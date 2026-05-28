@@ -1,0 +1,261 @@
+import { and, asc, eq, sql } from 'drizzle-orm';
+import { NextResponse } from 'next/server';
+import { touchLastSync, validatePosToken } from '@/actions/pos-tokens';
+import { applyInvoiceCustomerUpsert } from '@/features/customers/post-sale-hook';
+import { recordCashMovement, toMoney } from '@/libs/cash-helpers';
+import { db } from '@/libs/DB';
+import {
+  productsSchema,
+  saleItemsSchema,
+  salePaymentsSchema,
+  salesSchema,
+} from '@/models/Schema';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
+type QueuedSaleItem = {
+  productId: string;
+  qty: number;
+  productName?: string;
+  unitPrice?: number;
+};
+
+type QueuedSalePayment = {
+  method: string;
+  amount: number | string;
+  billsPaid?: unknown;
+  changeGiven?: number | string;
+  reference?: string | null;
+};
+
+type QueuedSale = {
+  localId: number;
+  items: QueuedSaleItem[];
+  paymentType: string;
+  total?: number;
+  notes?: string | null;
+  payments?: QueuedSalePayment[];
+  queuedAt?: string;
+};
+
+type SyncBody = {
+  token?: string;
+  sales?: QueuedSale[];
+  deviceName?: string;
+};
+
+type SyncResult = {
+  localId: number;
+  success: boolean;
+  serverSaleId?: string;
+  error?: string;
+};
+
+export async function POST(req: Request): Promise<NextResponse> {
+  let body: SyncBody;
+  try {
+    body = (await req.json()) as SyncBody;
+  } catch {
+    return NextResponse.json({ error: 'invalid_json' }, { status: 400 });
+  }
+
+  const token = body.token?.trim();
+  if (!token) {
+    return NextResponse.json({ error: 'token is required' }, { status: 400 });
+  }
+
+  let posToken;
+  try {
+    posToken = await validatePosToken(token);
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : 'Invalid token' },
+      { status: 401 },
+    );
+  }
+
+  const orgId = posToken.organizationId;
+  const cashierId = posToken.cashierId;
+  const deviceName = body.deviceName?.trim() || 'pos';
+  const queued = Array.isArray(body.sales) ? body.sales : [];
+
+  const results: SyncResult[] = [];
+
+  for (const queuedSale of queued) {
+    try {
+      if (!queuedSale.items?.length) {
+        throw new Error('Sale must include at least one item');
+      }
+
+      const { saleId, total: saleTotal } = await db.transaction(async (tx) => {
+        let total = 0;
+        const itemsToInsert: {
+          productId: string;
+          productName: string;
+          qty: number;
+          price: string;
+          subtotal: string;
+          unitType: string;
+        }[] = [];
+
+        for (const item of queuedSale.items) {
+          if (!item.productId) {
+            throw new Error('Each item must include a productId');
+          }
+          const qty = Number(item.qty);
+          if (!Number.isFinite(qty) || qty <= 0) {
+            throw new Error('Each item must have qty > 0');
+          }
+
+          const [product] = await tx
+            .select()
+            .from(productsSchema)
+            .where(
+              and(
+                eq(productsSchema.id, item.productId),
+                eq(productsSchema.organizationId, orgId),
+                eq(productsSchema.deleted, false),
+              ),
+            )
+            .for('update')
+            .limit(1);
+
+          if (!product) {
+            throw new Error(
+              `Producto no encontrado: ${item.productName || item.productId}`,
+            );
+          }
+          if (product.stock < qty) {
+            throw new Error(
+              `Stock insuficiente: ${product.name} (disp: ${product.stock})`,
+            );
+          }
+
+          const unitPrice = Number.parseFloat(product.price);
+          if (!Number.isFinite(unitPrice)) {
+            throw new TypeError(`Invalid price for product ${product.id}`);
+          }
+          const subtotal = unitPrice * qty;
+          total += subtotal;
+
+          itemsToInsert.push({
+            productId: product.id,
+            productName: product.name,
+            qty,
+            price: toMoney(unitPrice),
+            subtotal: toMoney(subtotal),
+            unitType: product.unitType,
+          });
+        }
+
+        const totalStr = toMoney(total);
+
+        const [sale] = await tx
+          .insert(salesSchema)
+          .values({
+            organizationId: orgId,
+            total: totalStr,
+            paymentType: queuedSale.paymentType || 'Efectivo',
+            status: 'completed',
+            notes: queuedSale.notes ?? null,
+            cashierId,
+            posTokenId: posToken.id,
+          })
+          .returning({ id: salesSchema.id });
+
+        if (!sale) {
+          throw new Error('Failed to create sale');
+        }
+
+        await tx
+          .insert(saleItemsSchema)
+          .values(itemsToInsert.map(it => ({ saleId: sale.id, ...it })));
+
+        for (const it of itemsToInsert) {
+          await tx
+            .update(productsSchema)
+            .set({
+              stock: sql`GREATEST(0, ${productsSchema.stock} - ${it.qty})`,
+            })
+            .where(
+              and(
+                eq(productsSchema.id, it.productId),
+                eq(productsSchema.organizationId, orgId),
+              ),
+            );
+
+          await tx.execute(
+            sql`INSERT INTO stock_movements (product_id, product_name, type, qty, reason, created_by)
+                VALUES (${it.productId}, ${it.productName}, 'exit', ${it.qty}, 'sale', ${deviceName})`,
+          );
+        }
+
+        const paymentRows
+          = queuedSale.payments && queuedSale.payments.length > 0
+            ? queuedSale.payments.map(p => ({
+                saleId: sale.id,
+                method: p.method,
+                amount: toMoney(p.amount),
+                reference: p.reference ?? null,
+                billsPaid: p.billsPaid ?? null,
+                changeGiven:
+                  p.changeGiven !== undefined ? toMoney(p.changeGiven) : '0',
+              }))
+            : [
+                {
+                  saleId: sale.id,
+                  method: queuedSale.paymentType,
+                  amount: totalStr,
+                  reference: null,
+                  billsPaid: null,
+                  changeGiven: '0',
+                },
+              ];
+
+        await tx.insert(salePaymentsSchema).values(paymentRows);
+
+        return { saleId: sale.id, total: totalStr, notes: queuedSale.notes ?? null };
+      });
+
+      results.push({
+        localId: queuedSale.localId,
+        success: true,
+        serverSaleId: saleId,
+      });
+
+      await recordCashMovement(saleId, saleTotal, {
+        organizationId: orgId,
+        userId: cashierId ?? deviceName,
+      }).catch(() => null);
+
+      await applyInvoiceCustomerUpsert({
+        organizationId: orgId,
+        notes: queuedSale.notes ?? null,
+        total: saleTotal,
+        createdBy: cashierId ?? deviceName ?? null,
+      }).catch(() => null);
+    } catch (err) {
+      results.push({
+        localId: queuedSale.localId,
+        success: false,
+        error: err instanceof Error ? err.message : 'Error al sincronizar venta',
+      });
+    }
+  }
+
+  await touchLastSync(token).catch(() => null);
+
+  const products = await db
+    .select()
+    .from(productsSchema)
+    .where(
+      and(
+        eq(productsSchema.organizationId, orgId),
+        eq(productsSchema.deleted, false),
+      ),
+    )
+    .orderBy(asc(productsSchema.name));
+
+  return NextResponse.json({ results, products });
+}

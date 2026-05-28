@@ -1,0 +1,11 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "crons": [
+    { "path": "/api/cron/wompi-billing", "schedule": "0 8 * * *" },
+    { "path": "/api/cron/smart-stock-recompute", "schedule": "0 4 * * *" },
+    { "path": "/api/cron/expiration-alerts", "schedule": "0 6 * * *" },
+    { "path": "/api/cron/notifications-generate", "schedule": "*/15 * * * *" },
+    { "path": "/api/cron/session-cleanup", "schedule": "0 3 * * *" },
+    { "path": "/api/cron/audit-log-purge", "schedule": "30 3 * * *" }
+  ]
+}

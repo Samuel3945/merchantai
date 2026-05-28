@@ -2,7 +2,9 @@ import { UserButton } from '@clerk/nextjs';
 import { useLocale } from 'next-intl';
 import Link from 'next/link';
 import { ActiveLink } from '@/components/ActiveLink';
+import { BusinessSwitcher } from '@/components/BusinessSwitcher';
 import { LocaleSwitcher } from '@/components/LocaleSwitcher';
+import { NotificationBell } from '@/components/NotificationBell';
 
 import { Separator } from '@/components/ui/separator';
 import { Logo } from '@/templates/Logo';
@@ -15,6 +17,7 @@ export const DashboardHeader = (props: {
   menu: {
     href: string;
     label: string;
+    badge?: 'red' | null;
   }[];
 }) => {
   const locale = useLocale();
@@ -43,7 +46,9 @@ export const DashboardHeader = (props: {
           >
             {props.menu.map(item => (
               <li key={item.href}>
-                <ActiveLink href={item.href}>{item.label}</ActiveLink>
+                <ActiveLink href={item.href} badge={item.badge ?? null}>
+                  {item.label}
+                </ActiveLink>
               </li>
             ))}
           </ul>
@@ -54,6 +59,14 @@ export const DashboardHeader = (props: {
         <ul className="flex items-center gap-x-1.5">
           <li className="lg:hidden">
             <MobileNavigation menu={props.menu} />
+          </li>
+
+          <li>
+            <BusinessSwitcher />
+          </li>
+
+          <li>
+            <NotificationBell />
           </li>
 
           <li>

@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { NextConfig } from 'next';
 import withBundleAnalyzer from '@next/bundle-analyzer';
 import { withSentryConfig } from '@sentry/nextjs';
@@ -17,6 +18,11 @@ const baseConfig: NextConfig = {
   },
   outputFileTracingIncludes: {
     '/': ['./migrations/**/*'],
+  },
+  // Anchor Turbopack at this project root so it doesn't walk up into
+  // ~/Desktop, which macOS sandboxes (causes EPERM panic at dev start).
+  turbopack: {
+    root: path.resolve(__dirname),
   },
 };
 

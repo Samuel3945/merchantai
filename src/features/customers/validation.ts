@@ -1,0 +1,103 @@
+import { z } from 'zod';
+
+const trimmedOrNull = z
+  .string()
+  .trim()
+  .max(200)
+  .nullable()
+  .optional()
+  .transform(v => (v === '' || v === undefined ? null : v));
+
+const decimalString = z
+  .union([z.string(), z.number()])
+  .transform(v => (typeof v === 'number' ? v.toString() : v))
+  .refine(v => /^\d+(\.\d{1,2})?$/.test(v), {
+    message: 'Must be a number with up to 2 decimals',
+  });
+
+export const customerCreateSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  documentId: trimmedOrNull,
+  whatsapp: trimmedOrNull,
+  email: trimmedOrNull,
+  address: z
+    .string()
+    .trim()
+    .max(500)
+    .nullable()
+    .optional()
+    .transform(v => (v === '' || v === undefined ? null : v)),
+  notes: z
+    .string()
+    .trim()
+    .max(1000)
+    .nullable()
+    .optional()
+    .transform(v => (v === '' || v === undefined ? null : v)),
+  marketingOptIn: z.coerce.boolean().optional().default(true),
+  totalSpent: decimalString.optional(),
+});
+
+export const customerUpdateSchema = customerCreateSchema.partial();
+
+export type CustomerCreateInput = z.input<typeof customerCreateSchema>;
+export type CustomerUpdateInput = z.input<typeof customerUpdateSchema>;
+
+const CONSUMIDOR_FINAL_RE = /consumidor\s*final/i;
+
+export function isConsumidorFinal(name: string | null | undefined): boolean {
+  if (!name) {
+    return false;
+  }
+  return CONSUMIDOR_FINAL_RE.test(name.trim());
+}
+
+const DIGITS_RE = /\D+/g;
+
+export function normalizeWhatsapp(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  const digits = value.replace(DIGITS_RE, '');
+  if (digits.length < 7 || digits.length > 15) {
+    return null;
+  }
+  return digits;
+}
+
+const FACTURA_TAG_RE = /\[FACTURA\]/i;
+const DOC_RE = /(?:doc|cc|nit|documento)\s*(?:[:#]\s*)?([A-Z0-9.-]{4,30})/i;
+const WA_RE = /(?:wa|whatsapp|tel|cel)\s*[:#]?\s*([+\d\s().-]{7,25})/i;
+const NAME_RE = /(?:nombre|cliente)\s*(?:[:#]\s*)?([^\n,;]{2,120})/i;
+
+export type ParsedInvoiceCustomer = {
+  name: string | null;
+  documentId: string | null;
+  whatsapp: string | null;
+};
+
+export function parseFacturaCustomer(
+  notes: string | null | undefined,
+): ParsedInvoiceCustomer | null {
+  if (!notes || !FACTURA_TAG_RE.test(notes)) {
+    return null;
+  }
+
+  const docMatch = notes.match(DOC_RE);
+  const waMatch = notes.match(WA_RE);
+  const nameMatch = notes.match(NAME_RE);
+
+  const documentId = docMatch?.[1]?.trim() ?? null;
+  const whatsapp = normalizeWhatsapp(waMatch?.[1] ?? null);
+  const name = nameMatch?.[1]?.trim() ?? null;
+
+  if (!documentId && !whatsapp) {
+    return null;
+  }
+
+  if (name && isConsumidorFinal(name)) {
+    return null;
+  }
+
+  return { name, documentId, whatsapp };
+}
