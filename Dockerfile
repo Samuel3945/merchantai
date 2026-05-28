@@ -23,10 +23,12 @@ RUN apk add --no-cache libc6-compat
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Public (NEXT_PUBLIC_*) vars are baked into the client bundle at build time,
-# so they must be provided as build args. Server secrets are NOT needed here
-# (SKIP_ENV_VALIDATION bypasses validation; they are read at runtime instead).
-ARG NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+# Public (NEXT_PUBLIC_*) vars are baked into the client bundle at build time.
+# The Clerk publishable key is public (it ships to every browser), so we bake a
+# default here for platforms (e.g. EasyPanel) that don't forward env vars as
+# build args. It can still be overridden with --build-arg. Server secrets are
+# NOT needed here (SKIP_ENV_VALIDATION bypasses validation; read at runtime).
+ARG NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_ZmluZS1yYWNjb29uLTcuY2xlcmsuYWNjb3VudHMuZGV2JA
 ARG NEXT_PUBLIC_APP_URL
 ARG NEXT_PUBLIC_LOGGING_LEVEL=info
 
