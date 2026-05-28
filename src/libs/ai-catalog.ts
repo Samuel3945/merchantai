@@ -33,7 +33,7 @@ Rules:
 - sales.status: 'completed' or 'settled' = valid sales. Exclude 'cancelled' and 'returned' unless asked.
 `.trim();
 
-const FORBIDDEN_KW = /\b(insert|update|delete|drop|alter|truncate|create|grant|revoke|vacuum|call|merge|copy|do\s+\$|set\s+(?!timezone|datestyle)|reset|lock)\b/i;
+const FORBIDDEN_KW = /\b(?:insert|update|delete|drop|alter|truncate|create|grant|revoke|vacuum|call|merge|copy|do\s+\$|set\s+(?!timezone|datestyle)|reset|lock)\b/i;
 
 export function validateAndBind(raw: string, orgId: string): { text: string; params: string[] } {
   const cleaned = raw
@@ -45,7 +45,7 @@ export function validateAndBind(raw: string, orgId: string): { text: string; par
   if (/;/.test(cleaned)) {
     throw new Error('Multiple statements not allowed');
   }
-  if (!/^(select|with)\b/i.test(cleaned)) {
+  if (!/^(?:select|with)\b/i.test(cleaned)) {
     throw new Error('Only SELECT/WITH queries allowed');
   }
   if (FORBIDDEN_KW.test(cleaned)) {
@@ -62,7 +62,7 @@ export function validateAndBind(raw: string, orgId: string): { text: string; par
     paramIndex += 1;
     return `$${paramIndex}`;
   });
-  const params = Array.from({ length: paramIndex }).fill(orgId);
+  const params = Array.from({ length: paramIndex }).fill(orgId) as string[];
 
   return { text, params };
 }
