@@ -27,7 +27,9 @@ const PLAN_CASHIER_LIMIT: Record<PlanTier, number> = {
 const INVITE_TTL_HOURS = 72;
 const INVITE_TTL_MS = INVITE_TTL_HOURS * 60 * 60 * 1000;
 
-export class CashiersLimitReachedError extends Error {
+// Not exported: a "use server" module may only export async functions.
+// This error is thrown and handled internally within this module.
+class CashiersLimitReachedError extends Error {
   readonly statusCode = 402;
   readonly code = 'cashiers_limit_reached';
   readonly plan: PlanTier;

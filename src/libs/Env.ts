@@ -18,6 +18,9 @@ export const Env = createEnv({
   shared: {
     NODE_ENV: z.enum(['test', 'development', 'production']).optional(),
   },
+  // Allow skipping validation during the Docker image build, where server
+  // secrets aren't (and shouldn't be) present. Runtime still validates fully.
+  skipValidation: process.env.SKIP_ENV_VALIDATION === 'true',
   // You need to destructure all the keys manually
   runtimeEnv: {
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,

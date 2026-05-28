@@ -14,13 +14,15 @@ import {
 export type PlanName = 'free' | 'pro' | 'business';
 export type AgentKind = 'sales_manager' | 'customer_service';
 
-export const PLAN_LIMITS: Record<PlanName, Record<AgentKind, number>> = {
+// Not exported: a "use server" module may only export async functions.
+// These are internal constants used by the actions below.
+const PLAN_LIMITS: Record<PlanName, Record<AgentKind, number>> = {
   free: { sales_manager: 0, customer_service: 0 },
   pro: { sales_manager: 500, customer_service: 0 },
   business: { sales_manager: 500, customer_service: 1000 },
 };
 
-export const AGENT_KINDS: AgentKind[] = ['sales_manager', 'customer_service'];
+const AGENT_KINDS: AgentKind[] = ['sales_manager', 'customer_service'];
 
 export type CurrentPlan = {
   plan: PlanName;

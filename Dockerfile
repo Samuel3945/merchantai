@@ -1,0 +1,83 @@
+# syntax=docker/dockerfile:1
+
+##########
+# 1) deps: install all dependencies (incl. dev, needed to build)
+##########
+FROM node:24-alpine AS deps
+WORKDIR /app
+
+# libc compat for some native-ish deps under Alpine
+RUN apk add --no-cache libc6-compat
+
+COPY package.json package-lock.json ./
+RUN npm ci
+
+##########
+# 2) builder: compile the Next.js standalone bundle
+##########
+FROM node:24-alpine AS builder
+WORKDIR /app
+
+RUN apk add --no-cache libc6-compat
+
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+# Public (NEXT_PUBLIC_*) vars are baked into the client bundle at build time,
+# so they must be provided as build args. Server secrets are NOT needed here
+# (SKIP_ENV_VALIDATION bypasses validation; they are read at runtime instead).
+ARG NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+ARG NEXT_PUBLIC_APP_URL
+ARG NEXT_PUBLIC_LOGGING_LEVEL=info
+
+ENV NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY} \
+    NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL} \
+    NEXT_PUBLIC_LOGGING_LEVEL=${NEXT_PUBLIC_LOGGING_LEVEL} \
+    NEXT_PUBLIC_SENTRY_DISABLED=true \
+    SKIP_ENV_VALIDATION=true \
+    NEXT_TELEMETRY_DISABLED=1 \
+    NODE_ENV=production
+
+# Build the app only (migrations run at container startup, not at build time).
+RUN npm run build:next
+
+##########
+# 3) runner: minimal production image
+##########
+FROM node:24-alpine AS runner
+WORKDIR /app
+
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0
+
+# Non-root user for safety
+RUN addgroup --system --gid 1001 nodejs \
+  && adduser --system --uid 1001 nextjs
+
+# Standalone server + its trimmed node_modules (includes ./migrations via
+# outputFileTracingIncludes in next.config.ts).
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+
+# Turbopack bundles drizzle-orm into the server chunks, so it's absent from the
+# standalone node_modules. The standalone tree DOES ship `pg`, so adding the
+# zero-dependency drizzle-orm package is enough for the runtime migration runner.
+COPY --from=deps --chown=nextjs:nodejs /app/node_modules/drizzle-orm ./node_modules/drizzle-orm
+
+# Runtime migration runner + entrypoint (not traced into standalone).
+COPY --from=builder --chown=nextjs:nodejs /app/scripts ./scripts
+COPY --from=builder --chown=nextjs:nodejs /app/docker-entrypoint.sh ./docker-entrypoint.sh
+RUN chmod +x ./docker-entrypoint.sh
+
+USER nextjs
+
+EXPOSE 3000
+
+# Container-level healthcheck (EasyPanel also probes the HTTP port).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"
+
+ENTRYPOINT ["./docker-entrypoint.sh"]
