@@ -96,12 +96,14 @@ export default async function proxy(
 
       const authObj = await auth();
 
-      // Redirect authenticated users without an organization to the organization selection page
-      // This ensures users are properly associated with an organization before accessing the dashboard
+      // Redirect authenticated users without an organization to the organization selection page.
+      // This ensures users are properly associated with an organization before accessing the
+      // dashboard or the onboarding stepper (both read org-scoped settings and would otherwise
+      // throw "No active organization", rendering a blank error page).
       if (
         authObj.userId
         && !authObj.orgId
-        && req.nextUrl.pathname.includes('/dashboard')
+        && (req.nextUrl.pathname.includes('/dashboard') || req.nextUrl.pathname.includes('/onboarding'))
         && !req.nextUrl.pathname.endsWith('/organization-selection')
       ) {
         const orgSelection = new URL(
