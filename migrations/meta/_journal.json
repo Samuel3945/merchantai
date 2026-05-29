@@ -5,50 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1779313620411,
-      "tag": "0000_init-db",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1779653206274,
-      "tag": "0001_marvelous_blacklash",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1779654125339,
-      "tag": "0002_reflective_sabretooth",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1779677579963,
-      "tag": "0003_secret_natasha_romanoff",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1779679947007,
-      "tag": "0004_fuzzy_boom_boom",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "7",
-      "when": 1779680000000,
-      "tag": "0005_pos_returns",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "7",
-      "when": 1779700000000,
-      "tag": "0006_customers",
+      "when": 1780073369475,
+      "tag": "0000_baseline",
       "breakpoints": true
     }
   ]
