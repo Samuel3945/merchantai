@@ -1,92 +1,96 @@
 {
   "Index": {
-    "meta_title": "SaaS Template - Le template SaaS parfait pour construire et mettre à l'échelle votre entreprise en toute simplicité.",
-    "meta_description": "Un template gratuit et open-source de landing page pour votre entreprise SaaS, construit avec React, TypeScript, Shadcn UI et Tailwind CSS."
+    "meta_title": "MyMerchantAI — Le point de vente avec Intelligence Artificielle pour votre commerce",
+    "meta_description": "Vendez plus vite, contrôlez votre stock en temps réel, gérez les crédits clients et interrogez votre commerce en langage naturel. MyMerchantAI est le POS intelligent conçu pour les commerces."
   },
   "Navbar": {
     "sign_in": "Se connecter",
-    "sign_up": "S'inscrire",
-    "product": "Produit",
+    "sign_up": "Commencer gratuitement",
+    "product": "Fonctions",
     "pricing": "Tarifs",
-    "docs": "Docs",
-    "blog": "Blog",
-    "about": "À propos"
+    "faq": "Questions"
   },
   "LocaleSwitcher": {
     "button_label": "Changer de langue"
   },
   "Hero": {
-    "follow_twitter": "Suivez @Ixartz sur Twitter",
-    "title": "Le parfait <important>SaaS template</important> pour construire et mettre à l'échelle votre entreprise en toute simplicité.",
-    "description": "Un template gratuit et open-source de landing page pour votre entreprise SaaS, construit avec React, TypeScript, Shadcn UI et Tailwind CSS.",
-    "primary_button": "Obtenir Next.js SaaS Starter Kit",
-    "secondary_button": "Mettez une étoile sur GitHub"
+    "badge": "Propulsé par l'IA · Conçu pour les commerces",
+    "title": "Le point de vente <important>intelligent</important> qui fait grandir votre commerce.",
+    "description": "Encaissez en quelques secondes, contrôlez votre stock en temps réel, gérez les crédits clients sans tracas et interrogez votre commerce sur tout ce que vous voulez savoir. Le tout au même endroit, avec la puissance de l'Intelligence Artificielle.",
+    "primary_button": "Commencer gratuitement",
+    "secondary_button": "Voir les fonctions"
   },
   "Features": {
-    "section_subtitle": "Fonctionnalités",
-    "section_title": "Débloquer le plein potentiel du SaaS Template",
-    "section_description": "Un template gratuit et open-source de landing page pour votre entreprise SaaS, construit avec React, TypeScript, Shadcn UI et Tailwind CSS.",
-    "feature1_title": "Node.js",
-    "feature2_title": "React",
-    "feature3_title": "Tailwind CSS",
-    "feature4_title": "TypeScript",
-    "feature5_title": "Shadcn UI",
-    "feature6_title": "ESLint",
-    "feature_description": "Un template gratuit et open-source de landing page pour votre entreprise SaaS, construit avec React, TypeScript, Shadcn UI et Tailwind CSS."
+    "section_subtitle": "Tout-en-un",
+    "section_title": "Tout votre commerce, sur une seule plateforme",
+    "section_description": "De la première vente au rapport de fin de mois. MyMerchantAI réunit caisse, stock, clients et analytique avec IA pour que vous arrêtiez d'improviser et décidiez avec des données.",
+    "feature1_title": "Point de vente rapide",
+    "feature1_description": "Encaissez en quelques secondes depuis n'importe quel appareil. Plusieurs caissiers à la fois, paiements mixtes et clôture de caisse avec contrôle automatique et alertes de fraude.",
+    "feature2_title": "Stock en temps réel",
+    "feature2_description": "Le stock se met à jour seul à chaque vente. Recevez des alertes de stock bas et de produits proches de la péremption pour ne jamais perdre d'argent.",
+    "feature3_title": "Crédits clients sans tracas",
+    "feature3_description": "Sachez qui vous doit, combien et depuis quand. Enregistrez les acomptes et consultez le solde de chaque client à l'instant. Fini le carnet.",
+    "feature4_title": "Sales Manager AI",
+    "feature4_description": "Interrogez votre commerce en langage naturel : « combien ai-je vendu cette semaine ? », « quel est mon produit phare ? ». L'IA analyse vos données et répond avec des graphiques à l'instant.",
+    "feature5_title": "Assistant de service client",
+    "feature5_description": "Un agent IA qui connaît votre catalogue, vos prix et vos horaires, et répond à vos clients pour vous, 24 h/24.",
+    "feature6_title": "Des rapports clairs",
+    "feature6_description": "Ventes par période, par caissier et par moyen de paiement, analyse de caisse, pertes, top des produits et plus. Décidez avec des informations claires, pas avec des intuitions."
   },
   "Pricing": {
     "section_subtitle": "Tarifs",
-    "section_title": "Débloquer le plein potentiel du SaaS Template",
-    "section_description": "Un template gratuit et open-source de landing page pour votre entreprise SaaS, construit avec React, TypeScript, Shadcn UI et Tailwind CSS.",
-    "button_text": "Commencer"
+    "section_title": "Commencez gratuitement. Évoluez quand vous en avez besoin.",
+    "section_description": "Sans contrat ni petites lignes. Choisissez le plan selon la taille de votre commerce et changez-en quand vous voulez.",
+    "button_text": "Commencer maintenant"
   },
   "PricingPlans": {
     "free_plan_name": "Gratuit",
     "premium_plan_name": "Premium",
-    "enterprise_plan_name": "Enterprise"
+    "enterprise_plan_name": "Entreprise"
   },
   "PricingCard": {
-    "free_plan_description": "Pour les particuliers",
-    "premium_plan_description": "Pour les petites équipes",
-    "enterprise_plan_description": "Pour les leaders du secteur",
+    "free_plan_description": "Pour démarrer votre commerce",
+    "premium_plan_description": "Pour les commerces en croissance",
+    "enterprise_plan_description": "Pour les chaînes et plusieurs points de vente",
     "plan_price": "${price}",
     "plan_interval_month": "/ mois",
     "plan_interval_year": "/ an"
   },
   "PricingFeatures": {
-    "feature_team_member": "Jusqu'à {number} membres",
-    "feature_website": "Jusqu'à {number} sites web",
-    "feature_storage": "{number} Go de stockage",
-    "feature_transfer": "{number} To de transfert",
+    "feature_team_member": "Jusqu'à {number} caissiers",
+    "feature_website": "Jusqu'à {number} points de vente",
+    "feature_storage": "Jusqu'à {number} produits au catalogue",
+    "feature_transfer": "{number} crédits d'IA par mois",
     "feature_email_support": "Support par email"
   },
-  "SponsorLogos": {
-    "sponsored_by": "Sponsorisé par",
-    "clerk_logo": "Logo Clerk",
-    "sentry_logo": "Logo Sentry",
-    "crowdin_logo": "Logo Crowdin",
-    "arcjet_logo": "Logo Arcjet",
-    "coderabbit_logo": "Logo CodeRabbit",
-    "nextjs_boilerplate_logo": "Logo Next.js SaaS Boilerplate"
-  },
   "FAQ": {
-    "question": "Lorem ipsum dolor sit amet, consectetur adipiscing elit?",
-    "answer": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Aliquam aliquam enim dui, id consequat turpis ullamcorper ac. Mauris id quam dolor. Nullam eu egestas turpis. Proin risus elit, sollicitudin in mi a, accumsan euismod turpis. In euismod mi sed diam tristique hendrerit."
+    "question1": "Dois-je installer quelque chose ou acheter du matériel spécial ?",
+    "answer1": "Non. MyMerchantAI fonctionne depuis le navigateur sur n'importe quel ordinateur, tablette ou téléphone. Si vous avez déjà l'appareil, votre point de vente est prêt.",
+    "question2": "Puis-je avoir plusieurs caissiers en même temps ?",
+    "answer2": "Oui. Chaque caissier se connecte avec son propre accès et vous voyez en temps réel qui a vendu quoi. Le plan Gratuit inclut un caissier et les plans payants en ajoutent davantage.",
+    "question3": "Comment fonctionne l'Intelligence Artificielle ?",
+    "answer3": "Votre Sales Manager AI répond aux questions sur vos ventes, votre stock et vos clients en langage naturel et affiche des graphiques. De plus, un assistant IA peut servir vos clients avec les informations de votre commerce. Chaque plan inclut des crédits d'IA par mois.",
+    "question4": "Est-ce utile pour gérer les crédits de mes clients ?",
+    "answer4": "Bien sûr. Enregistrez les ventes à crédit et les acomptes, et consultez le solde de chaque client quand vous voulez. Fini le carnet et les comptes perdus.",
+    "question5": "Mes informations sont-elles en sécurité ?",
+    "answer5": "Oui. Chaque commerce dispose de son espace isolé, avec des données chiffrées et sauvegardées dans le cloud. Vous seul et les personnes que vous autorisez pouvez les voir.",
+    "question6": "Puis-je vraiment commencer gratuitement ?",
+    "answer6": "Oui. Créez votre compte et commencez à vendre aujourd'hui, sans carte de crédit. Vous changez de plan uniquement lorsque votre commerce en a besoin."
   },
   "CTA": {
-    "title": "Vous êtes prêt?",
-    "description": "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
-    "button_text": "Obtenir Next.js SaaS Starter Kit"
+    "title": "Votre commerce mérite d'arrêter d'improviser",
+    "description": "Chaque jour, vous prenez des dizaines de décisions qui dépendent de bonnes informations. Commencez gratuitement aujourd'hui et laissez l'IA travailler pour vous.",
+    "button_text": "Créer mon compte gratuit"
   },
   "Footer": {
-    "product": "Produit",
-    "docs": "Docs",
-    "blog": "Blog",
-    "community": "Communauté",
-    "company": "Entreprise",
+    "product": "Fonctions",
+    "docs": "Tarifs",
+    "blog": "Questions fréquentes",
+    "community": "Support",
+    "company": "Contact",
     "terms_of_service": "Conditions d'utilisation",
     "privacy_policy": "Politique de confidentialité",
-    "footer_text": "© {year} {name}. Fait avec <author></author>."
+    "footer_text": "© {year} {name}. Le point de vente intelligent pour les commerces."
   },
   "SignIn": {
     "meta_title": "Se connecter",
@@ -97,8 +101,8 @@
     "meta_description": "Créez un compte sans effort grâce à notre processus d'inscription intuitif."
   },
   "DashboardLayout": {
-    "meta_title": "Tableau de bord du SaaS Template",
-    "meta_description": "Un template gratuit et open-source de landing page pour votre entreprise SaaS, construit avec Next.js, TypeScript, Shadcn UI et Tailwind CSS.",
+    "meta_title": "Tableau de bord MyMerchantAI",
+    "meta_description": "Gérez ventes, stock, crédits clients et rapports avec IA depuis le tableau de bord MyMerchantAI.",
     "home": "Accueil",
     "members": "Membres",
     "settings": "Réglages"

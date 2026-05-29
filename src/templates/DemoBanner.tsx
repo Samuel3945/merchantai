@@ -3,8 +3,8 @@ import { Link } from '@/libs/I18nNavigation';
 
 export const DemoBanner = () => (
   <StickyBanner>
-    Live Demo of SaaS Boilerplate -
+    Nuevo: pregúntale a tu negocio con Sales Manager AI —
     {' '}
-    <Link href="/sign-up">Explore the User Dashboard</Link>
+    <Link href="/sign-up">empieza gratis hoy</Link>
   </StickyBanner>
 );
