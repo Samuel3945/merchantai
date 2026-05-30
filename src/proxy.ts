@@ -40,6 +40,7 @@ const POS_DEVICE_FREE_PATHS = new Set([
 // Orígenes del POS de cajero autorizados a llamar /api/pos/* cross-origin.
 // (TiendaCajero corre en su propio dominio Vercel; el navegador exige CORS.)
 const POS_ALLOWED_ORIGINS = [
+  'https://app.pos.merchantai.com',
   'https://pos-cajero.vercel.app',
   'http://localhost:5174',
   'http://localhost:5173',

@@ -13,11 +13,11 @@ import {
 import { Button } from '@/components/ui/button';
 
 /**
- * App de cajero en producción (TiendaCajero / proyecto Vercel `pos-cajero`).
+ * App de cajero en producción (repo `pos-merchatai`, dominio propio).
  * Abrirla desde aquí sirve para verificar de punta a punta que el dispositivo
- * de caja levanta y se conecta a su backend.
+ * de caja levanta y se conecta a su backend (este MerchantAI vía /api/pos/*).
  */
-const TIENDA_CAJERO_URL = 'https://pos-cajero.vercel.app';
+const TIENDA_CAJERO_URL = 'https://app.pos.merchantai.com';
 
 type TokenRow = Awaited<ReturnType<typeof listPosTokens>>[number];
 type CashierRow = Awaited<ReturnType<typeof listOrgCashiers>>[number];
