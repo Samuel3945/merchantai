@@ -17,15 +17,15 @@ export const Hero = () => {
             bg-secondary px-3 py-1 text-sm font-medium text-secondary-foreground
           "
           >
-            <MagicWandIcon className="size-4 text-purple-500" />
+            <MagicWandIcon className="size-4 text-primary" />
             {t('badge')}
           </span>
         )}
         title={t.rich('title', {
           important: chunks => (
             <span className="
-              bg-linear-to-r from-indigo-500 via-purple-500 to-pink-500
-              bg-clip-text text-transparent
+              bg-linear-to-r from-primary to-brand-ink bg-clip-text
+              text-transparent
             "
             >
               {chunks}

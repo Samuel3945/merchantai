@@ -5,8 +5,7 @@ export const FeatureCard = (props: {
 }) => (
   <div className="rounded-xl border border-border bg-background p-5">
     <div className="
-      size-12 rounded-lg bg-linear-to-br from-indigo-400 via-purple-400
-      to-pink-400 p-2
+      size-12 rounded-lg bg-linear-to-br from-primary to-brand-ink p-2
       [&_svg]:stroke-white [&_svg]:stroke-2
     "
     >
@@ -15,7 +14,7 @@ export const FeatureCard = (props: {
 
     <div className="mt-2 text-lg font-bold">{props.title}</div>
 
-    <div className="my-3 w-8 border-t border-purple-400" />
+    <div className="my-3 w-8 border-t border-primary" />
 
     <div className="mt-2 text-muted-foreground">{props.children}</div>
   </div>

@@ -1,23 +1,58 @@
-import { AppConfig } from '@/utils/AppConfig';
-
-export const Logo = (props: {
-  isTextHidden?: boolean;
-}) => (
-  <div className="flex items-center text-xl font-semibold">
+/**
+ * Logo de MyMerchant AI.
+ * Marca oficial: toldo de tienda + "M" + flecha de crecimiento.
+ * Colores del logo: navy #0f2a43 (texto "MyMerchant") y teal #14a98a (icono + "AI").
+ */
+export const Logo = (props: { isTextHidden?: boolean }) => (
+  <div className="flex items-center gap-2">
     <svg
-      className="mr-1 size-8 stroke-current stroke-2"
-      xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 24 24"
+      className="size-9 shrink-0"
+      viewBox="0 0 64 64"
       fill="none"
-      strokeLinecap="round"
-      strokeLinejoin="round"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
     >
-      <path d="M0 0h24v24H0z" stroke="none" />
-      <rect x="3" y="12" width="6" height="8" rx="1" />
-      <rect x="9" y="8" width="6" height="12" rx="1" />
-      <rect x="15" y="4" width="6" height="16" rx="1" />
-      <path d="M4 20h14" />
+      {/* Techo / toldo de la tienda */}
+      <path
+        d="M11 25 L32 12 L53 25"
+        stroke="#0f2a43"
+        strokeWidth="4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      {/* Borde ondulado del toldo */}
+      <path
+        d="M13 25 q3.5 5 7 0 q3.5 5 7 0 q3.5 5 7 0 q3.5 5 7 0 q3.5 5 7 0"
+        stroke="#0f2a43"
+        strokeWidth="3"
+        strokeLinecap="round"
+        fill="none"
+      />
+      {/* Patas que forman la M */}
+      <path
+        d="M16 31 L16 51 M16 51 L25 37 L33 47"
+        stroke="#0f2a43"
+        strokeWidth="4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      {/* Flecha de crecimiento */}
+      <path
+        d="M29 47 L47 28 M47 28 L38 28 M47 28 L47 37"
+        stroke="#14a98a"
+        strokeWidth="4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
-    {!props.isTextHidden && AppConfig.name}
+    {!props.isTextHidden && (
+      <span className="text-xl font-extrabold tracking-tight text-[#0f2a43]">
+        MyMerchant
+        <span className="text-[#14a98a]">
+          {' '}
+          AI
+        </span>
+      </span>
+    )}
   </div>
 );

@@ -13,6 +13,10 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+  /* Tienda Control — typography */
+  --font-sans: var(--font-inter-tight), 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --font-display: var(--font-fraunces), 'Inter Tight', Georgia, serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, 'SF Mono', Menlo, monospace;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -31,6 +35,13 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  /* Tienda Control — brand accents (extra tokens beyond shadcn defaults) */
+  --color-brand: var(--brand);
+  --color-brand-ink: var(--brand-ink);
+  --color-brand-soft: var(--brand-soft);
+  --color-terracotta: var(--terracotta);
+  --color-success: var(--success);
+  --color-warn: var(--warn);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
@@ -38,57 +49,85 @@
   --color-chart-5: var(--chart-5);
 }
 
+/*
+ * Tienda Control design tokens — mapped onto the shadcn variable system so the
+ * whole app (landing + dashboard) inherits the brand automatically.
+ * Source: tienda-control/project/tokens.css (Claude Design handoff)
+ * Primary = deep teal #0F766E · warm bg #FBFAF7 · terracotta accent #C2410C
+ */
 :root {
   --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
+
+  --background: #fbfaf7; /* tc-bg */
+  --foreground: #14201c; /* tc-ink */
+  --card: #ffffff; /* tc-surface */
+  --card-foreground: #14201c;
+  --popover: #ffffff;
+  --popover-foreground: #14201c;
+
+  --primary: #0f766e; /* tc-primary — deep teal */
+  --primary-foreground: #ffffff;
+  --secondary: #f5f3ee; /* tc-surface-2 */
+  --secondary-foreground: #3a4541; /* tc-ink-2 */
+  --muted: #f5f3ee; /* tc-surface-2 */
+  --muted-foreground: #6b736f; /* tc-ink-3 */
+  --accent: #eceae3; /* tc-surface-3 — subtle hover surface */
+  --accent-foreground: #14201c;
+  --destructive: #b91c1c; /* tc-danger */
+
+  --border: #e5e2da; /* tc-line */
+  --input: #d7d3c7; /* tc-line-strong */
+  --ring: #0f766e; /* teal focus ring */
+
+  /* brand accents */
+  --brand: #0f766e;
+  --brand-ink: #064e47; /* tc-primary-ink */
+  --brand-soft: #e6f2ef; /* tc-primary-soft */
+  --terracotta: #c2410c; /* tc-accent */
+  --success: #15803d; /* tc-success */
+  --warn: #b45309; /* tc-warn */
+
+  --chart-1: #0f766e; /* teal */
+  --chart-2: #15803d; /* green */
+  --chart-3: #c2410c; /* terracotta */
+  --chart-4: #b45309; /* amber */
+  --chart-5: #1d4ed8; /* info blue */
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
+  --background: #0e1513; /* tc-bg dark */
+  --foreground: #edefec; /* tc-ink dark */
+  --card: #161e1b; /* tc-surface dark */
+  --card-foreground: #edefec;
+  --popover: #161e1b;
+  --popover-foreground: #edefec;
+
+  --primary: #34b5a8; /* tc-primary dark — brighter teal */
+  --primary-foreground: #06231f;
+  --secondary: #1e2724; /* tc-surface-2 dark */
+  --secondary-foreground: #bdc4c0;
+  --muted: #1e2724;
+  --muted-foreground: #8b948f; /* tc-ink-3 dark */
+  --accent: #28332f; /* tc-surface-3 dark */
+  --accent-foreground: #edefec;
+  --destructive: #f87171; /* tc-danger dark */
+
+  --border: #2a3531; /* tc-line dark */
+  --input: #3a4742; /* tc-line-strong dark */
+  --ring: #34b5a8;
+
+  --brand: #34b5a8;
+  --brand-ink: #6bd3c8;
+  --brand-soft: #143230;
+  --terracotta: #f97316;
+  --success: #4ade80;
+  --warn: #fbbf24;
+
+  --chart-1: #34b5a8;
+  --chart-2: #4ade80;
+  --chart-3: #f97316;
+  --chart-4: #fbbf24;
+  --chart-5: #60a5fa;
 }
 
 @layer base {
@@ -97,5 +136,20 @@
   }
   body {
     @apply bg-background text-foreground antialiased;
+    font-feature-settings: 'ss01', 'cv11';
+    letter-spacing: -0.005em;
+  }
+}
+
+@layer utilities {
+  /* Tienda Control display type — Fraunces serif for hero titles & KPIs */
+  .font-display {
+    font-family: var(--font-display);
+    font-weight: 500;
+    letter-spacing: -0.02em;
+  }
+  .tabular-nums-tc {
+    font-feature-settings: 'tnum';
+    font-variant-numeric: tabular-nums;
   }
 }

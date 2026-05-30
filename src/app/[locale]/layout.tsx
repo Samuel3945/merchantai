@@ -1,10 +1,31 @@
 import type { Metadata, Viewport } from 'next';
 import { hasLocale, NextIntlClientProvider } from 'next-intl';
 import { setRequestLocale } from 'next-intl/server';
+import { Fraunces, Inter_Tight, JetBrains_Mono } from 'next/font/google';
 import { notFound } from 'next/navigation';
 import { DemoBadge } from '@/components/DemoBadge';
 import { routing } from '@/libs/I18nRouting';
 import '@/styles/global.css';
+
+// Tienda Control typography: Inter Tight (sans), Fraunces (display), JetBrains Mono (numbers)
+const interTight = Inter_Tight({
+  subsets: ['latin'],
+  variable: '--font-inter-tight',
+  display: 'swap',
+});
+
+const fraunces = Fraunces({
+  subsets: ['latin'],
+  variable: '--font-fraunces',
+  display: 'swap',
+  axes: ['opsz'],
+});
+
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ['latin'],
+  variable: '--font-jetbrains-mono',
+  display: 'swap',
+});
 
 export const metadata: Metadata = {
   icons: [
@@ -53,8 +74,16 @@ export default async function RootLayout(props: {
   setRequestLocale(locale);
 
   return (
-    <html lang={locale} suppressHydrationWarning>
-      <body>
+    <html
+      lang={locale}
+      className={`
+        ${interTight.variable}
+        ${fraunces.variable}
+        ${jetbrainsMono.variable}
+      `}
+      suppressHydrationWarning
+    >
+      <body className="font-sans">
         <NextIntlClientProvider>
           {props.children}
 
