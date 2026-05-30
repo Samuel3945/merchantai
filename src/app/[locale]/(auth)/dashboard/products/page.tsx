@@ -14,8 +14,8 @@ export default async function DashboardProductsPage(props: {
   return (
     <>
       <TitleBar
-        title="Products"
-        description="Manage your catalog: prices, stock, barcodes and status."
+        title="Productos"
+        description="Gestiona tu catálogo: precios, stock, códigos de barras y estado."
       />
       <ProductsClient initial={initial} />
     </>

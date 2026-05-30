@@ -49,15 +49,17 @@ const dayFmt = new Intl.DateTimeFormat('es-CO', {
   timeZone: 'America/Bogota',
 });
 
+// Paleta de marca Tienda Control (teal/verde/terracota/ámbar/azul) — sin
+// purple/pink/cyan genéricos del boilerplate.
 const PIE_COLORS = [
-  '#3b82f6',
-  '#10b981',
-  '#f59e0b',
-  '#ef4444',
-  '#8b5cf6',
-  '#ec4899',
-  '#06b6d4',
-  '#f97316',
+  '#0F766E', // teal (primary)
+  '#15803D', // verde (success)
+  '#C2410C', // terracota (accent)
+  '#B45309', // ámbar (warn)
+  '#1D4ED8', // azul (info)
+  '#0891B2', // teal-cian
+  '#65A30D', // verde lima
+  '#D97706', // naranja cálido
 ];
 
 const inputCls
@@ -169,7 +171,12 @@ function KpiCard({
   return (
     <div className="rounded-lg border bg-background p-4 shadow-xs">
       <div className="text-xs font-medium text-muted-foreground">{title}</div>
-      <div className="mt-2 text-2xl font-semibold">{value}</div>
+      <div className="
+        mt-2 font-display text-3xl font-medium tracking-tight tabular-nums
+      "
+      >
+        {value}
+      </div>
       <div className="mt-1 flex items-center gap-2 text-xs">
         {delta && <span className={cn('font-medium', deltaClass)}>{delta}</span>}
         {hint && <span className="text-muted-foreground">{hint}</span>}
@@ -428,7 +435,7 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
                   type="monotone"
                   dataKey="total"
                   name="Revenue"
-                  stroke="#3b82f6"
+                  stroke="#0F766E"
                   strokeWidth={2}
                   dot={false}
                 />
@@ -436,7 +443,7 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
                   type="monotone"
                   dataKey="count"
                   name="Sales"
-                  stroke="#10b981"
+                  stroke="#15803D"
                   strokeWidth={2}
                   dot={false}
                 />
@@ -458,7 +465,7 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
                 <Tooltip
                   formatter={value => [formatMoney(Number(value)), 'Revenue']}
                 />
-                <Bar dataKey="total" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="total" fill="#0F766E" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -546,7 +553,7 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
                           'Revenue',
                         ]}
                       />
-                      <Bar dataKey="revenue" fill="#8b5cf6" radius={[0, 4, 4, 0]} />
+                      <Bar dataKey="revenue" fill="#C2410C" radius={[0, 4, 4, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>

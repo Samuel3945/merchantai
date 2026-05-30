@@ -5,6 +5,7 @@ import { redirect } from 'next/navigation';
 import { getAppSetting } from '@/actions/app-settings';
 import { getFraudAlerts } from '@/actions/cash';
 import { DashboardHeader } from '@/features/dashboard/DashboardHeader';
+import { DashboardSidebar } from '@/features/dashboard/DashboardSidebar';
 
 type DashboardLayoutProps = {
   params: Promise<{ locale: string }>;
@@ -38,11 +39,6 @@ export default async function DashboardLayout(props: DashboardLayoutProps) {
     }
   }
 
-  const t = await getTranslations({
-    locale,
-    namespace: 'DashboardLayout',
-  });
-
   // Fraud-alert badge for the Caja menu item. Failures are non-fatal —
   // we never want a layout to crash because the alert query failed.
   let cashBadge: 'red' | null = null;
@@ -58,70 +54,30 @@ export default async function DashboardLayout(props: DashboardLayoutProps) {
   }
 
   return (
-    <>
-      <div className="shadow-md">
-        <div className="
-          mx-auto flex max-w-7xl items-center justify-between px-3 py-4
+    <div className="flex min-h-screen bg-background">
+      <DashboardSidebar cashBadge={cashBadge} />
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="
+          sticky top-0 z-30 flex h-14 items-center gap-2 border-b border-border
+          bg-card px-4
         "
         >
-          <DashboardHeader
-            menu={[
-              {
-                href: '/dashboard',
-                label: t('home'),
-              },
-              {
-                href: '/dashboard/organization-profile/organization-members',
-                label: t('members'),
-              },
-              {
-                href: '/dashboard/customers',
-                label: 'Customers',
-              },
-              {
-                href: '/dashboard/employees',
-                label: 'Employees',
-              },
-              {
-                href: '/dashboard/inventory',
-                label: 'Inventario',
-              },
-              {
-                href: '/dashboard/pos-cajeros',
-                label: 'POS Cajeros',
-              },
-              {
-                href: '/dashboard/cash',
-                label: 'Caja',
-                badge: cashBadge,
-              },
-              {
-                href: '/dashboard/reports',
-                label: 'Reportes',
-              },
-              {
-                href: '/dashboard/plans',
-                label: 'Plans',
-              },
-              {
-                href: '/dashboard/ai-agent',
-                label: 'AI Agent',
-              },
-              {
-                href: '/dashboard/settings',
-                label: t('settings'),
-              },
-            ]}
-          />
-        </div>
-      </div>
+          <DashboardHeader cashBadge={cashBadge} />
+        </header>
 
-      <div className="min-h-[calc(100vh-72px)] bg-muted">
-        <div className="mx-auto max-w-7xl px-3 pt-6 pb-16">
-          {props.children}
-        </div>
+        <main className="
+          flex-1 px-4 py-6
+          sm:px-6
+          lg:px-8
+        "
+        >
+          <div className="mx-auto max-w-7xl">
+            {props.children}
+          </div>
+        </main>
       </div>
-    </>
+    </div>
   );
 }
 

@@ -140,16 +140,3 @@
     letter-spacing: -0.005em;
   }
 }
-
-@layer utilities {
-  /* Tienda Control display type — Fraunces serif for hero titles & KPIs */
-  .font-display {
-    font-family: var(--font-display);
-    font-weight: 500;
-    letter-spacing: -0.02em;
-  }
-  .tabular-nums-tc {
-    font-feature-settings: 'tnum';
-    font-variant-numeric: tabular-nums;
-  }
-}

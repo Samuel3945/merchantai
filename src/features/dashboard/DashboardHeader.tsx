@@ -1,95 +1,63 @@
 import { UserButton } from '@clerk/nextjs';
 import { useLocale } from 'next-intl';
 import Link from 'next/link';
-import { ActiveLink } from '@/components/ActiveLink';
 import { BusinessSwitcher } from '@/components/BusinessSwitcher';
 import { LocaleSwitcher } from '@/components/LocaleSwitcher';
 import { NotificationBell } from '@/components/NotificationBell';
-
 import { Separator } from '@/components/ui/separator';
 import { Logo } from '@/templates/Logo';
 import { getI18nPath } from '@/utils/Helpers';
 import { MobileNavigation } from './MobileNavigation';
 import { OrganizationMenu } from './OrganizationMenu';
-import { SlashIcon } from './SlashIcon';
 
-export const DashboardHeader = (props: {
-  menu: {
-    href: string;
-    label: string;
-    badge?: 'red' | null;
-  }[];
-}) => {
+/**
+ * Topbar del dashboard (Tienda Control). La navegación principal vive en la
+ * sidebar; aquí quedan el menú móvil, el selector de organización/negocio y
+ * las acciones de usuario.
+ */
+export const DashboardHeader = (props: { cashBadge?: 'red' | null }) => {
   const locale = useLocale();
 
   return (
     <>
-      <div className="flex items-center">
-        <Link href="/dashboard" className="max-sm:hidden">
-          <Logo />
+      <div className="
+        flex items-center gap-2
+        lg:hidden
+      "
+      >
+        <MobileNavigation cashBadge={props.cashBadge} />
+        <Link href="/dashboard">
+          <Logo isTextHidden />
         </Link>
-
-        <SlashIcon />
-
-        <OrganizationMenu />
-
-        <nav className="
-          ml-3
-          max-lg:hidden
-        "
-        >
-          <ul className="
-            flex flex-row items-center gap-x-3 text-lg font-medium
-            [&_a]:opacity-75
-            [&_a:hover]:opacity-100
-          "
-          >
-            {props.menu.map(item => (
-              <li key={item.href}>
-                <ActiveLink href={item.href} badge={item.badge ?? null}>
-                  {item.label}
-                </ActiveLink>
-              </li>
-            ))}
-          </ul>
-        </nav>
       </div>
 
-      <div>
-        <ul className="flex items-center gap-x-1.5">
-          <li className="lg:hidden">
-            <MobileNavigation menu={props.menu} />
-          </li>
+      <div className="
+        hidden items-center
+        lg:flex
+      "
+      >
+        <OrganizationMenu />
+      </div>
 
-          <li>
-            <BusinessSwitcher />
-          </li>
+      <div className="ml-auto flex items-center gap-x-1.5">
+        <BusinessSwitcher />
 
-          <li>
-            <NotificationBell />
-          </li>
+        <NotificationBell />
 
-          <li>
-            <LocaleSwitcher />
-          </li>
+        <LocaleSwitcher />
 
-          <li>
-            <Separator orientation="vertical" className="h-4" />
-          </li>
+        <Separator orientation="vertical" className="h-4" />
 
-          <li>
-            <UserButton
-              userProfileMode="navigation"
-              userProfileUrl={getI18nPath('/dashboard/user-profile', locale)}
-              afterSwitchSessionUrl="/dashboard"
-              appearance={{
-                elements: {
-                  rootBox: 'px-2 py-1.5',
-                },
-              }}
-            />
-          </li>
-        </ul>
+        <UserButton
+          userProfileMode="navigation"
+          userProfileUrl={getI18nPath('/dashboard/user-profile', locale)}
+          afterSwitchSessionUrl="/dashboard"
+          appearance={{
+            elements: {
+              rootBox: 'px-1 py-1',
+            },
+          }}
+        />
       </div>
     </>
   );

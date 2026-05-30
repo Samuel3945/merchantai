@@ -17,8 +17,8 @@ export default async function DashboardEmployeesPage(props: {
   return (
     <>
       <TitleBar
-        title="Employees"
-        description="Invite cashiers and employees, manage roles, permissions and modules."
+        title="Empleados"
+        description="Invita cajeros y empleados, gestiona roles, permisos y módulos."
       />
       <EmployeesClient
         initialEmployees={employees}

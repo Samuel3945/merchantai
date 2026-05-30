@@ -16,8 +16,8 @@ export default async function DashboardSalesPage(props: {
   return (
     <>
       <TitleBar
-        title="Sales"
-        description="Browse, filter and audit completed sales."
+        title="Ventas"
+        description="Consulta, filtra y audita las ventas completadas."
       />
       <SalesClient initial={initial} pageSize={DEFAULT_PAGE_SIZE} />
     </>

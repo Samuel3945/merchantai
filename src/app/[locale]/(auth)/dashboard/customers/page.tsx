@@ -14,7 +14,7 @@ export default async function DashboardCustomersPage(props: {
   return (
     <>
       <TitleBar
-        title="Customers"
+        title="Clientes"
         description="Tu CRM: clientes, contacto, dirección y compras acumuladas."
       />
       <CustomersClient initial={initial} />
