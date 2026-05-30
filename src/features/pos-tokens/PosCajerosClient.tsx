@@ -3,6 +3,7 @@
 import type {
   listOrgCashiers,
 } from '@/actions/pos-tokens';
+import { ExternalLink } from 'lucide-react';
 import { useCallback, useState, useTransition } from 'react';
 import {
   createPosToken,
@@ -10,6 +11,13 @@ import {
   revokePosToken,
 } from '@/actions/pos-tokens';
 import { Button } from '@/components/ui/button';
+
+/**
+ * App de cajero en producción (TiendaCajero / proyecto Vercel `pos-cajero`).
+ * Abrirla desde aquí sirve para verificar de punta a punta que el dispositivo
+ * de caja levanta y se conecta a su backend.
+ */
+const TIENDA_CAJERO_URL = 'https://pos-cajero.vercel.app';
 
 type TokenRow = Awaited<ReturnType<typeof listPosTokens>>[number];
 type CashierRow = Awaited<ReturnType<typeof listOrgCashiers>>[number];
@@ -90,11 +98,23 @@ export function PosCajerosClient({
         </div>
       )}
 
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <div className="text-lg font-semibold">POS Cajeros</div>
-        <Button onClick={() => setShowCreateModal(true)} disabled={pending}>
-          Generar nuevo token
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" asChild>
+            <a
+              href={TIENDA_CAJERO_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <ExternalLink className="size-4" />
+              Abrir TiendaCajero
+            </a>
+          </Button>
+          <Button onClick={() => setShowCreateModal(true)} disabled={pending}>
+            Generar nuevo token
+          </Button>
+        </div>
       </div>
 
       <div className="overflow-x-auto rounded-md border bg-background">
@@ -358,7 +378,7 @@ function QrModal({
         </div>
 
         <div className="flex flex-col items-center gap-4">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
+          {/* eslint-disable-next-line next/no-img-element */}
           <img
             src={qrUrl(token.token)}
             alt={`QR de ${token.deviceName}`}

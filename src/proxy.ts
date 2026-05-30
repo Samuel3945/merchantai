@@ -29,24 +29,81 @@ const POS_AUTH_FREE_PATHS = new Set([
   '/api/pos/auth/logout',
 ]);
 
+// Endpoints que un dispositivo POS externo (TiendaCajero) llama ANTES de tener
+// Bearer token: el login (code+PIN o token) y el connect (bootstrap por token).
+// Su autenticación la resuelve el propio handler, no la sesión del proxy.
+const POS_DEVICE_FREE_PATHS = new Set([
+  '/api/pos/login',
+  '/api/pos/connect',
+]);
+
+// Orígenes del POS de cajero autorizados a llamar /api/pos/* cross-origin.
+// (TiendaCajero corre en su propio dominio Vercel; el navegador exige CORS.)
+const POS_ALLOWED_ORIGINS = [
+  'https://pos-cajero.vercel.app',
+  'http://localhost:5174',
+  'http://localhost:5173',
+];
+
+function posCorsHeaders(origin: string | null): Record<string, string> {
+  const allow
+    = origin && POS_ALLOWED_ORIGINS.includes(origin)
+      ? origin
+      : POS_ALLOWED_ORIGINS[0]!;
+  return {
+    'Access-Control-Allow-Origin': allow,
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Authorization, Content-Type, x-session-id',
+    'Access-Control-Max-Age': '86400',
+    'Vary': 'Origin',
+  };
+}
+
+function hasBearer(request: NextRequest): boolean {
+  return (
+    request.headers.get('authorization')?.toLowerCase().startsWith('bearer ')
+    ?? false
+  );
+}
+
 async function handlePosRequest(request: NextRequest) {
+  const cors = posCorsHeaders(request.headers.get('origin'));
+
+  const withCors = (res: NextResponse): NextResponse => {
+    for (const [key, value] of Object.entries(cors)) {
+      res.headers.set(key, value);
+    }
+    return res;
+  };
+
+  // Preflight CORS — responder antes de tocar auth.
+  if (request.method === 'OPTIONS') {
+    return new NextResponse(null, { status: 204, headers: cors });
+  }
+
+  // Sesión del cajero embebido en el admin (login/logout) sin auth previa.
   if (POS_AUTH_FREE_PATHS.has(request.nextUrl.pathname)) {
-    return NextResponse.next();
+    return withCors(NextResponse.next());
+  }
+
+  // Dispositivos POS externos: el login/connect van sin token, y el resto de
+  // sus rutas viajan con Bearer token que el handler valida vía resolvePosAuth.
+  // En ambos casos el proxy solo deja pasar (no exige x-session-id).
+  if (POS_DEVICE_FREE_PATHS.has(request.nextUrl.pathname) || hasBearer(request)) {
+    return withCors(NextResponse.next());
   }
 
   const sessionId = request.headers.get('x-session-id');
   if (!sessionId) {
-    return NextResponse.json(
-      { error: 'missing_session' },
-      { status: 401 },
+    return withCors(
+      NextResponse.json({ error: 'missing_session' }, { status: 401 }),
     );
   }
 
   const session = await resolveCashierSession(sessionId);
   if (!session) {
-    return NextResponse.json(
-      { error: 'invalid_session' },
-      { status: 401 },
+    return withCors(
+      NextResponse.json({ error: 'invalid_session' }, { status: 401 }),
     );
   }
 
@@ -55,7 +112,7 @@ async function handlePosRequest(request: NextRequest) {
   forwarded.set('x-pos-user-role', session.user.role);
   forwarded.set('x-pos-organization-id', session.user.organizationId);
 
-  return NextResponse.next({ request: { headers: forwarded } });
+  return withCors(NextResponse.next({ request: { headers: forwarded } }));
 }
 
 export default async function proxy(

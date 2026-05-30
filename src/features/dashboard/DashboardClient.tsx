@@ -24,7 +24,6 @@ import {
   YAxis,
 } from 'recharts';
 import { getMetrics } from '@/actions/dashboard';
-import { Button } from '@/components/ui/button';
 import { cn } from '@/utils/Helpers';
 
 const moneyFmt = new Intl.NumberFormat('es-CO', {
@@ -62,10 +61,11 @@ const PIE_COLORS = [
   '#D97706', // naranja cálido
 ];
 
-const inputCls
-  = 'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50';
-
 const labelCls = 'text-xs font-medium text-muted-foreground';
+
+// Input de fecha al estilo Tienda Control: superficie de tarjeta + focus de marca.
+const dateInputCls
+  = 'h-9 w-full rounded-md border border-input bg-card px-3 py-1 text-sm shadow-xs outline-none transition-colors focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40';
 
 function formatMoney(value: number) {
   return moneyFmt.format(value);
@@ -146,6 +146,13 @@ function computePreviousRange(start: string, end: string) {
 
 type Preset = '7d' | '30d' | '90d' | 'mtd';
 
+const PRESETS: { key: Preset; label: string }[] = [
+  { key: '7d', label: '7 días' },
+  { key: '30d', label: '30 días' },
+  { key: '90d', label: '90 días' },
+  { key: 'mtd', label: 'Mes actual' },
+];
+
 function presetRange(preset: Preset): { start: string; end: string } {
   const end = todayBogota();
   if (preset === 'mtd') {
@@ -207,6 +214,7 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
   const [start, setStart] = useState(initial.range.start);
   const [end, setEnd] = useState(initial.range.end);
   const [compare, setCompare] = useState<boolean>(initial.compareRange !== null);
+  const [activePreset, setActivePreset] = useState<Preset | null>(null);
 
   const [pending, startTransition] = useTransition();
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -243,6 +251,18 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
     const range = presetRange(preset);
     setStart(range.start);
     setEnd(range.end);
+    setActivePreset(preset);
+  }
+
+  // Editar una fecha a mano deja de coincidir con cualquier preset.
+  function handleStartChange(value: string) {
+    setStart(value);
+    setActivePreset(null);
+  }
+
+  function handleEndChange(value: string) {
+    setEnd(value);
+    setActivePreset(null);
   }
 
   const prev = data.previousPeriod;
@@ -268,71 +288,94 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
 
   return (
     <div className="space-y-6">
-      {/* Filters */}
+      {/* Filtros — barra coherente con Tienda Control */}
       <div className="
-        grid grid-cols-1 gap-3
-        sm:grid-cols-2
-        lg:grid-cols-6
+        flex flex-col gap-4 rounded-lg border bg-card p-4 shadow-xs
+        lg:flex-row lg:flex-wrap lg:items-end lg:justify-between
       "
       >
-        <div className="lg:col-span-1">
-          <label className={labelCls}>From</label>
-          <input
-            type="date"
-            value={start}
-            max={end}
-            onChange={e => setStart(e.target.value)}
-            className={inputCls}
-          />
-        </div>
-        <div className="lg:col-span-1">
-          <label className={labelCls}>To</label>
-          <input
-            type="date"
-            value={end}
-            min={start}
-            max={todayBogota()}
-            onChange={e => setEnd(e.target.value)}
-            className={inputCls}
-          />
-        </div>
-        <div className="
-          flex items-end gap-2
-          lg:col-span-3
-        "
-        >
-          <Button variant="secondary" size="sm" onClick={() => applyPreset('7d')}>
-            7d
-          </Button>
-          <Button variant="secondary" size="sm" onClick={() => applyPreset('30d')}>
-            30d
-          </Button>
-          <Button variant="secondary" size="sm" onClick={() => applyPreset('90d')}>
-            90d
-          </Button>
-          <Button variant="secondary" size="sm" onClick={() => applyPreset('mtd')}>
-            MTD
-          </Button>
-        </div>
-        <div className="
-          flex items-end justify-end gap-3 text-sm
-          lg:col-span-1
-        "
-        >
-          <label className="flex cursor-pointer items-center gap-2">
+        {/* Rango de fechas */}
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="min-w-34">
+            <label htmlFor="db-from" className={labelCls}>Desde</label>
             <input
-              type="checkbox"
-              checked={compare}
-              onChange={e => setCompare(e.target.checked)}
-              className="size-4"
+              id="db-from"
+              type="date"
+              value={start}
+              max={end}
+              onChange={e => handleStartChange(e.target.value)}
+              className={cn(dateInputCls, 'mt-1')}
             />
-            Compare prev.
-          </label>
+          </div>
+          <span className="pb-2.5 text-muted-foreground">→</span>
+          <div className="min-w-34">
+            <label htmlFor="db-to" className={labelCls}>Hasta</label>
+            <input
+              id="db-to"
+              type="date"
+              value={end}
+              min={start}
+              max={todayBogota()}
+              onChange={e => handleEndChange(e.target.value)}
+              className={cn(dateInputCls, 'mt-1')}
+            />
+          </div>
         </div>
+
+        {/* Presets — control segmentado */}
+        <div
+          className="
+            inline-flex items-center gap-0.5 rounded-lg border bg-secondary/60
+            p-0.5
+          "
+          role="group"
+          aria-label="Rangos rápidos"
+        >
+          {PRESETS.map(p => (
+            <button
+              key={p.key}
+              type="button"
+              onClick={() => applyPreset(p.key)}
+              aria-pressed={activePreset === p.key}
+              className={cn(
+                `
+                  h-8 rounded-md px-3 text-sm font-medium text-muted-foreground
+                  transition-colors
+                  hover:text-foreground
+                `,
+                activePreset === p.key
+                  ? `
+                    bg-brand-soft text-brand-ink shadow-xs
+                    hover:text-brand-ink
+                  `
+                  : 'hover:bg-accent',
+              )}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Comparar periodo anterior */}
+        <label className="
+          flex cursor-pointer items-center gap-2 text-sm font-medium
+          text-foreground
+        "
+        >
+          <input
+            type="checkbox"
+            checked={compare}
+            onChange={e => setCompare(e.target.checked)}
+            className="size-4 accent-primary"
+          />
+          Comparar periodo anterior
+        </label>
       </div>
 
       <div className="text-xs text-muted-foreground">
-        {pending ? 'Loading…' : `Range: ${data.range.start} → ${data.range.end}`}
+        {pending
+          ? 'Cargando…'
+          : `Rango: ${data.range.start} → ${data.range.end}`}
         {data.compareRange
           && ` · vs ${data.compareRange.start} → ${data.compareRange.end}`}
       </div>

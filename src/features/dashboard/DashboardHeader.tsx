@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { BusinessSwitcher } from '@/components/BusinessSwitcher';
 import { LocaleSwitcher } from '@/components/LocaleSwitcher';
 import { NotificationBell } from '@/components/NotificationBell';
+import { ThemeToggle } from '@/components/ThemeToggle';
 import { Separator } from '@/components/ui/separator';
 import { Logo } from '@/templates/Logo';
 import { getI18nPath } from '@/utils/Helpers';
@@ -43,6 +44,8 @@ export const DashboardHeader = (props: { cashBadge?: 'red' | null }) => {
         <BusinessSwitcher />
 
         <NotificationBell />
+
+        <ThemeToggle />
 
         <LocaleSwitcher />
 
