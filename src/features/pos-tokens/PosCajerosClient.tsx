@@ -17,7 +17,7 @@ import { Button } from '@/components/ui/button';
  * Abrirla desde aquí sirve para verificar de punta a punta que el dispositivo
  * de caja levanta y se conecta a su backend (este MerchantAI vía /api/pos/*).
  */
-const TIENDA_CAJERO_URL = 'https://app.pos.merchantai.com';
+const TIENDA_CAJERO_URL = 'https://app.pos.mymerchantai.com';
 
 type TokenRow = Awaited<ReturnType<typeof listPosTokens>>[number];
 type CashierRow = Awaited<ReturnType<typeof listOrgCashiers>>[number];
