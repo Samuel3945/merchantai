@@ -31,7 +31,10 @@ type CreateSaleBody = {
 };
 
 export async function POST(req: Request): Promise<NextResponse> {
-  const ctx = await resolvePosAuth(req.headers.get('authorization'));
+  const ctx = await resolvePosAuth(
+    req.headers.get('authorization'),
+    req.headers.get('x-pos-cashier-id'),
+  );
   if (!ctx) {
     return NextResponse.json(
       { error: 'Sesión inválida o expirada' },
@@ -237,7 +240,10 @@ export async function POST(req: Request): Promise<NextResponse> {
 }
 
 export async function GET(req: Request): Promise<NextResponse> {
-  const ctx = await resolvePosAuth(req.headers.get('authorization'));
+  const ctx = await resolvePosAuth(
+    req.headers.get('authorization'),
+    req.headers.get('x-pos-cashier-id'),
+  );
   if (!ctx) {
     return NextResponse.json(
       { error: 'Sesión inválida o expirada' },

@@ -6,6 +6,7 @@ import {
   listEmployees,
   listPendingInvitations,
   resendInvitation,
+  resetCashierPin,
   revokeInvitation,
 } from '@/actions/employees';
 import { Button } from '@/components/ui/button';
@@ -114,6 +115,21 @@ export function EmployeesClient({
         refresh();
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Failed to revoke');
+      }
+    });
+  };
+
+  const handleResetPin = (id: string, name: string) => {
+    // eslint-disable-next-line no-alert
+    if (!globalThis.confirm(`¿Resetear el PIN de ${name}? Quedará sin PIN y podrá configurar uno nuevo desde la caja.`)) {
+      return;
+    }
+    startTransition(async () => {
+      try {
+        await resetCashierPin(id);
+        refresh();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'No se pudo resetear el PIN');
       }
     });
   };
@@ -236,7 +252,9 @@ export function EmployeesClient({
               <th className="px-3 py-2">Role</th>
               <th className="px-3 py-2">Status</th>
               <th className="px-3 py-2">Modules</th>
+              <th className="px-3 py-2">PIN</th>
               <th className="px-3 py-2">Created</th>
+              <th className="px-3 py-2">Acciones</th>
             </tr>
           </thead>
           <tbody>
@@ -244,7 +262,7 @@ export function EmployeesClient({
               <tr>
                 <td
                   className="px-3 py-6 text-center text-muted-foreground"
-                  colSpan={6}
+                  colSpan={8}
                 >
                   No employees yet
                 </td>
@@ -268,7 +286,25 @@ export function EmployeesClient({
                   {(emp.enabledModules ?? []).join(', ') || '—'}
                 </td>
                 <td className="px-3 py-2 text-xs">
+                  {emp.hasPin
+                    ? <span className="text-emerald-700">Configurado</span>
+                    : <span className="text-muted-foreground">Sin PIN</span>}
+                </td>
+                <td className="px-3 py-2 text-xs">
                   {formatDate(emp.createdAt)}
+                </td>
+                <td className="px-3 py-2">
+                  {emp.hasPin && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => handleResetPin(emp.id, emp.name)}
+                      disabled={pending}
+                      title="Deja al empleado sin PIN para que configure uno nuevo"
+                    >
+                      Resetear PIN
+                    </Button>
+                  )}
                 </td>
               </tr>
             ))}

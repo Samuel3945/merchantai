@@ -39,7 +39,10 @@ function decodeClientKey(key: string): { name: string; phone: string } {
 }
 
 export async function POST(req: Request): Promise<NextResponse> {
-  const ctx = await resolvePosAuth(req.headers.get('authorization'));
+  const ctx = await resolvePosAuth(
+    req.headers.get('authorization'),
+    req.headers.get('x-pos-cashier-id'),
+  );
   if (!ctx) {
     return NextResponse.json(
       { error: 'Sesión inválida o expirada' },

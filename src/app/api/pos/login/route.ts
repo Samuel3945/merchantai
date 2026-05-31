@@ -7,7 +7,10 @@ import { posTokensSchema, posUsersSchema } from '@/models/Schema';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const SESSION_TTL_S = 12 * 3600;
+// La caja (token de dispositivo) no expira por tiempo: persiste hasta que el
+// admin revoque/regenere el token. Si el admin setea pos_tokens.expiresAt, se
+// respeta esa fecha (ver chequeo de expiresAt más abajo). 10 años = "no expira".
+const SESSION_TTL_S = 10 * 365 * 24 * 3600;
 
 const UUID_RE
   = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

@@ -1,7 +1,8 @@
 'use server';
 
+import { randomUUID } from 'node:crypto';
 import { auth } from '@clerk/nextjs/server';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { db } from '@/libs/DB';
 import { posTokensSchema, posUsersSchema } from '@/models/Schema';
@@ -110,6 +111,59 @@ export async function revokePosToken(id: string) {
   const [updated] = await db
     .update(posTokensSchema)
     .set({ active: false })
+    .where(
+      and(
+        eq(posTokensSchema.id, id),
+        eq(posTokensSchema.organizationId, orgId),
+      ),
+    )
+    .returning({ id: posTokensSchema.id });
+
+  if (!updated) {
+    throw new Error('POS token not found');
+  }
+
+  revalidatePath('/dashboard/pos-cajeros');
+  return { ok: true as const };
+}
+
+// Genera un token nuevo para la caja (invalida el anterior). El dispositivo que
+// tenía el token viejo deberá pegar el nuevo. También sube el sessionEpoch.
+export async function regeneratePosToken(id: string) {
+  const { orgId } = await requireAdminContext();
+
+  const newToken = randomUUID();
+  const [updated] = await db
+    .update(posTokensSchema)
+    .set({
+      token: newToken,
+      sessionEpoch: sql`${posTokensSchema.sessionEpoch} + 1`,
+    })
+    .where(
+      and(
+        eq(posTokensSchema.id, id),
+        eq(posTokensSchema.organizationId, orgId),
+      ),
+    )
+    .returning({ id: posTokensSchema.id, token: posTokensSchema.token });
+
+  if (!updated) {
+    throw new Error('POS token not found');
+  }
+
+  revalidatePath('/dashboard/pos-cajeros');
+  return updated;
+}
+
+// "Cerrar sesión" de la caja: sube el sessionEpoch. El cajero lo detecta en su
+// próximo /pos/me (≤30 s) y desloguea al empleado activo (vuelve al selector),
+// sin invalidar el token de dispositivo.
+export async function forceLogoutPosToken(id: string) {
+  const { orgId } = await requireAdminContext();
+
+  const [updated] = await db
+    .update(posTokensSchema)
+    .set({ sessionEpoch: sql`${posTokensSchema.sessionEpoch} + 1` })
     .where(
       and(
         eq(posTokensSchema.id, id),

@@ -32,6 +32,7 @@ type ResolvedContext = {
   organizationId: string;
   cash: CashPayload;
   canConfirmTransfers: boolean;
+  sessionEpoch: number;
 };
 
 async function getSetting(
@@ -60,6 +61,24 @@ async function listActivePaymentMethods(organizationId: string) {
   } catch {
     return [];
   }
+}
+
+async function listCashiers(organizationId: string) {
+  return db
+    .select({
+      id: posUsersSchema.id,
+      name: posUsersSchema.name,
+      role: posUsersSchema.role,
+      hasPin: sql<boolean>`(${posUsersSchema.pin} <> '')`,
+    })
+    .from(posUsersSchema)
+    .where(
+      and(
+        eq(posUsersSchema.organizationId, organizationId),
+        eq(posUsersSchema.active, true),
+      ),
+    )
+    .orderBy(asc(posUsersSchema.name));
 }
 
 async function getOpenSession(
@@ -124,6 +143,7 @@ async function resolveFromToken(jwt: string): Promise<ResolvedContext | null> {
   return {
     organizationId: orgId,
     canConfirmTransfers: row.cashierCanConfirmTransfers ?? true,
+    sessionEpoch: row.token.sessionEpoch,
     cash: {
       id: row.token.id,
       displayCode: row.token.deviceName.slice(0, 12),
@@ -157,6 +177,7 @@ async function resolveFromUser(jwt: string): Promise<ResolvedContext | null> {
   return {
     organizationId: user.organizationId,
     canConfirmTransfers: user.canConfirmTransfers,
+    sessionEpoch: 0,
     cash: {
       id: user.id,
       displayCode: user.name.slice(0, 12),
@@ -197,12 +218,14 @@ export async function GET(req: Request): Promise<NextResponse> {
     businessPhone,
     fiadoEnabledRaw,
     paymentMethods,
+    cashiers,
     products,
   ] = await Promise.all([
     getSetting(orgId, 'business_name'),
     getSetting(orgId, 'business_phone'),
     getSetting(orgId, 'fiado_enabled'),
     listActivePaymentMethods(orgId),
+    listCashiers(orgId),
     db
       .select()
       .from(productsSchema)
@@ -218,8 +241,23 @@ export async function GET(req: Request): Promise<NextResponse> {
 
   const fiadoEnabled = fiadoEnabledRaw === 'true';
 
+  // "Cerrar sesión" desde el admin: si el cajero conoce un epoch más viejo que
+  // el actual de la caja, el empleado activo quedó deslogueado → el cajero
+  // vuelve al selector/PIN (sin perder el token).
+  const knownEpochRaw = req.headers.get('x-pos-session-epoch');
+  const knownEpoch
+    = knownEpochRaw != null && knownEpochRaw !== ''
+      ? Number.parseInt(knownEpochRaw, 10)
+      : null;
+  const cashierLocked
+    = knownEpoch != null
+      && Number.isFinite(knownEpoch)
+      && ctx.sessionEpoch > knownEpoch;
+
   return NextResponse.json({
     cash: ctx.cash,
+    sessionEpoch: ctx.sessionEpoch,
+    cashierLocked,
     store: {
       id: orgId,
       name: businessName || 'Mi Tienda',
@@ -234,6 +272,7 @@ export async function GET(req: Request): Promise<NextResponse> {
       canConfirmTransfers: ctx.canConfirmTransfers,
     },
     paymentMethods,
+    cashiers,
     products,
     serverTime: new Date().toISOString(),
   });

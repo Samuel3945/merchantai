@@ -3,7 +3,7 @@
 import { randomUUID } from 'node:crypto';
 import { auth } from '@clerk/nextjs/server';
 import bcrypt from 'bcryptjs';
-import { and, count, desc, eq } from 'drizzle-orm';
+import { and, count, desc, eq, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
@@ -355,6 +355,7 @@ export async function listEmployees() {
       active: posUsersSchema.active,
       enabledModules: posUsersSchema.enabledModules,
       canConfirmTransfers: posUsersSchema.canConfirmTransfers,
+      hasPin: sql<boolean>`(${posUsersSchema.pin} <> '')`,
       createdAt: posUsersSchema.createdAt,
     })
     .from(posUsersSchema)
@@ -463,4 +464,28 @@ export async function resendInvitation(invitationId: string) {
     inviteUrl: buildInviteUrl(updated.token, updated.userId),
     emailSent: false as const,
   };
+}
+
+// El admin resetea el PIN de un empleado (lo deja sin PIN). El empleado podrá
+// configurar uno nuevo desde la caja. `pin = ''` → sin PIN (acceso directo).
+export async function resetCashierPin(cashierId: string) {
+  const { orgId } = await requireAdminContext();
+
+  const [updated] = await db
+    .update(posUsersSchema)
+    .set({ pin: '' })
+    .where(
+      and(
+        eq(posUsersSchema.id, cashierId),
+        eq(posUsersSchema.organizationId, orgId),
+      ),
+    )
+    .returning({ id: posUsersSchema.id });
+
+  if (!updated) {
+    throw new Error('Empleado no encontrado');
+  }
+
+  revalidatePath('/dashboard/employees');
+  return { ok: true as const };
 }

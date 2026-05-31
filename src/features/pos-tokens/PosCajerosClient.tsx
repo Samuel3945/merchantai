@@ -7,7 +7,9 @@ import { ExternalLink } from 'lucide-react';
 import { useCallback, useState, useTransition } from 'react';
 import {
   createPosToken,
+  forceLogoutPosToken,
   listPosTokens,
+  regeneratePosToken,
   revokePosToken,
 } from '@/actions/pos-tokens';
 import { Button } from '@/components/ui/button';
@@ -75,6 +77,41 @@ export function PosCajerosClient({
         refresh();
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Failed to revoke');
+      }
+    });
+  };
+
+  const handleRegenerate = (id: string) => {
+    // eslint-disable-next-line no-alert
+    if (!globalThis.confirm('Cambiar el token de esta caja? El dispositivo actual deberá pegar el token nuevo para volver a entrar.')) {
+      return;
+    }
+    startTransition(async () => {
+      try {
+        const updated = await regeneratePosToken(id);
+        const rows = await listPosTokens();
+        setTokens(rows);
+        const fresh = rows.find(r => r.id === updated.id);
+        if (fresh) {
+          setActiveToken(fresh);
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'No se pudo regenerar el token');
+      }
+    });
+  };
+
+  const handleForceLogout = (id: string) => {
+    // eslint-disable-next-line no-alert
+    if (!globalThis.confirm('Cerrar la sesión de esta caja? El empleado activo tendrá que volver a ingresar su PIN (el token sigue válido).')) {
+      return;
+    }
+    startTransition(async () => {
+      try {
+        await forceLogoutPosToken(id);
+        refresh();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'No se pudo cerrar la sesión');
       }
     });
   };
@@ -166,14 +203,34 @@ export function PosCajerosClient({
                     Ver QR
                   </Button>
                   {t.active && (
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      onClick={() => handleRevoke(t.id)}
-                      disabled={pending}
-                    >
-                      Revocar
-                    </Button>
+                    <>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => handleForceLogout(t.id)}
+                        disabled={pending}
+                        title="Desloguea al empleado activo; el token sigue válido"
+                      >
+                        Cerrar sesión
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => handleRegenerate(t.id)}
+                        disabled={pending}
+                        title="Genera un token nuevo; el dispositivo deberá pegarlo"
+                      >
+                        Cambiar token
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={() => handleRevoke(t.id)}
+                        disabled={pending}
+                      >
+                        Revocar
+                      </Button>
+                    </>
                   )}
                 </td>
               </tr>

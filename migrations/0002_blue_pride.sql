@@ -1,0 +1,1 @@
+ALTER TABLE "pos_tokens" ADD COLUMN "session_epoch" integer DEFAULT 0 NOT NULL;

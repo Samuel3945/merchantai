@@ -71,12 +71,50 @@ async function resolveFromUser(jwt: string): Promise<PosAuthContext | null> {
   };
 }
 
+/**
+ * Resuelve la auth del POS a partir del Bearer (token de caja o id de cajero).
+ *
+ * `activeCashierId` (header `X-Pos-Cashier-Id`): el empleado seleccionado en la
+ * caja compartida. Si pertenece a la misma org del token y está activo, se usa
+ * para atribuir la operación (venta/movimiento) a ese empleado en vez de al
+ * cajero por defecto del token. Si no es válido, se ignora (cae al default).
+ */
 export async function resolvePosAuth(
   authHeader: string | null,
+  activeCashierId?: string | null,
 ): Promise<PosAuthContext | null> {
   const jwt = extractBearer(authHeader);
   if (!jwt || !UUID_RE.test(jwt)) {
     return null;
   }
-  return (await resolveFromToken(jwt)) ?? (await resolveFromUser(jwt));
+  const ctx = (await resolveFromToken(jwt)) ?? (await resolveFromUser(jwt));
+  if (!ctx) {
+    return null;
+  }
+
+  const override = activeCashierId?.trim();
+  if (override && UUID_RE.test(override)) {
+    const [emp] = await db
+      .select({
+        id: posUsersSchema.id,
+        name: posUsersSchema.name,
+        canConfirmTransfers: posUsersSchema.canConfirmTransfers,
+      })
+      .from(posUsersSchema)
+      .where(
+        and(
+          eq(posUsersSchema.id, override),
+          eq(posUsersSchema.organizationId, ctx.organizationId),
+          eq(posUsersSchema.active, true),
+        ),
+      )
+      .limit(1);
+    if (emp) {
+      ctx.cashierId = emp.id;
+      ctx.cashierName = emp.name;
+      ctx.canConfirmTransfers = emp.canConfirmTransfers;
+    }
+  }
+
+  return ctx;
 }

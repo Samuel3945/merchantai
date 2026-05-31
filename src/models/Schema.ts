@@ -300,6 +300,10 @@ export const posTokensSchema = pgTable(
       onDelete: 'set null',
     }),
     active: boolean('active').default(true).notNull(),
+    // Se incrementa cuando el admin "cierra la sesión" de la caja. El cajero
+    // compara el epoch que conoce contra este; si difiere, bloquea al empleado
+    // activo (vuelve al selector/PIN) sin perder el token de dispositivo.
+    sessionEpoch: integer('session_epoch').default(0).notNull(),
     lastSyncAt: timestamp('last_sync_at', { mode: 'date' }),
     expiresAt: timestamp('expires_at', { mode: 'date' }),
     createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
