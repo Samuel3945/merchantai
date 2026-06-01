@@ -1,10 +1,35 @@
 'use server';
 
-import { anthropic } from '@ai-sdk/anthropic';
+import { createOpenAI } from '@ai-sdk/openai';
 import { auth } from '@clerk/nextjs/server';
 import { generateObject } from 'ai';
+import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { consumeCredit } from '@/actions/plans';
+import { db } from '@/libs/DB';
+import { Env } from '@/libs/Env';
+import { appSettingsSchema } from '@/models/Schema';
+
+// Categorization runs on OpenAI. The key is resolved per-request with BYOK
+// precedence: if the org saved its own key in Settings › Integrations
+// (`openai_api_key`), we use it and DON'T spend a platform credit. Otherwise we
+// fall back to the platform key (OPENAI_API_KEY env) and consume one credit.
+const CATEGORIZE_MODEL = 'gpt-4o-mini';
+
+async function resolveOpenAiKey(orgId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ value: appSettingsSchema.value })
+    .from(appSettingsSchema)
+    .where(
+      and(
+        eq(appSettingsSchema.organizationId, orgId),
+        eq(appSettingsSchema.key, 'openai_api_key'),
+      ),
+    )
+    .limit(1);
+  const byok = row?.value?.trim();
+  return byok || null;
+}
 
 export type CategorizeResult
   = | {
@@ -46,13 +71,25 @@ export async function categorizeProduct(name: string): Promise<CategorizeResult>
     return { ok: false, reason: 'too_short' };
   }
 
-  const credit = await consumeCredit('sales_manager');
-  if (!credit.success) {
+  const byokKey = await resolveOpenAiKey(orgId);
+  const apiKey = byokKey ?? Env.OPENAI_API_KEY;
+  if (!apiKey) {
     return { ok: false, reason: 'no_credits' };
   }
 
+  // Platform key spends a credit; the org's own key (BYOK) bills their account.
+  let remaining = Number.POSITIVE_INFINITY;
+  if (!byokKey) {
+    const credit = await consumeCredit('sales_manager');
+    if (!credit.success) {
+      return { ok: false, reason: 'no_credits' };
+    }
+    remaining = credit.remaining;
+  }
+
+  const openai = createOpenAI({ apiKey });
   const { object } = await generateObject({
-    model: anthropic('claude-haiku-4-5-20251001'),
+    model: openai(CATEGORIZE_MODEL),
     schema: suggestionSchema,
     prompt: `Eres un asistente de catálogo para un negocio colombiano. Para el producto llamado "${trimmed}", sugiere una categoría comercial corta y hasta 6 características típicas (marca, tamaño, sabor, etc.). Responde en español. Si no puedes inferir un valor concreto para una característica, déjalo vacío.`,
   });
@@ -61,6 +98,6 @@ export async function categorizeProduct(name: string): Promise<CategorizeResult>
     ok: true,
     category: object.category,
     attributes: object.attributes,
-    remaining: credit.remaining,
+    remaining,
   };
 }
