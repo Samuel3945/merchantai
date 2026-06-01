@@ -1,4 +1,4 @@
-import type { NavGroup } from './navItems';
+import type { NavModuleFlags } from './navItems';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import {
@@ -9,14 +9,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { navGroups } from './navItems';
+import { buildNavGroups, navGroups } from './navItems';
 
 /**
  * Navegación móvil: replica los grupos de la sidebar en un menú desplegable.
  */
 export const MobileNavigation = (props: {
   cashBadge?: 'red' | null;
-  groups?: NavGroup[];
+  navFlags?: NavModuleFlags;
 }) => (
   <DropdownMenu>
     <DropdownMenuTrigger asChild>
@@ -52,7 +52,7 @@ export const MobileNavigation = (props: {
       </Button>
     </DropdownMenuTrigger>
     <DropdownMenuContent align="start" className="w-56">
-      {(props.groups ?? navGroups).map((group, i) => (
+      {(props.navFlags ? buildNavGroups(props.navFlags) : navGroups).map((group, i) => (
         <div key={group.title}>
           {i > 0 && <DropdownMenuSeparator />}
           <DropdownMenuLabel className="

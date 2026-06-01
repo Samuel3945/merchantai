@@ -1,4 +1,4 @@
-import type { NavGroup } from './navItems';
+import type { NavModuleFlags } from './navItems';
 import { UserButton } from '@clerk/nextjs';
 import { useLocale } from 'next-intl';
 import Link from 'next/link';
@@ -19,7 +19,7 @@ import { OrganizationMenu } from './OrganizationMenu';
  */
 export const DashboardHeader = (props: {
   cashBadge?: 'red' | null;
-  groups?: NavGroup[];
+  navFlags?: NavModuleFlags;
 }) => {
   const locale = useLocale();
 
@@ -30,7 +30,7 @@ export const DashboardHeader = (props: {
         lg:hidden
       "
       >
-        <MobileNavigation cashBadge={props.cashBadge} groups={props.groups} />
+        <MobileNavigation cashBadge={props.cashBadge} navFlags={props.navFlags} />
         <Link href="/dashboard">
           <Logo isTextHidden />
         </Link>

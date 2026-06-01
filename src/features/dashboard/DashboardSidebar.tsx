@@ -1,10 +1,10 @@
 'use client';
 
-import type { NavGroup } from './navItems';
+import type { NavModuleFlags } from './navItems';
 import { Link, usePathname } from '@/libs/I18nNavigation';
 import { Logo } from '@/templates/Logo';
 import { cn } from '@/utils/Helpers';
-import { isNavActive, navGroups } from './navItems';
+import { buildNavGroups, isNavActive, navGroups } from './navItems';
 
 /**
  * Sidebar fija del dashboard (Tienda Control). Visible en lg+, oculta en móvil
@@ -12,10 +12,10 @@ import { isNavActive, navGroups } from './navItems';
  */
 export const DashboardSidebar = (props: {
   cashBadge?: 'red' | null;
-  groups?: NavGroup[];
+  navFlags?: NavModuleFlags;
 }) => {
   const pathname = usePathname();
-  const groups = props.groups ?? navGroups;
+  const groups = props.navFlags ? buildNavGroups(props.navFlags) : navGroups;
 
   return (
     <aside className="

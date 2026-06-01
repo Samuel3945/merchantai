@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import type { NavModuleFlags } from '@/features/dashboard/navItems';
 import { auth } from '@clerk/nextjs/server';
 import { getTranslations, setRequestLocale } from 'next-intl/server';
 import { redirect } from 'next/navigation';
@@ -6,7 +7,6 @@ import { getAppSetting } from '@/actions/app-settings';
 import { getFraudAlerts } from '@/actions/cash';
 import { DashboardHeader } from '@/features/dashboard/DashboardHeader';
 import { DashboardSidebar } from '@/features/dashboard/DashboardSidebar';
-import { buildNavGroups } from '@/features/dashboard/navItems';
 
 type DashboardLayoutProps = {
   params: Promise<{ locale: string }>;
@@ -55,19 +55,22 @@ export default async function DashboardLayout(props: DashboardLayoutProps) {
   }
 
   // Module-gated nav: hide Fiados/Empleados when their toggle is off so the menu
-  // reflects exactly what the business has enabled in settings.
+  // reflects exactly what the business has enabled in settings. We pass plain
+  // booleans (not the built groups) because the nav groups carry Lucide icon
+  // components, which cannot cross the Server→Client boundary as props. The
+  // client nav components filter locally via buildNavGroups.
   const [fiadoSetting, employeesSetting] = await Promise.all([
     getAppSetting('fiado-enabled'),
     getAppSetting('modules.employees'),
   ]);
-  const navGroupsForOrg = buildNavGroups({
+  const navFlags: NavModuleFlags = {
     fiado: fiadoSetting.value !== 'false', // defaults to enabled
     employees: employeesSetting.value === 'true',
-  });
+  };
 
   return (
     <div className="flex min-h-screen bg-background">
-      <DashboardSidebar cashBadge={cashBadge} groups={navGroupsForOrg} />
+      <DashboardSidebar cashBadge={cashBadge} navFlags={navFlags} />
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="
@@ -75,7 +78,7 @@ export default async function DashboardLayout(props: DashboardLayoutProps) {
           bg-card px-4
         "
         >
-          <DashboardHeader cashBadge={cashBadge} groups={navGroupsForOrg} />
+          <DashboardHeader cashBadge={cashBadge} navFlags={navFlags} />
         </header>
 
         <main className="
