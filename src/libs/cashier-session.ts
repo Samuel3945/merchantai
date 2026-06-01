@@ -83,13 +83,6 @@ export async function loginCashier(
   };
 }
 
-export async function logoutCashier(sessionId: string): Promise<void> {
-  if (!sessionId) {
-    return;
-  }
-  await db.delete(posSessionsSchema).where(eq(posSessionsSchema.id, sessionId));
-}
-
 export async function resolveCashierSession(
   sessionId: string,
 ): Promise<CashierSession | null> {

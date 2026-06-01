@@ -6,7 +6,6 @@
 // produced it — we log to the runtime logger and swallow the error.
 
 import type { PosAuthContext } from '@/libs/pos-auth';
-import { auth } from '@clerk/nextjs/server';
 import { headers } from 'next/headers';
 import { db } from '@/libs/DB';
 import { logger } from '@/libs/Logger';
@@ -53,34 +52,11 @@ async function readRequestMeta(): Promise<{
   }
 }
 
-// Resolve the current Clerk-authenticated actor inside a dashboard server
-// action. Returns null when there is no Clerk session — the caller is then
-// responsible for using a system / api / cashier actor instead.
-export async function resolveClerkActor(): Promise<AuditActor | null> {
-  try {
-    const { userId } = await auth();
-    if (!userId) {
-      return null;
-    }
-    return { type: 'user', id: userId };
-  } catch {
-    return null;
-  }
-}
-
 export function resolvePosActor(ctx: PosAuthContext): AuditActor {
   return {
     type: 'cashier',
     id: ctx.cashierId ?? `device:${ctx.cashierName}`,
   };
-}
-
-export function systemActor(name: string): AuditActor {
-  return { type: 'system', id: name };
-}
-
-export function apiActor(source: string): AuditActor {
-  return { type: 'api', id: source };
 }
 
 export async function logAction(input: LogActionInput): Promise<void> {

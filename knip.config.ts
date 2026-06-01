@@ -1,20 +1,25 @@
 import type { KnipConfig } from 'knip';
 
 const config: KnipConfig = {
+  // Entry points Knip can't infer from framework conventions:
+  // - the standalone production migration runner (invoked via `node` in Docker)
+  // - server action modules, called across the RSC boundary rather than imported
+  entry: [
+    'scripts/db-migrate.mjs',
+    'src/actions/**/*.ts',
+    'src/features/**/actions.ts',
+  ],
+  // An export only consumed inside its own module is still "used" — don't flag it.
+  ignoreExportsUsedInFile: true,
   // Files to exclude from Knip analysis
   ignore: [
     'checkly.config.ts',
     'src/components/ui/*',
-    'src/libs/DB.ts',
     'src/libs/I18n.ts',
-    'src/libs/Logger.ts',
-    'src/types/Auth.ts',
-    'src/utils/DBConnection.ts',
   ],
   // Dependencies to ignore during analysis
   ignoreDependencies: [
     '@clerk/shared',
-    '@logtape/logtape',
     '@swc/helpers', // Avoid error in CI: "`npm ci` can only install packages when your package.json and package-lock.json or npm-shrinkwrap.json are in sync."
   ],
   // Include custom Playwright test file suffixes

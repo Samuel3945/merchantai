@@ -72,8 +72,6 @@ export const navGroups: NavGroup[] = [
   },
 ];
 
-export const flatNav: NavItem[] = navGroups.flatMap(g => g.items);
-
 export type NavModuleFlags = {
   fiado: boolean;
   employees: boolean;
