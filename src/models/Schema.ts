@@ -76,6 +76,9 @@ export const productsSchema = pgTable(
     uniqueIndex('products_org_barcode_unique_idx')
       .on(table.organizationId, table.barcode)
       .where(sql`${table.deleted} = false AND ${table.barcode} IS NOT NULL`),
+    // The barcode unique index is partial, so the planner can't lean on it for
+    // plain org listings/inventory. This covers product lists filtered by org.
+    index('products_org_idx').on(table.organizationId, table.deleted),
   ],
 );
 
@@ -86,32 +89,54 @@ export const saleStatusEnum = pgEnum('sale_status', [
   'returned',
 ]);
 
-export const salesSchema = pgTable('sales', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  organizationId: text('organization_id').notNull(),
-  total: numeric('total', { precision: 10, scale: 2 }).notNull(),
-  paymentType: text('payment_type').default('cash').notNull(),
-  status: saleStatusEnum('status').default('completed').notNull(),
-  notes: text('notes'),
-  cashierId: text('cashier_id'),
-  posTokenId: uuid('pos_token_id'),
-  createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
-});
+export const salesSchema = pgTable(
+  'sales',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: text('organization_id').notNull(),
+    total: numeric('total', { precision: 10, scale: 2 }).notNull(),
+    paymentType: text('payment_type').default('cash').notNull(),
+    status: saleStatusEnum('status').default('completed').notNull(),
+    notes: text('notes'),
+    cashierId: text('cashier_id'),
+    posTokenId: uuid('pos_token_id'),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+  },
+  table => [
+    // Sales listings and date-range reports scan by org + time window.
+    index('sales_org_created_idx').on(table.organizationId, table.createdAt),
+    // Dashboard metrics filter org + status before the date range.
+    index('sales_org_status_created_idx').on(
+      table.organizationId,
+      table.status,
+      table.createdAt,
+    ),
+  ],
+);
 
-export const saleItemsSchema = pgTable('sale_items', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  saleId: uuid('sale_id')
-    .notNull()
-    .references(() => salesSchema.id, { onDelete: 'cascade' }),
-  productId: uuid('product_id')
-    .notNull()
-    .references(() => productsSchema.id, { onDelete: 'restrict' }),
-  productName: text('product_name').notNull(),
-  qty: integer('qty').notNull(),
-  price: numeric('price', { precision: 10, scale: 2 }).notNull(),
-  subtotal: numeric('subtotal', { precision: 10, scale: 2 }).notNull(),
-  unitType: text('unit_type').default('unit').notNull(),
-});
+export const saleItemsSchema = pgTable(
+  'sale_items',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    saleId: uuid('sale_id')
+      .notNull()
+      .references(() => salesSchema.id, { onDelete: 'cascade' }),
+    productId: uuid('product_id')
+      .notNull()
+      .references(() => productsSchema.id, { onDelete: 'restrict' }),
+    productName: text('product_name').notNull(),
+    qty: integer('qty').notNull(),
+    price: numeric('price', { precision: 10, scale: 2 }).notNull(),
+    subtotal: numeric('subtotal', { precision: 10, scale: 2 }).notNull(),
+    unitType: text('unit_type').default('unit').notNull(),
+  },
+  table => [
+    // Postgres does NOT auto-index FK columns. Metrics JOIN sale_items by
+    // sale_id (WHERE sale_id IN ...) and aggregate by product_id.
+    index('sale_items_sale_id_idx').on(table.saleId),
+    index('sale_items_product_id_idx').on(table.productId),
+  ],
+);
 
 export const salePaymentsSchema = pgTable('sale_payments', {
   id: uuid('id').primaryKey().defaultRandom(),
