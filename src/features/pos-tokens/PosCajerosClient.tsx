@@ -76,7 +76,7 @@ export function PosCajerosClient({
         await revokePosToken(id);
         refresh();
       } catch (e) {
-        setError(e instanceof Error ? e.message : 'Failed to revoke');
+        setError(e instanceof Error ? e.message : 'No se pudo revocar');
       }
     });
   };
@@ -130,7 +130,7 @@ export function PosCajerosClient({
             className="ml-3 underline"
             onClick={() => setError(null)}
           >
-            Dismiss
+            Descartar
           </button>
         </div>
       )}

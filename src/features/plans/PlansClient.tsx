@@ -19,7 +19,7 @@ const PLANS: {
 }[] = [
   {
     name: 'free',
-    title: 'Free',
+    title: 'Gratis',
     priceLabel: 'COP 0 / mes',
     description: 'Para probar la plataforma sin compromiso.',
     features: [
@@ -34,7 +34,7 @@ const PLANS: {
     priceLabel: 'COP 89.000 / mes',
     description: 'Para tiendas que quieren automatizar ventas.',
     features: [
-      'Sales Manager: 500 requests/mes',
+      'Sales Manager: 500 consultas/mes',
       'Customer Service: no incluido',
       'Reportes avanzados',
     ],
@@ -45,8 +45,8 @@ const PLANS: {
     priceLabel: 'COP 199.000 / mes',
     description: 'Operación completa con atención al cliente automatizada.',
     features: [
-      'Sales Manager: 500 requests/mes',
-      'Customer Service: 1.000 requests/mes',
+      'Sales Manager: 500 consultas/mes',
+      'Customer Service: 1.000 consultas/mes',
       'Soporte prioritario',
     ],
   },
@@ -130,7 +130,7 @@ function CounterCard({
       <div className="flex items-center justify-between">
         <div className="font-medium">{AGENT_LABELS[counter.agentKind]}</div>
         <Button size="sm" variant="outline" onClick={onTopUp}>
-          Comprar top-up
+          Comprar recarga
         </Button>
       </div>
 
@@ -171,8 +171,8 @@ function CounterCard({
         {cap === 0
           ? 'No incluido en tu plan'
           : exhausted
-            ? 'Sin requests disponibles'
-            : `${counter.remaining.toLocaleString('es-CO')} requests disponibles`}
+            ? 'Sin consultas disponibles'
+            : `${counter.remaining.toLocaleString('es-CO')} consultas disponibles`}
       </div>
     </div>
   );
@@ -199,12 +199,12 @@ function TopUpModal({
     >
       <div className="w-full max-w-md rounded-xl bg-background p-6 shadow-lg">
         <div className="text-lg font-semibold">
-          Comprar top-up ·
+          Comprar recarga ·
           {' '}
           {AGENT_LABELS[agentKind]}
         </div>
         <div className="mt-1 text-sm text-muted-foreground">
-          Suma requests extra al contador actual. No expiran este mes.
+          Suma consultas extra al contador actual. No expiran este mes.
         </div>
 
         <div className="mt-4 space-y-2">
@@ -231,12 +231,12 @@ function TopUpModal({
                     +
                     {p.requests.toLocaleString('es-CO')}
                     {' '}
-                    requests
+                    consultas
                   </div>
                   <div className="text-xs text-muted-foreground">
                     {copFmt.format(p.amountCop / p.requests)}
                     {' '}
-                    por request
+                    por consulta
                   </div>
                 </div>
               </div>

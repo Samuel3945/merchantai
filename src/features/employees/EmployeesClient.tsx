@@ -15,17 +15,17 @@ type EmployeeRow = Awaited<ReturnType<typeof listEmployees>>[number];
 type InvitationRow = Awaited<ReturnType<typeof listPendingInvitations>>[number];
 
 const AVAILABLE_PERMISSIONS = [
-  { key: 'sales.refund', label: 'Refund sales' },
-  { key: 'cash.withdraw', label: 'Withdraw cash' },
-  { key: 'cash.adjust', label: 'Adjust cash counts' },
-  { key: 'inventory.edit', label: 'Edit inventory' },
-  { key: 'reports.view', label: 'View reports' },
+  { key: 'sales.refund', label: 'Reembolsar ventas' },
+  { key: 'cash.withdraw', label: 'Retirar efectivo' },
+  { key: 'cash.adjust', label: 'Ajustar conteos de caja' },
+  { key: 'inventory.edit', label: 'Editar inventario' },
+  { key: 'reports.view', label: 'Ver reportes' },
 ] as const;
 
 const AVAILABLE_MODULES = [
   { key: 'pos', label: 'POS' },
-  { key: 'inventory', label: 'Inventory' },
-  { key: 'reports', label: 'Reports' },
+  { key: 'inventory', label: 'Inventario' },
+  { key: 'reports', label: 'Reportes' },
   { key: 'fiados', label: 'Fiados' },
 ] as const;
 
@@ -106,7 +106,7 @@ export function EmployeesClient({
 
   const handleRevoke = (id: string) => {
     // eslint-disable-next-line no-alert
-    if (!globalThis.confirm('Revoke this invitation?')) {
+    if (!globalThis.confirm('¿Revocar esta invitación?')) {
       return;
     }
     startTransition(async () => {
@@ -114,7 +114,7 @@ export function EmployeesClient({
         await revokeInvitation(id);
         refresh();
       } catch (e) {
-        setError(e instanceof Error ? e.message : 'Failed to revoke');
+        setError(e instanceof Error ? e.message : 'No se pudo revocar');
       }
     });
   };
@@ -141,7 +141,7 @@ export function EmployeesClient({
         setLastInviteUrl(res.inviteUrl);
         refresh();
       } catch (e) {
-        setError(e instanceof Error ? e.message : 'Failed to resend');
+        setError(e instanceof Error ? e.message : 'No se pudo reenviar');
       }
     });
   };
@@ -160,7 +160,7 @@ export function EmployeesClient({
             className="ml-3 underline"
             onClick={() => setError(null)}
           >
-            Dismiss
+            Descartar
           </button>
         </div>
       )}
@@ -171,25 +171,25 @@ export function EmployeesClient({
           text-amber-900
         "
         >
-          <div className="font-semibold">Cashier limit reached</div>
+          <div className="font-semibold">Límite de cajeros alcanzado</div>
           <div>
-            Plan
+            El plan
             {' '}
             <span className="font-mono">{limitError.plan}</span>
             {' '}
-            allows
+            permite
             {' '}
             {limitError.base}
             {' '}
-            cashiers (+
+            cajeros (+
             {limitError.addons}
             {' '}
-            add-on
-            {limitError.addons === 1 ? '' : 's'}
+            adicional
+            {limitError.addons === 1 ? '' : 'es'}
             ) =
             {' '}
             {limitError.limit}
-            . Currently used:
+            . En uso actualmente:
             {' '}
             {limitError.used}
             .
@@ -199,7 +199,7 @@ export function EmployeesClient({
             className="mt-1 underline"
             onClick={() => setLimitError(null)}
           >
-            Dismiss
+            Descartar
           </button>
         </div>
       )}
@@ -210,7 +210,7 @@ export function EmployeesClient({
           text-emerald-900
         "
         >
-          <div className="font-semibold">Invitation link</div>
+          <div className="font-semibold">Enlace de invitación</div>
           <div className="mt-1 font-mono text-xs break-all">
             {lastInviteUrl}
           </div>
@@ -221,25 +221,25 @@ export function EmployeesClient({
               navigator.clipboard.writeText(lastInviteUrl);
             }}
           >
-            Copy
+            Copiar
           </button>
           <button
             type="button"
             className="mt-2 ml-3 underline"
             onClick={() => setLastInviteUrl(null)}
           >
-            Dismiss
+            Descartar
           </button>
         </div>
       )}
 
       <div className="flex items-center justify-between">
-        <div className="text-lg font-semibold">Employees</div>
+        <div className="text-lg font-semibold">Empleados</div>
         <Button
           onClick={() => setShowInviteModal(true)}
           disabled={pending}
         >
-          Invite employee
+          Invitar empleado
         </Button>
       </div>
 
@@ -247,13 +247,13 @@ export function EmployeesClient({
         <table className="w-full text-sm">
           <thead className="bg-muted/50 text-left text-xs uppercase">
             <tr>
-              <th className="px-3 py-2">Name</th>
+              <th className="px-3 py-2">Nombre</th>
               <th className="px-3 py-2">Email</th>
-              <th className="px-3 py-2">Role</th>
-              <th className="px-3 py-2">Status</th>
-              <th className="px-3 py-2">Modules</th>
+              <th className="px-3 py-2">Rol</th>
+              <th className="px-3 py-2">Estado</th>
+              <th className="px-3 py-2">Módulos</th>
               <th className="px-3 py-2">PIN</th>
-              <th className="px-3 py-2">Created</th>
+              <th className="px-3 py-2">Creado</th>
               <th className="px-3 py-2">Acciones</th>
             </tr>
           </thead>
@@ -264,7 +264,7 @@ export function EmployeesClient({
                   className="px-3 py-6 text-center text-muted-foreground"
                   colSpan={8}
                 >
-                  No employees yet
+                  Aún no hay empleados
                 </td>
               </tr>
             )}
@@ -276,10 +276,10 @@ export function EmployeesClient({
                 <td className="px-3 py-2">
                   {emp.active
                     ? (
-                        <span className="text-emerald-700">active</span>
+                        <span className="text-emerald-700">activo</span>
                       )
                     : (
-                        <span className="text-muted-foreground">inactive</span>
+                        <span className="text-muted-foreground">inactivo</span>
                       )}
                 </td>
                 <td className="px-3 py-2 text-xs">
@@ -313,16 +313,16 @@ export function EmployeesClient({
       </div>
 
       <div>
-        <div className="mb-3 text-lg font-semibold">Pending invitations</div>
+        <div className="mb-3 text-lg font-semibold">Invitaciones pendientes</div>
         <div className="overflow-x-auto rounded-md border bg-background">
           <table className="w-full text-sm">
             <thead className="bg-muted/50 text-left text-xs uppercase">
               <tr>
                 <th className="px-3 py-2">Email</th>
-                <th className="px-3 py-2">Name</th>
-                <th className="px-3 py-2">Role</th>
-                <th className="px-3 py-2">Expires</th>
-                <th className="px-3 py-2">Actions</th>
+                <th className="px-3 py-2">Nombre</th>
+                <th className="px-3 py-2">Rol</th>
+                <th className="px-3 py-2">Vence</th>
+                <th className="px-3 py-2">Acciones</th>
               </tr>
             </thead>
             <tbody>
@@ -332,7 +332,7 @@ export function EmployeesClient({
                     className="px-3 py-6 text-center text-muted-foreground"
                     colSpan={5}
                   >
-                    No pending invitations
+                    No hay invitaciones pendientes
                   </td>
                 </tr>
               )}
@@ -344,7 +344,7 @@ export function EmployeesClient({
                   <td className="px-3 py-2 text-xs">
                     {formatDate(inv.expiresAt)}
                     {inv.expired && (
-                      <span className="ml-2 text-destructive">(expired)</span>
+                      <span className="ml-2 text-destructive">(vencida)</span>
                     )}
                   </td>
                   <td className="space-x-2 px-3 py-2">
@@ -354,7 +354,7 @@ export function EmployeesClient({
                       onClick={() => handleResend(inv.id)}
                       disabled={pending}
                     >
-                      Resend
+                      Reenviar
                     </Button>
                     <Button
                       size="sm"
@@ -362,14 +362,14 @@ export function EmployeesClient({
                       onClick={() => handleRevoke(inv.id)}
                       disabled={pending}
                     >
-                      Revoke
+                      Revocar
                     </Button>
                     <Button
                       size="sm"
                       variant="ghost"
                       onClick={() => setLastInviteUrl(inv.inviteUrl)}
                     >
-                      Show link
+                      Ver enlace
                     </Button>
                   </td>
                 </tr>
@@ -459,7 +459,7 @@ function InviteModal({
     >
       <div className="w-full max-w-lg rounded-lg bg-background p-6 shadow-lg">
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Invite employee</h2>
+          <h2 className="text-lg font-semibold">Invitar empleado</h2>
           <button
             type="button"
             onClick={onClose}
@@ -488,7 +488,7 @@ function InviteModal({
           </div>
           <div>
             <label htmlFor="emp-name" className={labelCls}>
-              Name
+              Nombre
             </label>
             <input
               id="emp-name"
@@ -501,7 +501,7 @@ function InviteModal({
           </div>
           <div>
             <label htmlFor="emp-role" className={labelCls}>
-              Role
+              Rol
             </label>
             <select
               id="emp-role"
@@ -510,14 +510,14 @@ function InviteModal({
                 setRole(e.target.value as 'admin' | 'cashier' | 'employee')}
               className={inputCls}
             >
-              <option value="cashier">Cashier</option>
-              <option value="employee">Employee</option>
-              <option value="admin">Admin</option>
+              <option value="cashier">Cajero</option>
+              <option value="employee">Empleado</option>
+              <option value="admin">Administrador</option>
             </select>
           </div>
 
           <div>
-            <div className={labelCls}>Permissions</div>
+            <div className={labelCls}>Permisos</div>
             <div className="mt-2 grid grid-cols-2 gap-2">
               {AVAILABLE_PERMISSIONS.map(p => (
                 <label key={p.key} className="flex items-center gap-2 text-sm">
@@ -533,7 +533,7 @@ function InviteModal({
           </div>
 
           <div>
-            <div className={labelCls}>Enabled modules</div>
+            <div className={labelCls}>Módulos habilitados</div>
             <div className="mt-2 grid grid-cols-2 gap-2">
               {AVAILABLE_MODULES.map(m => (
                 <label key={m.key} className="flex items-center gap-2 text-sm">
@@ -554,7 +554,7 @@ function InviteModal({
               checked={canConfirmTransfers}
               onChange={() => setCanConfirmTransfers(v => !v)}
             />
-            Can confirm transfers
+            Puede confirmar transferencias
           </label>
 
           <div className="flex justify-end gap-2 pt-2">
@@ -564,10 +564,10 @@ function InviteModal({
               onClick={onClose}
               disabled={submitting}
             >
-              Cancel
+              Cancelar
             </Button>
             <Button type="submit" disabled={submitting}>
-              {submitting ? 'Sending…' : 'Send invitation'}
+              {submitting ? 'Enviando…' : 'Enviar invitación'}
             </Button>
           </div>
         </form>

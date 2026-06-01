@@ -52,7 +52,7 @@ export function BusinessTab({ initial }: { initial: BusinessTabValues }) {
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.error ?? `Upload failed (${res.status})`);
+        throw new Error(data.error ?? `Error al subir (${res.status})`);
       }
       const data = (await res.json()) as { url: string };
       setLogoUrl(data.url);

@@ -39,8 +39,8 @@ export default async function DashboardIndexPage(props: {
   return (
     <>
       <TitleBar
-        title="Dashboard"
-        description="Sales, profit, inventory and operational metrics."
+        title="Resumen"
+        description="Ventas, ganancias, inventario y métricas operativas."
       />
       <DashboardClient initial={metrics} />
     </>

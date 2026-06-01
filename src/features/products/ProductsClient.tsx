@@ -249,14 +249,14 @@ export function ProductsClient({ initial }: { initial: Product[] }) {
         }
         close();
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Unexpected error');
+        setError(err instanceof Error ? err.message : 'Error inesperado');
       }
     });
   }
 
   function onDelete(p: Product) {
     // eslint-disable-next-line no-alert -- native confirm matches the existing delete UX
-    if (!globalThis.confirm(`Delete "${p.name}"?`)) {
+    if (!globalThis.confirm(`¿Eliminar "${p.name}"?`)) {
       return;
     }
     startTransition(async () => {
@@ -264,7 +264,7 @@ export function ProductsClient({ initial }: { initial: Product[] }) {
         await softDeleteProduct(p.id);
         setRows(prev => prev.filter(r => r.id !== p.id));
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Unexpected error');
+        setError(err instanceof Error ? err.message : 'Error inesperado');
       }
     });
   }
@@ -276,14 +276,14 @@ export function ProductsClient({ initial }: { initial: Product[] }) {
           type="search"
           value={search}
           onChange={e => setSearch(e.target.value)}
-          placeholder="Search by name, barcode or category"
+          placeholder="Buscar por nombre, código de barras o categoría"
           className={cn(inputCls, 'max-w-md')}
         />
         <Button onClick={openCreate}>Nuevo artículo</Button>
         <div className="ml-auto text-sm text-muted-foreground">
           {rows.length}
           {' '}
-          items · stock total
+          artículos · stock total
           {' '}
           {totalStock}
         </div>
@@ -293,13 +293,13 @@ export function ProductsClient({ initial }: { initial: Product[] }) {
         <table className="w-full text-sm">
           <thead className="bg-muted/50 text-left text-xs uppercase">
             <tr>
-              <th className="px-3 py-2">Name</th>
-              <th className="px-3 py-2">Barcode</th>
-              <th className="px-3 py-2">Category</th>
-              <th className="px-3 py-2 text-right">Price</th>
+              <th className="px-3 py-2">Nombre</th>
+              <th className="px-3 py-2">Código de barras</th>
+              <th className="px-3 py-2">Categoría</th>
+              <th className="px-3 py-2 text-right">Precio</th>
               <th className="px-3 py-2 text-right">Stock</th>
-              <th className="px-3 py-2">Unit</th>
-              <th className="px-3 py-2">Status</th>
+              <th className="px-3 py-2">Unidad</th>
+              <th className="px-3 py-2">Estado</th>
               <th className="px-3 py-2"></th>
             </tr>
           </thead>
@@ -311,7 +311,7 @@ export function ProductsClient({ initial }: { initial: Product[] }) {
                       colSpan={8}
                       className="px-3 py-8 text-center text-muted-foreground"
                     >
-                      {pending ? 'Loading…' : 'No products yet'}
+                      {pending ? 'Cargando…' : 'Aún no hay productos'}
                     </td>
                   </tr>
                 )
@@ -334,14 +334,14 @@ export function ProductsClient({ initial }: { initial: Product[] }) {
                             size="sm"
                             onClick={() => openEdit(p)}
                           >
-                            Edit
+                            Editar
                           </Button>
                           <Button
                             variant="destructive"
                             size="sm"
                             onClick={() => onDelete(p)}
                           >
-                            Delete
+                            Eliminar
                           </Button>
                         </div>
                       </td>

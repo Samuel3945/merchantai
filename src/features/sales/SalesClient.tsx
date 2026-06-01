@@ -12,9 +12,9 @@ const inputCls
 const labelCls = 'text-xs font-medium text-muted-foreground';
 
 const paymentOptions = [
-  { value: 'all', label: 'All payments' },
-  { value: 'efectivo', label: 'Cash / Efectivo' },
-  { value: 'transferencia', label: 'Transfer / Nequi / Daviplata' },
+  { value: 'all', label: 'Todos los pagos' },
+  { value: 'efectivo', label: 'Efectivo' },
+  { value: 'transferencia', label: 'Transferencia / Nequi / Daviplata' },
 ];
 
 const moneyFmt = new Intl.NumberFormat('es-CO', {
@@ -118,7 +118,7 @@ export function SalesClient({
       "
       >
         <div className="lg:col-span-1">
-          <label className={labelCls}>From</label>
+          <label className={labelCls}>Desde</label>
           <input
             type="date"
             value={start}
@@ -130,7 +130,7 @@ export function SalesClient({
           />
         </div>
         <div className="lg:col-span-1">
-          <label className={labelCls}>To</label>
+          <label className={labelCls}>Hasta</label>
           <input
             type="date"
             value={end}
@@ -142,7 +142,7 @@ export function SalesClient({
           />
         </div>
         <div className="lg:col-span-1">
-          <label className={labelCls}>Payment</label>
+          <label className={labelCls}>Pago</label>
           <select
             value={payment}
             onChange={(e) => {
@@ -159,7 +159,7 @@ export function SalesClient({
           </select>
         </div>
         <div className="lg:col-span-1">
-          <label className={labelCls}>Cashier ID</label>
+          <label className={labelCls}>ID de cajero</label>
           <input
             type="text"
             value={cashierId}
@@ -172,7 +172,7 @@ export function SalesClient({
           />
         </div>
         <div className="lg:col-span-2">
-          <label className={labelCls}>Search</label>
+          <label className={labelCls}>Buscar</label>
           <input
             type="search"
             value={search}
@@ -180,7 +180,7 @@ export function SalesClient({
               setSearch(e.target.value);
               resetToFirstPage();
             }}
-            placeholder="Sale ID or product name"
+            placeholder="ID de venta o nombre de producto"
             className={inputCls}
           />
         </div>
@@ -188,18 +188,18 @@ export function SalesClient({
 
       <div className="flex flex-wrap items-center gap-3">
         <Button variant="secondary" size="sm" onClick={clearFilters}>
-          Clear filters
+          Limpiar filtros
         </Button>
         <div className="ml-auto text-sm text-muted-foreground">
           {pending
-            ? 'Loading…'
+            ? 'Cargando…'
             : (
                 <>
                   {from}
                   –
                   {to}
                   {' '}
-                  of
+                  de
                   {' '}
                   {total}
                 </>
@@ -211,11 +211,11 @@ export function SalesClient({
         <table className="w-full text-sm">
           <thead className="bg-muted/50 text-left text-xs uppercase">
             <tr>
-              <th className="px-3 py-2">Date</th>
-              <th className="px-3 py-2">Sale ID</th>
-              <th className="px-3 py-2">Payment</th>
-              <th className="px-3 py-2">Status</th>
-              <th className="px-3 py-2">Cashier</th>
+              <th className="px-3 py-2">Fecha</th>
+              <th className="px-3 py-2">ID de venta</th>
+              <th className="px-3 py-2">Pago</th>
+              <th className="px-3 py-2">Estado</th>
+              <th className="px-3 py-2">Cajero</th>
               <th className="px-3 py-2 text-right">Total</th>
             </tr>
           </thead>
@@ -227,7 +227,7 @@ export function SalesClient({
                       colSpan={6}
                       className="px-3 py-8 text-center text-muted-foreground"
                     >
-                      {pending ? 'Loading…' : 'No sales found'}
+                      {pending ? 'Cargando…' : 'No se encontraron ventas'}
                     </td>
                   </tr>
                 )
@@ -258,11 +258,11 @@ export function SalesClient({
 
       <div className="flex items-center justify-between">
         <div className="text-sm text-muted-foreground">
-          Page
+          Página
           {' '}
           {page + 1}
           {' '}
-          of
+          de
           {' '}
           {pageCount}
         </div>
@@ -273,7 +273,7 @@ export function SalesClient({
             disabled={page === 0 || pending}
             onClick={() => setPage(p => Math.max(0, p - 1))}
           >
-            Previous
+            Anterior
           </Button>
           <Button
             variant="secondary"
@@ -281,7 +281,7 @@ export function SalesClient({
             disabled={page >= pageCount - 1 || pending}
             onClick={() => setPage(p => Math.min(pageCount - 1, p + 1))}
           >
-            Next
+            Siguiente
           </Button>
         </div>
       </div>

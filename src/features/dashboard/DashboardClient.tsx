@@ -319,21 +319,21 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
       "
       >
         <KpiCard
-          title="Revenue"
+          title="Ingresos"
           value={formatMoney(data.period.total)}
           delta={prev ? formatDelta(data.period.total, prev.total) : undefined}
           deltaClass={prev ? deltaTone(data.period.total, prev.total) : undefined}
-          hint={prev ? `prev ${formatMoney(prev.total)}` : undefined}
+          hint={prev ? `ant. ${formatMoney(prev.total)}` : undefined}
         />
         <KpiCard
-          title="Sales"
+          title="Ventas"
           value={String(data.period.count)}
           delta={prev ? formatDelta(data.period.count, prev.count) : undefined}
           deltaClass={prev ? deltaTone(data.period.count, prev.count) : undefined}
-          hint={prev ? `prev ${prev.count}` : undefined}
+          hint={prev ? `ant. ${prev.count}` : undefined}
         />
         <KpiCard
-          title="Avg ticket"
+          title="Ticket promedio"
           value={formatMoney(data.period.avgTicket)}
           delta={
             prev ? formatDelta(data.period.avgTicket, prev.avgTicket) : undefined
@@ -343,13 +343,13 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
           }
         />
         <KpiCard
-          title="Profit"
+          title="Ganancia"
           value={formatMoney(data.period.profit)}
           delta={prev ? formatDelta(data.period.profit, prev.profit) : undefined}
           deltaClass={prev ? deltaTone(data.period.profit, prev.profit) : undefined}
         />
         <KpiCard
-          title="Margin"
+          title="Margen"
           value={`${data.period.margin.toFixed(1)}%`}
           delta={prev ? `${(data.period.margin - prev.margin).toFixed(1)} pts` : undefined}
           deltaClass={prev ? deltaTone(data.period.margin, prev.margin) : undefined}
@@ -363,20 +363,20 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
       "
       >
         <KpiCard
-          title="Inventory value"
+          title="Valor del inventario"
           value={formatMoney(data.inventory.value)}
         />
         <KpiCard
-          title="Products"
+          title="Productos"
           value={String(data.inventory.total)}
         />
         <KpiCard
-          title="Low stock (1-5)"
+          title="Stock bajo (1-5)"
           value={String(data.inventory.lowStock)}
           deltaClass={data.inventory.lowStock > 0 ? 'text-amber-600' : undefined}
         />
         <KpiCard
-          title="Out of stock"
+          title="Sin stock"
           value={String(data.inventory.outOfStock)}
           deltaClass={data.inventory.outOfStock > 0 ? 'text-red-600' : undefined}
         />
@@ -388,7 +388,7 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
         lg:grid-cols-2
       "
       >
-        <ChartCard title="Sales by day" className="lg:col-span-2">
+        <ChartCard title="Ventas por día" className="lg:col-span-2">
           <div className="h-72 w-full">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={salesByDayLabeled}>
@@ -400,15 +400,15 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
                 />
                 <Tooltip
                   formatter={(value, name) =>
-                    name === 'Revenue'
-                      ? [formatMoney(Number(value)), 'Revenue']
-                      : [String(value), 'Sales']}
+                    name === 'Ingresos'
+                      ? [formatMoney(Number(value)), 'Ingresos']
+                      : [String(value), 'Ventas']}
                 />
                 <Legend />
                 <Line
                   type="monotone"
                   dataKey="total"
-                  name="Revenue"
+                  name="Ingresos"
                   stroke="#0F766E"
                   strokeWidth={2}
                   dot={false}
@@ -416,7 +416,7 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
                 <Line
                   type="monotone"
                   dataKey="count"
-                  name="Sales"
+                  name="Ventas"
                   stroke="#15803D"
                   strokeWidth={2}
                   dot={false}
@@ -426,7 +426,7 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
           </div>
         </ChartCard>
 
-        <ChartCard title="Sales by hour (Bogotá)">
+        <ChartCard title="Ventas por hora (Bogotá)">
           <div className="h-64 w-full">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={salesByHourFull}>
@@ -437,7 +437,7 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
                   tickFormatter={v => compactFmt.format(Number(v))}
                 />
                 <Tooltip
-                  formatter={value => [formatMoney(Number(value)), 'Revenue']}
+                  formatter={value => [formatMoney(Number(value)), 'Ingresos']}
                 />
                 <Bar dataKey="total" fill="#0F766E" radius={[4, 4, 0, 0]} />
               </BarChart>
@@ -445,7 +445,7 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
           </div>
         </ChartCard>
 
-        <ChartCard title="Payment breakdown">
+        <ChartCard title="Desglose por pago">
           {data.paymentBreakdown.length === 0
             ? (
                 <div className="
@@ -453,7 +453,7 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
                   text-muted-foreground
                 "
                 >
-                  No data
+                  Sin datos
                 </div>
               )
             : (
@@ -491,7 +491,7 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
               )}
         </ChartCard>
 
-        <ChartCard title="Category breakdown">
+        <ChartCard title="Desglose por categoría">
           {data.categoryBreakdown.length === 0
             ? (
                 <div className="
@@ -499,7 +499,7 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
                   text-muted-foreground
                 "
                 >
-                  No data
+                  Sin datos
                 </div>
               )
             : (
@@ -524,7 +524,7 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
                       <Tooltip
                         formatter={value => [
                           formatMoney(Number(value)),
-                          'Revenue',
+                          'Ingresos',
                         ]}
                       />
                       <Bar dataKey="revenue" fill="#C2410C" radius={[0, 4, 4, 0]} />
@@ -534,7 +534,7 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
               )}
         </ChartCard>
 
-        <ChartCard title="Cashier breakdown">
+        <ChartCard title="Desglose por cajero">
           {data.cashierBreakdown.length === 0
             ? (
                 <div className="
@@ -542,7 +542,7 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
                   text-muted-foreground
                 "
                 >
-                  No cashier-attributed sales
+                  Sin ventas atribuidas a cajeros
                 </div>
               )
             : (
@@ -550,9 +550,9 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
                   <table className="w-full text-sm">
                     <thead className="bg-muted/50 text-left text-xs uppercase">
                       <tr>
-                        <th className="px-3 py-2">Cashier ID</th>
-                        <th className="px-3 py-2 text-right">Sales</th>
-                        <th className="px-3 py-2 text-right">Revenue</th>
+                        <th className="px-3 py-2">ID de cajero</th>
+                        <th className="px-3 py-2 text-right">Ventas</th>
+                        <th className="px-3 py-2 text-right">Ingresos</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -577,16 +577,16 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
       {/* Top products table */}
       <div className="rounded-lg border bg-background shadow-xs">
         <div className="border-b px-4 py-3 text-sm font-semibold">
-          Top 10 products by revenue
+          Top 10 productos por ingresos
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-muted/50 text-left text-xs uppercase">
               <tr>
                 <th className="px-3 py-2">#</th>
-                <th className="px-3 py-2">Product</th>
-                <th className="px-3 py-2 text-right">Qty</th>
-                <th className="px-3 py-2 text-right">Revenue</th>
+                <th className="px-3 py-2">Producto</th>
+                <th className="px-3 py-2 text-right">Cant.</th>
+                <th className="px-3 py-2 text-right">Ingresos</th>
               </tr>
             </thead>
             <tbody>
@@ -597,7 +597,7 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
                         colSpan={4}
                         className="px-3 py-8 text-center text-muted-foreground"
                       >
-                        No sales in the selected range
+                        Sin ventas en el rango seleccionado
                       </td>
                     </tr>
                   )

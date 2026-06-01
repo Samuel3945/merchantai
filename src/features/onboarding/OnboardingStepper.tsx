@@ -36,7 +36,7 @@ const PAYMENT_METHODS: { value: PaymentMethod; label: string }[] = [
 const PLANS: { value: Plan; title: string; price: string; description: string }[] = [
   {
     value: 'free',
-    title: 'Free',
+    title: 'Gratis',
     price: 'COP 0 / mes',
     description: 'POS y gestión básica, sin agentes de IA.',
   },
@@ -44,7 +44,7 @@ const PLANS: { value: Plan; title: string; price: string; description: string }[
     value: 'pro',
     title: 'Pro',
     price: 'COP 89.000 / mes',
-    description: 'Sales Manager: 500 requests/mes + reportes avanzados.',
+    description: 'Sales Manager: 500 consultas/mes + reportes avanzados.',
   },
   {
     value: 'business',

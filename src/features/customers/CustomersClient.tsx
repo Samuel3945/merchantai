@@ -187,7 +187,7 @@ export function CustomersClient({ initial }: { initial: CustomerListItem[] }) {
         }
         close();
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Unexpected error');
+        setError(err instanceof Error ? err.message : 'Error inesperado');
       }
     });
   }
@@ -201,7 +201,7 @@ export function CustomersClient({ initial }: { initial: CustomerListItem[] }) {
         await softDeleteCustomer(c.id);
         setRows(prev => prev.filter(r => r.id !== c.id));
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Unexpected error');
+        setError(err instanceof Error ? err.message : 'Error inesperado');
       }
     });
   }
@@ -319,7 +319,7 @@ export function CustomersClient({ initial }: { initial: CustomerListItem[] }) {
                   text-muted-foreground
                   hover:text-foreground
                 "
-                aria-label="Close"
+                aria-label="Cerrar"
               >
                 ✕
               </button>

@@ -14,7 +14,7 @@ export default async function DashboardAiAgentPage(props: {
   return (
     <>
       <TitleBar
-        title="AI Agent"
+        title="Agente IA"
         description="Consulta tus ventas con el Sales Manager o atiende clientes con Customer Service."
       />
       <AiAgentClient initialSnapshot={snapshot} />
