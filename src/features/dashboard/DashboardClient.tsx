@@ -25,6 +25,7 @@ import {
 } from 'recharts';
 import { getMetrics } from '@/actions/dashboard';
 import { cn } from '@/utils/Helpers';
+import { DateRangePicker } from './DateRangePicker';
 
 const moneyFmt = new Intl.NumberFormat('es-CO', {
   style: 'currency',
@@ -60,12 +61,6 @@ const PIE_COLORS = [
   '#65A30D', // verde lima
   '#D97706', // naranja cálido
 ];
-
-const labelCls = 'text-xs font-medium text-muted-foreground';
-
-// Input de fecha al estilo Tienda Control: superficie de tarjeta + focus de marca.
-const dateInputCls
-  = 'h-9 w-full rounded-md border border-input bg-card px-3 py-1 text-sm shadow-xs outline-none transition-colors focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40';
 
 function formatMoney(value: number) {
   return moneyFmt.format(value);
@@ -247,22 +242,24 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
     };
   }, [start, end, compare]);
 
-  function applyPreset(preset: Preset) {
-    const range = presetRange(preset);
-    setStart(range.start);
-    setEnd(range.end);
-    setActivePreset(preset);
-  }
+  // Precompute each preset's concrete range so the picker stays free of date
+  // math (it only renders and stages the selection).
+  const presetOptions = PRESETS.map(p => ({
+    key: p.key,
+    label: p.label,
+    range: presetRange(p.key),
+  }));
 
-  // Editar una fecha a mano deja de coincidir con cualquier preset.
-  function handleStartChange(value: string) {
-    setStart(value);
-    setActivePreset(null);
-  }
-
-  function handleEndChange(value: string) {
-    setEnd(value);
-    setActivePreset(null);
+  function applyRange(next: {
+    start: string;
+    end: string;
+    compare: boolean;
+    preset: string | null;
+  }) {
+    setStart(next.start);
+    setEnd(next.end);
+    setCompare(next.compare);
+    setActivePreset((next.preset as Preset | null) ?? null);
   }
 
   const prev = data.previousPeriod;
@@ -294,82 +291,16 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
         lg:flex-row lg:flex-wrap lg:items-end lg:justify-between
       "
       >
-        {/* Rango de fechas */}
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="min-w-34">
-            <label htmlFor="db-from" className={labelCls}>Desde</label>
-            <input
-              id="db-from"
-              type="date"
-              value={start}
-              max={end}
-              onChange={e => handleStartChange(e.target.value)}
-              className={cn(dateInputCls, 'mt-1')}
-            />
-          </div>
-          <span className="pb-2.5 text-muted-foreground">→</span>
-          <div className="min-w-34">
-            <label htmlFor="db-to" className={labelCls}>Hasta</label>
-            <input
-              id="db-to"
-              type="date"
-              value={end}
-              min={start}
-              max={todayBogota()}
-              onChange={e => handleEndChange(e.target.value)}
-              className={cn(dateInputCls, 'mt-1')}
-            />
-          </div>
-        </div>
-
-        {/* Presets — control segmentado */}
-        <div
-          className="
-            inline-flex items-center gap-0.5 rounded-lg border bg-secondary/60
-            p-0.5
-          "
-          role="group"
-          aria-label="Rangos rápidos"
-        >
-          {PRESETS.map(p => (
-            <button
-              key={p.key}
-              type="button"
-              onClick={() => applyPreset(p.key)}
-              aria-pressed={activePreset === p.key}
-              className={cn(
-                `
-                  h-8 rounded-md px-3 text-sm font-medium text-muted-foreground
-                  transition-colors
-                  hover:text-foreground
-                `,
-                activePreset === p.key
-                  ? `
-                    bg-brand-soft text-brand-ink shadow-xs
-                    hover:text-brand-ink
-                  `
-                  : 'hover:bg-accent',
-              )}
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Comparar periodo anterior */}
-        <label className="
-          flex cursor-pointer items-center gap-2 text-sm font-medium
-          text-foreground
-        "
-        >
-          <input
-            type="checkbox"
-            checked={compare}
-            onChange={e => setCompare(e.target.checked)}
-            className="size-4 accent-primary"
-          />
-          Comparar periodo anterior
-        </label>
+        {/* Rango de fechas — picker estilo Shopify (presets + calendario) */}
+        <DateRangePicker
+          start={start}
+          end={end}
+          compare={compare}
+          activePreset={activePreset}
+          presets={presetOptions}
+          maxDate={todayBogota()}
+          onApply={applyRange}
+        />
       </div>
 
       <div className="text-xs text-muted-foreground">

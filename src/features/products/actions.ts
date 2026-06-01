@@ -6,7 +6,7 @@ import { and, desc, eq, ilike, or, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
-import { productsSchema } from '@/models/Schema';
+import { productsSchema, stockMovementsSchema } from '@/models/Schema';
 import {
 
   productCreateSchema,
@@ -100,7 +100,7 @@ export async function getProductByBarcode(
 }
 
 export async function createProduct(input: ProductCreateInput) {
-  const orgId = await requireOrgId();
+  const { userId, orgId } = await requireOrgAndUser();
   const data = productCreateSchema.parse(input);
 
   if (data.barcode) {
@@ -110,31 +110,68 @@ export async function createProduct(input: ProductCreateInput) {
     }
   }
 
-  const [row] = await db
-    .insert(productsSchema)
-    .values({
-      organizationId: orgId,
-      name: data.name,
-      barcode: data.barcode ?? null,
-      price: data.price,
-      cost: data.cost,
-      stock: data.stock,
-      category: data.category ?? null,
-      unitType: data.unitType,
-      isPerishable: data.isPerishable,
-      isWholesale: data.isWholesale,
-      wholesaleTiers: data.wholesaleTiers ?? null,
-      attributes: data.attributes,
-      status: data.status,
-      publishAt: data.publishAt ?? null,
-    })
-    .returning();
+  const initialQty = data.initialQty ?? 0;
 
-  if (!row) {
-    throw new Error('Failed to create product');
-  }
+  // Product insert + opening FIFO batch are atomic: if the movement insert
+  // fails we don't want a product with phantom stock. The batch is a
+  // stock_movements 'entry' row (remainingQty = qty) — the same lot model
+  // recordMovement() uses — but inlined here so it shares this transaction.
+  const row = await db.transaction(async (tx) => {
+    const [created] = await tx
+      .insert(productsSchema)
+      .values({
+        organizationId: orgId,
+        name: data.name,
+        barcode: data.barcode ?? null,
+        price: data.price,
+        cost: data.cost,
+        // Stock comes from the opening batch when present, so it has a single
+        // source of truth; otherwise it falls back to the provided value.
+        stock: initialQty > 0 ? 0 : data.stock,
+        category: data.category ?? null,
+        unitType: data.unitType,
+        isPerishable: data.isPerishable,
+        isWholesale: data.isWholesale,
+        wholesaleTiers: data.wholesaleTiers ?? null,
+        attributes: data.attributes,
+        status: data.status,
+        publishAt: data.publishAt ?? null,
+      })
+      .returning();
+
+    if (!created) {
+      throw new Error('Failed to create product');
+    }
+
+    if (initialQty <= 0) {
+      return created;
+    }
+
+    await tx.insert(stockMovementsSchema).values({
+      organizationId: orgId,
+      productId: created.id,
+      productName: created.name,
+      type: 'entry',
+      qty: initialQty,
+      remainingQty: initialQty,
+      unitCost: data.initialCost ?? null,
+      // Expiry only matters for perishables; the engine reads it off the batch.
+      expiresAt: data.isPerishable ? (data.initialExpiresAt ?? null) : null,
+      reason: 'purchase',
+      createdBy: userId,
+    });
+
+    const [updated] = await tx
+      .update(productsSchema)
+      .set({ stock: sql`${productsSchema.stock} + ${initialQty}` })
+      .where(eq(productsSchema.id, created.id))
+      .returning();
+
+    return updated ?? created;
+  });
 
   revalidatePath('/dashboard/products');
+  revalidatePath('/dashboard/inventory');
   return row;
 }
 
