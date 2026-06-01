@@ -13,6 +13,11 @@ const KEYS = [
   'business_logo',
   'business_currency',
   'business_timezone',
+  'business_offering',
+  // Sale modalities (shape the product form)
+  'features.sell_by_weight',
+  'features.wholesale',
+  'features.perishable',
   // Modules
   'modules.delivery',
   'modules.employees',
@@ -67,18 +72,22 @@ export default async function DashboardSettingsPage(props: {
       />
       <SettingsClient
         initialPaymentMethods={paymentMethods}
+        fiadoEnabled={asBool(map['fiado-enabled'], true)}
         business={{
-          business_name: map.business_name,
-          business_phone: map.business_phone,
-          business_address: map.business_address,
-          business_logo: map.business_logo,
-          business_currency: map.business_currency,
-          business_timezone: map.business_timezone,
+          'business_name': map.business_name,
+          'business_phone': map.business_phone,
+          'business_address': map.business_address,
+          'business_logo': map.business_logo,
+          'business_currency': map.business_currency,
+          'business_timezone': map.business_timezone,
+          'business_offering': map.business_offering || 'productos',
+          'features.sell_by_weight': asBool(map['features.sell_by_weight']),
+          'features.wholesale': asBool(map['features.wholesale']),
+          'features.perishable': asBool(map['features.perishable']),
         }}
         modules={{
           'modules.delivery': asBool(map['modules.delivery']),
           'modules.employees': asBool(map['modules.employees']),
-          'fiado-enabled': asBool(map['fiado-enabled'], true),
         }}
         fiscal={{
           fiscal_nit: map.fiscal_nit,

@@ -28,16 +28,50 @@ import {
   updatePaymentMethod,
 } from '@/actions/payment-methods';
 import { Button } from '@/components/ui/button';
+import { ToggleRow } from './fields';
+import { useSettingSave } from './useSettingSave';
+
+// Transfer accounts carry banking details the bot shares with the customer at
+// checkout. The cashier never sees them — it only shows a "Transferencia" button.
+type TransferDetails = {
+  account_type?: 'ahorros' | 'corriente' | 'nequi' | 'daviplata';
+  bank?: string;
+  account_number?: string;
+  holder_name?: string;
+  holder_id?: string;
+  notes?: string;
+};
+
+const ACCOUNT_KINDS: ReadonlyArray<{
+  value: NonNullable<TransferDetails['account_type']>;
+  label: string;
+}> = [
+  { value: 'ahorros', label: 'Ahorros' },
+  { value: 'corriente', label: 'Corriente' },
+  { value: 'nequi', label: 'Nequi' },
+  { value: 'daviplata', label: 'Daviplata' },
+];
+
+// Cash and credit (fiado) are system-managed and never appear as editable rows.
+function isEditable(type: PaymentMethodType): boolean {
+  return type !== 'cash' && type !== 'credit';
+}
+
+// One-line account summary shown under a transfer row (bank · number · holder).
+function transferSummary(details: unknown): string {
+  const d = (details ?? {}) as TransferDetails;
+  return [d.bank, d.account_number, d.holder_name].filter(Boolean).join(' · ');
+}
 
 const inputCls
   = 'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50';
 const labelCls = 'text-xs font-medium text-muted-foreground';
 
+// Cash and credit are system-managed (see banner + Fiado toggle), so they are
+// not offered when creating a custom method.
 const TYPE_OPTIONS: ReadonlyArray<{ value: PaymentMethodType; label: string }> = [
-  { value: 'cash', label: 'Efectivo' },
   { value: 'transfer', label: 'Transferencia' },
   { value: 'card', label: 'Tarjeta' },
-  { value: 'credit', label: 'Fiado / Crédito' },
   { value: 'other', label: 'Otro' },
 ];
 
@@ -57,38 +91,52 @@ function formatSchedule(start: number | null, end: number | null): string {
 
 export function PaymentMethodsClient({
   initialMethods,
+  fiadoEnabled: initialFiado,
 }: {
   initialMethods: PaymentMethodRow[];
+  fiadoEnabled: boolean;
 }) {
   const [methods, setMethods] = useState(initialMethods);
   const [editing, setEditing] = useState<PaymentMethodRow | null>(null);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const [fiado, setFiado] = useState(initialFiado);
+  const { save } = useSettingSave();
+
+  const editableMethods = methods.filter(m => isEditable(m.type));
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
+  const handleToggleFiado = (next: boolean) => {
+    setFiado(next);
+    save('fiado-enabled', next ? 'true' : 'false', { notifyConfigChange: true })
+      .catch(() => setFiado(!next));
+  };
+
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over || active.id === over.id) {
       return;
     }
-    const oldIndex = methods.findIndex(m => m.id === active.id);
-    const newIndex = methods.findIndex(m => m.id === over.id);
+    const oldIndex = editableMethods.findIndex(m => m.id === active.id);
+    const newIndex = editableMethods.findIndex(m => m.id === over.id);
     if (oldIndex === -1 || newIndex === -1) {
       return;
     }
-    const next = arrayMove(methods, oldIndex, newIndex);
-    setMethods(next);
+    const newEditable = arrayMove(editableMethods, oldIndex, newIndex);
+    const systemMethods = methods.filter(m => !isEditable(m.type));
+    const prevMethods = methods;
+    setMethods([...systemMethods, ...newEditable]);
     startTransition(async () => {
       try {
-        await reorderPaymentMethods(next.map(m => m.id));
+        await reorderPaymentMethods(newEditable.map(m => m.id));
       } catch (e) {
         setError(e instanceof Error ? e.message : 'No se pudo reordenar');
-        setMethods(methods);
+        setMethods(prevMethods);
       }
     });
   };
@@ -160,12 +208,49 @@ export function PaymentMethodsClient({
         </div>
       )}
 
-      <div className="flex items-center justify-between">
+      <div>
+        <h2 className="text-lg font-semibold">Métodos del sistema</h2>
+        <p className="text-sm text-muted-foreground">
+          Efectivo siempre está disponible. El fiado se activa con un toque.
+        </p>
+      </div>
+
+      <div className="space-y-3">
+        <div className="
+          flex items-center justify-between gap-4 rounded-md border
+          border-border bg-muted/30 p-4
+        "
+        >
+          <div>
+            <div className="text-sm font-medium">Efectivo</div>
+            <div className="mt-1 text-xs text-muted-foreground">
+              Método predeterminado del sistema · siempre activo
+            </div>
+          </div>
+          <span className="
+            shrink-0 rounded-full bg-primary/10 px-2.5 py-1 text-xs
+            font-semibold text-primary
+          "
+          >
+            Siempre activo
+          </span>
+        </div>
+
+        <ToggleRow
+          label="Fiado / Crédito"
+          description="Permite registrar ventas a crédito con saldo pendiente del cliente."
+          initial={fiado}
+          onCommit={handleToggleFiado}
+        />
+      </div>
+
+      <div className="flex items-center justify-between pt-2">
         <div>
-          <h2 className="text-lg font-semibold">Métodos de pago</h2>
+          <h2 className="text-lg font-semibold">Cuentas de transferencia</h2>
           <p className="text-sm text-muted-foreground">
-            Arrastra para reordenar. Desactiva los que no uses sin perder el
-            historial.
+            Agrega tus cuentas (Bancolombia, Nequi, Daviplata…). En la caja el
+            cajero ve un solo botón «Transferencia»; el bot comparte los datos al
+            cliente. Arrastra para reordenar.
           </p>
         </div>
         <Button onClick={() => setCreating(true)} disabled={pending}>
@@ -194,18 +279,18 @@ export function PaymentMethodsClient({
           onDragEnd={handleDragEnd}
         >
           <SortableContext
-            items={methods.map(m => m.id)}
+            items={editableMethods.map(m => m.id)}
             strategy={verticalListSortingStrategy}
           >
-            {methods.length === 0 && (
+            {editableMethods.length === 0 && (
               <div className="
                 px-3 py-6 text-center text-sm text-muted-foreground
               "
               >
-                Sin métodos de pago
+                Sin cuentas de transferencia. Agrega una con «Nuevo método».
               </div>
             )}
-            {methods.map(row => (
+            {editableMethods.map(row => (
               <SortableRow
                 key={row.id}
                 row={row}
@@ -289,7 +374,14 @@ function SortableRow({
       </button>
       <div className="flex items-center gap-2">
         {row.icon && <span className="text-base">{row.icon}</span>}
-        <span className="font-medium">{row.name}</span>
+        <div className="min-w-0">
+          <div className="font-medium">{row.name}</div>
+          {row.type === 'transfer' && transferSummary(row.details) && (
+            <div className="truncate text-xs text-muted-foreground">
+              {transferSummary(row.details)}
+            </div>
+          )}
+        </div>
       </div>
       <div className="text-xs text-muted-foreground uppercase">{row.type}</div>
       <div className="text-xs text-muted-foreground">
@@ -335,8 +427,13 @@ function EditModal({
   onError: (err: unknown) => void;
 }) {
   const [name, setName] = useState(initial?.name ?? '');
-  const [type, setType] = useState<PaymentMethodType>(initial?.type ?? 'other');
+  const [type, setType] = useState<PaymentMethodType>(initial?.type ?? 'transfer');
   const [icon, setIcon] = useState(initial?.icon ?? '');
+  const [details, setDetails] = useState<TransferDetails>(
+    (initial?.details ?? { account_type: 'ahorros' }) as TransferDetails,
+  );
+  const setDetail = (patch: Partial<TransferDetails>) =>
+    setDetails(d => ({ ...d, ...patch }));
   const [hasSchedule, setHasSchedule] = useState(
     initial?.startHour !== null && initial?.startHour !== undefined,
   );
@@ -360,6 +457,14 @@ function EditModal({
       const parsedStart = hasSchedule ? Number(startHour) : null;
       const parsedEnd = hasSchedule ? Number(endHour) : null;
 
+      // Only persist banking details for transfer accounts; other types clear them.
+      const cleanDetails: Record<string, unknown>
+        = type === 'transfer'
+          ? Object.fromEntries(
+              Object.entries(details).filter(([, v]) => v != null && v !== ''),
+            )
+          : {};
+
       let saved: PaymentMethodRow;
       if (initial) {
         saved = await updatePaymentMethod({
@@ -370,6 +475,7 @@ function EditModal({
           startHour: parsedStart,
           endHour: parsedEnd,
           description: description.trim() || null,
+          details: cleanDetails,
         });
       } else {
         saved = await createPaymentMethod({
@@ -379,6 +485,7 @@ function EditModal({
           startHour: parsedStart,
           endHour: parsedEnd,
           description: description.trim() || null,
+          details: cleanDetails,
         });
       }
       onSaved(saved);
@@ -443,6 +550,97 @@ function EditModal({
               ))}
             </select>
           </div>
+
+          {type === 'transfer' && (
+            <div className="
+              space-y-3 rounded-md border border-border bg-muted/30 p-3
+            "
+            >
+              <p className="text-xs font-medium text-muted-foreground">
+                Datos de la cuenta (los comparte el bot al cliente; el cajero no
+                los ve)
+              </p>
+              <div>
+                <label htmlFor="pm-acct-kind" className={labelCls}>
+                  Tipo de cuenta
+                </label>
+                <select
+                  id="pm-acct-kind"
+                  value={details.account_type ?? 'ahorros'}
+                  onChange={e =>
+                    setDetail({
+                      account_type: e.target
+                        .value as TransferDetails['account_type'],
+                    })}
+                  className={inputCls}
+                >
+                  {ACCOUNT_KINDS.map(k => (
+                    <option key={k.value} value={k.value}>
+                      {k.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label htmlFor="pm-bank" className={labelCls}>
+                  {details.account_type === 'nequi'
+                    || details.account_type === 'daviplata'
+                    ? 'Plataforma'
+                    : 'Banco'}
+                </label>
+                <input
+                  id="pm-bank"
+                  type="text"
+                  value={details.bank ?? ''}
+                  onChange={e => setDetail({ bank: e.target.value })}
+                  placeholder="Ej: Bancolombia, Davivienda"
+                  className={inputCls}
+                />
+              </div>
+              <div>
+                <label htmlFor="pm-acct-num" className={labelCls}>
+                  {details.account_type === 'nequi'
+                    || details.account_type === 'daviplata'
+                    ? 'Número de celular'
+                    : 'Número de cuenta'}
+                </label>
+                <input
+                  id="pm-acct-num"
+                  type="text"
+                  value={details.account_number ?? ''}
+                  onChange={e => setDetail({ account_number: e.target.value })}
+                  placeholder="Ej: 001-234567-89"
+                  className={inputCls}
+                />
+              </div>
+              <div>
+                <label htmlFor="pm-holder" className={labelCls}>
+                  A nombre de
+                </label>
+                <input
+                  id="pm-holder"
+                  type="text"
+                  value={details.holder_name ?? ''}
+                  onChange={e => setDetail({ holder_name: e.target.value })}
+                  placeholder="Ej: Juan García"
+                  className={inputCls}
+                />
+              </div>
+              <div>
+                <label htmlFor="pm-holder-id" className={labelCls}>
+                  Cédula del titular (opcional)
+                </label>
+                <input
+                  id="pm-holder-id"
+                  type="text"
+                  value={details.holder_id ?? ''}
+                  onChange={e => setDetail({ holder_id: e.target.value })}
+                  placeholder="Algunos bancos la piden"
+                  className={inputCls}
+                />
+              </div>
+            </div>
+          )}
 
           <div>
             <label htmlFor="pm-icon" className={labelCls}>

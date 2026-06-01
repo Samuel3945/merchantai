@@ -6,7 +6,6 @@ import { useSettingSave } from './useSettingSave';
 export type ModulesTabValues = {
   'modules.delivery': boolean;
   'modules.employees': boolean;
-  'fiado-enabled': boolean;
 };
 
 export function ModulesTab({ initial }: { initial: ModulesTabValues }) {
@@ -37,12 +36,6 @@ export function ModulesTab({ initial }: { initial: ModulesTabValues }) {
           description="Permite múltiples cajeros, turnos y permisos por rol."
           initial={initial['modules.employees']}
           onCommit={v => persist('modules.employees', v)}
-        />
-        <ToggleRow
-          label="Fiado / Crédito"
-          description="Permite registrar ventas a crédito con saldo pendiente del cliente."
-          initial={initial['fiado-enabled']}
-          onCommit={v => persist('fiado-enabled', v)}
         />
       </div>
     </div>

@@ -74,6 +74,32 @@ export const navGroups: NavGroup[] = [
 
 export const flatNav: NavItem[] = navGroups.flatMap(g => g.items);
 
+export type NavModuleFlags = {
+  fiado: boolean;
+  employees: boolean;
+};
+
+// Maps a nav href to the module flag that controls its visibility. Items not
+// listed here are always visible (core modules).
+const GATED_HREF: Record<string, keyof NavModuleFlags> = {
+  '/dashboard/fiados': 'fiado',
+  '/dashboard/employees': 'employees',
+};
+
+// Returns the nav groups with module-gated items removed when their flag is off.
+// Empty groups are dropped so the sidebar never shows an empty section header.
+export function buildNavGroups(flags: NavModuleFlags): NavGroup[] {
+  return navGroups
+    .map(group => ({
+      ...group,
+      items: group.items.filter((item) => {
+        const flag = GATED_HREF[item.href];
+        return flag ? flags[flag] : true;
+      }),
+    }))
+    .filter(group => group.items.length > 0);
+}
+
 /** Marca activo el item: exacto para Resumen, por prefijo para el resto. */
 export function isNavActive(pathname: string, href: string): boolean {
   if (href === '/dashboard') {

@@ -98,7 +98,19 @@ type AiState
     | { status: 'done'; remaining: number }
     | { status: 'no_credits' };
 
-export function ProductsClient({ initial }: { initial: Product[] }) {
+export type ProductFeatureFlags = {
+  sellByWeight: boolean;
+  wholesale: boolean;
+  perishable: boolean;
+};
+
+export function ProductsClient({
+  initial,
+  features,
+}: {
+  initial: Product[];
+  features: ProductFeatureFlags;
+}) {
   const [rows, setRows] = useState<Product[]>(initial);
   const [search, setSearch] = useState('');
   const [open, setOpen] = useState(false);
@@ -407,20 +419,47 @@ export function ProductsClient({ initial }: { initial: Product[] }) {
                 />
               </div>
 
-              <div>
-                <label className={labelCls}>Se vende por</label>
-                <div className="mt-1 grid grid-cols-2 gap-2">
-                  {(['unit', 'kg'] as const).map(u => (
+              {features.sellByWeight && (
+                <div>
+                  <label className={labelCls}>Se vende por</label>
+                  <div className="mt-1 grid grid-cols-2 gap-2">
+                    {(['unit', 'kg'] as const).map(u => (
+                      <button
+                        key={u}
+                        type="button"
+                        onClick={() => setForm({ ...form, unitType: u })}
+                        className={cn(
+                          `
+                            h-10 rounded-md border text-sm font-medium
+                            transition-colors
+                          `,
+                          form.unitType === u
+                            ? 'border-primary bg-primary/10 text-primary'
+                            : `
+                              border-input text-muted-foreground
+                              hover:bg-accent
+                            `,
+                        )}
+                      >
+                        {u === 'unit' ? 'Unidad' : 'Kg'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {(features.wholesale || features.perishable) && (
+                <div className="flex flex-wrap gap-2">
+                  {features.wholesale && (
                     <button
-                      key={u}
                       type="button"
-                      onClick={() => setForm({ ...form, unitType: u })}
+                      onClick={() => setForm({ ...form, isWholesale: !form.isWholesale })}
                       className={cn(
                         `
-                          h-10 rounded-md border text-sm font-medium
+                          rounded-md border px-3 py-2 text-xs font-semibold
                           transition-colors
                         `,
-                        form.unitType === u
+                        form.isWholesale
                           ? 'border-primary bg-primary/10 text-primary'
                           : `
                             border-input text-muted-foreground
@@ -428,51 +467,32 @@ export function ProductsClient({ initial }: { initial: Product[] }) {
                           `,
                       )}
                     >
-                      {u === 'unit' ? 'Unidad' : 'Kg'}
+                      Por mayor
                     </button>
-                  ))}
+                  )}
+                  {features.perishable && (
+                    <button
+                      type="button"
+                      onClick={() => setForm({ ...form, isPerishable: !form.isPerishable })}
+                      title="Marca productos que se vencen para registrar caducidad por lote."
+                      className={cn(
+                        `
+                          rounded-md border px-3 py-2 text-xs font-semibold
+                          transition-colors
+                        `,
+                        form.isPerishable
+                          ? 'border-primary bg-primary/10 text-primary'
+                          : `
+                            border-input text-muted-foreground
+                            hover:bg-accent
+                          `,
+                      )}
+                    >
+                      Se vence
+                    </button>
+                  )}
                 </div>
-              </div>
-
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => setForm({ ...form, isWholesale: !form.isWholesale })}
-                  className={cn(
-                    `
-                      rounded-md border px-3 py-2 text-xs font-semibold
-                      transition-colors
-                    `,
-                    form.isWholesale
-                      ? 'border-primary bg-primary/10 text-primary'
-                      : `
-                        border-input text-muted-foreground
-                        hover:bg-accent
-                      `,
-                  )}
-                >
-                  Por mayor
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setForm({ ...form, isPerishable: !form.isPerishable })}
-                  title="Marca productos que se vencen para registrar caducidad por lote."
-                  className={cn(
-                    `
-                      rounded-md border px-3 py-2 text-xs font-semibold
-                      transition-colors
-                    `,
-                    form.isPerishable
-                      ? 'border-primary bg-primary/10 text-primary'
-                      : `
-                        border-input text-muted-foreground
-                        hover:bg-accent
-                      `,
-                  )}
-                >
-                  Se vence
-                </button>
-              </div>
+              )}
 
               <div>
                 <label className={labelCls}>
@@ -487,7 +507,7 @@ export function ProductsClient({ initial }: { initial: Product[] }) {
                 />
               </div>
 
-              {form.isWholesale && (
+              {features.wholesale && form.isWholesale && (
                 <WholesaleTiersEditor
                   price={priceNum}
                   tiers={form.tiers}
@@ -535,7 +555,7 @@ export function ProductsClient({ initial }: { initial: Product[] }) {
                       />
                     </div>
                   </div>
-                  {form.isPerishable && (
+                  {features.perishable && form.isPerishable && (
                     <div>
                       <label className="
                         text-[11px] font-semibold tracking-wider

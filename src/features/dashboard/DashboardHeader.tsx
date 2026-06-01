@@ -1,3 +1,4 @@
+import type { NavGroup } from './navItems';
 import { UserButton } from '@clerk/nextjs';
 import { useLocale } from 'next-intl';
 import Link from 'next/link';
@@ -16,7 +17,10 @@ import { OrganizationMenu } from './OrganizationMenu';
  * sidebar; aquí quedan el menú móvil, el selector de organización/negocio y
  * las acciones de usuario.
  */
-export const DashboardHeader = (props: { cashBadge?: 'red' | null }) => {
+export const DashboardHeader = (props: {
+  cashBadge?: 'red' | null;
+  groups?: NavGroup[];
+}) => {
   const locale = useLocale();
 
   return (
@@ -26,7 +30,7 @@ export const DashboardHeader = (props: { cashBadge?: 'red' | null }) => {
         lg:hidden
       "
       >
-        <MobileNavigation cashBadge={props.cashBadge} />
+        <MobileNavigation cashBadge={props.cashBadge} groups={props.groups} />
         <Link href="/dashboard">
           <Logo isTextHidden />
         </Link>

@@ -1,3 +1,4 @@
+import type { NavGroup } from './navItems';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import {
@@ -13,7 +14,10 @@ import { navGroups } from './navItems';
 /**
  * Navegación móvil: replica los grupos de la sidebar en un menú desplegable.
  */
-export const MobileNavigation = (props: { cashBadge?: 'red' | null }) => (
+export const MobileNavigation = (props: {
+  cashBadge?: 'red' | null;
+  groups?: NavGroup[];
+}) => (
   <DropdownMenu>
     <DropdownMenuTrigger asChild>
       <Button
@@ -48,7 +52,7 @@ export const MobileNavigation = (props: { cashBadge?: 'red' | null }) => (
       </Button>
     </DropdownMenuTrigger>
     <DropdownMenuContent align="start" className="w-56">
-      {navGroups.map((group, i) => (
+      {(props.groups ?? navGroups).map((group, i) => (
         <div key={group.title}>
           {i > 0 && <DropdownMenuSeparator />}
           <DropdownMenuLabel className="

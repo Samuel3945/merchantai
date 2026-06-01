@@ -6,6 +6,7 @@ import { getAppSetting } from '@/actions/app-settings';
 import { getFraudAlerts } from '@/actions/cash';
 import { DashboardHeader } from '@/features/dashboard/DashboardHeader';
 import { DashboardSidebar } from '@/features/dashboard/DashboardSidebar';
+import { buildNavGroups } from '@/features/dashboard/navItems';
 
 type DashboardLayoutProps = {
   params: Promise<{ locale: string }>;
@@ -53,9 +54,20 @@ export default async function DashboardLayout(props: DashboardLayoutProps) {
     }
   }
 
+  // Module-gated nav: hide Fiados/Empleados when their toggle is off so the menu
+  // reflects exactly what the business has enabled in settings.
+  const [fiadoSetting, employeesSetting] = await Promise.all([
+    getAppSetting('fiado-enabled'),
+    getAppSetting('modules.employees'),
+  ]);
+  const navGroupsForOrg = buildNavGroups({
+    fiado: fiadoSetting.value !== 'false', // defaults to enabled
+    employees: employeesSetting.value === 'true',
+  });
+
   return (
     <div className="flex min-h-screen bg-background">
-      <DashboardSidebar cashBadge={cashBadge} />
+      <DashboardSidebar cashBadge={cashBadge} groups={navGroupsForOrg} />
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="
@@ -63,7 +75,7 @@ export default async function DashboardLayout(props: DashboardLayoutProps) {
           bg-card px-4
         "
         >
-          <DashboardHeader cashBadge={cashBadge} />
+          <DashboardHeader cashBadge={cashBadge} groups={navGroupsForOrg} />
         </header>
 
         <main className="
