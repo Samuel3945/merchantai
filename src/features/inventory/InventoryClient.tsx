@@ -1,7 +1,7 @@
 'use client';
 
 import type { InventoryProduct, ListMovementsParams, SmartStockSuggestion } from '@/actions/inventory';
-import { useState, useTransition } from 'react';
+import { useEffect, useState, useTransition } from 'react';
 import {
   getInventoryProducts,
   getSmartStockSuggestion,
@@ -415,24 +415,25 @@ function AiModal({
   const [data, setData] = useState<SmartStockSuggestion | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
-  const [loaded, setLoaded] = useState(false);
 
   function load() {
-    setError(null);
     startTransition(async () => {
+      setError(null);
       try {
         const result = await getSmartStockSuggestion(product.id);
         setData(result);
-        setLoaded(true);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Error inesperado');
       }
     });
   }
 
-  if (!loaded && !pending) {
+  // Fetch the suggestion once when the modal opens. Calling load() during
+  // render looped forever whenever the request failed.
+  useEffect(() => {
     load();
-  }
+    // eslint-disable-next-line react/exhaustive-deps
+  }, []);
 
   return (
     <Modal title={`Recomendación IA — ${product.name}`} onClose={onClose}>
@@ -501,7 +502,7 @@ function HistoryPanel() {
   const [to, setTo] = useState('');
   const [page, setPage] = useState(1);
   const [pending, startTransition] = useTransition();
-  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   function doLoad(p: number = 1) {
     startTransition(async () => {
@@ -512,16 +513,25 @@ function HistoryPanel() {
       if (to) {
         params.to = to;
       }
-      const rows = await listMovements(params);
-      setMovements(rows);
-      setPage(p);
-      setLoaded(true);
+      try {
+        const rows = await listMovements(params);
+        setMovements(rows);
+        setPage(p);
+        setError(null);
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : 'No se pudo cargar el historial',
+        );
+      }
     });
   }
 
-  if (!loaded && !pending) {
-    doLoad();
-  }
+  // Load the first page once on mount. Doing this in render (the previous
+  // approach) fired a transition during render and could loop on failure.
+  useEffect(() => {
+    doLoad(1);
+    // eslint-disable-next-line react/exhaustive-deps
+  }, []);
 
   const dateFmt = new Intl.DateTimeFormat('es-CO', {
     day: '2-digit',
@@ -559,6 +569,16 @@ function HistoryPanel() {
           </Button>
         </div>
       </div>
+
+      {error && (
+        <div className="
+          rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2
+          text-sm text-destructive
+        "
+        >
+          {error}
+        </div>
+      )}
 
       <div className="overflow-x-auto rounded-md border bg-background">
         <table className="w-full text-sm">

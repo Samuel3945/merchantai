@@ -10,6 +10,7 @@ import {
   saleItemsSchema,
   salePaymentsSchema,
   salesSchema,
+  stockMovementsSchema,
 } from '@/models/Schema';
 
 export const runtime = 'nodejs';
@@ -155,6 +156,20 @@ export async function POST(req: Request): Promise<NextResponse> {
             ),
           );
       }
+
+      // Record exit movements so cashier sales show up in the inventory history.
+      await tx.insert(stockMovementsSchema).values(
+        itemsToInsert.map(it => ({
+          organizationId: ctx.organizationId,
+          productId: it.productId,
+          productName: it.productName,
+          type: 'exit' as const,
+          qty: it.qty,
+          reason: 'sale',
+          saleId: sale.id,
+          createdBy: ctx.cashierId,
+        })),
+      );
 
       const paymentRows
         = body.payments && body.payments.length > 0

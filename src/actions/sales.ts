@@ -11,6 +11,7 @@ import {
   saleItemsSchema,
   salePaymentsSchema,
   salesSchema,
+  stockMovementsSchema,
 } from '@/models/Schema';
 
 export type SalePaymentInput = {
@@ -146,6 +147,21 @@ export async function createSale(input: CreateSaleInput) {
           ),
         );
     }
+
+    // Record one exit movement per line so the inventory history (stock_movements
+    // ledger) reflects sales, not just manual adjustments and opening stock.
+    await tx.insert(stockMovementsSchema).values(
+      itemsToInsert.map(it => ({
+        organizationId: orgId,
+        productId: it.productId,
+        productName: it.productName,
+        type: 'exit' as const,
+        qty: it.qty,
+        reason: 'sale',
+        saleId: sale.id,
+        createdBy: userId,
+      })),
+    );
 
     const paymentRows
       = input.payments && input.payments.length > 0
