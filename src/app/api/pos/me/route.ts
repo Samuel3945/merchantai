@@ -26,6 +26,10 @@ type CashPayload = {
     openedBy: string;
     openingAmount: string;
   } | null;
+  // El cajero (pos-merchatai Pos.tsx) lee `cash.cashSessionId` para decidir si
+  // la caja está abierta y habilitar el POS. Si falta, siempre ve "Caja cerrada"
+  // aunque exista una sesión abierta.
+  cashSessionId: string | null;
 };
 
 type ResolvedContext = {
@@ -151,6 +155,7 @@ async function resolveFromToken(jwt: string): Promise<ResolvedContext | null> {
       cashierId: row.token.cashierId,
       label: row.cashierName || row.token.deviceName,
       session,
+      cashSessionId: session?.id ?? null,
     },
   };
 }
@@ -185,13 +190,14 @@ async function resolveFromUser(jwt: string): Promise<ResolvedContext | null> {
       cashierId: user.id,
       label: user.name,
       session,
+      cashSessionId: session?.id ?? null,
     },
   };
 }
 
 export async function GET(req: Request): Promise<NextResponse> {
   const authHeader = req.headers.get('authorization') || '';
-  const match = /^Bearer\s+(.+)$/i.exec(authHeader);
+  const match = /^Bearer\s+(\S.*)$/i.exec(authHeader);
   const jwt = match?.[1]?.trim();
 
   if (!jwt) {
