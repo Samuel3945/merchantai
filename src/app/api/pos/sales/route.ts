@@ -2,7 +2,7 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { applyInvoiceCustomerUpsert } from '@/features/customers/post-sale-hook';
 import { logAction, resolvePosActor } from '@/libs/audit-log';
-import { recordCashMovement, toMoney } from '@/libs/cash-helpers';
+import { findOpenSession, recordCashMovement, toMoney } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import { resolvePosAuth } from '@/libs/pos-auth';
 import {
@@ -59,6 +59,29 @@ export async function POST(req: Request): Promise<NextResponse> {
   }
 
   const paymentType = body.paymentType?.trim() || 'Efectivo';
+
+  // Regla portada de Tiendademo (pos.service.webSale): una venta que mueve
+  // efectivo exige una caja abierta. Los pagos 100% fiado no afectan la caja,
+  // así que se permiten sin sesión abierta.
+  const paymentMethods
+    = body.payments && body.payments.length > 0
+      ? body.payments.map(p => p.method ?? '')
+      : [paymentType];
+  const requiresOpenCash = !paymentMethods.every(m =>
+    m.toLowerCase().includes('fiado'),
+  );
+  if (requiresOpenCash) {
+    const openSession = await findOpenSession(db, ctx.organizationId);
+    if (!openSession) {
+      return NextResponse.json(
+        {
+          error:
+            'La caja está cerrada. Abre la caja antes de registrar ventas.',
+        },
+        { status: 400 },
+      );
+    }
+  }
 
   try {
     const result = await db.transaction(async (tx) => {
