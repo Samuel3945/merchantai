@@ -28,6 +28,7 @@ import {
   updatePaymentMethod,
 } from '@/actions/payment-methods';
 import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
 import { ToggleRow } from './fields';
 import { useSettingSave } from './useSettingSave';
 
@@ -159,18 +160,22 @@ export function PaymentMethodsClient({
   };
 
   const handleDelete = (row: PaymentMethodRow) => {
-    // eslint-disable-next-line no-alert
-    if (!globalThis.confirm(`¿Eliminar "${row.name}"?`)) {
+    if (
+      // eslint-disable-next-line no-alert
+      !globalThis.confirm(
+        `¿Eliminar "${row.name}"? Esta acción no se puede deshacer. El historial de ventas no se ve afectado.`,
+      )
+    ) {
       return;
     }
+    const prevMethods = methods;
+    setMethods(prev => prev.filter(m => m.id !== row.id));
     startTransition(async () => {
       try {
         await deletePaymentMethod(row.id);
-        setMethods(prev =>
-          prev.map(m => (m.id === row.id ? { ...m, active: false } : m)),
-        );
       } catch (e) {
         setError(e instanceof Error ? e.message : 'No se pudo eliminar');
+        setMethods(prevMethods);
       }
     });
   };
@@ -387,16 +392,14 @@ function SortableRow({
       <div className="text-xs text-muted-foreground">
         {formatSchedule(row.startHour, row.endHour)}
       </div>
-      <div>
-        <label className="inline-flex cursor-pointer items-center gap-2">
-          <input
-            type="checkbox"
-            checked={row.active}
-            disabled={disabled}
-            onChange={onToggle}
-          />
-          <span className="text-xs">{row.active ? 'Activo' : 'Inactivo'}</span>
-        </label>
+      <div className="flex items-center gap-2">
+        <Switch
+          checked={row.active}
+          disabled={disabled}
+          onCheckedChange={onToggle}
+          aria-label={row.active ? 'Activo' : 'Inactivo'}
+        />
+        <span className="text-xs">{row.active ? 'Activo' : 'Inactivo'}</span>
       </div>
       <div className="flex justify-end gap-2">
         <Button size="sm" variant="secondary" onClick={onEdit} disabled={disabled}>
@@ -406,7 +409,7 @@ function SortableRow({
           size="sm"
           variant="destructive"
           onClick={onDelete}
-          disabled={disabled || !row.active}
+          disabled={disabled}
         >
           Eliminar
         </Button>
@@ -658,14 +661,14 @@ function EditModal({
           </div>
 
           <div className="space-y-2">
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
+            <div className="flex items-center gap-2 text-sm">
+              <Switch
                 checked={hasSchedule}
-                onChange={() => setHasSchedule(v => !v)}
+                onCheckedChange={setHasSchedule}
+                aria-label="Restringir por horario"
               />
-              Restringir por horario
-            </label>
+              <span>Restringir por horario</span>
+            </div>
             {hasSchedule && (
               <div className="grid grid-cols-2 gap-3">
                 <div>

@@ -2,6 +2,7 @@
 
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
+import { Switch } from '@/components/ui/switch';
 
 const inputCls
   = 'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50';
@@ -160,11 +161,11 @@ export function ToggleRow({
   useEffect(() => setValue(initial), [initial]);
 
   return (
-    <label
+    <div
       className={`
-        flex cursor-pointer items-start justify-between gap-4 rounded-md border
-        border-border bg-background p-4
-        ${disabled ? 'opacity-60' : 'hover:bg-muted/40'}
+        flex items-start justify-between gap-4 rounded-md border border-border
+        bg-background p-4
+        ${disabled ? 'opacity-60' : ''}
       `}
     >
       <div>
@@ -175,18 +176,17 @@ export function ToggleRow({
           </div>
         )}
       </div>
-      <input
-        type="checkbox"
+      <Switch
         checked={value}
         disabled={disabled}
-        onChange={(e) => {
-          const next = e.target.checked;
+        aria-label={label}
+        className="mt-1"
+        onCheckedChange={(next) => {
           setValue(next);
           onCommit(next);
         }}
-        className="mt-1 size-4"
       />
-    </label>
+    </div>
   );
 }
 

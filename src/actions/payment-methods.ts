@@ -1,7 +1,7 @@
 'use server';
 
 import { auth } from '@clerk/nextjs/server';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, notInArray } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { db } from '@/libs/DB';
 import { paymentMethodsSchema } from '@/models/Schema';
@@ -15,12 +15,12 @@ const DEFAULT_SEED: ReadonlyArray<{
   type: PaymentMethodType;
   sortOrder: number;
 }> = [
+  // Solo se siembran los métodos gestionados por el sistema: Efectivo (siempre
+  // activo) y Fiado (controlado por el toggle fiado-enabled). Las cuentas de
+  // transferencia y tarjetas las agrega el negocio explícitamente con «Nuevo
+  // método» — no se crean métodos que el usuario no configuró.
   { name: 'Efectivo', type: 'cash', sortOrder: 0 },
-  { name: 'Nequi', type: 'transfer', sortOrder: 1 },
-  { name: 'Daviplata', type: 'transfer', sortOrder: 2 },
-  { name: 'Llave', type: 'transfer', sortOrder: 3 },
-  { name: 'Tarjeta', type: 'card', sortOrder: 4 },
-  { name: 'Fiado', type: 'credit', sortOrder: 5 },
+  { name: 'Fiado', type: 'credit', sortOrder: 1 },
 ];
 
 async function requireOrg() {
@@ -235,6 +235,10 @@ export async function updatePaymentMethod(
   return row;
 }
 
+// Borrado REAL. Es seguro porque sale_payments.method es texto (no FK a
+// payment_methods): el historial de ventas conserva el nombre del método. Los
+// métodos del sistema (cash/credit) no se pueden borrar — se gestionan con
+// «Efectivo siempre activo» y el toggle de Fiado.
 export async function deletePaymentMethod(id: string): Promise<{ ok: true }> {
   const { orgId } = await requireAdminOrg();
 
@@ -243,12 +247,12 @@ export async function deletePaymentMethod(id: string): Promise<{ ok: true }> {
   }
 
   const [row] = await db
-    .update(paymentMethodsSchema)
-    .set({ active: false })
+    .delete(paymentMethodsSchema)
     .where(
       and(
         eq(paymentMethodsSchema.id, id),
         eq(paymentMethodsSchema.organizationId, orgId),
+        notInArray(paymentMethodsSchema.type, ['cash', 'credit']),
       ),
     )
     .returning({ id: paymentMethodsSchema.id });
