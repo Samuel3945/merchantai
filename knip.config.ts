@@ -5,7 +5,7 @@ const config: KnipConfig = {
   // - the standalone production migration runner (invoked via `node` in Docker)
   // - server action modules, called across the RSC boundary rather than imported
   entry: [
-    'scripts/db-migrate.mjs',
+    'scripts/*.mjs',
     'src/actions/**/*.ts',
     'src/features/**/actions.ts',
   ],
