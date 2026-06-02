@@ -104,7 +104,7 @@ async function periodStats(
       FROM sales
       WHERE organization_id = ${orgId}
         AND status = 'completed'
-        AND (created_at AT TIME ZONE 'America/Bogota')::date
+        AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
             BETWEEN ${start}::date AND ${end}::date
     ),
     costs AS (
@@ -175,7 +175,7 @@ async function topProducts(
     JOIN products p ON p.id = si.product_id
     WHERE s.organization_id = ${orgId}
       AND s.status = 'completed'
-      AND (s.created_at AT TIME ZONE 'America/Bogota')::date
+      AND (s.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
           BETWEEN ${start}::date AND ${end}::date
     GROUP BY p.id, p.name
     ORDER BY revenue DESC
@@ -206,7 +206,7 @@ async function paymentBreakdown(
     FROM sales
     WHERE organization_id = ${orgId}
       AND status = 'completed'
-      AND (created_at AT TIME ZONE 'America/Bogota')::date
+      AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
           BETWEEN ${start}::date AND ${end}::date
     GROUP BY payment_type
     ORDER BY total DESC
@@ -229,13 +229,13 @@ async function salesByHour(
 ): Promise<SalesByHourRow[]> {
   const result = await db.execute(sql`
     SELECT
-      EXTRACT(hour FROM (created_at AT TIME ZONE 'America/Bogota'))::int AS hour,
+      EXTRACT(hour FROM (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota'))::int AS hour,
       COUNT(*)::int AS count,
       SUM(total)::float8 AS total
     FROM sales
     WHERE organization_id = ${orgId}
       AND status = 'completed'
-      AND (created_at AT TIME ZONE 'America/Bogota')::date
+      AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
           BETWEEN ${start}::date AND ${end}::date
     GROUP BY hour
     ORDER BY hour
@@ -258,13 +258,13 @@ async function salesByDay(
 ): Promise<SalesByDayRow[]> {
   const result = await db.execute(sql`
     SELECT
-      to_char((created_at AT TIME ZONE 'America/Bogota')::date, 'YYYY-MM-DD') AS day,
+      to_char((created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date, 'YYYY-MM-DD') AS day,
       COUNT(*)::int AS count,
       SUM(total)::float8 AS total
     FROM sales
     WHERE organization_id = ${orgId}
       AND status = 'completed'
-      AND (created_at AT TIME ZONE 'America/Bogota')::date
+      AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
           BETWEEN ${start}::date AND ${end}::date
     GROUP BY day
     ORDER BY day
@@ -295,7 +295,7 @@ async function categoryBreakdown(
     JOIN products p ON p.id = si.product_id
     WHERE s.organization_id = ${orgId}
       AND s.status = 'completed'
-      AND (s.created_at AT TIME ZONE 'America/Bogota')::date
+      AND (s.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
           BETWEEN ${start}::date AND ${end}::date
     GROUP BY p.category
     ORDER BY revenue DESC
@@ -328,7 +328,7 @@ async function cashierBreakdown(
     WHERE organization_id = ${orgId}
       AND status = 'completed'
       AND cashier_id IS NOT NULL
-      AND (created_at AT TIME ZONE 'America/Bogota')::date
+      AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
           BETWEEN ${start}::date AND ${end}::date
     GROUP BY cashier_id
     ORDER BY total DESC

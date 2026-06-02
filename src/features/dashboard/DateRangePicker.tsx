@@ -126,9 +126,8 @@ export function DateRangePicker({
       <PopoverTrigger asChild>
         <Button
           variant="secondary"
-          className="h-9 justify-start gap-2 font-medium"
+          className="h-9 justify-start font-medium"
         >
-          <span aria-hidden>🗓</span>
           {triggerLabel}
         </Button>
       </PopoverTrigger>
