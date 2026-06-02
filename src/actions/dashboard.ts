@@ -19,41 +19,23 @@ export type InventoryStats = {
   total: number;
 };
 
-export type TopProduct = {
-  id: string;
-  name: string;
-  qty: number;
-  revenue: number;
-};
-
-export type PaymentBreakdownRow = {
-  paymentType: string;
-  count: number;
-  total: number;
-};
-
-export type SalesByHourRow = {
-  hour: number;
-  count: number;
-  total: number;
-};
-
 export type SalesByDayRow = {
   day: string;
   count: number;
   total: number;
 };
 
-export type CategoryBreakdownRow = {
-  category: string;
-  qty: number;
-  revenue: number;
+export type CashFlowStats = {
+  income: number;
+  expenses: number;
+  net: number;
 };
 
-export type CashierBreakdownRow = {
-  cashierId: string;
-  count: number;
-  total: number;
+export type AttentionStats = {
+  outOfStock: number;
+  lowStock: number;
+  expiringSoon: number;
+  overdueFiados: number;
 };
 
 export type DashboardMetrics = {
@@ -61,13 +43,12 @@ export type DashboardMetrics = {
   compareRange: { start: string; end: string } | null;
   period: PeriodStats;
   previousPeriod: PeriodStats | null;
+  netRevenue: number;
+  prevNetRevenue: number | null;
+  cashFlow: CashFlowStats;
+  attention: AttentionStats;
   inventory: InventoryStats;
-  topProducts: TopProduct[];
-  paymentBreakdown: PaymentBreakdownRow[];
-  salesByHour: SalesByHourRow[];
   salesByDay: SalesByDayRow[];
-  categoryBreakdown: CategoryBreakdownRow[];
-  cashierBreakdown: CashierBreakdownRow[];
 };
 
 async function requireOrg() {
@@ -159,98 +140,6 @@ async function inventoryStats(orgId: string): Promise<InventoryStats> {
   };
 }
 
-async function topProducts(
-  orgId: string,
-  start: string,
-  end: string,
-): Promise<TopProduct[]> {
-  const result = await db.execute(sql`
-    SELECT
-      p.id::text AS id,
-      p.name AS name,
-      SUM(si.qty)::int AS qty,
-      SUM(si.subtotal)::float8 AS revenue
-    FROM sale_items si
-    JOIN sales s ON s.id = si.sale_id
-    JOIN products p ON p.id = si.product_id
-    WHERE s.organization_id = ${orgId}
-      AND s.status = 'completed'
-      AND (s.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
-          BETWEEN ${start}::date AND ${end}::date
-    GROUP BY p.id, p.name
-    ORDER BY revenue DESC
-    LIMIT 10
-  `);
-
-  return (result.rows ?? []).map((r) => {
-    const row = r as Record<string, unknown>;
-    return {
-      id: String(row.id),
-      name: String(row.name ?? ''),
-      qty: toInt(row.qty),
-      revenue: toNum(row.revenue),
-    };
-  });
-}
-
-async function paymentBreakdown(
-  orgId: string,
-  start: string,
-  end: string,
-): Promise<PaymentBreakdownRow[]> {
-  const result = await db.execute(sql`
-    SELECT
-      payment_type,
-      COUNT(*)::int AS count,
-      SUM(total)::float8 AS total
-    FROM sales
-    WHERE organization_id = ${orgId}
-      AND status = 'completed'
-      AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
-          BETWEEN ${start}::date AND ${end}::date
-    GROUP BY payment_type
-    ORDER BY total DESC
-  `);
-
-  return (result.rows ?? []).map((r) => {
-    const row = r as Record<string, unknown>;
-    return {
-      paymentType: String(row.payment_type ?? ''),
-      count: toInt(row.count),
-      total: toNum(row.total),
-    };
-  });
-}
-
-async function salesByHour(
-  orgId: string,
-  start: string,
-  end: string,
-): Promise<SalesByHourRow[]> {
-  const result = await db.execute(sql`
-    SELECT
-      EXTRACT(hour FROM (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota'))::int AS hour,
-      COUNT(*)::int AS count,
-      SUM(total)::float8 AS total
-    FROM sales
-    WHERE organization_id = ${orgId}
-      AND status = 'completed'
-      AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
-          BETWEEN ${start}::date AND ${end}::date
-    GROUP BY hour
-    ORDER BY hour
-  `);
-
-  return (result.rows ?? []).map((r) => {
-    const row = r as Record<string, unknown>;
-    return {
-      hour: toInt(row.hour),
-      count: toInt(row.count),
-      total: toNum(row.total),
-    };
-  });
-}
-
 async function salesByDay(
   orgId: string,
   start: string,
@@ -280,68 +169,113 @@ async function salesByDay(
   });
 }
 
-async function categoryBreakdown(
+// Net revenue = completed sales minus what was refunded back to customers in
+// the same window. "What you actually kept", not gross billing.
+async function netRevenue(
   orgId: string,
   start: string,
   end: string,
-): Promise<CategoryBreakdownRow[]> {
+): Promise<number> {
   const result = await db.execute(sql`
-    SELECT
-      COALESCE(p.category, 'Sin categoría') AS category,
-      SUM(si.qty)::int AS qty,
-      SUM(si.subtotal)::float8 AS revenue
-    FROM sale_items si
-    JOIN sales s ON s.id = si.sale_id
-    JOIN products p ON p.id = si.product_id
-    WHERE s.organization_id = ${orgId}
-      AND s.status = 'completed'
-      AND (s.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
-          BETWEEN ${start}::date AND ${end}::date
-    GROUP BY p.category
-    ORDER BY revenue DESC
+    WITH gross AS (
+      SELECT COALESCE(SUM(total), 0)::float8 AS v
+      FROM sales
+      WHERE organization_id = ${orgId}
+        AND status = 'completed'
+        AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
+            BETWEEN ${start}::date AND ${end}::date
+    ),
+    refunds AS (
+      SELECT COALESCE(SUM(total_refunded), 0)::float8 AS v
+      FROM pos_returns
+      WHERE organization_id = ${orgId}
+        AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
+            BETWEEN ${start}::date AND ${end}::date
+    )
+    SELECT (gross.v - refunds.v)::float8 AS net FROM gross, refunds
   `);
-
-  return (result.rows ?? []).map((r) => {
-    const row = r as Record<string, unknown>;
-    return {
-      category: String(row.category ?? 'Sin categoría'),
-      qty: toInt(row.qty),
-      revenue: toNum(row.revenue),
-    };
-  });
+  const row = (result.rows?.[0] ?? {}) as Record<string, unknown>;
+  return toNum(row.net);
 }
 
-async function cashierBreakdown(
+// Real cash-drawer flow: money in (sale + deposit) vs money out
+// (expense, salary, inventory_purchase, withdrawal). This is where the owner
+// finally sees that selling a lot ≠ keeping a lot.
+async function cashFlowStats(
   orgId: string,
   start: string,
   end: string,
-): Promise<CashierBreakdownRow[]> {
-  // Note: no `users` table in schema — cashier identity is the Clerk user ID
-  // stored in sales.cashier_id. Grouping by that ID; the UI resolves names
-  // separately if needed.
+): Promise<CashFlowStats> {
   const result = await db.execute(sql`
     SELECT
-      cashier_id,
-      COUNT(*)::int AS count,
-      SUM(total)::float8 AS total
-    FROM sales
+      COALESCE(SUM(amount) FILTER (WHERE type IN ('sale', 'deposit')), 0)::float8 AS income,
+      COALESCE(SUM(amount) FILTER (WHERE type IN ('expense', 'salary', 'inventory_purchase', 'withdrawal')), 0)::float8 AS expenses
+    FROM cash_movements
     WHERE organization_id = ${orgId}
-      AND status = 'completed'
-      AND cashier_id IS NOT NULL
       AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
           BETWEEN ${start}::date AND ${end}::date
-    GROUP BY cashier_id
-    ORDER BY total DESC
   `);
+  const row = (result.rows?.[0] ?? {}) as Record<string, unknown>;
+  const income = toNum(row.income);
+  const expenses = toNum(row.expenses);
+  return { income, expenses, net: income - expenses };
+}
 
-  return (result.rows ?? []).map((r) => {
-    const row = r as Record<string, unknown>;
-    return {
-      cashierId: String(row.cashier_id ?? ''),
-      count: toInt(row.count),
-      total: toNum(row.total),
-    };
-  });
+// "Needs your attention today" — the counters that should make the owner act.
+async function attentionStats(
+  orgId: string,
+): Promise<AttentionStats> {
+  const [stock, expiring, fiados] = await Promise.all([
+    db.execute(sql`
+      SELECT
+        COUNT(*) FILTER (WHERE stock <= 0)::int AS out_of_stock,
+        COUNT(*) FILTER (WHERE stock BETWEEN 1 AND min_stock)::int AS low_stock
+      FROM products
+      WHERE organization_id = ${orgId} AND deleted = false
+    `),
+    db.execute(sql`
+      SELECT COUNT(*)::int AS expiring
+      FROM expiration_risk_cache
+      WHERE organization_id = ${orgId}
+        AND payload->>'tier' IN ('urgente', 'critico')
+    `),
+    db.execute(sql`
+      WITH fiado_debt AS (
+        SELECT
+          s.id,
+          s.total::numeric AS total,
+          COALESCE((
+            SELECT SUM(sp.amount) FROM sale_payments sp
+            WHERE sp.sale_id = s.id AND sp.method NOT ILIKE '%fiado%'
+          ), 0)::numeric AS paid,
+          s.created_at
+        FROM sales s
+        WHERE s.organization_id = ${orgId}
+          AND s.status = 'completed'
+          AND (
+            s.payment_type ILIKE '%fiado%'
+            OR EXISTS (
+              SELECT 1 FROM sale_payments sp2
+              WHERE sp2.sale_id = s.id AND sp2.method ILIKE '%fiado%'
+            )
+          )
+      )
+      SELECT COUNT(*)::int AS overdue
+      FROM fiado_debt
+      WHERE total - paid > 0
+        AND EXTRACT(day FROM NOW() - created_at) >= 7
+    `),
+  ]);
+
+  const s = (stock.rows?.[0] ?? {}) as Record<string, unknown>;
+  const e = (expiring.rows?.[0] ?? {}) as Record<string, unknown>;
+  const f = (fiados.rows?.[0] ?? {}) as Record<string, unknown>;
+  return {
+    outOfStock: toInt(s.out_of_stock),
+    lowStock: toInt(s.low_stock),
+    expiringSoon: toInt(e.expiring),
+    overdueFiados: toInt(f.overdue),
+  };
 }
 
 function validateDate(value: string, field: string): string {
@@ -369,23 +303,21 @@ export async function getMetrics(
   const [
     period,
     inventory,
-    top,
-    payments,
-    byHour,
     byDay,
-    byCategory,
-    byCashier,
     previousPeriod,
+    net,
+    prevNet,
+    cashFlow,
+    attention,
   ] = await Promise.all([
     periodStats(orgId, s, e),
     inventoryStats(orgId),
-    topProducts(orgId, s, e),
-    paymentBreakdown(orgId, s, e),
-    salesByHour(orgId, s, e),
     salesByDay(orgId, s, e),
-    categoryBreakdown(orgId, s, e),
-    cashierBreakdown(orgId, s, e),
     hasCompare && cs && ce ? periodStats(orgId, cs, ce) : Promise.resolve(null),
+    netRevenue(orgId, s, e),
+    hasCompare && cs && ce ? netRevenue(orgId, cs, ce) : Promise.resolve(null),
+    cashFlowStats(orgId, s, e),
+    attentionStats(orgId),
   ]);
 
   return {
@@ -393,12 +325,11 @@ export async function getMetrics(
     compareRange: hasCompare && cs && ce ? { start: cs, end: ce } : null,
     period,
     previousPeriod,
+    netRevenue: net,
+    prevNetRevenue: prevNet,
+    cashFlow,
+    attention,
     inventory,
-    topProducts: top,
-    paymentBreakdown: payments,
-    salesByHour: byHour,
     salesByDay: byDay,
-    categoryBreakdown: byCategory,
-    cashierBreakdown: byCashier,
   };
 }

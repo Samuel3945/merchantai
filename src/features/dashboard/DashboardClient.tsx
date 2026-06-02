@@ -1,6 +1,7 @@
 'use client';
 
 import type { DashboardMetrics } from '@/actions/dashboard';
+import Link from 'next/link';
 import {
   useEffect,
   useMemo,
@@ -9,15 +10,9 @@ import {
   useTransition,
 } from 'react';
 import {
-  Bar,
-  BarChart,
+  Area,
+  AreaChart,
   CartesianGrid,
-  Cell,
-  Legend,
-  Line,
-  LineChart,
-  Pie,
-  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -65,19 +60,6 @@ function formatRangeLabel(start: string, end: string): string {
   }
   return `${rangeFmt.format(toLocal(start))} – ${rangeFmt.format(toLocal(end))}`;
 }
-
-// Paleta de marca Tienda Control (teal/verde/terracota/ámbar/azul) — sin
-// purple/pink/cyan genéricos del boilerplate.
-const PIE_COLORS = [
-  '#0F766E', // teal (primary)
-  '#15803D', // verde (success)
-  '#C2410C', // terracota (accent)
-  '#B45309', // ámbar (warn)
-  '#1D4ED8', // azul (info)
-  '#0891B2', // teal-cian
-  '#65A30D', // verde lima
-  '#D97706', // naranja cálido
-];
 
 function formatMoney(value: number) {
   return moneyFmt.format(value);
@@ -203,21 +185,32 @@ function presetRange(preset: Preset): { start: string; end: string } {
   }
 }
 
+/**
+ * Hero KPI. Big number first, one supporting line (delta vs the comparison
+ * period or a plain hint). This is the "glance every morning" tier — kept to a
+ * handful on purpose; the deep breakdowns live in Reportes.
+ */
 function KpiCard({
   title,
   value,
   hint,
   delta,
   deltaClass,
+  accent,
 }: {
   title: string;
   value: string;
   hint?: string;
   delta?: string;
   deltaClass?: string;
+  accent?: boolean;
 }) {
   return (
-    <div className="rounded-lg border bg-background p-4 shadow-xs">
+    <div className={cn(
+      'rounded-lg border bg-background p-4 shadow-xs',
+      accent && 'border-primary/40 bg-primary/5',
+    )}
+    >
       <div className="text-xs font-medium text-muted-foreground">{title}</div>
       <div className="
         mt-2 font-display text-3xl font-medium tracking-tight tabular-nums
@@ -233,20 +226,43 @@ function KpiCard({
   );
 }
 
-function ChartCard({
-  title,
-  children,
-  className,
+/** A single actionable alert pill. Only rendered when its count is > 0. */
+function AttentionPill({
+  count,
+  label,
+  href,
+  tone,
 }: {
-  title: string;
-  children: React.ReactNode;
-  className?: string;
+  count: number;
+  label: string;
+  href: string;
+  tone: 'danger' | 'warn';
 }) {
+  if (count <= 0) {
+    return null;
+  }
   return (
-    <div className={cn('rounded-lg border bg-background p-4 shadow-xs', className)}>
-      <div className="mb-3 text-sm font-semibold">{title}</div>
-      {children}
-    </div>
+    <Link
+      href={href}
+      className={cn(
+        `
+          inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs
+          font-medium transition-colors
+        `,
+        tone === 'danger'
+          ? `
+            border-red-200 bg-red-50 text-red-700
+            hover:bg-red-100
+          `
+          : `
+            border-amber-200 bg-amber-50 text-amber-700
+            hover:bg-amber-100
+          `,
+      )}
+    >
+      <span className="font-display tabular-nums">{count}</span>
+      {label}
+    </Link>
   );
 }
 
@@ -272,12 +288,7 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
     debounceTimer.current = setTimeout(() => {
       startTransition(async () => {
         const prev = compare ? computePreviousRange(start, end) : null;
-        const next = await getMetrics(
-          start,
-          end,
-          prev?.start,
-          prev?.end,
-        );
+        const next = await getMetrics(start, end, prev?.start, prev?.end);
         setData(next);
       });
     }, 300);
@@ -288,8 +299,6 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
     };
   }, [start, end, compare]);
 
-  // Precompute each preset's concrete range so the picker stays free of date
-  // math (it only renders and stages the selection).
   const presetOptions = PRESETS.map(p => ({
     key: p.key,
     label: p.label,
@@ -309,16 +318,9 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
   }
 
   const prev = data.previousPeriod;
-
-  const salesByHourFull = useMemo(() => {
-    const map = new Map(data.salesByHour.map(r => [r.hour, r]));
-    return Array.from({ length: 24 }, (_, h) => ({
-      hour: h,
-      hourLabel: `${String(h).padStart(2, '0')}:00`,
-      count: map.get(h)?.count ?? 0,
-      total: map.get(h)?.total ?? 0,
-    }));
-  }, [data.salesByHour]);
+  const att = data.attention;
+  const hasAttention
+    = att.outOfStock + att.lowStock + att.expiringSoon + att.overdueFiados > 0;
 
   const salesByDayLabeled = useMemo(
     () =>
@@ -331,7 +333,7 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
 
   return (
     <div className="space-y-6">
-      {/* Cabecera: título + rango activo a la izquierda, picker a la derecha */}
+      {/* Header: title + active range on the left, picker on the right */}
       <div className="
         flex flex-col gap-3
         sm:flex-row sm:items-center sm:justify-between
@@ -349,7 +351,6 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
               && ` · vs ${formatRangeLabel(data.compareRange.start, data.compareRange.end)}`}
           </p>
         </div>
-        {/* Rango de fechas — picker estilo Shopify (presets + calendario) */}
         <DateRangePicker
           start={start}
           end={end}
@@ -361,312 +362,139 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
         />
       </div>
 
-      {/* KPI cards */}
+      {/* Needs your attention — only shows when something is actually wrong */}
+      <div className="
+        flex flex-wrap items-center gap-2 rounded-lg border bg-background p-3
+        shadow-xs
+      "
+      >
+        <span className="mr-1 text-xs font-semibold text-muted-foreground">
+          Necesita tu atención
+        </span>
+        {hasAttention
+          ? (
+              <>
+                <AttentionPill
+                  count={att.outOfStock}
+                  label="sin stock"
+                  href="/dashboard/reports/inventario"
+                  tone="danger"
+                />
+                <AttentionPill
+                  count={att.overdueFiados}
+                  label="fiados vencidos"
+                  href="/dashboard/reports/fiados"
+                  tone="danger"
+                />
+                <AttentionPill
+                  count={att.expiringSoon}
+                  label="por vencer"
+                  href="/dashboard/reports/inventario"
+                  tone="warn"
+                />
+                <AttentionPill
+                  count={att.lowStock}
+                  label="stock bajo"
+                  href="/dashboard/reports/inventario"
+                  tone="warn"
+                />
+              </>
+            )
+          : (
+              <span className="text-xs text-emerald-600">
+                Todo en orden — sin alertas
+              </span>
+            )}
+      </div>
+
+      {/* Hero KPIs — the handful you check every morning */}
       <div className="
         grid grid-cols-1 gap-3
         sm:grid-cols-2
-        lg:grid-cols-5
+        lg:grid-cols-4
       "
       >
         <KpiCard
-          title="Ingresos"
-          value={formatMoney(data.period.total)}
-          delta={prev ? formatDelta(data.period.total, prev.total) : undefined}
-          deltaClass={prev ? deltaTone(data.period.total, prev.total) : undefined}
-          hint={prev ? `ant. ${formatMoney(prev.total)}` : undefined}
+          title="Ingresos netos"
+          value={formatMoney(data.netRevenue)}
+          accent
+          delta={
+            data.prevNetRevenue !== null
+              ? formatDelta(data.netRevenue, data.prevNetRevenue)
+              : undefined
+          }
+          deltaClass={
+            data.prevNetRevenue !== null
+              ? deltaTone(data.netRevenue, data.prevNetRevenue)
+              : undefined
+          }
+          hint="ya restando devoluciones"
+        />
+        <KpiCard
+          title="Ganancia bruta"
+          value={formatMoney(data.period.profit)}
+          delta={prev ? formatDelta(data.period.profit, prev.profit) : undefined}
+          deltaClass={prev ? deltaTone(data.period.profit, prev.profit) : undefined}
+          hint={`margen ${data.period.margin.toFixed(1)}%`}
+        />
+        <KpiCard
+          title="Flujo de caja neto"
+          value={formatMoney(data.cashFlow.net)}
+          deltaClass={data.cashFlow.net >= 0 ? 'text-emerald-600' : 'text-red-600'}
+          delta={data.cashFlow.net >= 0 ? 'positivo' : 'negativo'}
+          hint={`gastos ${formatMoney(data.cashFlow.expenses)}`}
         />
         <KpiCard
           title="Ventas"
           value={String(data.period.count)}
           delta={prev ? formatDelta(data.period.count, prev.count) : undefined}
           deltaClass={prev ? deltaTone(data.period.count, prev.count) : undefined}
-          hint={prev ? `ant. ${prev.count}` : undefined}
-        />
-        <KpiCard
-          title="Ticket promedio"
-          value={formatMoney(data.period.avgTicket)}
-          delta={
-            prev ? formatDelta(data.period.avgTicket, prev.avgTicket) : undefined
-          }
-          deltaClass={
-            prev ? deltaTone(data.period.avgTicket, prev.avgTicket) : undefined
-          }
-        />
-        <KpiCard
-          title="Ganancia"
-          value={formatMoney(data.period.profit)}
-          delta={prev ? formatDelta(data.period.profit, prev.profit) : undefined}
-          deltaClass={prev ? deltaTone(data.period.profit, prev.profit) : undefined}
-        />
-        <KpiCard
-          title="Margen"
-          value={`${data.period.margin.toFixed(1)}%`}
-          delta={prev ? `${(data.period.margin - prev.margin).toFixed(1)} pts` : undefined}
-          deltaClass={prev ? deltaTone(data.period.margin, prev.margin) : undefined}
+          hint={`ticket ${formatMoney(data.period.avgTicket)}`}
         />
       </div>
 
-      {/* Inventory KPIs */}
-      <div className="
-        grid grid-cols-2 gap-3
-        sm:grid-cols-4
-      "
-      >
-        <KpiCard
-          title="Valor del inventario"
-          value={formatMoney(data.inventory.value)}
-        />
-        <KpiCard
-          title="Productos"
-          value={String(data.inventory.total)}
-        />
-        <KpiCard
-          title="Stock bajo (1-5)"
-          value={String(data.inventory.lowStock)}
-          deltaClass={data.inventory.lowStock > 0 ? 'text-amber-600' : undefined}
-        />
-        <KpiCard
-          title="Sin stock"
-          value={String(data.inventory.outOfStock)}
-          deltaClass={data.inventory.outOfStock > 0 ? 'text-red-600' : undefined}
-        />
-      </div>
-
-      {/* Charts */}
-      <div className="
-        grid grid-cols-1 gap-4
-        lg:grid-cols-2
-      "
-      >
-        <ChartCard title="Ventas por día" className="lg:col-span-2">
-          <div className="h-72 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={salesByDayLabeled}>
-                <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
-                <XAxis dataKey="label" fontSize={12} />
-                <YAxis
-                  fontSize={12}
-                  tickFormatter={v => compactFmt.format(Number(v))}
-                />
-                <Tooltip
-                  formatter={(value, name) =>
-                    name === 'Ingresos'
-                      ? [formatMoney(Number(value)), 'Ingresos']
-                      : [String(value), 'Ventas']}
-                />
-                <Legend />
-                <Line
-                  type="monotone"
-                  dataKey="total"
-                  name="Ingresos"
-                  stroke="#0F766E"
-                  strokeWidth={2}
-                  dot={false}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="count"
-                  name="Ventas"
-                  stroke="#15803D"
-                  strokeWidth={2}
-                  dot={false}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </ChartCard>
-
-        <ChartCard title="Ventas por hora (Bogotá)">
-          <div className="h-64 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={salesByHourFull}>
-                <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
-                <XAxis dataKey="hourLabel" fontSize={11} interval={1} />
-                <YAxis
-                  fontSize={12}
-                  tickFormatter={v => compactFmt.format(Number(v))}
-                />
-                <Tooltip
-                  formatter={value => [formatMoney(Number(value)), 'Ingresos']}
-                />
-                <Bar dataKey="total" fill="#0F766E" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </ChartCard>
-
-        <ChartCard title="Desglose por pago">
-          {data.paymentBreakdown.length === 0
-            ? (
-                <div className="
-                  flex h-64 items-center justify-center text-sm
-                  text-muted-foreground
-                "
-                >
-                  Sin datos
-                </div>
-              )
-            : (
-                <div className="h-64 w-full">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={data.paymentBreakdown}
-                        dataKey="total"
-                        nameKey="paymentType"
-                        cx="50%"
-                        cy="50%"
-                        outerRadius={80}
-                        label={(props) => {
-                          const p = props as unknown as {
-                            paymentType?: string;
-                            total?: number;
-                          };
-                          return `${p.paymentType ?? ''}: ${compactFmt.format(Number(p.total ?? 0))}`;
-                        }}
-                      >
-                        {data.paymentBreakdown.map((_, i) => (
-                          <Cell
-                            key={`cell-${i}`}
-                            fill={PIE_COLORS[i % PIE_COLORS.length]}
-                          />
-                        ))}
-                      </Pie>
-                      <Tooltip
-                        formatter={value => formatMoney(Number(value))}
-                      />
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
-        </ChartCard>
-
-        <ChartCard title="Desglose por categoría">
-          {data.categoryBreakdown.length === 0
-            ? (
-                <div className="
-                  flex h-64 items-center justify-center text-sm
-                  text-muted-foreground
-                "
-                >
-                  Sin datos
-                </div>
-              )
-            : (
-                <div className="h-64 w-full">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart
-                      data={data.categoryBreakdown.slice(0, 8)}
-                      layout="vertical"
-                    >
-                      <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
-                      <XAxis
-                        type="number"
-                        fontSize={11}
-                        tickFormatter={v => compactFmt.format(Number(v))}
-                      />
-                      <YAxis
-                        type="category"
-                        dataKey="category"
-                        width={110}
-                        fontSize={11}
-                      />
-                      <Tooltip
-                        formatter={value => [
-                          formatMoney(Number(value)),
-                          'Ingresos',
-                        ]}
-                      />
-                      <Bar dataKey="revenue" fill="#C2410C" radius={[0, 4, 4, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
-        </ChartCard>
-
-        <ChartCard title="Desglose por cajero">
-          {data.cashierBreakdown.length === 0
-            ? (
-                <div className="
-                  flex h-64 items-center justify-center text-sm
-                  text-muted-foreground
-                "
-                >
-                  Sin ventas atribuidas a cajeros
-                </div>
-              )
-            : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead className="bg-muted/50 text-left text-xs uppercase">
-                      <tr>
-                        <th className="px-3 py-2">ID de cajero</th>
-                        <th className="px-3 py-2 text-right">Ventas</th>
-                        <th className="px-3 py-2 text-right">Ingresos</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {data.cashierBreakdown.map(c => (
-                        <tr key={c.cashierId} className="border-t">
-                          <td className="px-3 py-2 font-mono text-xs">
-                            {c.cashierId}
-                          </td>
-                          <td className="px-3 py-2 text-right">{c.count}</td>
-                          <td className="px-3 py-2 text-right font-medium">
-                            {formatMoney(c.total)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-        </ChartCard>
-      </div>
-
-      {/* Top products table */}
-      <div className="rounded-lg border bg-background shadow-xs">
-        <div className="border-b px-4 py-3 text-sm font-semibold">
-          Top 10 productos por ingresos
+      {/* Hero chart — revenue trend over the selected range */}
+      <div className="rounded-lg border bg-background p-4 shadow-xs">
+        <div className="mb-3 flex items-center justify-between">
+          <div className="text-sm font-semibold">Ingresos por día</div>
+          <Link
+            href="/dashboard/reports"
+            className="
+              text-xs text-muted-foreground
+              hover:text-primary hover:underline
+            "
+          >
+            Ver todos los reportes →
+          </Link>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/50 text-left text-xs uppercase">
-              <tr>
-                <th className="px-3 py-2">#</th>
-                <th className="px-3 py-2">Producto</th>
-                <th className="px-3 py-2 text-right">Cant.</th>
-                <th className="px-3 py-2 text-right">Ingresos</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.topProducts.length === 0
-                ? (
-                    <tr>
-                      <td
-                        colSpan={4}
-                        className="px-3 py-8 text-center text-muted-foreground"
-                      >
-                        Sin ventas en el rango seleccionado
-                      </td>
-                    </tr>
-                  )
-                : (
-                    data.topProducts.map((p, i) => (
-                      <tr key={p.id} className="border-t">
-                        <td className="px-3 py-2 text-muted-foreground">
-                          {i + 1}
-                        </td>
-                        <td className="px-3 py-2">{p.name}</td>
-                        <td className="px-3 py-2 text-right">{p.qty}</td>
-                        <td className="px-3 py-2 text-right font-medium">
-                          {formatMoney(p.revenue)}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-            </tbody>
-          </table>
+        <div className="h-72 w-full">
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={salesByDayLabeled}>
+              <defs>
+                <linearGradient id="revFill" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#0F766E" stopOpacity={0.25} />
+                  <stop offset="100%" stopColor="#0F766E" stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+              <XAxis dataKey="label" fontSize={12} />
+              <YAxis
+                fontSize={12}
+                tickFormatter={v => compactFmt.format(Number(v))}
+              />
+              <Tooltip
+                formatter={value => [formatMoney(Number(value)), 'Ingresos']}
+              />
+              <Area
+                type="monotone"
+                dataKey="total"
+                name="Ingresos"
+                stroke="#0F766E"
+                strokeWidth={2}
+                fill="url(#revFill)"
+              />
+            </AreaChart>
+          </ResponsiveContainer>
         </div>
       </div>
     </div>
