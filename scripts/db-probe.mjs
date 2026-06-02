@@ -49,4 +49,52 @@ console.log(
 
 console.log('sales_total:', (await q('SELECT count(*)::int AS n FROM sales'))[0]);
 
+// Are the sale exit movements carrying a cost? If exit_cost_null > 0, the
+// backfill has NOT been run for those sales and their COGS reads as 0
+// (=> 100% margin) regardless of the deployed code.
+console.log(
+  'sale_exit_cost_coverage:',
+  (
+    await q(`
+      SELECT
+        count(*)::int                                  AS sale_exits,
+        count(*) FILTER (WHERE unit_cost IS NULL)::int AS exit_cost_null,
+        count(*) FILTER (WHERE unit_cost > 0)::int     AS exit_cost_set
+      FROM stock_movements
+      WHERE type = 'exit' AND reason = 'sale'
+    `)
+  )[0],
+);
+
+// Live margin for the last 30 days using the NEW formula (COGS from exit
+// movements). This is exactly what the dashboard would show after a redeploy.
+console.log(
+  'margin_last_30d_new_formula:',
+  (
+    await q(`
+      WITH ps AS (
+        SELECT id, total::numeric AS total
+        FROM sales
+        WHERE status = 'completed'
+          AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
+              >= (now() AT TIME ZONE 'America/Bogota')::date - INTERVAL '30 days'
+      ),
+      costs AS (
+        SELECT sm.sale_id, SUM(sm.qty * COALESCE(sm.unit_cost, 0)) AS cost
+        FROM stock_movements sm
+        WHERE sm.type = 'exit' AND sm.sale_id IN (SELECT id FROM ps)
+        GROUP BY sm.sale_id
+      )
+      SELECT
+        COALESCE(SUM(ps.total), 0)::float8                              AS revenue,
+        COALESCE(SUM(COALESCE(c.cost, 0)), 0)::float8                   AS cogs,
+        COALESCE(SUM(ps.total - COALESCE(c.cost, 0)), 0)::float8        AS profit,
+        CASE WHEN SUM(ps.total) > 0
+          THEN ROUND((SUM(ps.total - COALESCE(c.cost, 0)) / SUM(ps.total) * 100)::numeric, 1)
+          ELSE 0 END                                                   AS margin_pct
+      FROM ps LEFT JOIN costs c ON c.sale_id = ps.id
+    `)
+  )[0],
+);
+
 await client.end();
