@@ -220,7 +220,7 @@ function KpiCard({
     <div className="rounded-lg border bg-background p-4 shadow-xs">
       <div className="text-xs font-medium text-muted-foreground">{title}</div>
       <div className="
-        mt-2 font-display text-3xl font-medium tracking-tight tabular-nums
+        mt-2 font-mono text-3xl font-semibold tracking-tight tabular-nums
       "
       >
         {value}
