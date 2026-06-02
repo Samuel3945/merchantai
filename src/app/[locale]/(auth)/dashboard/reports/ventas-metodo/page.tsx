@@ -5,6 +5,7 @@ import type { Column } from '@/features/reports/DataTable';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getSalesByPayment } from '@/actions/reports';
 import { DataTable } from '@/features/reports/DataTable';
+import { ChartCard, DonutChart } from '@/features/reports/ReportCharts';
 import { ReportShell } from '@/features/reports/ReportShell';
 import { exportToCSV, exportToPDF } from '@/libs/exports';
 
@@ -48,7 +49,19 @@ export default function VentasMetodoPage() {
     >
       {({ start, end }) => (
         <Loader start={start} end={end} onLoad={load}>
-          <DataTable columns={columns} rows={rows} emptyMessage="Sin ventas en el rango seleccionado" />
+          <div className="space-y-4">
+            <ChartCard
+              title="Distribución por método de pago"
+              description="Si el grueso es fiado o transferencia, es plata que aún no tenés en mano."
+            >
+              <DonutChart
+                data={rows as unknown as Record<string, unknown>[]}
+                nameKey="method"
+                valueKey="total"
+              />
+            </ChartCard>
+            <DataTable columns={columns} rows={rows} emptyMessage="Sin ventas en el rango seleccionado" />
+          </div>
         </Loader>
       )}
     </ReportShell>

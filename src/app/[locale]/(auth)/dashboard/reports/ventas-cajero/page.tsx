@@ -5,6 +5,7 @@ import type { Column } from '@/features/reports/DataTable';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getSalesByCashier } from '@/actions/reports';
 import { DataTable } from '@/features/reports/DataTable';
+import { ChartCard, RankBars } from '@/features/reports/ReportCharts';
 import { ReportShell } from '@/features/reports/ReportShell';
 import { exportToCSV, exportToPDF } from '@/libs/exports';
 
@@ -48,7 +49,20 @@ export default function VentasCajeroPage() {
     >
       {({ start, end }) => (
         <Loader start={start} end={end} onLoad={load}>
-          <DataTable columns={columns} rows={rows} emptyMessage="Sin ventas atribuidas a cajeros" />
+          <div className="space-y-4">
+            <ChartCard
+              title="Ventas por cajero"
+              description="Quién está moviendo la caja. Sirve para premiar y para detectar."
+            >
+              <RankBars
+                data={rows as unknown as Record<string, unknown>[]}
+                labelKey="cashierName"
+                valueKey="total"
+                name="Total"
+              />
+            </ChartCard>
+            <DataTable columns={columns} rows={rows} emptyMessage="Sin ventas atribuidas a cajeros" />
+          </div>
         </Loader>
       )}
     </ReportShell>

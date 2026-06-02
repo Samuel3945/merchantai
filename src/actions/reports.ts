@@ -2,6 +2,12 @@
 
 import { auth } from '@clerk/nextjs/server';
 import { sql } from 'drizzle-orm';
+import {
+  getCashFlow,
+  getCustomerInsights,
+  getExpirationRisk,
+  getReturnsAnalysis,
+} from '@/actions/analytics';
 import { db } from '@/libs/DB';
 
 async function requireOrg() {
@@ -541,6 +547,10 @@ export type ReportsOverview = {
   inventory: { value: number; outOfStock: number; lowStock: number; products: number };
   fiados: { totalOwed: number; clients: number; highRisk: number };
   losses: { totalLoss: number; items: number };
+  cashFlow: { net: number; expenses: number };
+  returns: { rate: number; totalRefunded: number };
+  customers: { total: number; inactive: number };
+  expiration: { atRisk: number; count: number };
 };
 
 export async function getReportsOverview(
@@ -561,6 +571,10 @@ export async function getReportsOverview(
     inventory,
     fiados,
     losses,
+    cashFlow,
+    returns,
+    customers,
+    expiration,
   ] = await Promise.all([
     getSalesByPeriod(s, e),
     getSalesByPeriod(prev.start, prev.end),
@@ -571,6 +585,10 @@ export async function getReportsOverview(
     getInventoryValuation(),
     getFiadoReport(),
     getLossReport(s, e),
+    getCashFlow(s, e),
+    getReturnsAnalysis(s, e),
+    getCustomerInsights(s, e),
+    getExpirationRisk(),
   ]);
 
   const salesTotal = period.reduce((acc, r) => acc + r.total, 0);
@@ -631,6 +649,13 @@ export async function getReportsOverview(
     losses: {
       totalLoss: losses.reduce((acc, r) => acc + r.totalLoss, 0),
       items: losses.length,
+    },
+    cashFlow: { net: cashFlow.net, expenses: cashFlow.expenses },
+    returns: { rate: returns.returnRate, totalRefunded: returns.totalRefunded },
+    customers: { total: customers.totalCustomers, inactive: customers.inactive },
+    expiration: {
+      atRisk: expiration.totalAtRisk,
+      count: expiration.byTier.reduce((acc, t) => acc + t.count, 0),
     },
   };
 }

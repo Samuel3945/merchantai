@@ -5,6 +5,7 @@ import type { Column } from '@/features/reports/DataTable';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getLossReport } from '@/actions/reports';
 import { DataTable } from '@/features/reports/DataTable';
+import { ChartCard, DonutChart } from '@/features/reports/ReportCharts';
 import { ReportShell } from '@/features/reports/ReportShell';
 import { exportToCSV, exportToPDF } from '@/libs/exports';
 
@@ -56,11 +57,32 @@ export default function PerdidasPage() {
             <Stat label="Pérdida total" value={money.format(rows.reduce((s, r) => s + r.totalLoss, 0))} />
             <Stat label="Items afectados" value={String(rows.length)} />
           </div>
+          {rows.length > 0 && (
+            <ChartCard
+              title="Pérdidas por razón"
+              description="A dónde se va la mercadería: vencida, dañada, perdida."
+              className="mb-4"
+            >
+              <DonutChart
+                data={lossesByReason(rows)}
+                nameKey="reason"
+                valueKey="totalLoss"
+              />
+            </ChartCard>
+          )}
           <DataTable columns={columns} rows={rows} emptyMessage="Sin mermas registradas en el rango" />
         </Loader>
       )}
     </ReportShell>
   );
+}
+
+function lossesByReason(rows: LossRow[]): Record<string, unknown>[] {
+  const map = new Map<string, number>();
+  for (const r of rows) {
+    map.set(r.reason, (map.get(r.reason) ?? 0) + r.totalLoss);
+  }
+  return Array.from(map, ([reason, totalLoss]) => ({ reason, totalLoss }));
 }
 
 function Stat({ label, value }: { label: string; value: string }) {

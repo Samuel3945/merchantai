@@ -1,10 +1,13 @@
 'use client';
 
+import type { FiadoAgingBucket } from '@/actions/analytics';
 import type { FiadoReportRow } from '@/actions/reports';
 import type { Column } from '@/features/reports/DataTable';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { getFiadosAging } from '@/actions/analytics';
 import { getFiadoReport } from '@/actions/reports';
 import { DataTable } from '@/features/reports/DataTable';
+import { ChartCard, ColumnBars } from '@/features/reports/ReportCharts';
 import { ReportShell } from '@/features/reports/ReportShell';
 import { exportToCSV, exportToPDF } from '@/libs/exports';
 import { cn } from '@/utils/Helpers';
@@ -50,9 +53,15 @@ const pdfCols = columns.map(c => ({ header: c.header, key: c.key, align: c.align
 
 export default function FiadosReportPage() {
   const [rows, setRows] = useState<FiadoReportRow[]>([]);
+  const [aging, setAging] = useState<FiadoAgingBucket[]>([]);
 
   const load = useCallback(async () => {
-    setRows(await getFiadoReport());
+    const [report, buckets] = await Promise.all([
+      getFiadoReport(),
+      getFiadosAging(),
+    ]);
+    setRows(report);
+    setAging(buckets);
   }, []);
 
   return (
@@ -73,6 +82,21 @@ export default function FiadosReportPage() {
               className="text-red-600"
             />
           </div>
+          {rows.length > 0 && (
+            <ChartCard
+              title="Antigüedad de la deuda"
+              description="Mientras más vieja la deuda, más difícil de cobrar. Atacá primero los tramos largos."
+              className="mb-4"
+            >
+              <ColumnBars
+                data={aging as unknown as Record<string, unknown>[]}
+                labelKey="bucket"
+                valueKey="amount"
+                name="Deuda"
+                color="#C2410C"
+              />
+            </ChartCard>
+          )}
           <DataTable columns={columns} rows={rows} emptyMessage="Sin fiados pendientes" />
         </LoadOnce>
       )}

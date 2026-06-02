@@ -323,6 +323,42 @@ export function ReportsOverviewClient({ initial }: { initial: ReportsOverview })
           tone={data.losses.totalLoss > 0 ? 'warn' : 'default'}
           href="/dashboard/reports/perdidas"
         />
+
+        <ReportCard
+          title="Flujo de caja neto"
+          value={money(data.cashFlow.net)}
+          secondary={`gastos ${money(data.cashFlow.expenses)}`}
+          explanation="Lo que de verdad entró a tu bolsillo: ventas menos gastos, sueldos y compras. Si da negativo, estás perdiendo plata aunque vendas."
+          tone={data.cashFlow.net < 0 ? 'danger' : 'default'}
+          href="/dashboard/reports/flujo-caja"
+        />
+
+        <ReportCard
+          title="Devoluciones"
+          value={`${data.returns.rate.toFixed(1)}%`}
+          secondary={`${money(data.returns.totalRefunded)} reembolsado`}
+          explanation="Qué porcentaje de tus ventas vuelve. Una tasa alta esconde un problema de calidad, precio o proceso que te cuesta plata."
+          tone={data.returns.rate > 5 ? 'danger' : data.returns.rate > 2 ? 'warn' : 'default'}
+          href="/dashboard/reports/devoluciones"
+        />
+
+        <ReportCard
+          title="Clientes"
+          value={String(data.customers.total)}
+          secondary={`${data.customers.inactive} inactivos (+30d)`}
+          explanation="Tu base de clientes. Los inactivos hace rato que no compran: un mensaje a tiempo los trae de vuelta antes de perderlos."
+          tone={data.customers.inactive > 0 ? 'warn' : 'default'}
+          href="/dashboard/reports/clientes"
+        />
+
+        <ReportCard
+          title="Por vencer (Smart Stock)"
+          value={money(data.expiration.atRisk)}
+          secondary={`${data.expiration.count} productos en riesgo`}
+          explanation="Valor de la mercadería perecedera por vencerse. La IA te sugiere descuentos para venderla antes de tener que tirarla."
+          tone={data.expiration.atRisk > 0 ? 'warn' : 'default'}
+          href="/dashboard/reports/vencimientos"
+        />
       </div>
     </div>
   );
