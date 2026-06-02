@@ -2,6 +2,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { auth } from '@clerk/nextjs/server';
+import bcrypt from 'bcryptjs';
 import { and, count, desc, eq, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
@@ -95,6 +96,19 @@ async function countActiveTokens(orgId: string): Promise<number> {
   return Number(row?.value ?? 0);
 }
 
+// PIN de caja: 4 a 8 dígitos, o '' para quitarlo (acceso directo con el token).
+// Devuelve el hash bcrypt listo para persistir.
+async function hashPinOrThrow(rawPin: string): Promise<string> {
+  const pin = rawPin.trim();
+  if (!pin) {
+    return '';
+  }
+  if (!/^\d{4,8}$/.test(pin)) {
+    throw new Error('El PIN debe tener entre 4 y 8 dígitos');
+  }
+  return bcrypt.hash(pin, 10);
+}
+
 async function requireAdminContext() {
   const { userId, orgId, orgRole } = await auth();
   if (!userId) {
@@ -113,6 +127,7 @@ export type CreatePosTokenInput = {
   deviceName: string;
   cashierId?: string;
   expiresAt?: Date | string | null;
+  pin?: string;
 };
 
 export async function createPosToken(input: CreatePosTokenInput) {
@@ -145,6 +160,8 @@ export async function createPosToken(input: CreatePosTokenInput) {
     throw new Error('expiresAt is not a valid date');
   }
 
+  const pinHash = await hashPinOrThrow(input.pin ?? '');
+
   if (cashierId) {
     const [cashier] = await db
       .select({ id: posUsersSchema.id })
@@ -169,6 +186,7 @@ export async function createPosToken(input: CreatePosTokenInput) {
       createdBy: userId,
       cashierId,
       expiresAt,
+      pin: pinHash,
     })
     .returning();
 
@@ -238,6 +256,7 @@ export async function listPosTokens() {
       cashierId: posTokensSchema.cashierId,
       cashierName: posUsersSchema.name,
       active: posTokensSchema.active,
+      hasPin: sql<boolean>`(${posTokensSchema.pin} <> '')`,
       lastSyncAt: posTokensSchema.lastSyncAt,
       expiresAt: posTokensSchema.expiresAt,
       createdAt: posTokensSchema.createdAt,
@@ -250,12 +269,17 @@ export async function listPosTokens() {
   return rows;
 }
 
-export async function revokePosToken(id: string) {
+// Bloquear caja: active=false. No puede loguear ni sincronizar y libera cupo del
+// plan, pero la fila persiste. Sube sessionEpoch para expulsar al empleado activo.
+export async function blockPosToken(id: string) {
   const { userId, orgId } = await requireAdminContext();
 
   const [updated] = await db
     .update(posTokensSchema)
-    .set({ active: false })
+    .set({
+      active: false,
+      sessionEpoch: sql`${posTokensSchema.sessionEpoch} + 1`,
+    })
     .where(
       and(
         eq(posTokensSchema.id, id),
@@ -265,19 +289,132 @@ export async function revokePosToken(id: string) {
     .returning({ id: posTokensSchema.id });
 
   if (!updated) {
-    throw new Error('POS token not found');
+    throw new Error('Caja no encontrada');
   }
 
   await logAction({
     organizationId: orgId,
     actor: { type: 'user', id: userId },
-    action: 'pos_token.revoked',
+    action: 'pos_token.blocked',
     entityType: 'pos_token',
     entityId: id,
   });
 
   revalidatePath('/dashboard/pos-cajeros');
   return { ok: true as const };
+}
+
+// Desbloquear caja: active=true. Revalida el cupo del plan, porque una caja
+// bloqueada no cuenta y reactivarla puede chocar contra el límite.
+export async function unblockPosToken(id: string) {
+  const { userId, orgId } = await requireAdminContext();
+
+  const [plan, used, addons] = await Promise.all([
+    getOrganizationPlan(orgId),
+    countActiveTokens(orgId),
+    countPosDeviceAddons(orgId),
+  ]);
+  const base = PLAN_POS_DEVICE_LIMIT[plan];
+  const limit = base + addons;
+  if (used >= limit) {
+    throw new PosDeviceLimitReachedError({ plan, limit, used, base, addons });
+  }
+
+  const [updated] = await db
+    .update(posTokensSchema)
+    .set({ active: true })
+    .where(
+      and(
+        eq(posTokensSchema.id, id),
+        eq(posTokensSchema.organizationId, orgId),
+        eq(posTokensSchema.active, false),
+      ),
+    )
+    .returning({ id: posTokensSchema.id });
+
+  if (!updated) {
+    throw new Error('Caja no encontrada o ya activa');
+  }
+
+  await logAction({
+    organizationId: orgId,
+    actor: { type: 'user', id: userId },
+    action: 'pos_token.unblocked',
+    entityType: 'pos_token',
+    entityId: id,
+  });
+
+  revalidatePath('/dashboard/pos-cajeros');
+  return { ok: true as const };
+}
+
+// Eliminar caja: borra la fila por completo. Irreversible; el dispositivo pierde
+// el acceso de inmediato y el cupo del plan queda libre.
+export async function deletePosToken(id: string) {
+  const { userId, orgId } = await requireAdminContext();
+
+  const [deleted] = await db
+    .delete(posTokensSchema)
+    .where(
+      and(
+        eq(posTokensSchema.id, id),
+        eq(posTokensSchema.organizationId, orgId),
+      ),
+    )
+    .returning({
+      id: posTokensSchema.id,
+      deviceName: posTokensSchema.deviceName,
+    });
+
+  if (!deleted) {
+    throw new Error('Caja no encontrada');
+  }
+
+  await logAction({
+    organizationId: orgId,
+    actor: { type: 'user', id: userId },
+    action: 'pos_token.deleted',
+    entityType: 'pos_token',
+    entityId: id,
+    before: { deviceName: deleted.deviceName },
+  });
+
+  revalidatePath('/dashboard/pos-cajeros');
+  return { ok: true as const };
+}
+
+// Admin setea/cambia/quita el PIN de acceso de la caja. newPin='' => sin PIN.
+export async function setPosTokenPin(id: string, newPin: string) {
+  const { userId, orgId } = await requireAdminContext();
+
+  const pinHash = await hashPinOrThrow(newPin ?? '');
+
+  const [updated] = await db
+    .update(posTokensSchema)
+    .set({ pin: pinHash })
+    .where(
+      and(
+        eq(posTokensSchema.id, id),
+        eq(posTokensSchema.organizationId, orgId),
+      ),
+    )
+    .returning({ id: posTokensSchema.id });
+
+  if (!updated) {
+    throw new Error('Caja no encontrada');
+  }
+
+  await logAction({
+    organizationId: orgId,
+    actor: { type: 'user', id: userId },
+    action: 'pos_token.pin_changed',
+    entityType: 'pos_token',
+    entityId: id,
+    metadata: { hasPin: pinHash !== '' },
+  });
+
+  revalidatePath('/dashboard/pos-cajeros');
+  return { ok: true as const, hasPin: pinHash !== '' };
 }
 
 // Genera un token nuevo para la caja (invalida el anterior). El dispositivo que

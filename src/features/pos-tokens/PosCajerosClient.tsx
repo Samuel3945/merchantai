@@ -6,20 +6,27 @@ import type {
 } from '@/actions/pos-tokens';
 import {
   ArrowUpRight,
+  Ban,
   CheckCircle2,
   ExternalLink,
+  KeyRound,
   Lock,
   Monitor,
   Plus,
+  Trash2,
+  Unlock,
 } from 'lucide-react';
 import { useCallback, useState, useTransition } from 'react';
 import {
+  blockPosToken,
   createPosToken,
+  deletePosToken,
   forceLogoutPosToken,
   getPosDeviceQuota,
   listPosTokens,
   regeneratePosToken,
-  revokePosToken,
+  setPosTokenPin,
+  unblockPosToken,
 } from '@/actions/pos-tokens';
 import { Button } from '@/components/ui/button';
 import { Link } from '@/libs/I18nNavigation';
@@ -106,6 +113,8 @@ export function PosCajerosClient({
   const [quota, setQuota] = useState(initialQuota);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [activeToken, setActiveToken] = useState<TokenRow | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<TokenRow | null>(null);
+  const [pinTarget, setPinTarget] = useState<TokenRow | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [limitError, setLimitError] = useState<LimitErrorPayload | null>(null);
   const [pending, startTransition] = useTransition();
@@ -139,17 +148,45 @@ export function PosCajerosClient({
     setShowCreateModal(true);
   };
 
-  const handleRevoke = (id: string) => {
-    // eslint-disable-next-line no-alert
-    if (!globalThis.confirm('¿Revocar esta caja? El dispositivo dejará de sincronizar y el slot quedará libre.')) {
-      return;
-    }
+  const handleBlock = (id: string) => {
     startTransition(async () => {
       try {
-        await revokePosToken(id);
+        await blockPosToken(id);
         refresh();
       } catch (e) {
-        setError(e instanceof Error ? e.message : 'No se pudo revocar');
+        setError(e instanceof Error ? e.message : 'No se pudo bloquear');
+      }
+    });
+  };
+
+  const handleUnblock = (id: string) => {
+    startTransition(async () => {
+      try {
+        await unblockPosToken(id);
+        refresh();
+      } catch (e) {
+        const limit = parseLimitError(e);
+        if (limit) {
+          setLimitError(limit);
+          return;
+        }
+        setError(e instanceof Error ? e.message : 'No se pudo desbloquear');
+      }
+    });
+  };
+
+  const handleConfirmDelete = () => {
+    if (!deleteTarget) {
+      return;
+    }
+    const id = deleteTarget.id;
+    startTransition(async () => {
+      try {
+        await deletePosToken(id);
+        setDeleteTarget(null);
+        refresh();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'No se pudo eliminar');
       }
     });
   };
@@ -289,69 +326,117 @@ export function PosCajerosClient({
                 </td>
                 <td className="px-3 py-2">{t.cashierName ?? '—'}</td>
                 <td className="px-3 py-2">
-                  {t.active
-                    ? (
-                        <span className="
-                          inline-flex items-center gap-1 rounded-full
-                          bg-emerald-50 px-2 py-0.5 text-xs font-medium
-                          text-emerald-700
-                        "
-                        >
-                          <CheckCircle2 className="size-3" />
-                          Activa
-                        </span>
-                      )
-                    : (
-                        <span className="
-                          inline-flex items-center rounded-full bg-muted px-2
-                          py-0.5 text-xs font-medium text-muted-foreground
-                        "
-                        >
-                          Revocada
-                        </span>
-                      )}
+                  <div className="flex flex-col items-start gap-1">
+                    {t.active
+                      ? (
+                          <span className="
+                            inline-flex items-center gap-1 rounded-full
+                            bg-emerald-50 px-2 py-0.5 text-xs font-medium
+                            text-emerald-700
+                          "
+                          >
+                            <CheckCircle2 className="size-3" />
+                            Activa
+                          </span>
+                        )
+                      : (
+                          <span className="
+                            inline-flex items-center gap-1 rounded-full
+                            bg-amber-50 px-2 py-0.5 text-xs font-medium
+                            text-amber-700
+                          "
+                          >
+                            <Ban className="size-3" />
+                            Bloqueada
+                          </span>
+                        )}
+                    <span className="
+                      inline-flex items-center gap-1 text-xs
+                      text-muted-foreground
+                    "
+                    >
+                      <KeyRound className="size-3" />
+                      {t.hasPin ? 'Con PIN' : 'Sin PIN'}
+                    </span>
+                  </div>
                 </td>
                 <td className="px-3 py-2 text-xs">{formatDate(t.lastSyncAt)}</td>
                 <td className="px-3 py-2 text-xs">{formatDate(t.expiresAt)}</td>
                 <td className="px-3 py-2 text-xs">{formatDate(t.createdAt)}</td>
-                <td className="space-x-2 px-3 py-2">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setActiveToken(t)}
-                  >
-                    Ver acceso
-                  </Button>
-                  {t.active && (
-                    <>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => handleForceLogout(t.id)}
-                        disabled={pending}
-                        title="Desloguea al empleado activo; la caja sigue activa"
-                      >
-                        Cerrar sesión
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => handleRegenerate(t.id)}
-                        disabled={pending}
-                        title="Genera un acceso nuevo; el dispositivo deberá escanearlo"
-                      >
-                        Cambiar acceso
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        onClick={() => handleRevoke(t.id)}
-                        disabled={pending}
-                      >
-                        Revocar
-                      </Button>
-                    </>
-                  )}
+                <td className="px-3 py-2">
+                  <div className="flex flex-wrap gap-1">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setActiveToken(t)}
+                    >
+                      Ver acceso
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setPinTarget(t)}
+                      disabled={pending}
+                      title="Configura o cambia el PIN de acceso de la caja"
+                    >
+                      <KeyRound className="size-4" />
+                      PIN
+                    </Button>
+                    {t.active
+                      ? (
+                          <>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleForceLogout(t.id)}
+                              disabled={pending}
+                              title="Desloguea al empleado activo; la caja sigue activa"
+                            >
+                              Cerrar sesión
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleRegenerate(t.id)}
+                              disabled={pending}
+                              title="Genera un acceso nuevo; el dispositivo deberá escanearlo"
+                            >
+                              Cambiar acceso
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleBlock(t.id)}
+                              disabled={pending}
+                              title="Bloquea la caja; deja de sincronizar pero no se borra"
+                            >
+                              <Ban className="size-4" />
+                              Bloquear
+                            </Button>
+                          </>
+                        )
+                      : (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => handleUnblock(t.id)}
+                            disabled={pending}
+                            title="Reactiva la caja (revalida el cupo de tu plan)"
+                          >
+                            <Unlock className="size-4" />
+                            Desbloquear
+                          </Button>
+                        )}
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={() => setDeleteTarget(t)}
+                      disabled={pending}
+                    >
+                      <Trash2 className="size-4" />
+                      Eliminar
+                    </Button>
+                  </div>
                 </td>
               </tr>
             ))}
@@ -375,6 +460,7 @@ export function PosCajerosClient({
               cashierName:
                 cashiers.find(c => c.id === created.cashierId)?.name ?? null,
               active: created.active,
+              hasPin: created.pin !== '',
               lastSyncAt: created.lastSyncAt,
               expiresAt: created.expiresAt,
               createdAt: created.createdAt,
@@ -395,6 +481,27 @@ export function PosCajerosClient({
 
       {activeToken && (
         <QrModal token={activeToken} onClose={() => setActiveToken(null)} />
+      )}
+
+      {pinTarget && (
+        <PinModal
+          token={pinTarget}
+          onClose={() => setPinTarget(null)}
+          onSaved={() => {
+            setPinTarget(null);
+            refresh();
+          }}
+          onError={msg => setError(msg)}
+        />
+      )}
+
+      {deleteTarget && (
+        <DeleteCajaModal
+          token={deleteTarget}
+          pending={pending}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={handleConfirmDelete}
+        />
       )}
     </div>
   );
@@ -577,16 +684,23 @@ function CreateTokenModal({
   const [deviceName, setDeviceName] = useState('');
   const [cashierId, setCashierId] = useState('');
   const [expiresAt, setExpiresAt] = useState('');
+  const [pin, setPin] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  const pinInvalid = pin !== '' && !/^\d{4,8}$/.test(pin);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (pinInvalid) {
+      return;
+    }
     setSubmitting(true);
     try {
       const created = await createPosToken({
         deviceName,
         cashierId: cashierId || undefined,
         expiresAt: expiresAt || undefined,
+        pin: pin || undefined,
       });
       onSuccess(created);
     } catch (err) {
@@ -665,6 +779,30 @@ function CreateTokenModal({
               className={inputCls}
             />
           </div>
+          <div>
+            <label htmlFor="pt-pin" className={labelCls}>
+              PIN de acceso (opcional)
+            </label>
+            <input
+              id="pt-pin"
+              type="text"
+              inputMode="numeric"
+              autoComplete="off"
+              placeholder="4 a 8 dígitos"
+              value={pin}
+              onChange={e => setPin(e.target.value.replace(/\D/g, '').slice(0, 8))}
+              className={inputCls}
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              Se pedirá en el login de la caja junto con el código de acceso.
+              Déjalo vacío para acceso directo con solo el código.
+            </p>
+            {pinInvalid && (
+              <p className="mt-1 text-xs text-destructive">
+                El PIN debe tener entre 4 y 8 dígitos.
+              </p>
+            )}
+          </div>
 
           <div className="flex justify-end gap-2 pt-2">
             <Button
@@ -675,7 +813,7 @@ function CreateTokenModal({
             >
               Cancelar
             </Button>
-            <Button type="submit" disabled={submitting}>
+            <Button type="submit" disabled={submitting || pinInvalid}>
               {submitting ? 'Creando…' : 'Crear caja'}
             </Button>
           </div>
@@ -766,6 +904,210 @@ function QrModal({
             </Button>
             <Button onClick={onClose}>Cerrar</Button>
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PinModal({
+  token,
+  onClose,
+  onSaved,
+  onError,
+}: {
+  token: TokenRow;
+  onClose: () => void;
+  onSaved: () => void;
+  onError: (msg: string) => void;
+}) {
+  const [pin, setPin] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const pinInvalid = pin !== '' && !/^\d{4,8}$/.test(pin);
+  const removing = token.hasPin && pin === '';
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (pinInvalid) {
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await setPosTokenPin(token.id, pin);
+      onSaved();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : 'No se pudo guardar el PIN');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="
+      fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4
+    "
+    >
+      <div className="w-full max-w-md rounded-lg bg-background p-6 shadow-lg">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="flex items-center gap-2 text-lg font-semibold">
+            <KeyRound className="size-5" />
+            PIN de
+            {' '}
+            {token.deviceName}
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="
+              text-muted-foreground
+              hover:text-foreground
+            "
+          >
+            ✕
+          </button>
+        </div>
+
+        <p className="mb-3 text-sm text-muted-foreground">
+          {token.hasPin
+            ? 'Esta caja ya tiene un PIN. Escribe uno nuevo para cambiarlo o déjalo vacío para quitarlo.'
+            : 'Define un PIN que se pedirá en el login de la caja, junto con el código de acceso.'}
+        </p>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label htmlFor="pin-input" className={labelCls}>
+              Nuevo PIN
+            </label>
+            <input
+              id="pin-input"
+              type="text"
+              inputMode="numeric"
+              autoComplete="off"
+              placeholder="4 a 8 dígitos"
+              value={pin}
+              onChange={e => setPin(e.target.value.replace(/\D/g, '').slice(0, 8))}
+              className={inputCls}
+            />
+            {pinInvalid && (
+              <p className="mt-1 text-xs text-destructive">
+                El PIN debe tener entre 4 y 8 dígitos.
+              </p>
+            )}
+            {removing && (
+              <p className="mt-1 text-xs text-amber-700">
+                Al guardar vacío, la caja quedará sin PIN (acceso directo con el
+                código).
+              </p>
+            )}
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={onClose}
+              disabled={submitting}
+            >
+              Cancelar
+            </Button>
+            <Button type="submit" disabled={submitting || pinInvalid}>
+              {submitting
+                ? 'Guardando…'
+                : removing
+                  ? 'Quitar PIN'
+                  : 'Guardar PIN'}
+            </Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function DeleteCajaModal({
+  token,
+  pending,
+  onCancel,
+  onConfirm,
+}: {
+  token: TokenRow;
+  pending: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const [confirmed, setConfirmed] = useState(false);
+
+  return (
+    <div className="
+      fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4
+    "
+    >
+      <div className="w-full max-w-md rounded-lg bg-background p-6 shadow-lg">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="
+            flex items-center gap-2 text-lg font-semibold text-destructive
+          "
+          >
+            <Trash2 className="size-5" />
+            Eliminar caja
+          </h2>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="
+              text-muted-foreground
+              hover:text-foreground
+            "
+          >
+            ✕
+          </button>
+        </div>
+
+        <p className="text-sm text-foreground">
+          Vas a eliminar
+          {' '}
+          <span className="font-semibold">{token.deviceName}</span>
+          .
+        </p>
+        <ul className="
+          mt-3 list-disc space-y-1 rounded-md bg-destructive/10 py-3 pr-3 pl-8
+          text-xs text-destructive
+        "
+        >
+          <li>El dispositivo perderá el acceso de inmediato.</li>
+          <li>Se libera un cupo de caja de tu plan.</li>
+          <li>Esta acción es permanente y no se puede deshacer.</li>
+        </ul>
+
+        <label className="mt-4 flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={confirmed}
+            onChange={e => setConfirmed(e.target.checked)}
+            className="mt-0.5"
+          />
+          <span>Entiendo que esta acción es permanente.</span>
+        </label>
+
+        <div className="mt-5 flex justify-end gap-2">
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={onCancel}
+            disabled={pending}
+          >
+            Cancelar
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            onClick={onConfirm}
+            disabled={pending || !confirmed}
+          >
+            <Trash2 className="size-4" />
+            {pending ? 'Eliminando…' : 'Eliminar definitivamente'}
+          </Button>
         </div>
       </div>
     </div>

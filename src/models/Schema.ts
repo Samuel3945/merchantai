@@ -324,7 +324,12 @@ export const posTokensSchema = pgTable(
     cashierId: uuid('cashier_id').references(() => posUsersSchema.id, {
       onDelete: 'set null',
     }),
+    // active=false => caja bloqueada (no puede loguear ni sincronizar, pero la
+    // fila persiste y libera cupo del plan). El borrado real elimina la fila.
     active: boolean('active').default(true).notNull(),
+    // PIN de acceso de la caja (bcrypt). Se exige en /api/pos/login junto con el
+    // token. '' => caja sin PIN (acceso directo con solo el token/QR).
+    pin: text('pin').default('').notNull(),
     // Se incrementa cuando el admin "cierra la sesión" de la caja. El cajero
     // compara el epoch que conoce contra este; si difiere, bloquea al empleado
     // activo (vuelve al selector/PIN) sin perder el token de dispositivo.

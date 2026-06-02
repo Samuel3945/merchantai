@@ -1,0 +1,1 @@
+ALTER TABLE "pos_tokens" ADD COLUMN "pin" text DEFAULT '' NOT NULL;

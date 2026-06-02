@@ -99,6 +99,21 @@ export async function POST(req: Request): Promise<NextResponse> {
         );
       }
 
+      // PIN de acceso de la caja: si está configurado, se exige junto al token.
+      if (row.token.pin) {
+        const valid = await bcrypt.compare(pin, row.token.pin);
+        if (!valid) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: 'PIN de la caja incorrecto',
+              needsPin: true,
+            },
+            { status: 401 },
+          );
+        }
+      }
+
       return NextResponse.json({
         success: true,
         jwt: row.token.token,
