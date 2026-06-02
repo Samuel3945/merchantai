@@ -4,11 +4,13 @@ import { touchLastSync, validatePosToken } from '@/actions/pos-tokens';
 import { applyInvoiceCustomerUpsert } from '@/features/customers/post-sale-hook';
 import { recordCashMovement, toMoney } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
+import { consumeFifoExits } from '@/libs/fifo-cogs';
 import {
   productsSchema,
   saleItemsSchema,
   salePaymentsSchema,
   salesSchema,
+  stockMovementsSchema,
 } from '@/models/Schema';
 
 export const runtime = 'nodejs';
@@ -98,6 +100,8 @@ export async function POST(req: Request): Promise<NextResponse> {
           subtotal: string;
           unitType: string;
         }[] = [];
+        // products.cost per line, aligned by index, for FIFO fallback valuation.
+        const lineFallbackCost: string[] = [];
 
         for (const item of queuedSale.items) {
           if (!item.productId) {
@@ -147,6 +151,7 @@ export async function POST(req: Request): Promise<NextResponse> {
             subtotal: toMoney(subtotal),
             unitType: product.unitType,
           });
+          lineFallbackCost.push(product.cost);
         }
 
         const totalStr = toMoney(total);
@@ -184,12 +189,24 @@ export async function POST(req: Request): Promise<NextResponse> {
                 eq(productsSchema.organizationId, orgId),
               ),
             );
-
-          await tx.execute(
-            sql`INSERT INTO stock_movements (product_id, product_name, type, qty, reason, created_by)
-                VALUES (${it.productId}, ${it.productName}, 'exit', ${it.qty}, 'sale', ${deviceName})`,
-          );
         }
+
+        // FIFO consumption + exit cost capture, shared with every sale path.
+        // (The previous raw INSERT here left org_id, sale_id and unit_cost
+        // unset, so synced sales never reached COGS/margin.)
+        const exitRows = await consumeFifoExits(
+          tx,
+          orgId,
+          deviceName,
+          sale.id,
+          itemsToInsert.map((it, i) => ({
+            productId: it.productId,
+            productName: it.productName,
+            qty: it.qty,
+            fallbackCost: lineFallbackCost[i] ?? '0',
+          })),
+        );
+        await tx.insert(stockMovementsSchema).values(exitRows);
 
         const paymentRows
           = queuedSale.payments && queuedSale.payments.length > 0

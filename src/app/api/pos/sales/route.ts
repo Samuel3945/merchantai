@@ -4,6 +4,7 @@ import { applyInvoiceCustomerUpsert } from '@/features/customers/post-sale-hook'
 import { logAction, resolvePosActor } from '@/libs/audit-log';
 import { findOpenSession, recordCashMovement, toMoney } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
+import { consumeFifoExits } from '@/libs/fifo-cogs';
 import { resolvePosAuth } from '@/libs/pos-auth';
 import {
   productsSchema,
@@ -94,6 +95,8 @@ export async function POST(req: Request): Promise<NextResponse> {
         subtotal: string;
         unitType: string;
       }[] = [];
+      // products.cost per line, aligned by index, for FIFO fallback valuation.
+      const lineFallbackCost: string[] = [];
 
       for (const item of items) {
         if (!item.productId) {
@@ -141,6 +144,7 @@ export async function POST(req: Request): Promise<NextResponse> {
           subtotal: toMoney(subtotal),
           unitType: product.unitType,
         });
+        lineFallbackCost.push(product.cost);
       }
 
       const totalStr = toMoney(total);
@@ -180,19 +184,21 @@ export async function POST(req: Request): Promise<NextResponse> {
           );
       }
 
-      // Record exit movements so cashier sales show up in the inventory history.
-      await tx.insert(stockMovementsSchema).values(
-        itemsToInsert.map(it => ({
-          organizationId: ctx.organizationId,
+      // FIFO consumption + exit cost capture, shared with the createSale action
+      // so cashier sales feed COGS/margin exactly the same way.
+      const exitRows = await consumeFifoExits(
+        tx,
+        ctx.organizationId,
+        ctx.cashierId ?? null,
+        sale.id,
+        itemsToInsert.map((it, i) => ({
           productId: it.productId,
           productName: it.productName,
-          type: 'exit' as const,
           qty: it.qty,
-          reason: 'sale',
-          saleId: sale.id,
-          createdBy: ctx.cashierId,
+          fallbackCost: lineFallbackCost[i] ?? '0',
         })),
       );
+      await tx.insert(stockMovementsSchema).values(exitRows);
 
       const paymentRows
         = body.payments && body.payments.length > 0

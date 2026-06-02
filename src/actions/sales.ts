@@ -6,6 +6,7 @@ import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
 import { recordCashMovement } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
+import { consumeFifoExits } from '@/libs/fifo-cogs';
 import {
   productsSchema,
   saleItemsSchema,
@@ -139,68 +140,19 @@ export async function createSale(input: CreateSaleInput) {
       .values(itemsToInsert.map(it => ({ saleId: sale.id, ...it })))
       .returning();
 
-    // FIFO consumption: draw each line's quantity from the oldest open entry
-    // batches first, decrement their remaining_qty, and capture the weighted
-    // cost of the consumed units as the exit's unit_cost. This is what keeps
-    // COGS/margin accurate and the per-batch ledger in sync with stock on hand.
-    const exitRows: (typeof stockMovementsSchema.$inferInsert)[] = [];
-    for (let i = 0; i < itemsToInsert.length; i++) {
-      const line = itemsToInsert[i]!;
-      const fallbackCost = Number(lineFallbackCost[i] ?? '0');
-      let remaining = line.qty;
-      let totalCost = 0;
-
-      const batches = await tx.execute(sql`
-        SELECT id, remaining_qty, unit_cost
-        FROM stock_movements
-        WHERE organization_id = ${orgId}
-          AND product_id = ${line.productId}
-          AND type = 'entry'
-          AND remaining_qty IS NOT NULL
-          AND remaining_qty > 0
-        ORDER BY created_at ASC
-        FOR UPDATE
-      `);
-
-      const rows = (batches.rows ?? []) as {
-        id: string;
-        remaining_qty: number;
-        unit_cost: string | null;
-      }[];
-      for (const b of rows) {
-        if (remaining <= 0) {
-          break;
-        }
-        const take = Math.min(Number(b.remaining_qty), remaining);
-        const unit = b.unit_cost != null ? Number(b.unit_cost) : fallbackCost;
-        totalCost += take * unit;
-        remaining -= take;
-        await tx.execute(sql`
-          UPDATE stock_movements
-          SET remaining_qty = remaining_qty - ${take}
-          WHERE id = ${b.id}
-        `);
-      }
-
-      // Units not covered by the ledger (legacy stock without entry batches):
-      // value them at the product's reference cost so COGS isn't understated.
-      if (remaining > 0) {
-        totalCost += remaining * fallbackCost;
-      }
-
-      const unitCost = line.qty > 0 ? totalCost / line.qty : 0;
-      exitRows.push({
-        organizationId: orgId,
-        productId: line.productId,
-        productName: line.productName,
-        type: 'exit',
-        qty: line.qty,
-        unitCost: toMoney(unitCost),
-        reason: 'sale',
-        saleId: sale.id,
-        createdBy: userId,
-      });
-    }
+    // FIFO consumption + exit cost capture, shared by every sale path.
+    const exitRows = await consumeFifoExits(
+      tx,
+      orgId,
+      userId,
+      sale.id,
+      itemsToInsert.map((it, i) => ({
+        productId: it.productId,
+        productName: it.productName,
+        qty: it.qty,
+        fallbackCost: lineFallbackCost[i] ?? '0',
+      })),
+    );
 
     // Stock on hand stays the authoritative quantity; the FIFO ledger above
     // mirrors it batch by batch.
