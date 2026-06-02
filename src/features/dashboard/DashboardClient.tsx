@@ -49,6 +49,23 @@ const dayFmt = new Intl.DateTimeFormat('es-CO', {
   timeZone: 'America/Bogota',
 });
 
+const rangeFmt = new Intl.DateTimeFormat('es-CO', {
+  day: 'numeric',
+  month: 'short',
+  year: 'numeric',
+});
+
+function formatRangeLabel(start: string, end: string): string {
+  const toLocal = (iso: string) => {
+    const [y, m, d] = iso.split('-').map(Number);
+    return new Date(y ?? 1970, (m ?? 1) - 1, d ?? 1);
+  };
+  if (start === end) {
+    return rangeFmt.format(toLocal(start));
+  }
+  return `${rangeFmt.format(toLocal(start))} – ${rangeFmt.format(toLocal(end))}`;
+}
+
 // Paleta de marca Tienda Control (teal/verde/terracota/ámbar/azul) — sin
 // purple/pink/cyan genéricos del boilerplate.
 const PIE_COLORS = [
@@ -68,7 +85,7 @@ function formatMoney(value: number) {
 
 function formatDelta(current: number, previous: number) {
   if (previous === 0) {
-    return current > 0 ? '+∞' : '0%';
+    return current > 0 ? '—' : '0%';
   }
   const delta = (current - previous) / previous;
   const sign = delta > 0 ? '+' : '';
@@ -139,22 +156,51 @@ function computePreviousRange(start: string, end: string) {
   return { start: prevStart, end: prevEnd };
 }
 
-type Preset = '7d' | '30d' | '90d' | 'mtd';
+type Preset = 'today' | 'yesterday' | '7d' | '30d' | '90d' | 'mtd' | 'lastMonth';
 
 const PRESETS: { key: Preset; label: string }[] = [
-  { key: '7d', label: '7 días' },
-  { key: '30d', label: '30 días' },
-  { key: '90d', label: '90 días' },
-  { key: 'mtd', label: 'Mes actual' },
+  { key: 'today', label: 'Hoy' },
+  { key: 'yesterday', label: 'Ayer' },
+  { key: '7d', label: 'Últimos 7 días' },
+  { key: '30d', label: 'Últimos 30 días' },
+  { key: '90d', label: 'Últimos 90 días' },
+  { key: 'mtd', label: 'Este mes' },
+  { key: 'lastMonth', label: 'Mes pasado' },
 ];
 
 function presetRange(preset: Preset): { start: string; end: string } {
   const end = todayBogota();
-  if (preset === 'mtd') {
-    return { start: `${end.slice(0, 7)}-01`, end };
+  switch (preset) {
+    case 'today':
+      return { start: end, end };
+    case 'yesterday': {
+      const y = addDays(end, -1);
+      return { start: y, end: y };
+    }
+    case '7d':
+      return { start: addDays(end, -6), end };
+    case '30d':
+      return { start: addDays(end, -29), end };
+    case '90d':
+      return { start: addDays(end, -89), end };
+    case 'mtd':
+      return { start: `${end.slice(0, 7)}-01`, end };
+    case 'lastMonth': {
+      const [y, m] = end.split('-').map(Number);
+      const firstThis = new Date(Date.UTC(y ?? 1970, (m ?? 1) - 1, 1));
+      const lastPrev = new Date(firstThis);
+      lastPrev.setUTCDate(0); // rolls back to the last day of the previous month
+      const firstPrev = new Date(
+        Date.UTC(lastPrev.getUTCFullYear(), lastPrev.getUTCMonth(), 1),
+      );
+      return {
+        start: firstPrev.toISOString().slice(0, 10),
+        end: lastPrev.toISOString().slice(0, 10),
+      };
+    }
+    default:
+      return { start: addDays(end, -6), end };
   }
-  const days = preset === '7d' ? 6 : preset === '30d' ? 29 : 89;
-  return { start: addDays(end, -days), end };
 }
 
 function KpiCard({
@@ -285,12 +331,24 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
 
   return (
     <div className="space-y-6">
-      {/* Filtros — barra coherente con Tienda Control */}
+      {/* Cabecera: título + rango activo a la izquierda, picker a la derecha */}
       <div className="
-        flex flex-col gap-4 rounded-lg border bg-card p-4 shadow-xs
-        lg:flex-row lg:flex-wrap lg:items-end lg:justify-between
+        flex flex-col gap-3
+        sm:flex-row sm:items-center sm:justify-between
       "
       >
+        <div className="min-w-0">
+          <h1 className="font-display text-xl font-semibold tracking-tight">
+            Resumen
+          </h1>
+          <p className="mt-0.5 truncate text-xs text-muted-foreground">
+            {pending
+              ? 'Actualizando…'
+              : formatRangeLabel(data.range.start, data.range.end)}
+            {data.compareRange
+              && ` · vs ${formatRangeLabel(data.compareRange.start, data.compareRange.end)}`}
+          </p>
+        </div>
         {/* Rango de fechas — picker estilo Shopify (presets + calendario) */}
         <DateRangePicker
           start={start}
@@ -301,14 +359,6 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
           maxDate={todayBogota()}
           onApply={applyRange}
         />
-      </div>
-
-      <div className="text-xs text-muted-foreground">
-        {pending
-          ? 'Cargando…'
-          : `Rango: ${data.range.start} → ${data.range.end}`}
-        {data.compareRange
-          && ` · vs ${data.compareRange.start} → ${data.compareRange.end}`}
       </div>
 
       {/* KPI cards */}
