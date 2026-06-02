@@ -75,7 +75,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     = await Promise.all([
       getSetting(orgId, 'business_name'),
       getSetting(orgId, 'business_address'),
-      getSetting(orgId, 'fiado_enabled'),
+      getSetting(orgId, 'fiado-enabled'),
       listActivePaymentMethods(orgId),
       db
         .select()

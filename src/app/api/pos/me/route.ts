@@ -229,7 +229,7 @@ export async function GET(req: Request): Promise<NextResponse> {
   ] = await Promise.all([
     getSetting(orgId, 'business_name'),
     getSetting(orgId, 'business_phone'),
-    getSetting(orgId, 'fiado_enabled'),
+    getSetting(orgId, 'fiado-enabled'),
     listActivePaymentMethods(orgId),
     listCashiers(orgId),
     db
