@@ -141,7 +141,7 @@ async function periodStats(
 async function inventoryStats(orgId: string): Promise<InventoryStats> {
   const result = await db.execute(sql`
     SELECT
-      COALESCE(SUM(price * stock), 0)::float8 AS value,
+      COALESCE(SUM(cost * stock), 0)::float8 AS value,
       COUNT(*) FILTER (WHERE stock <= 0)::int AS out_of_stock,
       COUNT(*) FILTER (WHERE stock BETWEEN 1 AND 5)::int AS low_stock,
       COUNT(*)::int AS total

@@ -56,13 +56,13 @@ export async function getSalesByPeriod(
   const result = await db.execute(sql`
     WITH daily AS (
       SELECT
-        to_char((s.created_at AT TIME ZONE 'America/Bogota')::date, 'YYYY-MM-DD') AS day,
+        to_char((s.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date, 'YYYY-MM-DD') AS day,
         s.id,
         s.total::numeric AS total
       FROM sales s
       WHERE s.organization_id = ${orgId}
         AND s.status = 'completed'
-        AND (s.created_at AT TIME ZONE 'America/Bogota')::date
+        AND (s.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
             BETWEEN ${s}::date AND ${e}::date
     ),
     costs AS (
@@ -132,7 +132,7 @@ export async function getSalesByCashier(
     WHERE s.organization_id = ${orgId}
       AND s.status = 'completed'
       AND s.cashier_id IS NOT NULL
-      AND (s.created_at AT TIME ZONE 'America/Bogota')::date
+      AND (s.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
           BETWEEN ${s}::date AND ${e}::date
     GROUP BY s.cashier_id, pu.name
     ORDER BY total DESC
@@ -176,7 +176,7 @@ export async function getSalesByPayment(
       FROM sales
       WHERE organization_id = ${orgId}
         AND status = 'completed'
-        AND (created_at AT TIME ZONE 'America/Bogota')::date
+        AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
             BETWEEN ${s}::date AND ${e}::date
       GROUP BY payment_type
     ),
@@ -243,7 +243,7 @@ export async function getTopProducts(
     JOIN products p ON p.id = si.product_id
     WHERE s.organization_id = ${orgId}
       AND s.status = 'completed'
-      AND (s.created_at AT TIME ZONE 'America/Bogota')::date
+      AND (s.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
           BETWEEN ${s}::date AND ${e}::date
     GROUP BY p.id, p.name, p.category
     ORDER BY revenue DESC
@@ -304,7 +304,7 @@ export async function getCashAnalysis(
     LEFT JOIN pos_users cpu ON cpu.id::text = cs.closed_by
     WHERE cs.organization_id = ${orgId}
       AND cs.status = 'closed'
-      AND (cs.closed_at AT TIME ZONE 'America/Bogota')::date
+      AND (cs.closed_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
           BETWEEN ${s}::date AND ${e}::date
     ORDER BY cs.closed_at DESC
   `);
@@ -343,7 +343,7 @@ export async function getInventoryValuation(): Promise<InventoryRow[]> {
     SELECT
       COALESCE(category, 'Sin categoría') AS category,
       COUNT(*)::int AS product_count,
-      COALESCE(SUM(price * stock), 0)::float8 AS total_value,
+      COALESCE(SUM(cost * stock), 0)::float8 AS total_value,
       COUNT(*) FILTER (WHERE stock <= 0)::int AS out_of_stock,
       COUNT(*) FILTER (WHERE stock BETWEEN 1 AND min_stock)::int AS low_stock
     FROM products
@@ -458,13 +458,13 @@ export async function getLossReport(
       ABS(sm.qty)::int AS qty,
       COALESCE(sm.unit_cost, p.cost, 0)::float8 AS unit_cost,
       (ABS(sm.qty) * COALESCE(sm.unit_cost, p.cost, 0))::float8 AS total_loss,
-      to_char((sm.created_at AT TIME ZONE 'America/Bogota')::date, 'YYYY-MM-DD') AS date
+      to_char((sm.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date, 'YYYY-MM-DD') AS date
     FROM stock_movements sm
     LEFT JOIN products p ON p.id = sm.product_id
     WHERE sm.organization_id = ${orgId}
       AND sm.type = 'exit'
       AND LOWER(COALESCE(sm.reason, '')) IN ('spoiled', 'damaged', 'lost', 'vencido', 'dañado', 'perdido')
-      AND (sm.created_at AT TIME ZONE 'America/Bogota')::date
+      AND (sm.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
           BETWEEN ${s}::date AND ${e}::date
     ORDER BY sm.created_at DESC
   `);

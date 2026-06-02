@@ -261,15 +261,15 @@ export async function listSales(
 
   if (filters.start && filters.end) {
     conds.push(
-      sql`(${salesSchema.createdAt} AT TIME ZONE 'America/Bogota')::date BETWEEN ${filters.start}::date AND ${filters.end}::date`,
+      sql`(${salesSchema.createdAt} AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date BETWEEN ${filters.start}::date AND ${filters.end}::date`,
     );
   } else if (filters.start) {
     conds.push(
-      sql`(${salesSchema.createdAt} AT TIME ZONE 'America/Bogota')::date >= ${filters.start}::date`,
+      sql`(${salesSchema.createdAt} AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date >= ${filters.start}::date`,
     );
   } else if (filters.end) {
     conds.push(
-      sql`(${salesSchema.createdAt} AT TIME ZONE 'America/Bogota')::date <= ${filters.end}::date`,
+      sql`(${salesSchema.createdAt} AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date <= ${filters.end}::date`,
     );
   }
 

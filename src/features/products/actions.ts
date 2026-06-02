@@ -112,6 +112,13 @@ export async function createProduct(input: ProductCreateInput) {
 
   const initialQty = data.initialQty ?? 0;
 
+  // The form captures the unit cost as the opening-batch cost (initialCost);
+  // there is no separate base-cost input, so products.cost — the cost basis
+  // used by margin and inventory valuation — must be seeded from the opening
+  // batch. Without this it stays '0' and margins read as 100%.
+  const baseCost
+    = data.cost && Number(data.cost) > 0 ? data.cost : (data.initialCost ?? data.cost);
+
   // Product insert + opening FIFO batch are atomic: if the movement insert
   // fails we don't want a product with phantom stock. The batch is a
   // stock_movements 'entry' row (remainingQty = qty) — the same lot model
@@ -124,7 +131,7 @@ export async function createProduct(input: ProductCreateInput) {
         name: data.name,
         barcode: data.barcode ?? null,
         price: data.price,
-        cost: data.cost,
+        cost: baseCost,
         // Stock comes from the opening batch when present, so it has a single
         // source of truth; otherwise it falls back to the provided value.
         stock: initialQty > 0 ? 0 : data.stock,
