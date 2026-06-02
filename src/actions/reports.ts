@@ -66,11 +66,11 @@ export async function getSalesByPeriod(
             BETWEEN ${s}::date AND ${e}::date
     ),
     costs AS (
-      SELECT si.sale_id, SUM(si.qty * p.cost) AS cost
-      FROM sale_items si
-      JOIN products p ON p.id = si.product_id
-      WHERE si.sale_id IN (SELECT id FROM daily)
-      GROUP BY si.sale_id
+      SELECT sm.sale_id, SUM(sm.qty * COALESCE(sm.unit_cost, 0)) AS cost
+      FROM stock_movements sm
+      WHERE sm.type = 'exit'
+        AND sm.sale_id IN (SELECT id FROM daily)
+      GROUP BY sm.sale_id
     )
     SELECT
       d.day,
@@ -227,25 +227,44 @@ export async function getTopProducts(
   const e = validateDate(end, 'end');
 
   const result = await db.execute(sql`
+    WITH sales_in_range AS (
+      SELECT s.id
+      FROM sales s
+      WHERE s.organization_id = ${orgId}
+        AND s.status = 'completed'
+        AND (s.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
+            BETWEEN ${s}::date AND ${e}::date
+    ),
+    items AS (
+      SELECT si.product_id,
+             SUM(si.qty)::int AS qty,
+             SUM(si.subtotal)::numeric AS revenue
+      FROM sale_items si
+      WHERE si.sale_id IN (SELECT id FROM sales_in_range)
+      GROUP BY si.product_id
+    ),
+    costs AS (
+      SELECT sm.product_id,
+             SUM(sm.qty * COALESCE(sm.unit_cost, 0))::numeric AS cost
+      FROM stock_movements sm
+      WHERE sm.type = 'exit'
+        AND sm.sale_id IN (SELECT id FROM sales_in_range)
+      GROUP BY sm.product_id
+    )
     SELECT
       p.name,
       COALESCE(p.category, 'Sin categoría') AS category,
-      SUM(si.qty)::int AS qty,
-      SUM(si.subtotal)::float8 AS revenue,
-      SUM(si.qty * p.cost)::float8 AS cost,
-      SUM(si.subtotal - si.qty * p.cost)::float8 AS profit,
-      CASE WHEN SUM(si.subtotal) > 0
-        THEN ((SUM(si.subtotal - si.qty * p.cost)) / SUM(si.subtotal) * 100)::float8
+      i.qty AS qty,
+      i.revenue::float8 AS revenue,
+      COALESCE(c.cost, 0)::float8 AS cost,
+      (i.revenue - COALESCE(c.cost, 0))::float8 AS profit,
+      CASE WHEN i.revenue > 0
+        THEN ((i.revenue - COALESCE(c.cost, 0)) / i.revenue * 100)::float8
         ELSE 0
       END AS margin
-    FROM sale_items si
-    JOIN sales s ON s.id = si.sale_id
-    JOIN products p ON p.id = si.product_id
-    WHERE s.organization_id = ${orgId}
-      AND s.status = 'completed'
-      AND (s.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
-          BETWEEN ${s}::date AND ${e}::date
-    GROUP BY p.id, p.name, p.category
+    FROM items i
+    JOIN products p ON p.id = i.product_id
+    LEFT JOIN costs c ON c.product_id = i.product_id
     ORDER BY revenue DESC
     LIMIT 50
   `);

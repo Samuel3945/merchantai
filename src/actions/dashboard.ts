@@ -108,11 +108,11 @@ async function periodStats(
             BETWEEN ${start}::date AND ${end}::date
     ),
     costs AS (
-      SELECT si.sale_id, SUM(si.qty * p.cost) AS cost
-      FROM sale_items si
-      JOIN products p ON p.id = si.product_id
-      WHERE si.sale_id IN (SELECT id FROM ps)
-      GROUP BY si.sale_id
+      SELECT sm.sale_id, SUM(sm.qty * COALESCE(sm.unit_cost, 0)) AS cost
+      FROM stock_movements sm
+      WHERE sm.type = 'exit'
+        AND sm.sale_id IN (SELECT id FROM ps)
+      GROUP BY sm.sale_id
     )
     SELECT
       COALESCE(SUM(ps.total), 0)::float8 AS total,

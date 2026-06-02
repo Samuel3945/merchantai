@@ -1,11 +1,13 @@
-// Backfills products.cost from each product's most recent stock-entry unit cost.
-// Existing products were created before products.cost was seeded from the
-// opening batch, so they sit at 0 and break margin/valuation. This repairs them.
+// FIFO replay backfill. Repairs historical data so margin, COGS and the
+// per-batch ledger are correct for sales made before FIFO consumption existed:
+//   - sets unit_cost on each 'exit' movement to the weighted cost of the
+//     batches it consumed (oldest first),
+//   - rebuilds remaining_qty on every 'entry' batch (sales never drew them down),
+//   - seeds products.cost (weighted average of entries) where it is still 0.
 //
-// Dry run (default): reports how many rows WOULD change, writes nothing.
-//   DATABASE_URL="<prod-url>" node scripts/db-backfill-cost.mjs
-// Apply:
-//   DATABASE_URL="<prod-url>" node scripts/db-backfill-cost.mjs --apply
+// Dry run (default): runs everything in a transaction and ROLLS BACK, printing
+// what it would change.  DATABASE_URL="<prod>" node scripts/db-backfill-cost.mjs
+// Apply: DATABASE_URL="<prod>" node scripts/db-backfill-cost.mjs --apply
 import pg from 'pg';
 
 const url = process.env.DATABASE_URL;
@@ -17,49 +19,104 @@ const apply = process.argv.includes('--apply');
 
 const client = new pg.Client({ connectionString: url });
 await client.connect();
+await client.query('BEGIN');
 
-// Latest entry unit cost per product, only where it would actually change cost.
-const candidatesSql = `
-  WITH latest_entry AS (
-    SELECT DISTINCT ON (product_id) product_id, unit_cost
-    FROM stock_movements
-    WHERE type = 'entry' AND unit_cost IS NOT NULL AND unit_cost > 0
-    ORDER BY product_id, created_at DESC
-  )
-  SELECT p.id, p.name, p.cost::float8 AS old_cost, le.unit_cost::float8 AS new_cost
-  FROM products p
-  JOIN latest_entry le ON le.product_id = p.id
-  WHERE p.deleted = false
-    AND (p.cost IS NULL OR p.cost = 0)
-`;
+let exitsCosted = 0;
+let batchesFixed = 0;
+let productsCostSeeded = 0;
 
-const { rows: candidates } = await client.query(candidatesSql);
-console.log(`products to repair: ${candidates.length}`);
-for (const r of candidates.slice(0, 20)) {
-  console.log(`  ${r.name}: ${r.old_cost} -> ${r.new_cost}`);
-}
-if (candidates.length > 20) {
-  console.log(`  ...and ${candidates.length - 20} more`);
-}
+try {
+  const { rows: products } = await client.query(`
+    SELECT DISTINCT product_id, organization_id FROM stock_movements
+  `);
 
-if (!apply) {
-  console.log('\nDRY RUN — nothing written. Re-run with --apply to commit.');
+  for (const { product_id, organization_id } of products) {
+    const { rows: entries } = await client.query(
+      `SELECT id, qty, COALESCE(unit_cost, 0)::float8 AS unit_cost
+       FROM stock_movements
+       WHERE product_id = $1 AND type = 'entry'
+       ORDER BY created_at ASC`,
+      [product_id],
+    );
+    const { rows: exits } = await client.query(
+      `SELECT id, qty FROM stock_movements
+       WHERE product_id = $1 AND type = 'exit'
+       ORDER BY created_at ASC`,
+      [product_id],
+    );
+
+    // Weighted-average cost across all entry batches — fallback for exits the
+    // ledger can't fully cover, and the seed value for products.cost.
+    const totalEntryQty = entries.reduce((a, e) => a + Number(e.qty), 0);
+    const totalEntryCost = entries.reduce(
+      (a, e) => a + Number(e.qty) * Number(e.unit_cost),
+      0,
+    );
+    const avgCost = totalEntryQty > 0 ? totalEntryCost / totalEntryQty : 0;
+
+    // In-memory FIFO batches, replayed from full quantities.
+    const batches = entries.map(e => ({
+      id: e.id,
+      remaining: Number(e.qty),
+      unit: Number(e.unit_cost),
+    }));
+
+    for (const exit of exits) {
+      let remaining = Number(exit.qty);
+      let totalCost = 0;
+      for (const b of batches) {
+        if (remaining <= 0) {
+          break;
+        }
+        const take = Math.min(b.remaining, remaining);
+        totalCost += take * b.unit;
+        b.remaining -= take;
+        remaining -= take;
+      }
+      if (remaining > 0) {
+        totalCost += remaining * avgCost; // uncovered units at weighted average
+      }
+      const unitCost = Number(exit.qty) > 0 ? totalCost / Number(exit.qty) : 0;
+      await client.query(
+        `UPDATE stock_movements SET unit_cost = $1 WHERE id = $2`,
+        [unitCost.toFixed(2), exit.id],
+      );
+      exitsCosted++;
+    }
+
+    for (const b of batches) {
+      await client.query(
+        `UPDATE stock_movements SET remaining_qty = $1 WHERE id = $2`,
+        [b.remaining, b.id],
+      );
+      batchesFixed++;
+    }
+
+    if (avgCost > 0) {
+      const { rowCount } = await client.query(
+        `UPDATE products SET cost = $1
+         WHERE id = $2 AND organization_id = $3 AND (cost IS NULL OR cost = 0)`,
+        [avgCost.toFixed(2), product_id, organization_id],
+      );
+      productsCostSeeded += rowCount;
+    }
+  }
+
+  console.log(`exits given a cost:        ${exitsCosted}`);
+  console.log(`entry batches recomputed:  ${batchesFixed}`);
+  console.log(`products.cost seeded:      ${productsCostSeeded}`);
+
+  if (apply) {
+    await client.query('COMMIT');
+    console.log('\nAPPLIED — changes committed.');
+  } else {
+    await client.query('ROLLBACK');
+    console.log('\nDRY RUN — rolled back. Re-run with --apply to commit.');
+  }
+} catch (err) {
+  await client.query('ROLLBACK');
+  console.error('Failed, rolled back:', err);
+  process.exitCode = 1;
+} finally {
   await client.end();
-  process.exit(0);
 }
-
-const { rowCount } = await client.query(`
-  UPDATE products p
-  SET cost = le.unit_cost
-  FROM (
-    SELECT DISTINCT ON (product_id) product_id, unit_cost
-    FROM stock_movements
-    WHERE type = 'entry' AND unit_cost IS NOT NULL AND unit_cost > 0
-    ORDER BY product_id, created_at DESC
-  ) le
-  WHERE p.id = le.product_id
-    AND p.deleted = false
-    AND (p.cost IS NULL OR p.cost = 0)
-`);
-console.log(`\nAPPLIED — updated ${rowCount} products.`);
-await client.end();
