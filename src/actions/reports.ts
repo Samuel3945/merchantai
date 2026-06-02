@@ -34,6 +34,23 @@ function toInt(v: unknown): number {
   return Math.trunc(toNum(v));
 }
 
+function addDays(iso: string, days: number): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  const date = new Date(Date.UTC(y!, m! - 1, d!));
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function previousRange(start: string, end: string): { start: string; end: string } {
+  const [ys, ms, ds] = start.split('-').map(Number);
+  const [ye, me, de] = end.split('-').map(Number);
+  const span = Math.round(
+    (Date.UTC(ye!, me! - 1, de!) - Date.UTC(ys!, ms! - 1, ds!)) / 86_400_000,
+  );
+  const prevEnd = addDays(start, -1);
+  return { start: addDays(prevEnd, -span), end: prevEnd };
+}
+
 // ── 1. Ventas por período ──────────────────────────────────────────────────
 
 export type SalesByPeriodRow = {
@@ -499,4 +516,121 @@ export async function getLossReport(
       date: String(row.date ?? ''),
     };
   });
+}
+
+// ── Overview: resumen liviano de todos los reportes en una sola llamada ──────
+//
+// Reutiliza las 8 queries ya probadas y las reduce a las cifras titulares que
+// alimentan las tarjetas del overview. Corre todo en paralelo (incluido el
+// período anterior para los deltas de ventas y ganancia).
+
+export type ReportsOverview = {
+  range: { start: string; end: string };
+  sales: {
+    total: number;
+    count: number;
+    avgTicket: number;
+    prevTotal: number;
+    spark: { day: string; total: number }[];
+  };
+  profit: { profit: number; margin: number; prevProfit: number };
+  payment: { topMethod: string; topPct: number; methodCount: number };
+  cashier: { activeCashiers: number; topName: string; topTotal: number };
+  topProduct: { name: string; revenue: number; qty: number };
+  cash: { sessions: number; totalDifference: number; alerts: number };
+  inventory: { value: number; outOfStock: number; lowStock: number; products: number };
+  fiados: { totalOwed: number; clients: number; highRisk: number };
+  losses: { totalLoss: number; items: number };
+};
+
+export async function getReportsOverview(
+  start: string,
+  end: string,
+): Promise<ReportsOverview> {
+  const s = validateDate(start, 'start');
+  const e = validateDate(end, 'end');
+  const prev = previousRange(s, e);
+
+  const [
+    period,
+    prevPeriod,
+    cashiers,
+    payments,
+    top,
+    cash,
+    inventory,
+    fiados,
+    losses,
+  ] = await Promise.all([
+    getSalesByPeriod(s, e),
+    getSalesByPeriod(prev.start, prev.end),
+    getSalesByCashier(s, e),
+    getSalesByPayment(s, e),
+    getTopProducts(s, e),
+    getCashAnalysis(s, e),
+    getInventoryValuation(),
+    getFiadoReport(),
+    getLossReport(s, e),
+  ]);
+
+  const salesTotal = period.reduce((acc, r) => acc + r.total, 0);
+  const salesCount = period.reduce((acc, r) => acc + r.count, 0);
+  const profit = period.reduce((acc, r) => acc + r.profit, 0);
+  const prevTotal = prevPeriod.reduce((acc, r) => acc + r.total, 0);
+  const prevProfit = prevPeriod.reduce((acc, r) => acc + r.profit, 0);
+
+  const topPayment = payments[0];
+  const topCashier = cashiers[0];
+  const topProduct = top[0];
+
+  return {
+    range: { start: s, end: e },
+    sales: {
+      total: salesTotal,
+      count: salesCount,
+      avgTicket: salesCount > 0 ? salesTotal / salesCount : 0,
+      prevTotal,
+      spark: period.map(r => ({ day: r.day, total: r.total })),
+    },
+    profit: {
+      profit,
+      margin: salesTotal > 0 ? (profit / salesTotal) * 100 : 0,
+      prevProfit,
+    },
+    payment: {
+      topMethod: topPayment?.method ?? '',
+      topPct: topPayment?.pct ?? 0,
+      methodCount: payments.length,
+    },
+    cashier: {
+      activeCashiers: cashiers.length,
+      topName: topCashier?.cashierName ?? '',
+      topTotal: topCashier?.total ?? 0,
+    },
+    topProduct: {
+      name: topProduct?.name ?? '',
+      revenue: topProduct?.revenue ?? 0,
+      qty: topProduct?.qty ?? 0,
+    },
+    cash: {
+      sessions: cash.length,
+      totalDifference: cash.reduce((acc, r) => acc + r.difference, 0),
+      alerts: cash.filter(r => r.hasFraudAlert).length,
+    },
+    inventory: {
+      value: inventory.reduce((acc, r) => acc + r.totalValue, 0),
+      outOfStock: inventory.reduce((acc, r) => acc + r.outOfStock, 0),
+      lowStock: inventory.reduce((acc, r) => acc + r.lowStock, 0),
+      products: inventory.reduce((acc, r) => acc + r.productCount, 0),
+    },
+    fiados: {
+      totalOwed: fiados.reduce((acc, r) => acc + r.totalOwed, 0),
+      clients: fiados.length,
+      highRisk: fiados.filter(r => r.risk === 'alto').length,
+    },
+    losses: {
+      totalLoss: losses.reduce((acc, r) => acc + r.totalLoss, 0),
+      items: losses.length,
+    },
+  };
 }
