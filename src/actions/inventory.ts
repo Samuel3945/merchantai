@@ -2,7 +2,7 @@
 
 import type { SQL } from 'drizzle-orm';
 import { auth } from '@clerk/nextjs/server';
-import { and, desc, eq, gte, lte, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, gte, lte, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { db } from '@/libs/db-context';
 import {
@@ -59,7 +59,12 @@ export async function recordMovement(input: RecordMovementInput) {
   }
 
   const [product] = await tdb
-    .select({ id: productsSchema.id, name: productsSchema.name, stock: productsSchema.stock })
+    .select({
+      id: productsSchema.id,
+      name: productsSchema.name,
+      stock: productsSchema.stock,
+      cost: productsSchema.cost,
+    })
     .from(productsSchema)
     .where(
       and(
@@ -74,6 +79,55 @@ export async function recordMovement(input: RecordMovementInput) {
   }
 
   const result = await tdb.transaction(async (tx) => {
+    // Manual exits draw down the FIFO ledger (oldest batches first) and capture
+    // the weighted cost of the units removed, mirroring how sales consume stock,
+    // so loss valuation stays accurate and remaining_qty stays in sync. An
+    // explicitly provided unitCost wins; otherwise we use the FIFO cost.
+    let unitCost = input.unitCost ?? null;
+    if (input.type === 'exit') {
+      const batches = await tx
+        .select({
+          id: stockMovementsSchema.id,
+          remainingQty: stockMovementsSchema.remainingQty,
+          unitCost: stockMovementsSchema.unitCost,
+        })
+        .from(stockMovementsSchema)
+        .where(
+          and(
+            eq(stockMovementsSchema.productId, input.productId),
+            eq(stockMovementsSchema.type, 'entry'),
+            gt(stockMovementsSchema.remainingQty, 0),
+          ),
+        )
+        .orderBy(stockMovementsSchema.createdAt)
+        .for('update');
+
+      const fallback = Number(product.cost) || 0;
+      let remaining = input.qty;
+      let totalCost = 0;
+      for (const b of batches) {
+        if (remaining <= 0) {
+          break;
+        }
+        const take = Math.min(b.remainingQty ?? 0, remaining);
+        totalCost += take * (b.unitCost != null ? Number(b.unitCost) : fallback);
+        remaining -= take;
+        await tx
+          .update(stockMovementsSchema)
+          .set({
+            remainingQty: sql`${stockMovementsSchema.remainingQty} - ${take}`,
+          })
+          .where(eq(stockMovementsSchema.id, b.id));
+      }
+      // Units not covered by the ledger fall back to the product's reference cost.
+      if (remaining > 0) {
+        totalCost += remaining * fallback;
+      }
+      unitCost
+        = input.unitCost
+          ?? (input.qty > 0 ? (totalCost / input.qty).toFixed(2) : '0');
+    }
+
     const [movement] = await tx
       .insert(stockMovementsSchema)
       .values({
@@ -83,7 +137,7 @@ export async function recordMovement(input: RecordMovementInput) {
         qty: input.qty,
         remainingQty: input.type === 'entry' ? input.qty : null,
         reason: input.reason,
-        unitCost: input.unitCost ?? null,
+        unitCost,
         expiresAt: input.expiresAt ?? null,
         saleId: input.saleId ?? null,
         supplierId: input.supplierId ?? null,
