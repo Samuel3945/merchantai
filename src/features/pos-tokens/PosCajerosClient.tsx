@@ -2,17 +2,27 @@
 
 import type {
   listOrgCashiers,
+  PosDeviceQuota,
 } from '@/actions/pos-tokens';
-import { ExternalLink } from 'lucide-react';
+import {
+  ArrowUpRight,
+  CheckCircle2,
+  ExternalLink,
+  Lock,
+  Monitor,
+  Plus,
+} from 'lucide-react';
 import { useCallback, useState, useTransition } from 'react';
 import {
   createPosToken,
   forceLogoutPosToken,
+  getPosDeviceQuota,
   listPosTokens,
   regeneratePosToken,
   revokePosToken,
 } from '@/actions/pos-tokens';
 import { Button } from '@/components/ui/button';
+import { Link } from '@/libs/I18nNavigation';
 
 /**
  * App de cajero en producción (repo `pos-merchatai`, dominio propio).
@@ -27,6 +37,13 @@ type CashierRow = Awaited<ReturnType<typeof listOrgCashiers>>[number];
 const inputCls
   = 'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50';
 const labelCls = 'text-xs font-medium text-muted-foreground';
+
+const PLAN_LABEL: Record<string, string> = {
+  free: 'Gratis',
+  starter: 'Starter',
+  pro: 'Pro',
+  business: 'Business',
+};
 
 const dateFmt = new Intl.DateTimeFormat('es-CO', {
   dateStyle: 'short',
@@ -45,30 +62,86 @@ function qrUrl(text: string, size = 220) {
   return `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(text)}`;
 }
 
+type LimitErrorPayload = {
+  code: 'pos_devices_limit_reached';
+  plan: string;
+  limit: number;
+  used: number;
+  base: number;
+  addons: number;
+};
+
+// The server action throws an Error whose message embeds a JSON blob; we parse
+// it back out so the client can render the upgrade CTA with real numbers.
+function parseLimitError(err: unknown): LimitErrorPayload | null {
+  if (!err) {
+    return null;
+  }
+  const msg = err instanceof Error ? err.message : String(err);
+  const match = msg.match(/\{[^}]*pos_devices_limit_reached[^}]*\}/);
+  if (match) {
+    try {
+      return JSON.parse(match[0]) as LimitErrorPayload;
+    } catch {
+      // fall through
+    }
+  }
+  if (msg.includes('Pos devices limit reached')) {
+    return { code: 'pos_devices_limit_reached', plan: '', limit: 0, used: 0, base: 0, addons: 0 };
+  }
+  return null;
+}
+
 export function PosCajerosClient({
   initialTokens,
   initialCashiers,
+  initialQuota,
 }: {
   initialTokens: TokenRow[];
   initialCashiers: CashierRow[];
+  initialQuota: PosDeviceQuota;
 }) {
   const [tokens, setTokens] = useState(initialTokens);
   const [cashiers] = useState(initialCashiers);
+  const [quota, setQuota] = useState(initialQuota);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [activeToken, setActiveToken] = useState<TokenRow | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [limitError, setLimitError] = useState<LimitErrorPayload | null>(null);
   const [pending, startTransition] = useTransition();
+
+  const atLimit = quota.used >= quota.limit;
+  const usagePct = quota.limit > 0
+    ? Math.min(100, Math.round((quota.used / quota.limit) * 100))
+    : 100;
 
   const refresh = useCallback(() => {
     startTransition(async () => {
-      const rows = await listPosTokens();
+      const [rows, q] = await Promise.all([listPosTokens(), getPosDeviceQuota()]);
       setTokens(rows);
+      setQuota(q);
     });
   }, []);
 
+  const handleOpenCreate = () => {
+    if (atLimit) {
+      setLimitError({
+        code: 'pos_devices_limit_reached',
+        plan: quota.plan,
+        limit: quota.limit,
+        used: quota.used,
+        base: quota.base,
+        addons: quota.addons,
+      });
+      return;
+    }
+    setLimitError(null);
+    setShowCreateModal(true);
+  };
+
   const handleRevoke = (id: string) => {
     // eslint-disable-next-line no-alert
-    if (!globalThis.confirm('Revocar este token? El dispositivo dejará de sincronizar.')) {
+    if (!globalThis.confirm('¿Revocar esta caja? El dispositivo dejará de sincronizar y el slot quedará libre.')) {
       return;
     }
     startTransition(async () => {
@@ -83,7 +156,7 @@ export function PosCajerosClient({
 
   const handleRegenerate = (id: string) => {
     // eslint-disable-next-line no-alert
-    if (!globalThis.confirm('Cambiar el token de esta caja? El dispositivo actual deberá pegar el token nuevo para volver a entrar.')) {
+    if (!globalThis.confirm('¿Cambiar el acceso de esta caja? El dispositivo actual deberá escanear el código nuevo para volver a entrar.')) {
       return;
     }
     startTransition(async () => {
@@ -96,14 +169,14 @@ export function PosCajerosClient({
           setActiveToken(fresh);
         }
       } catch (e) {
-        setError(e instanceof Error ? e.message : 'No se pudo regenerar el token');
+        setError(e instanceof Error ? e.message : 'No se pudo regenerar el acceso');
       }
     });
   };
 
   const handleForceLogout = (id: string) => {
     // eslint-disable-next-line no-alert
-    if (!globalThis.confirm('Cerrar la sesión de esta caja? El empleado activo tendrá que volver a ingresar su PIN (el token sigue válido).')) {
+    if (!globalThis.confirm('¿Cerrar la sesión de esta caja? El empleado activo tendrá que volver a ingresar su PIN (la caja sigue activa).')) {
       return;
     }
     startTransition(async () => {
@@ -135,8 +208,23 @@ export function PosCajerosClient({
         </div>
       )}
 
-      <div className="flex items-center justify-between gap-2">
-        <div className="text-lg font-semibold">POS Cajeros</div>
+      {limitError && (
+        <LimitBanner
+          payload={limitError}
+          onDismiss={() => setLimitError(null)}
+        />
+      )}
+
+      <QuotaCard quota={quota} usagePct={usagePct} atLimit={atLimit} />
+
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="text-lg font-semibold">Tus cajas</div>
+          <p className="text-sm text-muted-foreground">
+            Cada caja es un dispositivo (tablet, celular o PC) que abre el POS y
+            sincroniza con tu negocio.
+          </p>
+        </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" asChild>
             <a
@@ -145,12 +233,24 @@ export function PosCajerosClient({
               rel="noopener noreferrer"
             >
               <ExternalLink className="size-4" />
-              Abrir TiendaCajero
+              Abrir POS
             </a>
           </Button>
-          <Button onClick={() => setShowCreateModal(true)} disabled={pending}>
-            Generar nuevo token
-          </Button>
+          {atLimit
+            ? (
+                <Button asChild>
+                  <Link href="/dashboard/plans">
+                    <Lock className="size-4" />
+                    Desbloquear más cajas
+                  </Link>
+                </Button>
+              )
+            : (
+                <Button onClick={handleOpenCreate} disabled={pending}>
+                  <Plus className="size-4" />
+                  Agregar caja
+                </Button>
+              )}
         </div>
       </div>
 
@@ -158,12 +258,12 @@ export function PosCajerosClient({
         <table className="w-full text-sm">
           <thead className="bg-muted/50 text-left text-xs uppercase">
             <tr>
-              <th className="px-3 py-2">Dispositivo</th>
+              <th className="px-3 py-2">Caja / dispositivo</th>
               <th className="px-3 py-2">Cajero</th>
               <th className="px-3 py-2">Estado</th>
               <th className="px-3 py-2">Último sync</th>
               <th className="px-3 py-2">Expira</th>
-              <th className="px-3 py-2">Creado</th>
+              <th className="px-3 py-2">Creada</th>
               <th className="px-3 py-2">Acciones</th>
             </tr>
           </thead>
@@ -171,24 +271,44 @@ export function PosCajerosClient({
             {tokens.length === 0 && (
               <tr>
                 <td
-                  className="px-3 py-6 text-center text-muted-foreground"
+                  className="px-3 py-8 text-center text-muted-foreground"
                   colSpan={7}
                 >
-                  Aún no hay tokens. Genera uno para registrar un dispositivo.
+                  Aún no tienes cajas. Agrega una para registrar tu primer
+                  dispositivo POS.
                 </td>
               </tr>
             )}
             {tokens.map(t => (
               <tr key={t.id} className="border-t">
-                <td className="px-3 py-2">{t.deviceName}</td>
+                <td className="px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    <Monitor className="size-4 text-muted-foreground" />
+                    {t.deviceName}
+                  </div>
+                </td>
                 <td className="px-3 py-2">{t.cashierName ?? '—'}</td>
                 <td className="px-3 py-2">
                   {t.active
                     ? (
-                        <span className="text-emerald-700">activo</span>
+                        <span className="
+                          inline-flex items-center gap-1 rounded-full
+                          bg-emerald-50 px-2 py-0.5 text-xs font-medium
+                          text-emerald-700
+                        "
+                        >
+                          <CheckCircle2 className="size-3" />
+                          Activa
+                        </span>
                       )
                     : (
-                        <span className="text-muted-foreground">revocado</span>
+                        <span className="
+                          inline-flex items-center rounded-full bg-muted px-2
+                          py-0.5 text-xs font-medium text-muted-foreground
+                        "
+                        >
+                          Revocada
+                        </span>
                       )}
                 </td>
                 <td className="px-3 py-2 text-xs">{formatDate(t.lastSyncAt)}</td>
@@ -200,7 +320,7 @@ export function PosCajerosClient({
                     variant="ghost"
                     onClick={() => setActiveToken(t)}
                   >
-                    Ver QR
+                    Ver acceso
                   </Button>
                   {t.active && (
                     <>
@@ -209,7 +329,7 @@ export function PosCajerosClient({
                         variant="ghost"
                         onClick={() => handleForceLogout(t.id)}
                         disabled={pending}
-                        title="Desloguea al empleado activo; el token sigue válido"
+                        title="Desloguea al empleado activo; la caja sigue activa"
                       >
                         Cerrar sesión
                       </Button>
@@ -218,9 +338,9 @@ export function PosCajerosClient({
                         variant="ghost"
                         onClick={() => handleRegenerate(t.id)}
                         disabled={pending}
-                        title="Genera un token nuevo; el dispositivo deberá pegarlo"
+                        title="Genera un acceso nuevo; el dispositivo deberá escanearlo"
                       >
-                        Cambiar token
+                        Cambiar acceso
                       </Button>
                       <Button
                         size="sm"
@@ -261,14 +381,184 @@ export function PosCajerosClient({
             });
             refresh();
           }}
-          onError={err =>
-            setError(err instanceof Error ? err.message : String(err))}
+          onError={(err) => {
+            const limit = parseLimitError(err);
+            if (limit) {
+              setShowCreateModal(false);
+              setLimitError(limit);
+              return;
+            }
+            setError(err instanceof Error ? err.message : String(err));
+          }}
         />
       )}
 
       {activeToken && (
         <QrModal token={activeToken} onClose={() => setActiveToken(null)} />
       )}
+    </div>
+  );
+}
+
+function QuotaCard({
+  quota,
+  usagePct,
+  atLimit,
+}: {
+  quota: PosDeviceQuota;
+  usagePct: number;
+  atLimit: boolean;
+}) {
+  const planLabel = PLAN_LABEL[quota.plan] ?? quota.plan;
+  const barColor = atLimit
+    ? 'bg-amber-500'
+    : usagePct >= 80
+      ? 'bg-amber-400'
+      : 'bg-emerald-500';
+
+  return (
+    <div className="rounded-lg border bg-background p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-muted-foreground">
+              Cajas activas
+            </span>
+            <span className="
+              rounded-full bg-muted px-2 py-0.5 text-xs font-medium
+            "
+            >
+              Plan
+              {' '}
+              {planLabel}
+            </span>
+          </div>
+          <div className="mt-1 text-2xl font-semibold tabular-nums">
+            {quota.used}
+            {' '}
+            <span className="text-base font-normal text-muted-foreground">
+              /
+              {' '}
+              {quota.limit}
+            </span>
+          </div>
+          {quota.addons > 0 && (
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {quota.base}
+              {' '}
+              del plan +
+              {' '}
+              {quota.addons}
+              {' '}
+              adicional
+              {quota.addons === 1 ? '' : 'es'}
+            </p>
+          )}
+        </div>
+
+        {atLimit
+          ? (
+              <Button asChild size="sm">
+                <Link href="/dashboard/plans">
+                  Desbloquear más cajas
+                  <ArrowUpRight className="size-4" />
+                </Link>
+              </Button>
+            )
+          : (
+              <span className="text-sm text-emerald-700">
+                {quota.remaining}
+                {' '}
+                disponible
+                {quota.remaining === 1 ? '' : 's'}
+              </span>
+            )}
+      </div>
+
+      <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-muted">
+        <div
+          className={`
+            h-full rounded-full transition-all
+            ${barColor}
+          `}
+          style={{ width: `${usagePct}%` }}
+        />
+      </div>
+
+      {atLimit && (
+        <p className="mt-2 text-xs text-amber-700">
+          Llegaste al máximo de cajas de tu plan. Mejora tu plan o suma una caja
+          adicional para registrar otro dispositivo.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function LimitBanner({
+  payload,
+  onDismiss,
+}: {
+  payload: LimitErrorPayload;
+  onDismiss: () => void;
+}) {
+  const planLabel = PLAN_LABEL[payload.plan] ?? payload.plan;
+  return (
+    <div className="
+      rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm
+      text-amber-900
+    "
+    >
+      <div className="flex items-center gap-2 font-semibold">
+        <Lock className="size-4" />
+        Límite de cajas alcanzado
+      </div>
+      <div className="mt-1">
+        {payload.plan
+          ? (
+              <>
+                El plan
+                {' '}
+                <span className="font-medium">{planLabel}</span>
+                {' '}
+                permite
+                {' '}
+                {payload.base}
+                {' '}
+                caja
+                {payload.base === 1 ? '' : 's'}
+                {payload.addons > 0 && (
+                  <>
+                    {' '}
+                    (+
+                    {payload.addons}
+                    {' '}
+                    adicional
+                    {payload.addons === 1 ? '' : 'es'}
+                    )
+                  </>
+                )}
+                {' = '}
+                {payload.limit}
+                . En uso:
+                {' '}
+                {payload.used}
+                .
+              </>
+            )
+          : 'Alcanzaste el máximo de cajas de tu plan.'}
+      </div>
+      <div className="mt-2 flex items-center gap-3">
+        <Button asChild size="sm">
+          <Link href="/dashboard/plans">
+            Ver planes y desbloquear
+            <ArrowUpRight className="size-4" />
+          </Link>
+        </Button>
+        <button type="button" className="underline" onClick={onDismiss}>
+          Descartar
+        </button>
+      </div>
     </div>
   );
 }
@@ -313,7 +603,7 @@ function CreateTokenModal({
     >
       <div className="w-full max-w-lg rounded-lg bg-background p-6 shadow-lg">
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Nuevo token POS</h2>
+          <h2 className="text-lg font-semibold">Nueva caja</h2>
           <button
             type="button"
             onClick={onClose}
@@ -329,13 +619,13 @@ function CreateTokenModal({
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label htmlFor="pt-device" className={labelCls}>
-              Nombre del dispositivo
+              Nombre de la caja / dispositivo
             </label>
             <input
               id="pt-device"
               type="text"
               required
-              placeholder="Caja 1 - iPad mostrador"
+              placeholder="Caja 1 - tablet mostrador"
               value={deviceName}
               onChange={e => setDeviceName(e.target.value)}
               className={inputCls}
@@ -386,7 +676,7 @@ function CreateTokenModal({
               Cancelar
             </Button>
             <Button type="submit" disabled={submitting}>
-              {submitting ? 'Generando…' : 'Generar token'}
+              {submitting ? 'Creando…' : 'Crear caja'}
             </Button>
           </div>
         </form>
@@ -434,18 +724,34 @@ function QrModal({
           </button>
         </div>
 
+        <ol className="
+          mb-4 list-decimal space-y-1 rounded-md bg-muted/40 py-3 pr-3 pl-8
+          text-xs text-muted-foreground
+        "
+        >
+          <li>
+            Abre
+            {' '}
+            <span className="font-medium text-foreground">{TIENDA_CAJERO_URL.replace('https://', '')}</span>
+            {' '}
+            en el dispositivo de la caja.
+          </li>
+          <li>Escanea el código QR o pega el código de acceso.</li>
+          <li>La caja queda vinculada y empieza a sincronizar.</li>
+        </ol>
+
         <div className="flex flex-col items-center gap-4">
           {/* eslint-disable-next-line next/no-img-element */}
           <img
             src={qrUrl(token.token)}
-            alt={`QR de ${token.deviceName}`}
+            alt={`Código de acceso de ${token.deviceName}`}
             width={220}
             height={220}
             className="rounded-md border bg-white p-2"
           />
 
           <div className="w-full">
-            <div className={labelCls}>Token</div>
+            <div className={labelCls}>Código de acceso</div>
             <div className="
               mt-1 rounded-md border bg-muted/40 p-2 font-mono text-xs break-all
             "
@@ -456,7 +762,7 @@ function QrModal({
 
           <div className="flex w-full justify-end gap-2">
             <Button variant="secondary" onClick={handleCopy}>
-              {copied ? 'Copiado ✓' : 'Copiar token'}
+              {copied ? 'Copiado ✓' : 'Copiar código'}
             </Button>
             <Button onClick={onClose}>Cerrar</Button>
           </div>

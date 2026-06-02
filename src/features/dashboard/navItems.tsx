@@ -38,7 +38,7 @@ export const navGroups: NavGroup[] = [
       { href: '/dashboard', label: 'Resumen', icon: LayoutDashboard },
       { href: '/dashboard/cash', label: 'Caja', icon: Wallet },
       { href: '/dashboard/sales', label: 'Ventas', icon: Receipt },
-      { href: '/dashboard/pos-cajeros', label: 'POS Cajeros', icon: ShoppingCart },
+      { href: '/dashboard/pos-cajeros', label: 'Cajas POS', icon: ShoppingCart },
       { href: '/dashboard/fiados', label: 'Fiados', icon: HandCoins },
     ],
   },

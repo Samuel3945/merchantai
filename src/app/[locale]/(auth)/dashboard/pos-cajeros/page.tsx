@@ -1,5 +1,9 @@
 import { setRequestLocale } from 'next-intl/server';
-import { listOrgCashiers, listPosTokens } from '@/actions/pos-tokens';
+import {
+  getPosDeviceQuota,
+  listOrgCashiers,
+  listPosTokens,
+} from '@/actions/pos-tokens';
 import { TitleBar } from '@/features/dashboard/TitleBar';
 import { PosCajerosClient } from '@/features/pos-tokens/PosCajerosClient';
 
@@ -9,18 +13,23 @@ export default async function DashboardPosCajerosPage(props: {
   const { locale } = await props.params;
   setRequestLocale(locale);
 
-  const [tokens, cashiers] = await Promise.all([
+  const [tokens, cashiers, quota] = await Promise.all([
     listPosTokens(),
     listOrgCashiers(),
+    getPosDeviceQuota(),
   ]);
 
   return (
     <>
       <TitleBar
-        title="POS Cajeros"
-        description="Genera y administra los tokens que autentican los dispositivos de caja."
+        title="Cajas POS"
+        description="Administra las cajas (dispositivos POS) de tu negocio: genera su acceso, vincula al cajero y controla cuántas tienes activas según tu plan."
       />
-      <PosCajerosClient initialTokens={tokens} initialCashiers={cashiers} />
+      <PosCajerosClient
+        initialTokens={tokens}
+        initialCashiers={cashiers}
+        initialQuota={quota}
+      />
     </>
   );
 }

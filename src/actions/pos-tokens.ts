@@ -2,10 +2,98 @@
 
 import { randomUUID } from 'node:crypto';
 import { auth } from '@clerk/nextjs/server';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, count, desc, eq, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
+import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
-import { posTokensSchema, posUsersSchema } from '@/models/Schema';
+import {
+  organizationPlansSchema,
+  planAddonsSchema,
+  posTokensSchema,
+  posUsersSchema,
+} from '@/models/Schema';
+
+type PlanTier = 'free' | 'starter' | 'pro' | 'business';
+
+// Cajas (POS device tokens) allowed per plan tier. Mirrors PLAN_CASHIER_LIMIT
+// in employees.ts: you need at least one caja per cashier, so device slots
+// track cashier slots. Extra slots are bought as `pos_device` add-ons.
+const PLAN_POS_DEVICE_LIMIT: Record<PlanTier, number> = {
+  free: 1,
+  starter: 2,
+  pro: 5,
+  business: 10,
+};
+
+// Not exported: a "use server" module may only export async functions.
+// Thrown by createPosToken and parsed by the client to show the upgrade CTA.
+class PosDeviceLimitReachedError extends Error {
+  readonly statusCode = 402;
+  readonly code = 'pos_devices_limit_reached';
+  readonly plan: PlanTier;
+  readonly limit: number;
+  readonly used: number;
+  readonly base: number;
+  readonly addons: number;
+
+  constructor(payload: {
+    plan: PlanTier;
+    limit: number;
+    used: number;
+    base: number;
+    addons: number;
+  }) {
+    super(
+      `Pos devices limit reached: ${payload.used}/${payload.limit} on plan "${payload.plan}". ${JSON.stringify({
+        code: 'pos_devices_limit_reached',
+        ...payload,
+      })}`,
+    );
+    this.name = 'PosDeviceLimitReachedError';
+    this.plan = payload.plan;
+    this.limit = payload.limit;
+    this.used = payload.used;
+    this.base = payload.base;
+    this.addons = payload.addons;
+  }
+}
+
+async function getOrganizationPlan(orgId: string): Promise<PlanTier> {
+  const [row] = await db
+    .select({ plan: organizationPlansSchema.plan })
+    .from(organizationPlansSchema)
+    .where(eq(organizationPlansSchema.organizationId, orgId))
+    .limit(1);
+  return (row?.plan as PlanTier | undefined) ?? 'free';
+}
+
+// Each active `pos_device` add-on row grants `qty` extra caja slots.
+async function countPosDeviceAddons(orgId: string): Promise<number> {
+  const [row] = await db
+    .select({ value: sql<number>`coalesce(sum(${planAddonsSchema.qty}), 0)` })
+    .from(planAddonsSchema)
+    .where(
+      and(
+        eq(planAddonsSchema.organizationId, orgId),
+        eq(planAddonsSchema.addon, 'pos_device'),
+        eq(planAddonsSchema.active, true),
+      ),
+    );
+  return Number(row?.value ?? 0);
+}
+
+async function countActiveTokens(orgId: string): Promise<number> {
+  const [row] = await db
+    .select({ value: count() })
+    .from(posTokensSchema)
+    .where(
+      and(
+        eq(posTokensSchema.organizationId, orgId),
+        eq(posTokensSchema.active, true),
+      ),
+    );
+  return Number(row?.value ?? 0);
+}
 
 async function requireAdminContext() {
   const { userId, orgId, orgRole } = await auth();
@@ -33,6 +121,18 @@ export async function createPosToken(input: CreatePosTokenInput) {
   const deviceName = input.deviceName?.trim();
   if (!deviceName) {
     throw new Error('deviceName is required');
+  }
+
+  // Plan quota: cap the number of active cajas (device tokens) per org.
+  const [plan, used, addons] = await Promise.all([
+    getOrganizationPlan(orgId),
+    countActiveTokens(orgId),
+    countPosDeviceAddons(orgId),
+  ]);
+  const base = PLAN_POS_DEVICE_LIMIT[plan];
+  const limit = base + addons;
+  if (used >= limit) {
+    throw new PosDeviceLimitReachedError({ plan, limit, used, base, addons });
   }
 
   const cashierId = input.cashierId?.trim() || null;
@@ -76,8 +176,53 @@ export async function createPosToken(input: CreatePosTokenInput) {
     throw new Error('Failed to create POS token');
   }
 
+  await logAction({
+    organizationId: orgId,
+    actor: { type: 'user', id: userId },
+    action: 'pos_token.created',
+    entityType: 'pos_token',
+    entityId: row.id,
+    after: {
+      deviceName: row.deviceName,
+      cashierId: row.cashierId,
+      expiresAt: row.expiresAt,
+    },
+  });
+
   revalidatePath('/dashboard/pos-cajeros');
   return row;
+}
+
+export type PosDeviceQuota = {
+  plan: PlanTier;
+  used: number;
+  base: number;
+  addons: number;
+  limit: number;
+  remaining: number;
+};
+
+// Snapshot of caja usage for the admin hub — drives the usage meter and the
+// "unlock more cajas" CTA proactively (before the user hits the 402 on create).
+export async function getPosDeviceQuota(): Promise<PosDeviceQuota> {
+  const { orgId } = await requireAdminContext();
+
+  const [plan, used, addons] = await Promise.all([
+    getOrganizationPlan(orgId),
+    countActiveTokens(orgId),
+    countPosDeviceAddons(orgId),
+  ]);
+  const base = PLAN_POS_DEVICE_LIMIT[plan];
+  const limit = base + addons;
+
+  return {
+    plan,
+    used,
+    base,
+    addons,
+    limit,
+    remaining: Math.max(0, limit - used),
+  };
 }
 
 export async function listPosTokens() {
@@ -106,7 +251,7 @@ export async function listPosTokens() {
 }
 
 export async function revokePosToken(id: string) {
-  const { orgId } = await requireAdminContext();
+  const { userId, orgId } = await requireAdminContext();
 
   const [updated] = await db
     .update(posTokensSchema)
@@ -122,6 +267,14 @@ export async function revokePosToken(id: string) {
   if (!updated) {
     throw new Error('POS token not found');
   }
+
+  await logAction({
+    organizationId: orgId,
+    actor: { type: 'user', id: userId },
+    action: 'pos_token.revoked',
+    entityType: 'pos_token',
+    entityId: id,
+  });
 
   revalidatePath('/dashboard/pos-cajeros');
   return { ok: true as const };
