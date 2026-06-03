@@ -130,9 +130,6 @@ export function PosCajerosClient({
   const [pending, startTransition] = useTransition();
 
   const atLimit = quota.used >= quota.limit;
-  const usagePct = quota.limit > 0
-    ? Math.min(100, Math.round((quota.used / quota.limit) * 100))
-    : 100;
 
   const refresh = useCallback(() => {
     startTransition(async () => {
@@ -262,8 +259,6 @@ export function PosCajerosClient({
         />
       )}
 
-      <QuotaCard quota={quota} usagePct={usagePct} atLimit={atLimit} />
-
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <div className="text-lg font-semibold">Tus cajas</div>
@@ -283,21 +278,10 @@ export function PosCajerosClient({
               Abrir POS
             </a>
           </Button>
-          {atLimit
-            ? (
-                <Button asChild>
-                  <Link href="/dashboard/plans">
-                    <Lock className="size-4" />
-                    Desbloquear más cajas
-                  </Link>
-                </Button>
-              )
-            : (
-                <Button onClick={handleOpenCreate} disabled={pending}>
-                  <Plus className="size-4" />
-                  Agregar caja
-                </Button>
-              )}
+          <Button onClick={handleOpenCreate} disabled={pending}>
+            <Plus className="size-4" />
+            Agregar caja
+          </Button>
         </div>
       </div>
 
@@ -516,101 +500,6 @@ export function PosCajerosClient({
           onCancel={() => setDeleteTarget(null)}
           onConfirm={handleConfirmDelete}
         />
-      )}
-    </div>
-  );
-}
-
-function QuotaCard({
-  quota,
-  usagePct,
-  atLimit,
-}: {
-  quota: PosDeviceQuota;
-  usagePct: number;
-  atLimit: boolean;
-}) {
-  const planLabel = PLAN_LABEL[quota.plan] ?? quota.plan;
-  const barColor = atLimit
-    ? 'bg-amber-500'
-    : usagePct >= 80
-      ? 'bg-amber-400'
-      : 'bg-emerald-500';
-
-  return (
-    <div className="rounded-lg border bg-background p-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-muted-foreground">
-              Cajas activas
-            </span>
-            <span className="
-              rounded-full bg-muted px-2 py-0.5 text-xs font-medium
-            "
-            >
-              Plan
-              {' '}
-              {planLabel}
-            </span>
-          </div>
-          <div className="mt-1 text-2xl font-semibold tabular-nums">
-            {quota.used}
-            {' '}
-            <span className="text-base font-normal text-muted-foreground">
-              /
-              {' '}
-              {quota.limit}
-            </span>
-          </div>
-          {quota.addons > 0 && (
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              {quota.base}
-              {' '}
-              del plan +
-              {' '}
-              {quota.addons}
-              {' '}
-              adicional
-              {quota.addons === 1 ? '' : 'es'}
-            </p>
-          )}
-        </div>
-
-        {atLimit
-          ? (
-              <Button asChild size="sm">
-                <Link href="/dashboard/plans">
-                  Desbloquear más cajas
-                  <ArrowUpRight className="size-4" />
-                </Link>
-              </Button>
-            )
-          : (
-              <span className="text-sm text-emerald-700">
-                {quota.remaining}
-                {' '}
-                disponible
-                {quota.remaining === 1 ? '' : 's'}
-              </span>
-            )}
-      </div>
-
-      <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-muted">
-        <div
-          className={`
-            h-full rounded-full transition-all
-            ${barColor}
-          `}
-          style={{ width: `${usagePct}%` }}
-        />
-      </div>
-
-      {atLimit && (
-        <p className="mt-2 text-xs text-amber-700">
-          Llegaste al máximo de cajas de tu plan. Mejora tu plan o suma una caja
-          adicional para registrar otro dispositivo.
-        </p>
       )}
     </div>
   );
