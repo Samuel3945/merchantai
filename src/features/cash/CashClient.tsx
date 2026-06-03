@@ -1,6 +1,7 @@
 'use client';
 
 import type { GetCurrentCashResult } from '@/actions/cash';
+import type { ActionResult } from '@/libs/action-result';
 import type { CashMovementType, CashSession } from '@/libs/cash-helpers';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState, useTransition } from 'react';
@@ -123,15 +124,24 @@ export function CashClient(props: {
     return Number.parseFloat((countedNum - expected).toFixed(2));
   }, [countedNum, expected]);
 
-  function run(fn: () => Promise<unknown>, reset?: () => void) {
+  function run(
+    fn: () => Promise<ActionResult<unknown>>,
+    reset?: () => void,
+  ) {
     setError(null);
     startTransition(async () => {
       try {
-        await fn();
+        const result = await fn();
+        if (!result.ok) {
+          setError(result.error);
+          return;
+        }
         reset?.();
         router.refresh();
-      } catch (e) {
-        setError(e instanceof Error ? e.message : 'Ocurrió un error');
+      } catch {
+        // Only unexpected failures reach here now (network, real 500s);
+        // expected validation comes back as { ok: false } above.
+        setError('Ocurrió un error inesperado. Volvé a intentar.');
       }
     });
   }

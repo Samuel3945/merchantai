@@ -1,9 +1,14 @@
 'use server';
 
+import type { ActionResult } from '@/libs/action-result';
 import type { CashMovement, CashMovementType, CashSession } from '@/libs/cash-helpers';
 import { auth, currentUser } from '@clerk/nextjs/server';
 import { and, desc, eq, gte, lt, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
+import {
+  ActionValidationError,
+  isUniqueViolation,
+} from '@/libs/action-result';
 import { logAction } from '@/libs/audit-log';
 import {
   computeExpectedAmount,
@@ -44,37 +49,55 @@ async function getActorName(fallback: string): Promise<string> {
 export async function openCashSession(
   openingAmount: number | string,
   notes?: string | null,
-): Promise<CashSession> {
+): Promise<ActionResult<CashSession>> {
   const { userId, orgId } = await requireOrg();
   const actor = await getActorName(userId);
 
   const opening = toMoney(openingAmount ?? 0);
   if (Number.parseFloat(opening) < 0) {
-    throw new Error('Opening amount must be >= 0');
+    return { ok: false, error: 'El monto base no puede ser negativo' };
   }
 
-  const session = await db.transaction(async (tx) => {
-    const existing = await findOpenSession(tx, orgId);
-    if (existing) {
-      throw new Error('Ya hay una caja abierta en esta organización');
-    }
+  let session: CashSession;
+  try {
+    session = await db.transaction(async (tx) => {
+      const existing = await findOpenSession(tx, orgId);
+      if (existing) {
+        throw new ActionValidationError(
+          'Ya hay una caja abierta en esta organización',
+        );
+      }
 
-    const [created] = await tx
-      .insert(cashSessionsSchema)
-      .values({
-        organizationId: orgId,
-        openingAmount: opening,
-        openedBy: actor,
-        status: 'open',
-        notes: notes ?? null,
-      })
-      .returning();
+      const [created] = await tx
+        .insert(cashSessionsSchema)
+        .values({
+          organizationId: orgId,
+          openingAmount: opening,
+          openedBy: actor,
+          status: 'open',
+          notes: notes ?? null,
+        })
+        .returning();
 
-    if (!created) {
-      throw new Error('Failed to open cash session');
+      if (!created) {
+        throw new Error('Failed to open cash session');
+      }
+      return created;
+    });
+  } catch (error) {
+    if (error instanceof ActionValidationError) {
+      return { ok: false, error: error.message };
     }
-    return created;
-  });
+    // A concurrent open can slip past the in-transaction check and hit the
+    // one-open-session-per-org unique index instead — surface the same message.
+    if (isUniqueViolation(error)) {
+      return {
+        ok: false,
+        error: 'Ya hay una caja abierta en esta organización',
+      };
+    }
+    throw error;
+  }
 
   await logAction({
     organizationId: orgId,
@@ -91,54 +114,62 @@ export async function openCashSession(
   });
 
   revalidatePath('/dashboard/cash');
-  return session;
+  return { ok: true, data: session };
 }
 
 export async function closeCashSession(
   countedAmount: number | string,
   notes?: string | null,
-): Promise<CashSession> {
+): Promise<ActionResult<CashSession>> {
   const { userId, orgId } = await requireOrg();
   const actor = await getActorName(userId);
 
   const counted = toMoney(countedAmount);
 
-  const session = await db.transaction(async (tx) => {
-    const open = await findOpenSession(tx, orgId);
-    if (!open) {
-      throw new Error('No hay caja abierta para cerrar');
+  let session: CashSession;
+  try {
+    session = await db.transaction(async (tx) => {
+      const open = await findOpenSession(tx, orgId);
+      if (!open) {
+        throw new ActionValidationError('No hay caja abierta para cerrar');
+      }
+
+      const expected = await computeExpectedAmount(tx, open);
+      const difference = Number.parseFloat(
+        (Number.parseFloat(counted) - expected).toFixed(2),
+      );
+
+      const mergedNotes = notes
+        ? open.notes
+          ? `${open.notes}; cierre: ${notes}`
+          : `cierre: ${notes}`
+        : open.notes;
+
+      const [closed] = await tx
+        .update(cashSessionsSchema)
+        .set({
+          status: 'closed',
+          closedAt: new Date(),
+          closedBy: actor,
+          countedAmount: counted,
+          expectedAmount: toMoney(expected),
+          difference: toMoney(difference),
+          notes: mergedNotes,
+        })
+        .where(eq(cashSessionsSchema.id, open.id))
+        .returning();
+
+      if (!closed) {
+        throw new Error('Failed to close cash session');
+      }
+      return closed;
+    });
+  } catch (error) {
+    if (error instanceof ActionValidationError) {
+      return { ok: false, error: error.message };
     }
-
-    const expected = await computeExpectedAmount(tx, open);
-    const difference = Number.parseFloat(
-      (Number.parseFloat(counted) - expected).toFixed(2),
-    );
-
-    const mergedNotes = notes
-      ? open.notes
-        ? `${open.notes}; cierre: ${notes}`
-        : `cierre: ${notes}`
-      : open.notes;
-
-    const [closed] = await tx
-      .update(cashSessionsSchema)
-      .set({
-        status: 'closed',
-        closedAt: new Date(),
-        closedBy: actor,
-        countedAmount: counted,
-        expectedAmount: toMoney(expected),
-        difference: toMoney(difference),
-        notes: mergedNotes,
-      })
-      .where(eq(cashSessionsSchema.id, open.id))
-      .returning();
-
-    if (!closed) {
-      throw new Error('Failed to close cash session');
-    }
-    return closed;
-  });
+    throw error;
+  }
 
   try {
     await notifyCashDifference({
@@ -171,7 +202,7 @@ export async function closeCashSession(
   });
 
   revalidatePath('/dashboard/cash');
-  return session;
+  return { ok: true, data: session };
 }
 
 export async function addCashMovement(
@@ -179,60 +210,72 @@ export async function addCashMovement(
   amount: number | string,
   reason: string,
   options?: { authorizedBy?: string | null },
-): Promise<CashMovement> {
+): Promise<ActionResult<CashMovement>> {
   const { userId, orgId } = await requireOrg();
   const actor = await getActorName(userId);
 
   if (type === 'sale') {
-    throw new Error(
-      'Los movimientos de tipo "sale" solo se crean automáticamente al registrar una venta',
-    );
+    return {
+      ok: false,
+      error:
+        'Los movimientos de tipo "sale" solo se crean automáticamente al registrar una venta',
+    };
   }
 
   if (
     !INCOME_MOVEMENT_TYPES.includes(type)
     && !EXPENSE_MOVEMENT_TYPES.includes(type)
   ) {
-    throw new Error(`Tipo de movimiento inválido: ${type}`);
+    return { ok: false, error: `Tipo de movimiento inválido: ${type}` };
   }
 
   const reasonTrimmed = reason?.trim();
   if (!reasonTrimmed) {
-    throw new Error('Reason is required');
+    return { ok: false, error: 'El motivo es obligatorio' };
   }
 
   const amt = toMoney(amount);
   if (Number.parseFloat(amt) <= 0) {
-    throw new Error('Amount must be > 0');
+    return { ok: false, error: 'El monto debe ser mayor a 0' };
   }
 
-  const movement = await db.transaction(async (tx) => {
-    const open = await findOpenSession(tx, orgId);
-    if (!open) {
-      throw new Error('No hay caja abierta. Abre la caja primero.');
-    }
+  let movement: CashMovement;
+  try {
+    movement = await db.transaction(async (tx) => {
+      const open = await findOpenSession(tx, orgId);
+      if (!open) {
+        throw new ActionValidationError(
+          'No hay caja abierta. Abre la caja primero.',
+        );
+      }
 
-    const [created] = await tx
-      .insert(cashMovementsSchema)
-      .values({
-        sessionId: open.id,
-        organizationId: orgId,
-        type,
-        amount: amt,
-        reason: reasonTrimmed,
-        createdBy: actor,
-        authorizedBy: options?.authorizedBy ?? null,
-      })
-      .returning();
+      const [created] = await tx
+        .insert(cashMovementsSchema)
+        .values({
+          sessionId: open.id,
+          organizationId: orgId,
+          type,
+          amount: amt,
+          reason: reasonTrimmed,
+          createdBy: actor,
+          authorizedBy: options?.authorizedBy ?? null,
+        })
+        .returning();
 
-    if (!created) {
-      throw new Error('Failed to register cash movement');
+      if (!created) {
+        throw new Error('Failed to register cash movement');
+      }
+      return created;
+    });
+  } catch (error) {
+    if (error instanceof ActionValidationError) {
+      return { ok: false, error: error.message };
     }
-    return created;
-  });
+    throw error;
+  }
 
   revalidatePath('/dashboard/cash');
-  return movement;
+  return { ok: true, data: movement };
 }
 
 export type GetCurrentCashResult = {

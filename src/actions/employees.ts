@@ -1,5 +1,6 @@
 'use server';
 
+import type { ActionResult } from '@/libs/action-result';
 import { randomUUID } from 'node:crypto';
 import { auth } from '@clerk/nextjs/server';
 import bcrypt from 'bcryptjs';
@@ -8,6 +9,7 @@ import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
 import { Env } from '@/libs/Env';
+import { CASHIERS_LIMIT_REACHED } from '@/libs/plan-limits';
 import {
   employeeInvitationsSchema,
   organizationPlansSchema,
@@ -27,45 +29,25 @@ const PLAN_CASHIER_LIMIT: Record<PlanTier, number> = {
 const INVITE_TTL_HOURS = 72;
 const INVITE_TTL_MS = INVITE_TTL_HOURS * 60 * 60 * 1000;
 
-// Not exported: a "use server" module may only export async functions.
-// This error is thrown and handled internally within this module.
-class CashiersLimitReachedError extends Error {
-  readonly statusCode = 402;
-  readonly code = 'cashiers_limit_reached';
-  readonly plan: PlanTier;
-  readonly limit: number;
-  readonly used: number;
-  readonly base: number;
-  readonly addons: number;
+type CashierLimitMeta = {
+  plan: PlanTier;
+  limit: number;
+  used: number;
+  base: number;
+  addons: number;
+};
 
-  constructor(payload: {
-    plan: PlanTier;
-    limit: number;
-    used: number;
-    base: number;
-    addons: number;
-  }) {
-    super(
-      `Cashiers limit reached: ${payload.used}/${payload.limit} on plan "${payload.plan}".`,
-    );
-    this.name = 'CashiersLimitReachedError';
-    this.plan = payload.plan;
-    this.limit = payload.limit;
-    this.used = payload.used;
-    this.base = payload.base;
-    this.addons = payload.addons;
-  }
-
-  toJSON() {
-    return {
-      code: this.code,
-      plan: this.plan,
-      limit: this.limit,
-      used: this.used,
-      base: this.base,
-      addons: this.addons,
-    };
-  }
+// Coded failure returned (not thrown) so the structured payload survives Next's
+// production error masking; the client renders the upgrade CTA from `meta`.
+function cashiersLimitReached(
+  meta: CashierLimitMeta,
+): { ok: false; error: string; code: string; meta: CashierLimitMeta } {
+  return {
+    ok: false,
+    error: `Alcanzaste el límite de cajeros de tu plan (${meta.used}/${meta.limit}).`,
+    code: CASHIERS_LIMIT_REACHED,
+    meta,
+  };
 }
 
 async function requireAdminContext() {
@@ -182,7 +164,7 @@ export type InviteEmployeeResult = {
 
 export async function invite(
   data: InviteEmployeeInput,
-): Promise<InviteEmployeeResult> {
+): Promise<ActionResult<InviteEmployeeResult>> {
   const { userId, orgId } = await requireAdminContext();
 
   const email = data.email?.trim().toLowerCase();
@@ -190,10 +172,10 @@ export async function invite(
   const role = data.role ?? 'cashier';
 
   if (!email || !/^\S[^\s@]*@\S[^\s.]*\.\S+$/.test(email)) {
-    throw new Error('A valid email is required');
+    return { ok: false, error: 'Ingresá un email válido' };
   }
   if (!name) {
-    throw new Error('Name is required');
+    return { ok: false, error: 'El nombre es obligatorio' };
   }
 
   // 1. Quota check (only enforced for cashiers; admins/employees not gated here).
@@ -207,13 +189,7 @@ export async function invite(
     const limit = base + addons;
 
     if (used >= limit) {
-      throw new CashiersLimitReachedError({
-        plan,
-        limit,
-        used,
-        base,
-        addons,
-      });
+      return cashiersLimitReached({ plan, limit, used, base, addons });
     }
   }
 
@@ -224,7 +200,7 @@ export async function invite(
     .where(eq(posUsersSchema.email, email))
     .limit(1);
   if (existing) {
-    throw new Error('A user with that email already exists');
+    return { ok: false, error: 'Ya existe un usuario con ese email' };
   }
 
   // 4–6. Create posUser + invitation in a single transaction.
@@ -296,9 +272,12 @@ export async function invite(
   revalidatePath('/dashboard/employees');
 
   return {
-    invitation: result.invitation,
-    inviteUrl: buildInviteUrl(result.invitation.token, result.user.id),
-    emailSent: false,
+    ok: true,
+    data: {
+      invitation: result.invitation,
+      inviteUrl: buildInviteUrl(result.invitation.token, result.user.id),
+      emailSent: false,
+    },
   };
 }
 
@@ -308,19 +287,21 @@ export type AcceptInvitationInput = {
   password: string;
 };
 
-export async function acceptInvitation(input: AcceptInvitationInput) {
+export async function acceptInvitation(
+  input: AcceptInvitationInput,
+): Promise<ActionResult<{ organizationId: string }>> {
   const token = input.token?.trim();
   const name = input.name?.trim();
   const password = input.password;
 
   if (!token) {
-    throw new Error('Token is required');
+    return { ok: false, error: 'El enlace de invitación no es válido' };
   }
   if (!name) {
-    throw new Error('Name is required');
+    return { ok: false, error: 'El nombre es obligatorio' };
   }
   if (!password || password.length < 8) {
-    throw new Error('Password must be at least 8 characters');
+    return { ok: false, error: 'La contraseña debe tener al menos 8 caracteres' };
   }
 
   const [invitation] = await db
@@ -330,17 +311,17 @@ export async function acceptInvitation(input: AcceptInvitationInput) {
     .limit(1);
 
   if (!invitation) {
-    throw new Error('Invitation not found');
+    return { ok: false, error: 'Invitación no encontrada' };
   }
   if (invitation.status !== 'pending') {
-    throw new Error(`Invitation is ${invitation.status}`);
+    return { ok: false, error: 'Esta invitación ya no está disponible' };
   }
   if (invitation.expiresAt.getTime() <= Date.now()) {
     await db
       .update(employeeInvitationsSchema)
       .set({ status: 'expired' })
       .where(eq(employeeInvitationsSchema.id, invitation.id));
-    throw new Error('Invitation has expired');
+    return { ok: false, error: 'La invitación expiró' };
   }
 
   const passwordHash = await bcrypt.hash(password, 10);
@@ -377,7 +358,7 @@ export async function acceptInvitation(input: AcceptInvitationInput) {
     },
   });
 
-  return { ok: true as const, organizationId: invitation.organizationId };
+  return { ok: true, data: { organizationId: invitation.organizationId } };
 }
 
 export async function listEmployees() {
@@ -423,7 +404,9 @@ export async function listPendingInvitations() {
   }));
 }
 
-export async function revokeInvitation(invitationId: string) {
+export async function revokeInvitation(
+  invitationId: string,
+): Promise<ActionResult<{ id: string }>> {
   const { orgId } = await requireAdminContext();
 
   const [invitation] = await db
@@ -438,10 +421,10 @@ export async function revokeInvitation(invitationId: string) {
     .limit(1);
 
   if (!invitation) {
-    throw new Error('Invitation not found');
+    return { ok: false, error: 'Invitación no encontrada' };
   }
   if (invitation.status !== 'pending') {
-    throw new Error(`Invitation is ${invitation.status}`);
+    return { ok: false, error: 'Esta invitación ya no está pendiente' };
   }
 
   await db.transaction(async (tx) => {
@@ -457,10 +440,18 @@ export async function revokeInvitation(invitationId: string) {
   });
 
   revalidatePath('/dashboard/employees');
-  return { ok: true as const };
+  return { ok: true, data: { id: invitation.id } };
 }
 
-export async function resendInvitation(invitationId: string) {
+export type ResendInvitationResult = {
+  invitation: typeof employeeInvitationsSchema.$inferSelect;
+  inviteUrl: string;
+  emailSent: false;
+};
+
+export async function resendInvitation(
+  invitationId: string,
+): Promise<ActionResult<ResendInvitationResult>> {
   const { orgId } = await requireAdminContext();
 
   const [invitation] = await db
@@ -475,10 +466,10 @@ export async function resendInvitation(invitationId: string) {
     .limit(1);
 
   if (!invitation) {
-    throw new Error('Invitation not found');
+    return { ok: false, error: 'Invitación no encontrada' };
   }
   if (invitation.status === 'accepted') {
-    throw new Error('Invitation already accepted');
+    return { ok: false, error: 'La invitación ya fue aceptada' };
   }
 
   const token = randomUUID();
@@ -497,15 +488,20 @@ export async function resendInvitation(invitationId: string) {
   revalidatePath('/dashboard/employees');
 
   return {
-    invitation: updated,
-    inviteUrl: buildInviteUrl(updated.token, updated.userId),
-    emailSent: false as const,
+    ok: true,
+    data: {
+      invitation: updated,
+      inviteUrl: buildInviteUrl(updated.token, updated.userId),
+      emailSent: false,
+    },
   };
 }
 
 // El admin resetea el PIN de un empleado (lo deja sin PIN). El empleado podrá
 // configurar uno nuevo desde la caja. `pin = ''` → sin PIN (acceso directo).
-export async function resetCashierPin(cashierId: string) {
+export async function resetCashierPin(
+  cashierId: string,
+): Promise<ActionResult<{ id: string }>> {
   const { orgId } = await requireAdminContext();
 
   const [updated] = await db
@@ -520,9 +516,9 @@ export async function resetCashierPin(cashierId: string) {
     .returning({ id: posUsersSchema.id });
 
   if (!updated) {
-    throw new Error('Empleado no encontrado');
+    return { ok: false, error: 'Empleado no encontrado' };
   }
 
   revalidatePath('/dashboard/employees');
-  return { ok: true as const };
+  return { ok: true, data: updated };
 }

@@ -4,6 +4,7 @@ import type {
   listOrgCashiers,
   PosDeviceQuota,
 } from '@/actions/pos-tokens';
+import type { ActionResult } from '@/libs/action-result';
 import {
   ArrowUpRight,
   Ban,
@@ -40,6 +41,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Link } from '@/libs/I18nNavigation';
+import { POS_DEVICES_LIMIT_REACHED } from '@/libs/plan-limits';
 
 /**
  * App de cajero en producción (repo `pos-merchatai`, dominio propio).
@@ -50,6 +52,11 @@ const TIENDA_CAJERO_URL = 'https://app.pos.mymerchantai.com';
 
 type TokenRow = Awaited<ReturnType<typeof listPosTokens>>[number];
 type CashierRow = Awaited<ReturnType<typeof listOrgCashiers>>[number];
+type CreatedToken = Extract<
+  Awaited<ReturnType<typeof createPosToken>>,
+  { ok: true }
+>['data'];
+type ActionFailure = Extract<ActionResult<unknown>, { ok: false }>;
 
 const inputCls
   = 'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50';
@@ -88,25 +95,21 @@ type LimitErrorPayload = {
   addons: number;
 };
 
-// The server action throws an Error whose message embeds a JSON blob; we parse
-// it back out so the client can render the upgrade CTA with real numbers.
-function parseLimitError(err: unknown): LimitErrorPayload | null {
-  if (!err) {
+// A coded failure result carries the real numbers in `meta`, so the client can
+// render the upgrade CTA. Returns null when the failure isn't a limit error.
+function limitPayload(failure: ActionFailure): LimitErrorPayload | null {
+  if (failure.code !== POS_DEVICES_LIMIT_REACHED) {
     return null;
   }
-  const msg = err instanceof Error ? err.message : String(err);
-  const match = msg.match(/\{[^}]*pos_devices_limit_reached[^}]*\}/);
-  if (match) {
-    try {
-      return JSON.parse(match[0]) as LimitErrorPayload;
-    } catch {
-      // fall through
-    }
-  }
-  if (msg.includes('Pos devices limit reached')) {
-    return { code: 'pos_devices_limit_reached', plan: '', limit: 0, used: 0, base: 0, addons: 0 };
-  }
-  return null;
+  const meta = failure.meta ?? {};
+  return {
+    code: 'pos_devices_limit_reached',
+    plan: String(meta.plan ?? ''),
+    limit: Number(meta.limit ?? 0),
+    used: Number(meta.used ?? 0),
+    base: Number(meta.base ?? 0),
+    addons: Number(meta.addons ?? 0),
+  };
 }
 
 export function PosCajerosClient({
@@ -158,10 +161,14 @@ export function PosCajerosClient({
   const handleBlock = (id: string) => {
     startTransition(async () => {
       try {
-        await blockPosToken(id);
+        const result = await blockPosToken(id);
+        if (!result.ok) {
+          setError(result.error);
+          return;
+        }
         refresh();
-      } catch (e) {
-        setError(e instanceof Error ? e.message : 'No se pudo bloquear');
+      } catch {
+        setError('No se pudo bloquear');
       }
     });
   };
@@ -169,15 +176,19 @@ export function PosCajerosClient({
   const handleUnblock = (id: string) => {
     startTransition(async () => {
       try {
-        await unblockPosToken(id);
-        refresh();
-      } catch (e) {
-        const limit = parseLimitError(e);
-        if (limit) {
-          setLimitError(limit);
+        const result = await unblockPosToken(id);
+        if (!result.ok) {
+          const limit = limitPayload(result);
+          if (limit) {
+            setLimitError(limit);
+            return;
+          }
+          setError(result.error);
           return;
         }
-        setError(e instanceof Error ? e.message : 'No se pudo desbloquear');
+        refresh();
+      } catch {
+        setError('No se pudo desbloquear');
       }
     });
   };
@@ -189,11 +200,15 @@ export function PosCajerosClient({
     const id = deleteTarget.id;
     startTransition(async () => {
       try {
-        await deletePosToken(id);
+        const result = await deletePosToken(id);
+        if (!result.ok) {
+          setError(result.error);
+          return;
+        }
         setDeleteTarget(null);
         refresh();
-      } catch (e) {
-        setError(e instanceof Error ? e.message : 'No se pudo eliminar');
+      } catch {
+        setError('No se pudo eliminar');
       }
     });
   };
@@ -205,15 +220,19 @@ export function PosCajerosClient({
     }
     startTransition(async () => {
       try {
-        const updated = await regeneratePosToken(id);
+        const result = await regeneratePosToken(id);
+        if (!result.ok) {
+          setError(result.error);
+          return;
+        }
         const rows = await listPosTokens();
         setTokens(rows);
-        const fresh = rows.find(r => r.id === updated.id);
+        const fresh = rows.find(r => r.id === result.data.id);
         if (fresh) {
           setActiveToken(fresh);
         }
-      } catch (e) {
-        setError(e instanceof Error ? e.message : 'No se pudo regenerar el acceso');
+      } catch {
+        setError('No se pudo regenerar el acceso');
       }
     });
   };
@@ -225,10 +244,14 @@ export function PosCajerosClient({
     }
     startTransition(async () => {
       try {
-        await forceLogoutPosToken(id);
+        const result = await forceLogoutPosToken(id);
+        if (!result.ok) {
+          setError(result.error);
+          return;
+        }
         refresh();
-      } catch (e) {
-        setError(e instanceof Error ? e.message : 'No se pudo cerrar la sesión');
+      } catch {
+        setError('No se pudo cerrar la sesión');
       }
     });
   };
@@ -465,14 +488,14 @@ export function PosCajerosClient({
             });
             refresh();
           }}
-          onError={(err) => {
-            const limit = parseLimitError(err);
+          onFailure={(failure) => {
+            const limit = limitPayload(failure);
             if (limit) {
               setShowCreateModal(false);
               setLimitError(limit);
               return;
             }
-            setError(err instanceof Error ? err.message : String(err));
+            setError(failure.error);
           }}
         />
       )}
@@ -577,12 +600,12 @@ function CreateTokenModal({
   cashiers,
   onClose,
   onSuccess,
-  onError,
+  onFailure,
 }: {
   cashiers: CashierRow[];
   onClose: () => void;
-  onSuccess: (token: Awaited<ReturnType<typeof createPosToken>>) => void;
-  onError: (err: unknown) => void;
+  onSuccess: (token: CreatedToken) => void;
+  onFailure: (failure: ActionFailure) => void;
 }) {
   const [deviceName, setDeviceName] = useState('');
   const [cashierId, setCashierId] = useState('');
@@ -600,15 +623,19 @@ function CreateTokenModal({
     }
     setSubmitting(true);
     try {
-      const created = await createPosToken({
+      const result = await createPosToken({
         deviceName,
         cashierId: cashierId || undefined,
         expiresAt: expiresAt || undefined,
         pin,
       });
-      onSuccess(created);
-    } catch (err) {
-      onError(err);
+      if (!result.ok) {
+        onFailure(result);
+        return;
+      }
+      onSuccess(result.data);
+    } catch {
+      onFailure({ ok: false, error: 'No se pudo crear la caja' });
     } finally {
       setSubmitting(false);
     }
@@ -856,10 +883,14 @@ function PinModal({
     }
     setSubmitting(true);
     try {
-      await setPosTokenPin(token.id, pin);
+      const result = await setPosTokenPin(token.id, pin);
+      if (!result.ok) {
+        onError(result.error);
+        return;
+      }
       onSaved();
-    } catch (err) {
-      onError(err instanceof Error ? err.message : 'No se pudo guardar el PIN');
+    } catch {
+      onError('No se pudo guardar el PIN');
     } finally {
       setSubmitting(false);
     }

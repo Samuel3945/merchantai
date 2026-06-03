@@ -1,5 +1,6 @@
 'use client';
 
+import type { ActionResult } from '@/libs/action-result';
 import { useCallback, useState, useTransition } from 'react';
 import {
   invite,
@@ -10,9 +11,11 @@ import {
   revokeInvitation,
 } from '@/actions/employees';
 import { Button } from '@/components/ui/button';
+import { CASHIERS_LIMIT_REACHED } from '@/libs/plan-limits';
 
 type EmployeeRow = Awaited<ReturnType<typeof listEmployees>>[number];
 type InvitationRow = Awaited<ReturnType<typeof listPendingInvitations>>[number];
+type ActionFailure = Extract<ActionResult<unknown>, { ok: false }>;
 
 const AVAILABLE_PERMISSIONS = [
   { key: 'sales.refund', label: 'Reembolsar ventas' },
@@ -52,30 +55,21 @@ type LimitErrorPayload = {
   addons: number;
 };
 
-function parseLimitError(err: unknown): LimitErrorPayload | null {
-  if (!err) {
+// A coded failure result carries the real numbers in `meta`, so the client can
+// render the upgrade CTA. Returns null when the failure isn't a limit error.
+function limitPayload(failure: ActionFailure): LimitErrorPayload | null {
+  if (failure.code !== CASHIERS_LIMIT_REACHED) {
     return null;
   }
-  const msg = err instanceof Error ? err.message : String(err);
-  const match = msg.match(/\{[^}]*cashiers_limit_reached[^}]*\}/);
-  if (match) {
-    try {
-      return JSON.parse(match[0]) as LimitErrorPayload;
-    } catch {
-      // fall through
-    }
-  }
-  if (msg.includes('Cashiers limit reached')) {
-    return {
-      code: 'cashiers_limit_reached',
-      plan: '',
-      limit: 0,
-      used: 0,
-      base: 0,
-      addons: 0,
-    };
-  }
-  return null;
+  const meta = failure.meta ?? {};
+  return {
+    code: 'cashiers_limit_reached',
+    plan: String(meta.plan ?? ''),
+    limit: Number(meta.limit ?? 0),
+    used: Number(meta.used ?? 0),
+    base: Number(meta.base ?? 0),
+    addons: Number(meta.addons ?? 0),
+  };
 }
 
 export function EmployeesClient({
@@ -111,10 +105,14 @@ export function EmployeesClient({
     }
     startTransition(async () => {
       try {
-        await revokeInvitation(id);
+        const result = await revokeInvitation(id);
+        if (!result.ok) {
+          setError(result.error);
+          return;
+        }
         refresh();
-      } catch (e) {
-        setError(e instanceof Error ? e.message : 'No se pudo revocar');
+      } catch {
+        setError('No se pudo revocar');
       }
     });
   };
@@ -126,10 +124,14 @@ export function EmployeesClient({
     }
     startTransition(async () => {
       try {
-        await resetCashierPin(id);
+        const result = await resetCashierPin(id);
+        if (!result.ok) {
+          setError(result.error);
+          return;
+        }
         refresh();
-      } catch (e) {
-        setError(e instanceof Error ? e.message : 'No se pudo resetear el PIN');
+      } catch {
+        setError('No se pudo resetear el PIN');
       }
     });
   };
@@ -137,11 +139,15 @@ export function EmployeesClient({
   const handleResend = (id: string) => {
     startTransition(async () => {
       try {
-        const res = await resendInvitation(id);
-        setLastInviteUrl(res.inviteUrl);
+        const result = await resendInvitation(id);
+        if (!result.ok) {
+          setError(result.error);
+          return;
+        }
+        setLastInviteUrl(result.data.inviteUrl);
         refresh();
-      } catch (e) {
-        setError(e instanceof Error ? e.message : 'No se pudo reenviar');
+      } catch {
+        setError('No se pudo reenviar');
       }
     });
   };
@@ -388,12 +394,12 @@ export function EmployeesClient({
             setLimitError(null);
             refresh();
           }}
-          onError={(err) => {
-            const limit = parseLimitError(err);
+          onFailure={(failure) => {
+            const limit = limitPayload(failure);
             if (limit) {
               setLimitError(limit);
             } else {
-              setError(err instanceof Error ? err.message : String(err));
+              setError(failure.error);
             }
           }}
         />
@@ -405,11 +411,11 @@ export function EmployeesClient({
 function InviteModal({
   onClose,
   onSuccess,
-  onError,
+  onFailure,
 }: {
   onClose: () => void;
   onSuccess: (inviteUrl: string) => void;
-  onError: (err: unknown) => void;
+  onFailure: (failure: ActionFailure) => void;
 }) {
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
@@ -436,7 +442,7 @@ function InviteModal({
       const cleanPerms = Object.fromEntries(
         Object.entries(permissions).filter(([, v]) => v),
       );
-      const res = await invite({
+      const result = await invite({
         email,
         name,
         role,
@@ -444,9 +450,13 @@ function InviteModal({
         enabledModules,
         canConfirmTransfers,
       });
-      onSuccess(res.inviteUrl);
-    } catch (err) {
-      onError(err);
+      if (!result.ok) {
+        onFailure(result);
+        return;
+      }
+      onSuccess(result.data.inviteUrl);
+    } catch {
+      onFailure({ ok: false, error: 'No se pudo enviar la invitación' });
     } finally {
       setSubmitting(false);
     }

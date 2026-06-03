@@ -1,12 +1,15 @@
 'use server';
 
+import type { ActionResult } from '@/libs/action-result';
 import { randomUUID } from 'node:crypto';
 import { auth } from '@clerk/nextjs/server';
 import bcrypt from 'bcryptjs';
 import { and, count, desc, eq, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
+import { ActionValidationError } from '@/libs/action-result';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
+import { POS_DEVICES_LIMIT_REACHED } from '@/libs/plan-limits';
 import {
   organizationPlansSchema,
   planAddonsSchema,
@@ -15,6 +18,8 @@ import {
 } from '@/models/Schema';
 
 type PlanTier = 'free' | 'starter' | 'pro' | 'business';
+
+type PosToken = typeof posTokensSchema.$inferSelect;
 
 // Cajas (POS device tokens) allowed per plan tier. Mirrors PLAN_CASHIER_LIMIT
 // in employees.ts: you need at least one caja per cashier, so device slots
@@ -26,37 +31,26 @@ const PLAN_POS_DEVICE_LIMIT: Record<PlanTier, number> = {
   business: 10,
 };
 
-// Not exported: a "use server" module may only export async functions.
-// Thrown by createPosToken and parsed by the client to show the upgrade CTA.
-class PosDeviceLimitReachedError extends Error {
-  readonly statusCode = 402;
-  readonly code = 'pos_devices_limit_reached';
-  readonly plan: PlanTier;
-  readonly limit: number;
-  readonly used: number;
-  readonly base: number;
-  readonly addons: number;
+type PosLimitMeta = {
+  plan: PlanTier;
+  limit: number;
+  used: number;
+  base: number;
+  addons: number;
+};
 
-  constructor(payload: {
-    plan: PlanTier;
-    limit: number;
-    used: number;
-    base: number;
-    addons: number;
-  }) {
-    super(
-      `Pos devices limit reached: ${payload.used}/${payload.limit} on plan "${payload.plan}". ${JSON.stringify({
-        code: 'pos_devices_limit_reached',
-        ...payload,
-      })}`,
-    );
-    this.name = 'PosDeviceLimitReachedError';
-    this.plan = payload.plan;
-    this.limit = payload.limit;
-    this.used = payload.used;
-    this.base = payload.base;
-    this.addons = payload.addons;
-  }
+// Coded failure parsed by the client to render the "unlock more cajas" CTA with
+// real numbers. Returned (not thrown) so the structured payload survives — Next
+// masks thrown Server Action errors in production.
+function posLimitReached(
+  meta: PosLimitMeta,
+): { ok: false; error: string; code: string; meta: PosLimitMeta } {
+  return {
+    ok: false,
+    error: `Alcanzaste el límite de cajas de tu plan (${meta.used}/${meta.limit}).`,
+    code: POS_DEVICES_LIMIT_REACHED,
+    meta,
+  };
 }
 
 async function getOrganizationPlan(orgId: string): Promise<PlanTier> {
@@ -104,7 +98,7 @@ async function hashPinOrThrow(rawPin: string): Promise<string> {
     return '';
   }
   if (!/^\d{4,8}$/.test(pin)) {
-    throw new Error('El PIN debe tener entre 4 y 8 dígitos');
+    throw new ActionValidationError('El PIN debe tener entre 4 y 8 dígitos');
   }
   return bcrypt.hash(pin, 10);
 }
@@ -130,12 +124,14 @@ export type CreatePosTokenInput = {
   pin?: string;
 };
 
-export async function createPosToken(input: CreatePosTokenInput) {
+export async function createPosToken(
+  input: CreatePosTokenInput,
+): Promise<ActionResult<PosToken>> {
   const { userId, orgId } = await requireAdminContext();
 
   const deviceName = input.deviceName?.trim();
   if (!deviceName) {
-    throw new Error('deviceName is required');
+    return { ok: false, error: 'El nombre de la caja es obligatorio' };
   }
 
   // Plan quota: cap the number of active cajas (device tokens) per org.
@@ -147,7 +143,7 @@ export async function createPosToken(input: CreatePosTokenInput) {
   const base = PLAN_POS_DEVICE_LIMIT[plan];
   const limit = base + addons;
   if (used >= limit) {
-    throw new PosDeviceLimitReachedError({ plan, limit, used, base, addons });
+    return posLimitReached({ plan, limit, used, base, addons });
   }
 
   const cashierId = input.cashierId?.trim() || null;
@@ -157,15 +153,23 @@ export async function createPosToken(input: CreatePosTokenInput) {
       : new Date(input.expiresAt);
 
   if (expiresAt && Number.isNaN(expiresAt.getTime())) {
-    throw new Error('expiresAt is not a valid date');
+    return { ok: false, error: 'La fecha de expiración no es válida' };
   }
 
   // El PIN de la caja es obligatorio al crear (toda caja nace protegida).
   const rawPin = input.pin?.trim() ?? '';
   if (!rawPin) {
-    throw new Error('El PIN de la caja es obligatorio');
+    return { ok: false, error: 'El PIN de la caja es obligatorio' };
   }
-  const pinHash = await hashPinOrThrow(rawPin);
+  let pinHash: string;
+  try {
+    pinHash = await hashPinOrThrow(rawPin);
+  } catch (error) {
+    if (error instanceof ActionValidationError) {
+      return { ok: false, error: error.message };
+    }
+    throw error;
+  }
 
   if (cashierId) {
     const [cashier] = await db
@@ -179,7 +183,7 @@ export async function createPosToken(input: CreatePosTokenInput) {
       )
       .limit(1);
     if (!cashier) {
-      throw new Error('Cashier not found in this organization');
+      return { ok: false, error: 'El cajero no existe en esta organización' };
     }
   }
 
@@ -213,7 +217,7 @@ export async function createPosToken(input: CreatePosTokenInput) {
   });
 
   revalidatePath('/dashboard/pos-cajeros');
-  return row;
+  return { ok: true, data: row };
 }
 
 export type PosDeviceQuota = {
@@ -276,7 +280,9 @@ export async function listPosTokens() {
 
 // Bloquear caja: active=false. No puede loguear ni sincronizar y libera cupo del
 // plan, pero la fila persiste. Sube sessionEpoch para expulsar al empleado activo.
-export async function blockPosToken(id: string) {
+export async function blockPosToken(
+  id: string,
+): Promise<ActionResult<{ id: string }>> {
   const { userId, orgId } = await requireAdminContext();
 
   const [updated] = await db
@@ -294,7 +300,7 @@ export async function blockPosToken(id: string) {
     .returning({ id: posTokensSchema.id });
 
   if (!updated) {
-    throw new Error('Caja no encontrada');
+    return { ok: false, error: 'Caja no encontrada' };
   }
 
   await logAction({
@@ -306,12 +312,14 @@ export async function blockPosToken(id: string) {
   });
 
   revalidatePath('/dashboard/pos-cajeros');
-  return { ok: true as const };
+  return { ok: true, data: updated };
 }
 
 // Desbloquear caja: active=true. Revalida el cupo del plan, porque una caja
 // bloqueada no cuenta y reactivarla puede chocar contra el límite.
-export async function unblockPosToken(id: string) {
+export async function unblockPosToken(
+  id: string,
+): Promise<ActionResult<{ id: string }>> {
   const { userId, orgId } = await requireAdminContext();
 
   const [plan, used, addons] = await Promise.all([
@@ -322,7 +330,7 @@ export async function unblockPosToken(id: string) {
   const base = PLAN_POS_DEVICE_LIMIT[plan];
   const limit = base + addons;
   if (used >= limit) {
-    throw new PosDeviceLimitReachedError({ plan, limit, used, base, addons });
+    return posLimitReached({ plan, limit, used, base, addons });
   }
 
   const [updated] = await db
@@ -338,7 +346,7 @@ export async function unblockPosToken(id: string) {
     .returning({ id: posTokensSchema.id });
 
   if (!updated) {
-    throw new Error('Caja no encontrada o ya activa');
+    return { ok: false, error: 'Caja no encontrada o ya activa' };
   }
 
   await logAction({
@@ -350,12 +358,14 @@ export async function unblockPosToken(id: string) {
   });
 
   revalidatePath('/dashboard/pos-cajeros');
-  return { ok: true as const };
+  return { ok: true, data: updated };
 }
 
 // Eliminar caja: borra la fila por completo. Irreversible; el dispositivo pierde
 // el acceso de inmediato y el cupo del plan queda libre.
-export async function deletePosToken(id: string) {
+export async function deletePosToken(
+  id: string,
+): Promise<ActionResult<{ id: string; deviceName: string }>> {
   const { userId, orgId } = await requireAdminContext();
 
   const [deleted] = await db
@@ -372,7 +382,7 @@ export async function deletePosToken(id: string) {
     });
 
   if (!deleted) {
-    throw new Error('Caja no encontrada');
+    return { ok: false, error: 'Caja no encontrada' };
   }
 
   await logAction({
@@ -385,14 +395,25 @@ export async function deletePosToken(id: string) {
   });
 
   revalidatePath('/dashboard/pos-cajeros');
-  return { ok: true as const };
+  return { ok: true, data: deleted };
 }
 
 // Admin setea/cambia/quita el PIN de acceso de la caja. newPin='' => sin PIN.
-export async function setPosTokenPin(id: string, newPin: string) {
+export async function setPosTokenPin(
+  id: string,
+  newPin: string,
+): Promise<ActionResult<{ hasPin: boolean }>> {
   const { userId, orgId } = await requireAdminContext();
 
-  const pinHash = await hashPinOrThrow(newPin ?? '');
+  let pinHash: string;
+  try {
+    pinHash = await hashPinOrThrow(newPin ?? '');
+  } catch (error) {
+    if (error instanceof ActionValidationError) {
+      return { ok: false, error: error.message };
+    }
+    throw error;
+  }
 
   const [updated] = await db
     .update(posTokensSchema)
@@ -406,7 +427,7 @@ export async function setPosTokenPin(id: string, newPin: string) {
     .returning({ id: posTokensSchema.id });
 
   if (!updated) {
-    throw new Error('Caja no encontrada');
+    return { ok: false, error: 'Caja no encontrada' };
   }
 
   await logAction({
@@ -419,12 +440,14 @@ export async function setPosTokenPin(id: string, newPin: string) {
   });
 
   revalidatePath('/dashboard/pos-cajeros');
-  return { ok: true as const, hasPin: pinHash !== '' };
+  return { ok: true, data: { hasPin: pinHash !== '' } };
 }
 
 // Genera un token nuevo para la caja (invalida el anterior). El dispositivo que
 // tenía el token viejo deberá pegar el nuevo. También sube el sessionEpoch.
-export async function regeneratePosToken(id: string) {
+export async function regeneratePosToken(
+  id: string,
+): Promise<ActionResult<{ id: string; token: string }>> {
   const { orgId } = await requireAdminContext();
 
   const newToken = randomUUID();
@@ -443,17 +466,19 @@ export async function regeneratePosToken(id: string) {
     .returning({ id: posTokensSchema.id, token: posTokensSchema.token });
 
   if (!updated) {
-    throw new Error('POS token not found');
+    return { ok: false, error: 'Caja no encontrada' };
   }
 
   revalidatePath('/dashboard/pos-cajeros');
-  return updated;
+  return { ok: true, data: updated };
 }
 
 // "Cerrar sesión" de la caja: sube el sessionEpoch. El cajero lo detecta en su
 // próximo /pos/me (≤30 s) y desloguea al empleado activo (vuelve al selector),
 // sin invalidar el token de dispositivo.
-export async function forceLogoutPosToken(id: string) {
+export async function forceLogoutPosToken(
+  id: string,
+): Promise<ActionResult<{ id: string }>> {
   const { orgId } = await requireAdminContext();
 
   const [updated] = await db
@@ -468,11 +493,11 @@ export async function forceLogoutPosToken(id: string) {
     .returning({ id: posTokensSchema.id });
 
   if (!updated) {
-    throw new Error('POS token not found');
+    return { ok: false, error: 'Caja no encontrada' };
   }
 
   revalidatePath('/dashboard/pos-cajeros');
-  return { ok: true as const };
+  return { ok: true, data: updated };
 }
 
 export async function validatePosToken(token: string) {
