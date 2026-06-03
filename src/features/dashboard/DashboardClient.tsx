@@ -290,34 +290,44 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
 
   return (
     <div className="space-y-6">
-      {/* Header: title + active range on the left, picker on the right */}
-      <div className="
-        flex flex-col gap-3
-        sm:flex-row sm:items-center sm:justify-between
+      {/* Page header: identity on the left, period control on the right.
+          Single source of truth — the page no longer renders its own title. */}
+      <header className="
+        flex flex-col gap-4
+        sm:flex-row sm:items-start sm:justify-between
       "
       >
         <div className="min-w-0">
-          <h1 className="font-display text-xl font-semibold tracking-tight">
+          <h1 className="font-display text-3xl font-medium tracking-tight">
             Resumen
           </h1>
-          <p className="mt-0.5 truncate text-xs text-muted-foreground">
-            {pending
-              ? 'Actualizando…'
-              : formatRangeLabel(data.range.start, data.range.end)}
-            {data.compareRange
-              && ` · vs ${formatRangeLabel(data.compareRange.start, data.compareRange.end)}`}
+          <p className="mt-1 text-sm text-muted-foreground">
+            Ventas, ganancias, inventario y métricas operativas.
           </p>
         </div>
-        <DateRangePicker
-          start={start}
-          end={end}
-          compare={compare}
-          activePreset={activePreset}
-          presets={presetOptions}
-          maxDate={todayBogota()}
-          onApply={applyRange}
-        />
-      </div>
+        <div className="
+          flex flex-col items-start gap-1
+          sm:items-end
+        "
+        >
+          <DateRangePicker
+            start={start}
+            end={end}
+            compare={compare}
+            activePreset={activePreset}
+            presets={presetOptions}
+            maxDate={todayBogota()}
+            onApply={applyRange}
+          />
+          <p className="min-h-4 truncate text-xs text-muted-foreground">
+            {pending
+              ? 'Actualizando…'
+              : data.compareRange
+                ? `vs ${formatRangeLabel(data.compareRange.start, data.compareRange.end)}`
+                : null}
+          </p>
+        </div>
+      </header>
 
       {/* Hero KPIs — the handful you check every morning */}
       <div className="
