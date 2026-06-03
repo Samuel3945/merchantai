@@ -9,6 +9,7 @@ import {
   PackageX,
   Wallet,
 } from 'lucide-react';
+import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { markAllAsRead, markAsRead } from '@/actions/notifications';
 import { cn } from '@/utils/Helpers';
@@ -19,6 +20,16 @@ type NotificationKind
     | 'expiring_soon'
     | 'fiado_overdue'
     | 'sale_alert';
+
+// Where each alert gets resolved. Clicking a notification takes the owner
+// straight to the screen where they can act on it.
+const KIND_HREF: Record<NotificationKind, string> = {
+  cash_difference: '/dashboard/reports/analisis-caja',
+  low_stock: '/dashboard/products',
+  expiring_soon: '/dashboard/inventory',
+  fiado_overdue: '/dashboard/fiados',
+  sale_alert: '/dashboard/sales',
+};
 
 type NotificationSeverity = 'low' | 'mid' | 'high';
 
@@ -118,6 +129,17 @@ export function NotificationBell() {
     }
   }
 
+  // Clicking a notification navigates to its fix screen. Close the dropdown and
+  // mark it read in the background — navigation shouldn't wait on the write.
+  function handleOpenNotification(n: Notification) {
+    setOpen(false);
+    if (!n.read) {
+      void markAsRead(n.id).catch(() => {
+        // Best-effort: the next poll reconciles the read state.
+      });
+    }
+  }
+
   async function handleMarkAll() {
     setLoading(true);
     try {
@@ -195,6 +217,7 @@ export function NotificationBell() {
               : (
                   items.map((n) => {
                     const Icon = KIND_ICON[n.kind] ?? Bell;
+                    const href = KIND_HREF[n.kind] ?? '/dashboard';
                     return (
                       <div
                         key={n.id}
@@ -206,31 +229,37 @@ export function NotificationBell() {
                           !n.read && 'bg-muted/40',
                         )}
                       >
-                        <Icon
-                          className={cn(
-                            'mt-0.5 size-4 shrink-0',
-                            n.severity === 'high' && 'text-red-600',
-                            n.severity === 'mid' && 'text-amber-600',
-                            n.severity === 'low' && 'text-muted-foreground',
-                          )}
-                        />
-                        <div className="min-w-0 flex-1">
-                          <div className="
-                            flex items-center justify-between gap-2
-                          "
-                          >
-                            <span className="truncate font-medium">{n.title}</span>
-                            <span className="
-                              shrink-0 text-[10px] text-muted-foreground
+                        <Link
+                          href={href}
+                          onClick={() => handleOpenNotification(n)}
+                          className="flex min-w-0 flex-1 items-start gap-2"
+                        >
+                          <Icon
+                            className={cn(
+                              'mt-0.5 size-4 shrink-0',
+                              n.severity === 'high' && 'text-red-600',
+                              n.severity === 'mid' && 'text-amber-600',
+                              n.severity === 'low' && 'text-muted-foreground',
+                            )}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="
+                              flex items-center justify-between gap-2
                             "
                             >
-                              {timeAgo(n.createdAt)}
-                            </span>
+                              <span className="truncate font-medium">{n.title}</span>
+                              <span className="
+                                shrink-0 text-[10px] text-muted-foreground
+                              "
+                              >
+                                {timeAgo(n.createdAt)}
+                              </span>
+                            </div>
+                            <p className="mt-0.5 text-xs text-muted-foreground">
+                              {n.message}
+                            </p>
                           </div>
-                          <p className="mt-0.5 text-xs text-muted-foreground">
-                            {n.message}
-                          </p>
-                        </div>
+                        </Link>
                         {!n.read && (
                           <button
                             type="button"

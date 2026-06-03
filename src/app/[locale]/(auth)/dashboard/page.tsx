@@ -1,6 +1,7 @@
 import { setRequestLocale } from 'next-intl/server';
 import { getMetrics } from '@/actions/dashboard';
 import { DashboardClient } from '@/features/dashboard/DashboardClient';
+import { PlanPanel } from '@/features/dashboard/PlanPanel';
 import { TitleBar } from '@/features/dashboard/TitleBar';
 
 function todayBogota(): string {
@@ -43,6 +44,9 @@ export default async function DashboardIndexPage(props: {
         description="Ventas, ganancias, inventario y métricas operativas."
       />
       <DashboardClient initial={metrics} />
+      <div className="mt-6">
+        <PlanPanel />
+      </div>
     </>
   );
 }
