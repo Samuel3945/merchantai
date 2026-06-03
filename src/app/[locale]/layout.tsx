@@ -3,6 +3,7 @@ import { hasLocale, NextIntlClientProvider } from 'next-intl';
 import { setRequestLocale } from 'next-intl/server';
 import { Fraunces, Inter_Tight, JetBrains_Mono } from 'next/font/google';
 import { notFound } from 'next/navigation';
+import { StaleActionReloader } from '@/components/StaleActionReloader';
 import { ThemeScript } from '@/components/ThemeScript';
 import { routing } from '@/libs/I18nRouting';
 import '@/styles/global.css';
@@ -87,6 +88,7 @@ export default async function RootLayout(props: {
         <ThemeScript />
       </head>
       <body className="font-sans">
+        <StaleActionReloader />
         <NextIntlClientProvider>
           {props.children}
         </NextIntlClientProvider>
