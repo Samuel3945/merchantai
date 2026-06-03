@@ -11,6 +11,7 @@ import {
 } from '@/actions/cash';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/utils/Helpers';
+import { DenominationCounter } from './DenominationCounter';
 
 type FraudAlert = {
   kind: string;
@@ -188,6 +189,10 @@ export function CashClient(props: {
                     value={opening}
                     onChange={e => setOpening(e.target.value)}
                   />
+                  <DenominationCounter
+                    className="mt-2"
+                    onTotal={t => setOpening(t > 0 ? String(t) : '')}
+                  />
                 </div>
                 <div>
                   <label className="mb-1 block text-sm font-medium" htmlFor="openNotes">
@@ -303,6 +308,10 @@ export function CashClient(props: {
                         placeholder="0"
                         value={counted}
                         onChange={e => setCounted(e.target.value)}
+                      />
+                      <DenominationCounter
+                        className="mt-2"
+                        onTotal={t => setCounted(t > 0 ? String(t) : '')}
                       />
                     </div>
                     {previewDiff !== null && (
