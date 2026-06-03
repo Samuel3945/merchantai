@@ -160,7 +160,12 @@ export async function createPosToken(input: CreatePosTokenInput) {
     throw new Error('expiresAt is not a valid date');
   }
 
-  const pinHash = await hashPinOrThrow(input.pin ?? '');
+  // El PIN de la caja es obligatorio al crear (toda caja nace protegida).
+  const rawPin = input.pin?.trim() ?? '';
+  if (!rawPin) {
+    throw new Error('El PIN de la caja es obligatorio');
+  }
+  const pinHash = await hashPinOrThrow(rawPin);
 
   if (cashierId) {
     const [cashier] = await db

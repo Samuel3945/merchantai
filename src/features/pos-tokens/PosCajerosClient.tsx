@@ -12,7 +12,10 @@ import {
   KeyRound,
   Lock,
   Monitor,
+  MoreVertical,
   Plus,
+  QrCode,
+  RefreshCw,
   Trash2,
   Unlock,
 } from 'lucide-react';
@@ -29,6 +32,13 @@ import {
   unblockPosToken,
 } from '@/actions/pos-tokens';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Link } from '@/libs/I18nNavigation';
 
 /**
@@ -364,61 +374,32 @@ export function PosCajerosClient({
                 <td className="px-3 py-2 text-xs">{formatDate(t.expiresAt)}</td>
                 <td className="px-3 py-2 text-xs">{formatDate(t.createdAt)}</td>
                 <td className="px-3 py-2">
-                  <div className="flex flex-wrap gap-1">
+                  <div className="flex items-center justify-end gap-1">
                     <Button
                       size="sm"
-                      variant="ghost"
+                      variant="outline"
                       onClick={() => setActiveToken(t)}
                     >
+                      <QrCode className="size-4" />
                       Ver acceso
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => setPinTarget(t)}
-                      disabled={pending}
-                      title="Configura o cambia el PIN de acceso de la caja"
-                    >
-                      <KeyRound className="size-4" />
-                      PIN
                     </Button>
                     {t.active
                       ? (
-                          <>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => handleForceLogout(t.id)}
-                              disabled={pending}
-                              title="Desloguea al empleado activo; la caja sigue activa"
-                            >
-                              Cerrar sesión
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => handleRegenerate(t.id)}
-                              disabled={pending}
-                              title="Genera un acceso nuevo; el dispositivo deberá escanearlo"
-                            >
-                              Cambiar acceso
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => handleBlock(t.id)}
-                              disabled={pending}
-                              title="Bloquea la caja; deja de sincronizar pero no se borra"
-                            >
-                              <Ban className="size-4" />
-                              Bloquear
-                            </Button>
-                          </>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleBlock(t.id)}
+                            disabled={pending}
+                            title="Bloquea la caja; deja de sincronizar pero no se borra"
+                          >
+                            <Ban className="size-4" />
+                            Bloquear
+                          </Button>
                         )
                       : (
                           <Button
                             size="sm"
-                            variant="ghost"
+                            variant="outline"
                             onClick={() => handleUnblock(t.id)}
                             disabled={pending}
                             title="Reactiva la caja (revalida el cupo de tu plan)"
@@ -427,15 +408,48 @@ export function PosCajerosClient({
                             Desbloquear
                           </Button>
                         )}
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      onClick={() => setDeleteTarget(t)}
-                      disabled={pending}
-                    >
-                      <Trash2 className="size-4" />
-                      Eliminar
-                    </Button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          disabled={pending}
+                          aria-label="Más opciones"
+                        >
+                          <MoreVertical className="size-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-48">
+                        <DropdownMenuItem onClick={() => setPinTarget(t)}>
+                          <KeyRound className="size-4" />
+                          Cambiar PIN
+                        </DropdownMenuItem>
+                        {t.active && (
+                          <>
+                            <DropdownMenuItem
+                              onClick={() => handleRegenerate(t.id)}
+                            >
+                              <RefreshCw className="size-4" />
+                              Cambiar acceso
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() => handleForceLogout(t.id)}
+                            >
+                              <Unlock className="size-4" />
+                              Cerrar sesión
+                            </DropdownMenuItem>
+                          </>
+                        )}
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          variant="destructive"
+                          onClick={() => setDeleteTarget(t)}
+                        >
+                          <Trash2 className="size-4" />
+                          Eliminar caja
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
                 </td>
               </tr>
@@ -687,11 +701,12 @@ function CreateTokenModal({
   const [pin, setPin] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const pinInvalid = pin !== '' && !/^\d{4,8}$/.test(pin);
+  // El PIN es obligatorio: toda caja nace protegida.
+  const pinValid = /^\d{4,8}$/.test(pin);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (pinInvalid) {
+    if (!pinValid) {
       return;
     }
     setSubmitting(true);
@@ -700,7 +715,7 @@ function CreateTokenModal({
         deviceName,
         cashierId: cashierId || undefined,
         expiresAt: expiresAt || undefined,
-        pin: pin || undefined,
+        pin,
       });
       onSuccess(created);
     } catch (err) {
@@ -781,23 +796,26 @@ function CreateTokenModal({
           </div>
           <div>
             <label htmlFor="pt-pin" className={labelCls}>
-              PIN de acceso (opcional)
+              PIN de acceso
+              {' '}
+              <span className="text-destructive">*</span>
             </label>
             <input
               id="pt-pin"
               type="text"
               inputMode="numeric"
               autoComplete="off"
+              required
               placeholder="4 a 8 dígitos"
               value={pin}
               onChange={e => setPin(e.target.value.replace(/\D/g, '').slice(0, 8))}
               className={inputCls}
             />
             <p className="mt-1 text-xs text-muted-foreground">
-              Se pedirá en el login de la caja junto con el código de acceso.
-              Déjalo vacío para acceso directo con solo el código.
+              Obligatorio. Se pedirá en el login de la caja junto con el código
+              de acceso, para que nadie entre solo con el QR.
             </p>
-            {pinInvalid && (
+            {pin !== '' && !pinValid && (
               <p className="mt-1 text-xs text-destructive">
                 El PIN debe tener entre 4 y 8 dígitos.
               </p>
@@ -813,7 +831,7 @@ function CreateTokenModal({
             >
               Cancelar
             </Button>
-            <Button type="submit" disabled={submitting || pinInvalid}>
+            <Button type="submit" disabled={submitting || !pinValid}>
               {submitting ? 'Creando…' : 'Crear caja'}
             </Button>
           </div>
@@ -924,12 +942,12 @@ function PinModal({
   const [pin, setPin] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const pinInvalid = pin !== '' && !/^\d{4,8}$/.test(pin);
-  const removing = token.hasPin && pin === '';
+  // El PIN es obligatorio, así que no se permite dejarlo vacío.
+  const pinValid = /^\d{4,8}$/.test(pin);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (pinInvalid) {
+    if (!pinValid) {
       return;
     }
     setSubmitting(true);
@@ -970,34 +988,31 @@ function PinModal({
 
         <p className="mb-3 text-sm text-muted-foreground">
           {token.hasPin
-            ? 'Esta caja ya tiene un PIN. Escribe uno nuevo para cambiarlo o déjalo vacío para quitarlo.'
-            : 'Define un PIN que se pedirá en el login de la caja, junto con el código de acceso.'}
+            ? 'Esta caja ya tiene un PIN. Escribe uno nuevo para cambiarlo.'
+            : 'Define el PIN que se pedirá en el login de la caja, junto con el código de acceso.'}
         </p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label htmlFor="pin-input" className={labelCls}>
               Nuevo PIN
+              {' '}
+              <span className="text-destructive">*</span>
             </label>
             <input
               id="pin-input"
               type="text"
               inputMode="numeric"
               autoComplete="off"
+              required
               placeholder="4 a 8 dígitos"
               value={pin}
               onChange={e => setPin(e.target.value.replace(/\D/g, '').slice(0, 8))}
               className={inputCls}
             />
-            {pinInvalid && (
+            {pin !== '' && !pinValid && (
               <p className="mt-1 text-xs text-destructive">
                 El PIN debe tener entre 4 y 8 dígitos.
-              </p>
-            )}
-            {removing && (
-              <p className="mt-1 text-xs text-amber-700">
-                Al guardar vacío, la caja quedará sin PIN (acceso directo con el
-                código).
               </p>
             )}
           </div>
@@ -1011,12 +1026,8 @@ function PinModal({
             >
               Cancelar
             </Button>
-            <Button type="submit" disabled={submitting || pinInvalid}>
-              {submitting
-                ? 'Guardando…'
-                : removing
-                  ? 'Quitar PIN'
-                  : 'Guardar PIN'}
+            <Button type="submit" disabled={submitting || !pinValid}>
+              {submitting ? 'Guardando…' : 'Guardar PIN'}
             </Button>
           </div>
         </form>
@@ -1090,10 +1101,15 @@ function DeleteCajaModal({
           <span>Entiendo que esta acción es permanente.</span>
         </label>
 
-        <div className="mt-5 flex justify-end gap-2">
+        <div className="
+          mt-6 flex flex-col-reverse gap-2
+          sm:flex-row
+        "
+        >
           <Button
             type="button"
-            variant="secondary"
+            variant="outline"
+            className="sm:flex-1"
             onClick={onCancel}
             disabled={pending}
           >
@@ -1102,11 +1118,18 @@ function DeleteCajaModal({
           <Button
             type="button"
             variant="destructive"
+            className="sm:flex-1"
             onClick={onConfirm}
             disabled={pending || !confirmed}
           >
-            <Trash2 className="size-4" />
-            {pending ? 'Eliminando…' : 'Eliminar definitivamente'}
+            {pending
+              ? 'Eliminando…'
+              : (
+                  <>
+                    <Trash2 className="size-4" />
+                    Sí, eliminar caja
+                  </>
+                )}
           </Button>
         </div>
       </div>
