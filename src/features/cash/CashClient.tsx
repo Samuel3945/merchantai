@@ -46,7 +46,7 @@ function when(value: Date | string | null | undefined): string {
 }
 
 const inputCls
-  = 'flex h-9 w-full rounded-md border border-input bg-card px-3 py-1 text-sm outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring/30';
+  = 'flex h-9 w-full rounded-md border border-input bg-card px-3 py-1 text-sm outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring/30 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none [&[type=number]]:[-moz-appearance:textfield]';
 
 const MANUAL_MOVEMENT_TYPES: { value: CashMovementType; label: string; income: boolean }[] = [
   { value: 'deposit', label: 'Depósito / ingreso', income: true },
