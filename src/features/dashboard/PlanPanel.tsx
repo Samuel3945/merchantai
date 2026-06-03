@@ -1,3 +1,4 @@
+import type { AgentKind } from '@/actions/plans';
 import { Sparkles } from 'lucide-react';
 import Link from 'next/link';
 import { currentPlan } from '@/actions/plans';
@@ -7,6 +8,12 @@ const PLAN_LABEL: Record<string, string> = {
   free: 'Free',
   pro: 'Pro',
   business: 'Business',
+};
+
+// Mirrors the labels used on the Plans screen so the two views stay in sync.
+const AGENT_LABELS: Record<AgentKind, string> = {
+  sales_manager: 'Sales Manager',
+  customer_service: 'Customer Service',
 };
 
 const numberFmt = new Intl.NumberFormat('es-CO');
@@ -27,22 +34,20 @@ function formatDate(iso: string | null): string {
 
 /**
  * SaaS plan snapshot for the Resumen, adapted from Tiendademo's SaasPanel.
- * Shows the active plan, AI credit usage and renewal date, with a single
- * pointer to the plans screen — no permanent "buy" buttons, the upsell only
- * surfaces as a low-credit warning.
+ * Tiendademo had a single credit pool; MerchantAI tracks credits per AI agent
+ * (separate, non-interchangeable limits), so we show one bar per agent that the
+ * plan includes — never a misleading sum. The upsell only surfaces as a
+ * low-credit warning.
  */
 export async function PlanPanel() {
   const { subscription, counters } = await currentPlan();
 
-  const used = counters.reduce((acc, c) => acc + c.used, 0);
-  const total = counters.reduce(
-    (acc, c) => acc + c.monthlyLimit + c.toppedUp,
-    0,
-  );
-  const remaining = Math.max(0, total - used);
-  const pct = total > 0 ? Math.min(100, (used / total) * 100) : 0;
-  const lowCredits = total > 0 && pct >= 80;
-  const renewal = subscription.periodEnd;
+  // Only agents the current plan actually grants credits for.
+  const activeAgents = counters.filter(c => c.monthlyLimit + c.toppedUp > 0);
+  const lowAny = activeAgents.some((c) => {
+    const cap = c.monthlyLimit + c.toppedUp;
+    return cap > 0 && c.remaining / cap <= 0.2;
+  });
 
   return (
     <div className="rounded-lg border bg-background p-4 shadow-xs">
@@ -57,7 +62,9 @@ export async function PlanPanel() {
             </h3>
           </div>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Todos los módulos activos. La IA potencia y automatiza tu negocio.
+            La IA potencia y automatiza tu negocio. Renovación:
+            {' '}
+            {formatDate(subscription.periodEnd)}
           </p>
         </div>
         <Link
@@ -71,17 +78,13 @@ export async function PlanPanel() {
         </Link>
       </div>
 
-      {lowCredits && (
+      {lowAny && (
         <div className="
           mb-4 flex items-center justify-between gap-3 rounded-md border
           border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700
         "
         >
-          <span>
-            Te quedan pocos créditos de IA (
-            {numberFmt.format(remaining)}
-            ). Considerá recargar o subir de plan.
-          </span>
+          <span>Te quedan pocos créditos de IA. Recargá o subí de plan.</span>
           <Link
             href="/dashboard/plans"
             className="
@@ -94,68 +97,91 @@ export async function PlanPanel() {
         </div>
       )}
 
-      <div className="
-        grid grid-cols-1 gap-4
-        sm:grid-cols-3
-      "
-      >
-        <div>
-          <div className="
-            text-[10px] font-bold tracking-widest text-muted-foreground
-            uppercase
-          "
-          >
-            Créditos IA restantes
-          </div>
-          <div className="mt-1 font-display text-2xl font-medium tabular-nums">
-            {numberFmt.format(remaining)}
-            <span className="text-sm font-normal text-muted-foreground">
-              {' '}
-              /
-              {' '}
-              {numberFmt.format(total)}
-            </span>
-          </div>
-          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
-            <div
-              className={cn(
-                'h-full',
-                pct >= 80 ? 'bg-amber-500' : 'bg-primary',
-              )}
-              style={{ width: `${pct}%` }}
-            />
-          </div>
-        </div>
-
-        <div>
-          <div className="
-            text-[10px] font-bold tracking-widest text-muted-foreground
-            uppercase
-          "
-          >
-            Consumo IA
-          </div>
-          <div className="mt-1 font-display text-2xl font-medium tabular-nums">
-            {numberFmt.format(used)}
-          </div>
-          <div className="text-xs text-muted-foreground">
-            créditos usados este período
-          </div>
-        </div>
-
-        <div>
-          <div className="
-            text-[10px] font-bold tracking-widest text-muted-foreground
-            uppercase
-          "
-          >
-            Renovación
-          </div>
-          <div className="mt-1 font-display text-lg font-medium tabular-nums">
-            {formatDate(renewal)}
-          </div>
-        </div>
-      </div>
+      {activeAgents.length === 0
+        ? (
+            <div className="
+              flex flex-wrap items-center justify-between gap-3 rounded-md
+              bg-muted/40 p-3 text-sm
+            "
+            >
+              <span className="text-muted-foreground">
+                Tu plan no incluye créditos de IA. Subí a Pro o Business para
+                activar los agentes.
+              </span>
+              <Link
+                href="/dashboard/plans"
+                className="
+                  shrink-0 text-xs font-semibold text-primary
+                  hover:underline
+                "
+              >
+                Ver planes →
+              </Link>
+            </div>
+          )
+        : (
+            <div className={cn(
+              'grid grid-cols-1 gap-4',
+              activeAgents.length > 1 && 'sm:grid-cols-2',
+            )}
+            >
+              {activeAgents.map((c) => {
+                const cap = c.monthlyLimit + c.toppedUp;
+                const pct = cap > 0 ? Math.min(100, (c.used / cap) * 100) : 0;
+                return (
+                  <div key={c.agentKind}>
+                    <div className="
+                      flex items-center justify-between text-[10px] font-bold
+                      tracking-widest text-muted-foreground uppercase
+                    "
+                    >
+                      <span>{AGENT_LABELS[c.agentKind]}</span>
+                      {c.toppedUp > 0 && (
+                        <span className="text-primary">
+                          +
+                          {numberFmt.format(c.toppedUp)}
+                          {' '}
+                          extra
+                        </span>
+                      )}
+                    </div>
+                    <div className="
+                      mt-1 font-display text-2xl font-medium tabular-nums
+                    "
+                    >
+                      {numberFmt.format(c.remaining)}
+                      <span className="
+                        text-sm font-normal text-muted-foreground
+                      "
+                      >
+                        {' '}
+                        /
+                        {' '}
+                        {numberFmt.format(cap)}
+                      </span>
+                    </div>
+                    <div className="
+                      mt-2 h-1.5 overflow-hidden rounded-full bg-muted
+                    "
+                    >
+                      <div
+                        className={cn(
+                          'h-full',
+                          pct >= 80 ? 'bg-amber-500' : 'bg-primary',
+                        )}
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {numberFmt.format(c.used)}
+                      {' '}
+                      usados este período
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
     </div>
   );
 }
