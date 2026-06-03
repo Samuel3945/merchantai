@@ -31,13 +31,6 @@ export type CashFlowStats = {
   net: number;
 };
 
-export type AttentionStats = {
-  outOfStock: number;
-  lowStock: number;
-  expiringSoon: number;
-  overdueFiados: number;
-};
-
 export type DashboardMetrics = {
   range: { start: string; end: string };
   compareRange: { start: string; end: string } | null;
@@ -46,7 +39,6 @@ export type DashboardMetrics = {
   netRevenue: number;
   prevNetRevenue: number | null;
   cashFlow: CashFlowStats;
-  attention: AttentionStats;
   inventory: InventoryStats;
   salesByDay: SalesByDayRow[];
 };
@@ -221,63 +213,6 @@ async function cashFlowStats(
   return { income, expenses, net: income - expenses };
 }
 
-// "Needs your attention today" — the counters that should make the owner act.
-async function attentionStats(
-  orgId: string,
-): Promise<AttentionStats> {
-  const [stock, expiring, fiados] = await Promise.all([
-    db.execute(sql`
-      SELECT
-        COUNT(*) FILTER (WHERE stock <= 0)::int AS out_of_stock,
-        COUNT(*) FILTER (WHERE stock BETWEEN 1 AND min_stock)::int AS low_stock
-      FROM products
-      WHERE organization_id = ${orgId} AND deleted = false
-    `),
-    db.execute(sql`
-      SELECT COUNT(*)::int AS expiring
-      FROM expiration_risk_cache
-      WHERE organization_id = ${orgId}
-        AND payload->>'tier' IN ('urgente', 'critico')
-    `),
-    db.execute(sql`
-      WITH fiado_debt AS (
-        SELECT
-          s.id,
-          s.total::numeric AS total,
-          COALESCE((
-            SELECT SUM(sp.amount) FROM sale_payments sp
-            WHERE sp.sale_id = s.id AND sp.method NOT ILIKE '%fiado%'
-          ), 0)::numeric AS paid,
-          s.created_at
-        FROM sales s
-        WHERE s.organization_id = ${orgId}
-          AND s.status = 'completed'
-          AND (
-            s.payment_type ILIKE '%fiado%'
-            OR EXISTS (
-              SELECT 1 FROM sale_payments sp2
-              WHERE sp2.sale_id = s.id AND sp2.method ILIKE '%fiado%'
-            )
-          )
-      )
-      SELECT COUNT(*)::int AS overdue
-      FROM fiado_debt
-      WHERE total - paid > 0
-        AND EXTRACT(day FROM NOW() - created_at) >= 7
-    `),
-  ]);
-
-  const s = (stock.rows?.[0] ?? {}) as Record<string, unknown>;
-  const e = (expiring.rows?.[0] ?? {}) as Record<string, unknown>;
-  const f = (fiados.rows?.[0] ?? {}) as Record<string, unknown>;
-  return {
-    outOfStock: toInt(s.out_of_stock),
-    lowStock: toInt(s.low_stock),
-    expiringSoon: toInt(e.expiring),
-    overdueFiados: toInt(f.overdue),
-  };
-}
-
 function validateDate(value: string, field: string): string {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
     throw new Error(`Invalid ${field}: expected YYYY-MM-DD`);
@@ -308,7 +243,6 @@ export async function getMetrics(
     net,
     prevNet,
     cashFlow,
-    attention,
   ] = await Promise.all([
     periodStats(orgId, s, e),
     inventoryStats(orgId),
@@ -317,7 +251,6 @@ export async function getMetrics(
     netRevenue(orgId, s, e),
     hasCompare && cs && ce ? netRevenue(orgId, cs, ce) : Promise.resolve(null),
     cashFlowStats(orgId, s, e),
-    attentionStats(orgId),
   ]);
 
   return {
@@ -328,7 +261,6 @@ export async function getMetrics(
     netRevenue: net,
     prevNetRevenue: prevNet,
     cashFlow,
-    attention,
     inventory,
     salesByDay: byDay,
   };

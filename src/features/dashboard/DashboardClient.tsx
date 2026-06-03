@@ -226,46 +226,6 @@ function KpiCard({
   );
 }
 
-/** A single actionable alert pill. Only rendered when its count is > 0. */
-function AttentionPill({
-  count,
-  label,
-  href,
-  tone,
-}: {
-  count: number;
-  label: string;
-  href: string;
-  tone: 'danger' | 'warn';
-}) {
-  if (count <= 0) {
-    return null;
-  }
-  return (
-    <Link
-      href={href}
-      className={cn(
-        `
-          inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs
-          font-medium transition-colors
-        `,
-        tone === 'danger'
-          ? `
-            border-red-200 bg-red-50 text-red-700
-            hover:bg-red-100
-          `
-          : `
-            border-amber-200 bg-amber-50 text-amber-700
-            hover:bg-amber-100
-          `,
-      )}
-    >
-      <span className="font-display tabular-nums">{count}</span>
-      {label}
-    </Link>
-  );
-}
-
 export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
   const [data, setData] = useState<DashboardMetrics>(initial);
   const [start, setStart] = useState(initial.range.start);
@@ -318,9 +278,6 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
   }
 
   const prev = data.previousPeriod;
-  const att = data.attention;
-  const hasAttention
-    = att.outOfStock + att.lowStock + att.expiringSoon + att.overdueFiados > 0;
 
   const salesByDayLabeled = useMemo(
     () =>
@@ -360,51 +317,6 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
           maxDate={todayBogota()}
           onApply={applyRange}
         />
-      </div>
-
-      {/* Needs your attention — only shows when something is actually wrong */}
-      <div className="
-        flex flex-wrap items-center gap-2 rounded-lg border bg-background p-3
-        shadow-xs
-      "
-      >
-        <span className="mr-1 text-xs font-semibold text-muted-foreground">
-          Necesita tu atención
-        </span>
-        {hasAttention
-          ? (
-              <>
-                <AttentionPill
-                  count={att.outOfStock}
-                  label="sin stock"
-                  href="/dashboard/reports/inventario"
-                  tone="danger"
-                />
-                <AttentionPill
-                  count={att.overdueFiados}
-                  label="fiados vencidos"
-                  href="/dashboard/reports/fiados"
-                  tone="danger"
-                />
-                <AttentionPill
-                  count={att.expiringSoon}
-                  label="por vencer"
-                  href="/dashboard/reports/inventario"
-                  tone="warn"
-                />
-                <AttentionPill
-                  count={att.lowStock}
-                  label="stock bajo"
-                  href="/dashboard/reports/inventario"
-                  tone="warn"
-                />
-              </>
-            )
-          : (
-              <span className="text-xs text-emerald-600">
-                Todo en orden — sin alertas
-              </span>
-            )}
       </div>
 
       {/* Hero KPIs — the handful you check every morning */}
