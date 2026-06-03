@@ -67,20 +67,35 @@ export async function setAppSetting(
   }
   const { orgId } = await requireAdminOrg();
 
-  await db
-    .insert(appSettingsSchema)
-    .values({
-      organizationId: orgId,
-      key,
-      value,
-    })
-    .onConflictDoUpdate({
-      target: [appSettingsSchema.organizationId, appSettingsSchema.key],
-      set: {
+  await db.transaction(async (tx) => {
+    await tx
+      .insert(appSettingsSchema)
+      .values({
+        organizationId: orgId,
+        key,
         value,
-        updatedAt: sql`now()`,
-      },
-    });
+      })
+      .onConflictDoUpdate({
+        target: [appSettingsSchema.organizationId, appSettingsSchema.key],
+        set: {
+          value,
+          updatedAt: sql`now()`,
+        },
+      });
+
+    // Keep the Fiado payment method's `active` flag in sync with the
+    // fiado-enabled toggle. The two were decoupled, so payment_methods kept
+    // the credit row active=true after fiado was turned off and the POS still
+    // received it as a payment option. Syncing here in the same transaction
+    // makes this toggle the single source of truth. See issue #8.
+    if (key === 'fiado-enabled') {
+      const enabled = value === 'true';
+      await tx.execute(
+        sql`UPDATE payment_methods SET active = ${enabled}
+            WHERE organization_id = ${orgId} AND type = 'credit'`,
+      );
+    }
+  });
 
   return { key, value };
 }
