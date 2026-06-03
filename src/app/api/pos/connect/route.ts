@@ -97,16 +97,27 @@ export async function POST(req: Request): Promise<NextResponse> {
         : Promise.resolve(null),
     ]);
 
+  const fiadoEnabled = fiadoEnabledRaw === 'true';
+
+  // El método "Fiado" (type credit) se controla por el toggle fiado-enabled, no
+  // por su columna active. Si el toggle está apagado, no debe llegar al cajero
+  // como opción de pago aunque la fila siga active = true.
+  const visiblePaymentMethods = fiadoEnabled
+    ? paymentMethods
+    : paymentMethods.filter(
+        pm => (pm as { type?: string }).type !== 'credit',
+      );
+
   return NextResponse.json({
     valid: true,
     store: {
       id: posToken.storeId,
       name: businessName || 'Mi Tienda',
       address: businessAddress || '',
-      fiadoEnabled: fiadoEnabledRaw === 'true',
+      fiadoEnabled,
     },
     cashier: cashierRow ? { id: cashierRow.id, name: cashierRow.name } : null,
-    paymentMethods,
+    paymentMethods: visiblePaymentMethods,
     products,
   });
 }
