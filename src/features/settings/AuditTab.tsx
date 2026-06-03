@@ -84,7 +84,7 @@ export function AuditTab() {
     getAuditFacets()
       .then(setFacets)
       .catch(() => null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react/exhaustive-deps
   }, []);
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;

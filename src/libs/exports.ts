@@ -12,7 +12,7 @@ export function exportToCSV(
   filename: string,
 ) {
   const csv = Papa.unparse(rows);
-  const blob = new Blob([`﻿${csv}`], { type: 'text/csv;charset=utf-8;' });
+  const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' });
   downloadBlob(blob, filename.endsWith('.csv') ? filename : `${filename}.csv`);
 }
 

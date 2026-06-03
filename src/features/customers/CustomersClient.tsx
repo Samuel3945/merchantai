@@ -193,7 +193,8 @@ export function CustomersClient({ initial }: { initial: CustomerListItem[] }) {
   }
 
   function onDelete(c: CustomerListItem) {
-    if (!confirm(`Eliminar "${c.name}"?`)) {
+    // eslint-disable-next-line no-alert
+    if (!globalThis.confirm(`Eliminar "${c.name}"?`)) {
       return;
     }
     startTransition(async () => {

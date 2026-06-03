@@ -71,6 +71,7 @@ function ToastItem({ toast, onDone }: { toast: Toast; onDone: () => void }) {
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useSettingsToast(): ToastContextValue {
   const ctx = useContext(ToastContext);
   if (!ctx) {

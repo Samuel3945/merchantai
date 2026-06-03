@@ -11,7 +11,7 @@ const trimmedOrNull = z
 const decimalString = z
   .union([z.string(), z.number()])
   .transform(v => (typeof v === 'number' ? v.toString() : v))
-  .refine(v => /^\d+(\.\d{1,2})?$/.test(v), {
+  .refine(v => /^\d+(?:\.\d{1,2})?$/.test(v), {
     message: 'Must be a number with up to 2 decimals',
   });
 

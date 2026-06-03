@@ -24,7 +24,7 @@ type ChartBlock = {
 };
 
 function tryParseChart(text: string): { cleanText: string; chart: ChartBlock | null } {
-  const match = text.match(/```chart\s*\n([\s\S]*?)\n```/);
+  const match = text.match(/```chart[^\S\n]*\n([\s\S]*?)\n```/);
   if (!match) {
     return { cleanText: text, chart: null };
   }
