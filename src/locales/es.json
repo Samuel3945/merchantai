@@ -102,18 +102,7 @@
   },
   "DashboardLayout": {
     "meta_title": "Panel de MyMerchantAI",
-    "meta_description": "Gestiona ventas, inventario, fiados, clientes y reportes con IA desde el panel de MyMerchantAI.",
-    "home": "Home",
-    "members": "Members",
-    "settings": "Settings"
-  },
-  "DashboardIndexPage": {
-    "title_bar": "Dashboard",
-    "title_bar_description": "Welcome to your dashboard",
-    "message_state_title": "Let's get started",
-    "message_state_description": "Customize this page by editing the file at <code>dashboard/page.tsx</code>.",
-    "message_state_alternative": "Need advanced features? Next.js 16 & React 19, Multi-tenancy & Teams, Roles & Permissions, Shadcn UI,\nEnd-to-End Typesafety with oRPC, Stripe Payment, Light / Dark mode. Try <url></url>.",
-    "max_message": "Or, need a Self-hosted auth stack (Better Auth)? Try <url></url>."
+    "meta_description": "Gestiona ventas, inventario, fiados, clientes y reportes con IA desde el panel de MyMerchantAI."
   },
   "UserProfilePage": {
     "title_bar": "User Profile",
