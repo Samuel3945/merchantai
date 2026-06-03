@@ -35,23 +35,12 @@ import { useSettingSave } from './useSettingSave';
 // Transfer accounts carry banking details the bot shares with the customer at
 // checkout. The cashier never sees them — it only shows a "Transferencia" button.
 type TransferDetails = {
-  account_type?: 'ahorros' | 'corriente' | 'nequi' | 'daviplata';
   bank?: string;
   account_number?: string;
   holder_name?: string;
   holder_id?: string;
   notes?: string;
 };
-
-const ACCOUNT_KINDS: ReadonlyArray<{
-  value: NonNullable<TransferDetails['account_type']>;
-  label: string;
-}> = [
-  { value: 'ahorros', label: 'Ahorros' },
-  { value: 'corriente', label: 'Corriente' },
-  { value: 'nequi', label: 'Nequi' },
-  { value: 'daviplata', label: 'Daviplata' },
-];
 
 // Cash and credit (fiado) are system-managed and never appear as editable rows.
 function isEditable(type: PaymentMethodType): boolean {
@@ -433,7 +422,7 @@ function EditModal({
   const [type, setType] = useState<PaymentMethodType>(initial?.type ?? 'transfer');
   const [icon, setIcon] = useState(initial?.icon ?? '');
   const [details, setDetails] = useState<TransferDetails>(
-    (initial?.details ?? { account_type: 'ahorros' }) as TransferDetails,
+    (initial?.details ?? {}) as TransferDetails,
   );
   const setDetail = (patch: Partial<TransferDetails>) =>
     setDetails(d => ({ ...d, ...patch }));
@@ -451,6 +440,14 @@ function EditModal({
       : '20',
   );
   const [description, setDescription] = useState(initial?.description ?? '');
+  const [showAdvanced, setShowAdvanced] = useState(
+    Boolean(
+      initial?.icon
+      || initial?.description
+      || (initial?.startHour !== null && initial?.startHour !== undefined)
+      || (initial?.details as TransferDetails | undefined)?.holder_id,
+    ),
+  );
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -504,7 +501,11 @@ function EditModal({
       fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4
     "
     >
-      <div className="w-full max-w-lg rounded-lg bg-background p-6 shadow-lg">
+      <div className="
+        max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-lg bg-background
+        p-6 shadow-lg
+      "
+      >
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-lg font-semibold">
             {initial ? 'Editar método de pago' : 'Nuevo método de pago'}
@@ -560,59 +561,31 @@ function EditModal({
             "
             >
               <p className="text-xs font-medium text-muted-foreground">
-                Datos de la cuenta (los comparte el bot al cliente; el cajero no
-                los ve)
+                Datos que el bot comparte con el cliente (el cajero no los ve)
               </p>
               <div>
-                <label htmlFor="pm-acct-kind" className={labelCls}>
-                  Tipo de cuenta
-                </label>
-                <select
-                  id="pm-acct-kind"
-                  value={details.account_type ?? 'ahorros'}
-                  onChange={e =>
-                    setDetail({
-                      account_type: e.target
-                        .value as TransferDetails['account_type'],
-                    })}
-                  className={inputCls}
-                >
-                  {ACCOUNT_KINDS.map(k => (
-                    <option key={k.value} value={k.value}>
-                      {k.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
                 <label htmlFor="pm-bank" className={labelCls}>
-                  {details.account_type === 'nequi'
-                    || details.account_type === 'daviplata'
-                    ? 'Plataforma'
-                    : 'Banco'}
+                  Banco o billetera
                 </label>
                 <input
                   id="pm-bank"
                   type="text"
                   value={details.bank ?? ''}
                   onChange={e => setDetail({ bank: e.target.value })}
-                  placeholder="Ej: Bancolombia, Davivienda"
+                  placeholder="Bancolombia, Nequi, Daviplata…"
                   className={inputCls}
                 />
               </div>
               <div>
                 <label htmlFor="pm-acct-num" className={labelCls}>
-                  {details.account_type === 'nequi'
-                    || details.account_type === 'daviplata'
-                    ? 'Número de celular'
-                    : 'Número de cuenta'}
+                  Número de cuenta o celular
                 </label>
                 <input
                   id="pm-acct-num"
                   type="text"
                   value={details.account_number ?? ''}
                   onChange={e => setDetail({ account_number: e.target.value })}
-                  placeholder="Ej: 001-234567-89"
+                  placeholder="Ej: 300 123 4567"
                   className={inputCls}
                 />
               </div>
@@ -629,95 +602,117 @@ function EditModal({
                   className={inputCls}
                 />
               </div>
+            </div>
+          )}
+
+          <div className="border-t pt-3">
+            <button
+              type="button"
+              onClick={() => setShowAdvanced(s => !s)}
+              className="
+                flex items-center gap-1 text-sm font-medium
+                text-muted-foreground
+                hover:text-foreground
+              "
+            >
+              <span aria-hidden>{showAdvanced ? '▾' : '▸'}</span>
+              Opciones avanzadas
+            </button>
+          </div>
+
+          {showAdvanced && (
+            <div className="space-y-4">
+              {type === 'transfer' && (
+                <div>
+                  <label htmlFor="pm-holder-id" className={labelCls}>
+                    Cédula del titular (opcional)
+                  </label>
+                  <input
+                    id="pm-holder-id"
+                    type="text"
+                    value={details.holder_id ?? ''}
+                    onChange={e => setDetail({ holder_id: e.target.value })}
+                    placeholder="Algunos bancos la piden"
+                    className={inputCls}
+                  />
+                </div>
+              )}
+
               <div>
-                <label htmlFor="pm-holder-id" className={labelCls}>
-                  Cédula del titular (opcional)
+                <label htmlFor="pm-icon" className={labelCls}>
+                  Ícono (emoji o texto)
                 </label>
                 <input
-                  id="pm-holder-id"
+                  id="pm-icon"
                   type="text"
-                  value={details.holder_id ?? ''}
-                  onChange={e => setDetail({ holder_id: e.target.value })}
-                  placeholder="Algunos bancos la piden"
+                  maxLength={4}
+                  value={icon}
+                  onChange={e => setIcon(e.target.value)}
+                  placeholder="💸"
                   className={inputCls}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-sm">
+                  <Switch
+                    checked={hasSchedule}
+                    onCheckedChange={setHasSchedule}
+                    aria-label="Restringir por horario"
+                  />
+                  <span>Restringir por horario</span>
+                </div>
+                {hasSchedule && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label htmlFor="pm-start" className={labelCls}>
+                        Desde (0–23)
+                      </label>
+                      <input
+                        id="pm-start"
+                        type="number"
+                        min={0}
+                        max={23}
+                        value={startHour}
+                        onChange={e => setStartHour(e.target.value)}
+                        className={inputCls}
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="pm-end" className={labelCls}>
+                        Hasta (0–23)
+                      </label>
+                      <input
+                        id="pm-end"
+                        type="number"
+                        min={0}
+                        max={23}
+                        value={endHour}
+                        onChange={e => setEndHour(e.target.value)}
+                        className={inputCls}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label htmlFor="pm-desc" className={labelCls}>
+                  Descripción
+                </label>
+                <textarea
+                  id="pm-desc"
+                  rows={3}
+                  value={description}
+                  onChange={e => setDescription(e.target.value)}
+                  className={`
+                    ${inputCls}
+                    h-auto py-2
+                  `}
                 />
               </div>
             </div>
           )}
-
-          <div>
-            <label htmlFor="pm-icon" className={labelCls}>
-              Ícono (emoji o texto)
-            </label>
-            <input
-              id="pm-icon"
-              type="text"
-              maxLength={4}
-              value={icon}
-              onChange={e => setIcon(e.target.value)}
-              placeholder="💸"
-              className={inputCls}
-            />
-          </div>
-
-          <div className="space-y-2">
-            <div className="flex items-center gap-2 text-sm">
-              <Switch
-                checked={hasSchedule}
-                onCheckedChange={setHasSchedule}
-                aria-label="Restringir por horario"
-              />
-              <span>Restringir por horario</span>
-            </div>
-            {hasSchedule && (
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label htmlFor="pm-start" className={labelCls}>
-                    Desde (0–23)
-                  </label>
-                  <input
-                    id="pm-start"
-                    type="number"
-                    min={0}
-                    max={23}
-                    value={startHour}
-                    onChange={e => setStartHour(e.target.value)}
-                    className={inputCls}
-                  />
-                </div>
-                <div>
-                  <label htmlFor="pm-end" className={labelCls}>
-                    Hasta (0–23)
-                  </label>
-                  <input
-                    id="pm-end"
-                    type="number"
-                    min={0}
-                    max={23}
-                    value={endHour}
-                    onChange={e => setEndHour(e.target.value)}
-                    className={inputCls}
-                  />
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div>
-            <label htmlFor="pm-desc" className={labelCls}>
-              Descripción
-            </label>
-            <textarea
-              id="pm-desc"
-              rows={3}
-              value={description}
-              onChange={e => setDescription(e.target.value)}
-              className={`
-                ${inputCls}
-                h-auto py-2
-              `}
-            />
-          </div>
 
           <div className="flex justify-end gap-2 pt-2">
             <Button
