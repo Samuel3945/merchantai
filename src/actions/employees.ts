@@ -119,6 +119,43 @@ async function countActiveCashiers(orgId: string): Promise<number> {
   return Number(row?.value ?? 0);
 }
 
+export type CashierQuota = {
+  plan: PlanTier;
+  used: number;
+  base: number;
+  addons: number;
+  limit: number;
+  remaining: number;
+};
+
+// Read-only snapshot of employee (cashier user) usage for the Resumen counter.
+// Mirrors getPosDeviceQuota's shape so the dashboard can render both quotas the
+// same way. Not admin-gated: it only reads counts, never mutates, so any member
+// of the org can see how many seats are used without hitting a 403.
+export async function getCashierQuota(): Promise<CashierQuota> {
+  const { orgId } = await auth();
+  if (!orgId) {
+    throw new Error('No active organization');
+  }
+
+  const [plan, used, addons] = await Promise.all([
+    getOrganizationPlan(orgId),
+    countActiveCashiers(orgId),
+    countCashierAddons(orgId),
+  ]);
+  const base = PLAN_CASHIER_LIMIT[plan];
+  const limit = base + addons;
+
+  return {
+    plan,
+    used,
+    base,
+    addons,
+    limit,
+    remaining: Math.max(0, limit - used),
+  };
+}
+
 function buildInviteUrl(token: string, userId: string): string {
   const base
     = process.env.FRONTEND_URL

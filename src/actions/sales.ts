@@ -8,6 +8,7 @@ import { recordCashMovement } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import { consumeFifoExits } from '@/libs/fifo-cogs';
 import {
+  posTokensSchema,
   productsSchema,
   saleItemsSchema,
   salePaymentsSchema,
@@ -352,5 +353,104 @@ export async function listSales(
   return {
     items,
     total: totalRow[0]?.count ?? 0,
+  };
+}
+
+// --- Caja saturation signal -------------------------------------------------
+// "This register works a lot → buy/activate another caja" is measured by the
+// REST between consecutive sales, not by raw daily volume. A tiny gap means the
+// cashier never gets breathing room — the honest bottleneck signal, and it is
+// auto-normalized across business types (a bakery and a supermarket each have
+// their own comfortable rhythm; sales/day would need a different threshold per
+// business, the inter-sale gap does not).
+const SATURATION_WINDOW_DAYS = 30;
+// Gaps longer than this are treated as "store closed / long pause" and excluded
+// from the median, so an overnight gap can't inflate it and hide midday rush.
+const SATURATION_CLOSED_GAP_SECONDS = 60 * 60; // 1h
+// Median gap at or below this ⇒ the caja is saturated.
+const SATURATION_MEDIAN_THRESHOLD_SECONDS = 2 * 60; // 2min
+// Don't judge saturation on thin data — a median over a handful of sales lies.
+const SATURATION_MIN_SALES = 20;
+
+export type CajaSaturation = {
+  posTokenId: string;
+  deviceName: string | null;
+  salesCount: number;
+  medianGapSeconds: number | null;
+  saturated: boolean;
+};
+
+export type SaturationReport = {
+  // True when at least one caja is at its working limit.
+  saturated: boolean;
+  cajas: CajaSaturation[];
+};
+
+// Per-caja saturation over the trailing window. One SQL pass: LAG() yields the
+// gap to the previous sale on the same caja, percentile_cont(0.5) the median of
+// the gaps that fall under the closed-store cutoff, and the HAVING clause drops
+// cajas with too few sales to judge.
+export async function getCashierSaturation(): Promise<SaturationReport> {
+  const { orgId } = await auth();
+  if (!orgId) {
+    throw new Error('No active organization');
+  }
+
+  const result = await db.execute(sql`
+    WITH base AS (
+      SELECT
+        ${salesSchema.posTokenId} AS pos_token_id,
+        EXTRACT(EPOCH FROM (
+          ${salesSchema.createdAt}
+          - LAG(${salesSchema.createdAt}) OVER (
+              PARTITION BY ${salesSchema.posTokenId}
+              ORDER BY ${salesSchema.createdAt}
+            )
+        )) AS gap_seconds
+      FROM ${salesSchema}
+      WHERE ${salesSchema.organizationId} = ${orgId}
+        AND ${salesSchema.status} IN ('completed', 'settled')
+        AND ${salesSchema.posTokenId} IS NOT NULL
+        AND ${salesSchema.createdAt}
+            >= now() - make_interval(days => ${SATURATION_WINDOW_DAYS})
+    )
+    SELECT
+      b.pos_token_id AS "posTokenId",
+      t.device_name AS "deviceName",
+      count(*)::int AS "salesCount",
+      percentile_cont(0.5) WITHIN GROUP (ORDER BY b.gap_seconds)
+        FILTER (
+          WHERE b.gap_seconds IS NOT NULL
+            AND b.gap_seconds <= ${SATURATION_CLOSED_GAP_SECONDS}
+        ) AS "medianGapSeconds"
+    FROM base b
+    LEFT JOIN ${posTokensSchema} t ON t.id = b.pos_token_id
+    GROUP BY b.pos_token_id, t.device_name
+    HAVING count(*) >= ${SATURATION_MIN_SALES}
+  `);
+
+  const rows = result.rows as Array<{
+    posTokenId: string;
+    deviceName: string | null;
+    salesCount: number | string;
+    medianGapSeconds: number | string | null;
+  }>;
+
+  const cajas: CajaSaturation[] = rows.map((row) => {
+    const median
+      = row.medianGapSeconds == null ? null : Number(row.medianGapSeconds);
+    return {
+      posTokenId: row.posTokenId,
+      deviceName: row.deviceName,
+      salesCount: Number(row.salesCount),
+      medianGapSeconds: median,
+      saturated:
+        median != null && median <= SATURATION_MEDIAN_THRESHOLD_SECONDS,
+    };
+  });
+
+  return {
+    saturated: cajas.some(c => c.saturated),
+    cajas,
   };
 }
