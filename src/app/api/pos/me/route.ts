@@ -247,6 +247,15 @@ export async function GET(req: Request): Promise<NextResponse> {
 
   const fiadoEnabled = fiadoEnabledRaw === 'true';
 
+  // El método "Fiado" (type credit) se controla por el toggle fiado-enabled, no
+  // por su columna active. Si el toggle está apagado, no debe llegar al cajero
+  // como opción de pago aunque la fila siga active = true.
+  const visiblePaymentMethods = fiadoEnabled
+    ? paymentMethods
+    : paymentMethods.filter(
+        pm => (pm as { type?: string }).type !== 'credit',
+      );
+
   // "Cerrar sesión" desde el admin: si el cajero conoce un epoch más viejo que
   // el actual de la caja, el empleado activo quedó deslogueado → el cajero
   // vuelve al selector/PIN (sin perder el token).
@@ -277,7 +286,7 @@ export async function GET(req: Request): Promise<NextResponse> {
       wholesale: true,
       canConfirmTransfers: ctx.canConfirmTransfers,
     },
-    paymentMethods,
+    paymentMethods: visiblePaymentMethods,
     cashiers,
     products,
     serverTime: new Date().toISOString(),
