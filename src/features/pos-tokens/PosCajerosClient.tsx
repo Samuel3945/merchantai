@@ -893,6 +893,7 @@ function QrModal({
             en el dispositivo de la caja.
           </li>
           <li>Escanea el código QR o pega el código de acceso.</li>
+          {token.hasPin && <li>Ingresa el PIN de la caja cuando lo pida.</li>}
           <li>La caja queda vinculada y empieza a sincronizar.</li>
         </ol>
 
@@ -915,6 +916,20 @@ function QrModal({
               {token.token}
             </div>
           </div>
+
+          {token.hasPin && (
+            <div className="
+              flex w-full items-start gap-2 rounded-md border border-amber-300
+              bg-amber-50 px-3 py-2 text-xs text-amber-900
+            "
+            >
+              <KeyRound className="mt-0.5 size-4 shrink-0" />
+              <span>
+                Esta caja tiene PIN. Por seguridad no se muestra aquí: dáselo al
+                cajero por separado para que pueda entrar.
+              </span>
+            </div>
+          )}
 
           <div className="flex w-full justify-end gap-2">
             <Button variant="secondary" onClick={handleCopy}>
