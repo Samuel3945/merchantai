@@ -4,11 +4,20 @@ import * as Sentry from '@sentry/nextjs';
 import NextError from 'next/error';
 import { useEffect } from 'react';
 import { routing } from '@/libs/I18nRouting';
+import {
+  isStaleServerActionError,
+  reloadForStaleServerAction,
+} from '@/utils/staleServerAction';
 
 export default function GlobalError(props: {
   error: Error & { digest?: string };
 }) {
   useEffect(() => {
+    // A stale bundle after a deploy can surface here when a Server Action
+    // bubbles to the boundary. Reload to recover before reporting noise.
+    if (isStaleServerActionError(props.error) && reloadForStaleServerAction()) {
+      return;
+    }
     Sentry.captureException(props.error);
   }, [props.error]);
 

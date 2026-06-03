@@ -2,6 +2,10 @@
 
 import { useCallback, useRef, useState } from 'react';
 import { setAppSetting } from '@/actions/app-settings';
+import {
+  isStaleServerActionError,
+  reloadForStaleServerAction,
+} from '@/utils/staleServerAction';
 import { useSettingsToast } from './useSettingsToast';
 
 type SaveOptions = {
@@ -30,6 +34,12 @@ export function useSettingSave() {
           }));
         }
       } catch (e) {
+        // Stale bundle after a deploy: reload to fetch fresh action IDs instead
+        // of showing a confusing error. If the guard blocks the reload, fall
+        // through and surface the error normally.
+        if (isStaleServerActionError(e) && reloadForStaleServerAction()) {
+          return;
+        }
         toast.show(
           e instanceof Error ? e.message : 'No se pudo guardar',
           'error',
