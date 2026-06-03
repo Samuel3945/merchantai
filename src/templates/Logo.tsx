@@ -1,10 +1,15 @@
 /**
  * Logo de MyMerchant AI.
  * Marca oficial: toldo de tienda + "M" + flecha de crecimiento.
- * Colores del logo: navy #0f2a43 (texto "MyMerchant") y teal #14a98a (icono + "AI").
+ * Las partes navy usan `currentColor` para adaptarse al tema (navy #0f2a43 en
+ * claro, blanco en oscuro); el teal #14a98a (icono + "AI") es fijo en ambos.
  */
 export const Logo = (props: { isTextHidden?: boolean }) => (
-  <div className="flex items-center gap-2">
+  <div className="
+    flex items-center gap-2 text-[#0f2a43]
+    dark:text-white
+  "
+  >
     <svg
       className="size-9 shrink-0"
       viewBox="0 0 64 64"
@@ -15,7 +20,7 @@ export const Logo = (props: { isTextHidden?: boolean }) => (
       {/* Techo / toldo de la tienda */}
       <path
         d="M11 25 L32 12 L53 25"
-        stroke="#0f2a43"
+        stroke="currentColor"
         strokeWidth="4"
         strokeLinecap="round"
         strokeLinejoin="round"
@@ -23,7 +28,7 @@ export const Logo = (props: { isTextHidden?: boolean }) => (
       {/* Borde ondulado del toldo */}
       <path
         d="M13 25 q3.5 5 7 0 q3.5 5 7 0 q3.5 5 7 0 q3.5 5 7 0 q3.5 5 7 0"
-        stroke="#0f2a43"
+        stroke="currentColor"
         strokeWidth="3"
         strokeLinecap="round"
         fill="none"
@@ -31,7 +36,7 @@ export const Logo = (props: { isTextHidden?: boolean }) => (
       {/* Patas que forman la M */}
       <path
         d="M16 31 L16 51 M16 51 L25 37 L33 47"
-        stroke="#0f2a43"
+        stroke="currentColor"
         strokeWidth="4"
         strokeLinecap="round"
         strokeLinejoin="round"
@@ -46,7 +51,7 @@ export const Logo = (props: { isTextHidden?: boolean }) => (
       />
     </svg>
     {!props.isTextHidden && (
-      <span className="text-xl font-extrabold tracking-tight text-[#0f2a43]">
+      <span className="text-xl font-extrabold tracking-tight">
         MyMerchant
         <span className="text-[#14a98a]">
           {' '}
