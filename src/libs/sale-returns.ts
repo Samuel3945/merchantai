@@ -240,29 +240,46 @@ export async function applySaleReturn(
     .returning();
 
   for (const r of resolved) {
-    if (!r.restock) {
-      continue;
+    if (r.restock) {
+      // Customer changed their mind: the goods go back to sellable stock.
+      await tx
+        .update(productsSchema)
+        .set({ stock: sql`${productsSchema.stock} + ${r.qty}` })
+        .where(
+          and(
+            eq(productsSchema.id, r.productId),
+            eq(productsSchema.organizationId, organizationId),
+          ),
+        );
+      // Drizzle insert (not raw SQL) so organization_id — a NOT NULL column — is
+      // always written; the previous raw INSERT omitted it and broke restocks.
+      await tx.insert(stockMovementsSchema).values({
+        organizationId,
+        productId: r.productId,
+        productName: r.productName,
+        type: 'entry',
+        qty: r.qty,
+        reason: 'return_sale',
+        saleId: sale.id,
+        createdBy: actorName,
+      });
+    } else if (r.disposition === 'damaged') {
+      // Damaged return: the goods do NOT re-enter sellable stock. We log the
+      // loss in the ledger (type 'adjustment', no remaining_qty so FIFO ignores
+      // it and product.stock is untouched) so inventory history shows the unit
+      // left because it was damaged.
+      await tx.insert(stockMovementsSchema).values({
+        organizationId,
+        productId: r.productId,
+        productName: r.productName,
+        type: 'adjustment',
+        qty: r.qty,
+        reason: 'return_damaged',
+        saleId: sale.id,
+        createdBy: actorName,
+      });
     }
-    await tx
-      .update(productsSchema)
-      .set({ stock: sql`${productsSchema.stock} + ${r.qty}` })
-      .where(
-        and(
-          eq(productsSchema.id, r.productId),
-          eq(productsSchema.organizationId, organizationId),
-        ),
-      );
-    // Drizzle insert (not raw SQL) so organization_id — a NOT NULL column — is
-    // always written; the previous raw INSERT omitted it and broke restocks.
-    await tx.insert(stockMovementsSchema).values({
-      organizationId,
-      productId: r.productId,
-      productName: r.productName,
-      type: 'entry',
-      qty: r.qty,
-      reason: 'return_sale',
-      createdBy: actorName,
-    });
+    // warranty | discard: recorded on pos_return_items.disposition only.
   }
 
   if (!partial) {
