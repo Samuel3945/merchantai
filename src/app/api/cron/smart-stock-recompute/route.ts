@@ -1,8 +1,9 @@
 import type { NextResponse } from 'next/server';
 import { and, eq } from 'drizzle-orm';
+import { recomputeAndCacheCashThreshold } from '@/libs/cash-security-engine';
 import { runCron } from '@/libs/cron-runner';
 import { db } from '@/libs/DB';
-import { productsSchema } from '@/models/Schema';
+import { cashSessionsSchema, productsSchema } from '@/models/Schema';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -54,10 +55,28 @@ export async function GET(req: Request): Promise<NextResponse> {
       }
     }
 
+    // Cash-security thresholds: recompute per org that has cash history. Folded
+    // into this daily job so no parallel cron infra is introduced.
+    const cashOrgRows = await db
+      .selectDistinct({ organizationId: cashSessionsSchema.organizationId })
+      .from(cashSessionsSchema);
+
+    let cashThresholds = 0;
+    for (const { organizationId } of cashOrgRows) {
+      try {
+        await recomputeAndCacheCashThreshold(organizationId);
+        cashThresholds += 1;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        orgErrors.push(`cash:${organizationId}: ${message}`);
+      }
+    }
+
     return {
       processed: recomputed,
       orgs: orgRows.length,
       recomputed,
+      cashThresholds,
       orgErrors,
     };
   });

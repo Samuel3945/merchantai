@@ -1,5 +1,6 @@
 import { setRequestLocale } from 'next-intl/server';
 import {
+  getCashSecurityStatus,
   getCurrentCash,
   getFraudAlerts,
   getTodayCashKpis,
@@ -14,11 +15,12 @@ export default async function DashboardCashPage(props: {
   const { locale } = await props.params;
   setRequestLocale(locale);
 
-  const [current, sessions, alerts, kpis] = await Promise.all([
+  const [current, sessions, alerts, kpis, security] = await Promise.all([
     getCurrentCash(),
     listCashSessions(30),
     getFraudAlerts(14).catch(() => []),
     getTodayCashKpis(),
+    getCashSecurityStatus(),
   ]);
 
   return (
@@ -32,6 +34,7 @@ export default async function DashboardCashPage(props: {
         sessions={sessions}
         alerts={alerts}
         kpis={kpis}
+        security={security}
       />
     </>
   );

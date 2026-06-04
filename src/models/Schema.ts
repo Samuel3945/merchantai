@@ -318,6 +318,32 @@ export const suppliersRelations = relations(suppliersSchema, ({ many }) => ({
   movements: many(cashMovementsSchema),
 }));
 
+// ── Cash security threshold cache ──────────────────────────────────────────
+// One row per organization, UPSERTed by the daily cron (reuses the smart-stock
+// recompute job). Lets Caja paint the risk level without recomputing the
+// behavioural threshold on every page load. payload carries the explainable
+// breakdown (signals + policy snapshot + reasoning).
+export const cashSecurityThresholdCacheSchema = pgTable(
+  'cash_security_threshold_cache',
+  {
+    organizationId: text('organization_id').primaryKey(),
+    threshold: numeric('threshold', { precision: 14, scale: 2 }).notNull(),
+    avgDailyInflow: numeric('avg_daily_inflow', {
+      precision: 14,
+      scale: 2,
+    }).notNull(),
+    accumulatedP85: numeric('accumulated_p85', {
+      precision: 14,
+      scale: 2,
+    }).notNull(),
+    daysOperated: integer('days_operated').notNull(),
+    payload: jsonb('payload').notNull(),
+    computedAt: timestamp('computed_at', { mode: 'date' })
+      .defaultNow()
+      .notNull(),
+  },
+);
+
 export const posUserRoleEnum = pgEnum('pos_user_role', [
   'admin',
   'cashier',

@@ -2,6 +2,7 @@
 
 import type { ActionResult } from '@/libs/action-result';
 import type { CashBreakdown, CashMovement, CashMovementType, CashSession } from '@/libs/cash-helpers';
+import type { CashRiskLevel } from '@/libs/cash-security-policy';
 import { auth, currentUser } from '@clerk/nextjs/server';
 import { and, desc, eq, gte, lt, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
@@ -18,9 +19,15 @@ import {
   INCOME_MOVEMENT_TYPES,
   toMoney,
 } from '@/libs/cash-helpers';
+import { recomputeAndCacheCashThreshold } from '@/libs/cash-security-engine';
+import {
+  CASH_SECURITY_POLICY,
+  riskLevelForRatio,
+} from '@/libs/cash-security-policy';
 import { db } from '@/libs/DB';
 import {
   cashMovementsSchema,
+  cashSecurityThresholdCacheSchema,
   cashSessionsSchema,
   suppliersSchema,
 } from '@/models/Schema';
@@ -531,4 +538,93 @@ export async function getTodayCashKpis(): Promise<TodayCashKpis> {
     pagosProveedores: num(row.pagos_proveedores),
     gastosOperativos: num(row.gastos_operativos),
   };
+}
+
+export type CashSecurityStatus = {
+  /** `learning` while there isn't enough history to recommend a threshold. */
+  state: 'learning' | 'ready';
+  level: CashRiskLevel;
+  threshold: number;
+  currentCash: number;
+  ratio: number;
+  daysOperated: number;
+  reasoning: string;
+};
+
+// Reads the cached behavioural threshold (computing it on-demand the first time)
+// and compares it to the cash currently in the open drawer to derive the risk
+// level. See cash-security-policy / cash-security-engine for the rules.
+export async function getCashSecurityStatus(): Promise<CashSecurityStatus> {
+  const { orgId } = await requireOrg();
+
+  const session = await findOpenSession(db, orgId);
+  const currentCash = session
+    ? (await computeCashBreakdown(db, session)).expected
+    : 0;
+
+  async function readCache() {
+    const [row] = await db
+      .select()
+      .from(cashSecurityThresholdCacheSchema)
+      .where(eq(cashSecurityThresholdCacheSchema.organizationId, orgId))
+      .limit(1);
+    return row;
+  }
+
+  let cache = await readCache();
+  if (!cache) {
+    await recomputeAndCacheCashThreshold(orgId);
+    cache = await readCache();
+  }
+
+  const daysOperated = cache?.daysOperated ?? 0;
+  const threshold = Number.parseFloat(cache?.threshold ?? '0') || 0;
+  const reasoning
+    = (cache?.payload as { reasoning?: string } | null)?.reasoning ?? '';
+
+  if (daysOperated < CASH_SECURITY_POLICY.minOperatingDays || threshold <= 0) {
+    return {
+      state: 'learning',
+      level: 'normal',
+      threshold,
+      currentCash,
+      ratio: 0,
+      daysOperated,
+      reasoning,
+    };
+  }
+
+  const ratio = currentCash / threshold;
+  return {
+    state: 'ready',
+    level: riskLevelForRatio(ratio),
+    threshold,
+    currentCash,
+    ratio,
+    daysOperated,
+    reasoning,
+  };
+}
+
+export type WithdrawalDestino = 'caja_fuerte' | 'banco' | 'oficina' | 'otro';
+
+const DESTINO_LABEL: Record<WithdrawalDestino, string> = {
+  caja_fuerte: 'Caja fuerte',
+  banco: 'Banco',
+  oficina: 'Oficina',
+  otro: 'Otro',
+};
+
+// One-step security withdrawal for the "Retiro rápido" modal. Records a
+// `withdrawal` movement (cash out, not a P&L expense) reusing addCashMovement so
+// the open-session and amount validations stay in one place.
+export async function quickWithdraw(
+  amount: number | string,
+  destino: WithdrawalDestino,
+): Promise<ActionResult<CashMovement>> {
+  const label = DESTINO_LABEL[destino];
+  if (!label) {
+    return { ok: false, error: 'Destino inválido' };
+  }
+  return addCashMovement('withdrawal', amount, `Retiro de seguridad — ${label}`);
 }
