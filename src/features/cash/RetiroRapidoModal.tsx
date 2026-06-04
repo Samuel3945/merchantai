@@ -67,14 +67,7 @@ export function RetiroRapidoModal(props: {
         onClick={e => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="flex items-center gap-2 text-lg font-semibold">
-            <span className="
-              flex size-7 items-center justify-center rounded-full bg-warn/10
-              text-sm
-            "
-            >
-              💰
-            </span>
+          <h2 className="text-lg font-semibold">
             Retiro rápido
           </h2>
           <button

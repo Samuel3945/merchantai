@@ -41,23 +41,7 @@ export function CashSecurityAlert(props: {
 }) {
   const { security } = props;
 
-  if (security.state === 'learning') {
-    return (
-      <div className="rounded-xl border border-border bg-card p-4">
-        <div className="flex items-center gap-2 text-sm font-semibold">
-          <span aria-hidden="true">🧠</span>
-          Aprendiendo tu operación
-        </div>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Todavía no hay suficiente historial para recomendarte un umbral de
-          seguridad. Seguí operando unos días y el sistema aprenderá cuánto
-          efectivo es normal en tu caja.
-        </p>
-      </div>
-    );
-  }
-
-  if (security.level === 'normal') {
+  if (security.state === 'learning' || security.level === 'normal') {
     return null;
   }
 

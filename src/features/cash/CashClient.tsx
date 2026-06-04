@@ -346,7 +346,7 @@ export function CashClient(props: {
                   disabled={pending}
                   onClick={() => setRetiroOpen(true)}
                 >
-                  💰 Retiro rápido
+                  Retiro rápido
                 </Button>
               </div>
 
