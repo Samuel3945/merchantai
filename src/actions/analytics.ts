@@ -40,7 +40,9 @@ function rows(result: { rows?: unknown[] }): Record<string, unknown>[] {
 
 // ── Cash flow ────────────────────────────────────────────────────────────────
 // Real money in/out of the register. Income = sale + deposit; expenses =
-// expense + salary + inventory_purchase + withdrawal.
+// expense + salary + inventory_purchase. A security withdrawal (withdrawal)
+// only moves cash to a safe/bank, so it is NOT a financial expense and is
+// excluded here; same for `adjustment`, a reconciliation entry.
 
 export type CashFlowByType = { type: string; amount: number };
 export type CashFlowDay = { day: string; income: number; expenses: number };
@@ -54,7 +56,7 @@ export type CashFlowReport = {
 };
 
 const INCOME_TYPES = sql`('sale', 'deposit')`;
-const EXPENSE_TYPES = sql`('expense', 'salary', 'inventory_purchase', 'withdrawal')`;
+const EXPENSE_TYPES = sql`('expense', 'salary', 'inventory_purchase')`;
 
 export async function getCashFlow(
   start: string,

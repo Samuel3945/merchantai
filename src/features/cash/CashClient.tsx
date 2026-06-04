@@ -1,8 +1,10 @@
 'use client';
 
+import type { Direction } from './cash-ui';
+import type { MovementSubmit } from './MovementModal';
 import type { GetCurrentCashResult } from '@/actions/cash';
 import type { ActionResult } from '@/libs/action-result';
-import type { CashMovementType, CashSession } from '@/libs/cash-helpers';
+import type { CashSession } from '@/libs/cash-helpers';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState, useTransition } from 'react';
 import {
@@ -12,7 +14,10 @@ import {
 } from '@/actions/cash';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/utils/Helpers';
+import { ActivityFeed } from './ActivityFeed';
+import { cashInputCls, money, relativeTime } from './cash-ui';
 import { DenominationCounter } from './DenominationCounter';
+import { MovementModal } from './MovementModal';
 
 type FraudAlert = {
   kind: string;
@@ -20,17 +25,6 @@ type FraudAlert = {
   count: number;
   message: string;
 };
-
-const fmt = new Intl.NumberFormat('es-CO', {
-  style: 'currency',
-  currency: 'COP',
-  maximumFractionDigits: 0,
-});
-
-function money(value: number | string | null | undefined): string {
-  const n = typeof value === 'string' ? Number.parseFloat(value) : value ?? 0;
-  return fmt.format(Number.isFinite(n as number) ? (n as number) : 0);
-}
 
 const dateFmt = new Intl.DateTimeFormat('es-CO', {
   day: '2-digit',
@@ -41,53 +35,52 @@ const dateFmt = new Intl.DateTimeFormat('es-CO', {
 });
 
 function when(value: Date | string | null | undefined): string {
-  if (!value) {
-    return '—';
-  }
-  return dateFmt.format(new Date(value));
+  return value ? dateFmt.format(new Date(value)) : '—';
 }
-
-const inputCls
-  = 'flex h-9 w-full rounded-md border border-input bg-card px-3 py-1 text-sm outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring/30 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none [&[type=number]]:[-moz-appearance:textfield]';
-
-const MANUAL_MOVEMENT_TYPES: { value: CashMovementType; label: string; income: boolean }[] = [
-  { value: 'deposit', label: 'Depósito / ingreso', income: true },
-  { value: 'expense', label: 'Gasto', income: false },
-  { value: 'salary', label: 'Pago de nómina', income: false },
-  { value: 'inventory_purchase', label: 'Compra de inventario', income: false },
-  { value: 'withdrawal', label: 'Retiro', income: false },
-];
-
-const MOVEMENT_LABEL: Record<string, string> = {
-  sale: 'Venta',
-  deposit: 'Depósito',
-  expense: 'Gasto',
-  salary: 'Nómina',
-  inventory_purchase: 'Compra inventario',
-  withdrawal: 'Retiro',
-};
 
 function Card(props: { children: React.ReactNode; className?: string }) {
   return (
-    <div className={cn('rounded-xl border border-border bg-card p-5 shadow-xs', props.className)}>
+    <div
+      className={cn(
+        'rounded-xl border border-border bg-card shadow-xs',
+        props.className,
+      )}
+    >
       {props.children}
     </div>
   );
 }
 
-function Kpi(props: { label: string; value: string; tone?: 'default' | 'good' | 'bad' }) {
+function StatCard(props: {
+  label: string;
+  value: string;
+  tone?: 'in' | 'out';
+}) {
   return (
-    <div className="rounded-lg border border-border bg-card p-4">
-      <div className="text-xs font-medium text-muted-foreground">{props.label}</div>
+    <Card className="p-4">
+      <div className="text-xs font-medium text-muted-foreground">
+        {props.label}
+      </div>
       <div
         className={cn(
-          `mt-2 font-display text-3xl font-medium tracking-tight tabular-nums`,
-          props.tone === 'good' && 'text-success',
-          props.tone === 'bad' && 'text-destructive',
+          'mt-1.5 font-display text-xl font-medium tracking-tight tabular-nums',
+          props.tone === 'in' && 'text-success',
         )}
       >
         {props.value}
       </div>
+    </Card>
+  );
+}
+
+function BreakdownRow(props: { label: string; value: string; sign?: string }) {
+  return (
+    <div className="flex items-center justify-between text-sm">
+      <span className="text-muted-foreground">{props.label}</span>
+      <span className="font-medium tabular-nums">
+        {props.sign}
+        {props.value}
+      </span>
     </div>
   );
 }
@@ -101,20 +94,13 @@ export function CashClient(props: {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
-  // open form
   const [opening, setOpening] = useState('');
-  const [openNotes, setOpenNotes] = useState('');
-
-  // movement form
-  const [movType, setMovType] = useState<CashMovementType>('expense');
-  const [movAmount, setMovAmount] = useState('');
-  const [movReason, setMovReason] = useState('');
-
-  // close form
+  const [modal, setModal] = useState<Direction | null>(null);
   const [counted, setCounted] = useState('');
-  const [closeNotes, setCloseNotes] = useState('');
+  const [closeNote, setCloseNote] = useState('');
 
-  const { session, movements, expected } = props.current;
+  const { session, movements, breakdown } = props.current;
+  const expected = breakdown.expected;
 
   const countedNum = Number.parseFloat(counted);
   const previewDiff = useMemo(() => {
@@ -124,10 +110,7 @@ export function CashClient(props: {
     return Number.parseFloat((countedNum - expected).toFixed(2));
   }, [countedNum, expected]);
 
-  function run(
-    fn: () => Promise<ActionResult<unknown>>,
-    reset?: () => void,
-  ) {
+  function run(fn: () => Promise<ActionResult<unknown>>, onSuccess?: () => void) {
     setError(null);
     startTransition(async () => {
       try {
@@ -136,15 +119,27 @@ export function CashClient(props: {
           setError(result.error);
           return;
         }
-        reset?.();
+        onSuccess?.();
         router.refresh();
       } catch {
-        // Only unexpected failures reach here now (network, real 500s);
-        // expected validation comes back as { ok: false } above.
         setError('Ocurrió un error inesperado. Volvé a intentar.');
       }
     });
   }
+
+  function openModal(direction: Direction) {
+    setError(null);
+    setModal(direction);
+  }
+
+  function submitMovement(p: MovementSubmit) {
+    run(
+      () => addCashMovement(p.type, p.amount, p.reason, { category: p.category }),
+      () => setModal(null),
+    );
+  }
+
+  const closedSessions = props.sessions.filter(s => s.status === 'closed');
 
   return (
     <div className="space-y-6">
@@ -167,7 +162,7 @@ export function CashClient(props: {
         </div>
       )}
 
-      {error && (
+      {error && !modal && (
         <div className="
           rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3
           text-sm text-destructive
@@ -179,19 +174,20 @@ export function CashClient(props: {
 
       {!session
         ? (
-            <Card className="max-w-md">
-              <div className="text-lg font-semibold">Caja cerrada</div>
+            <Card className="max-w-md p-5">
+              <div className="text-lg font-semibold">Abrir caja</div>
               <p className="mt-1 text-sm text-muted-foreground">
-                Abre la caja con el monto base (efectivo inicial) para empezar a operar.
+                Ingresá el efectivo con el que arrancás la jornada. No se arrastra
+                el dinero del día anterior: vos decidís cuánto dejás disponible.
               </p>
               <div className="mt-4 space-y-3">
                 <div>
-                  <label className="mb-1 block text-sm font-medium" htmlFor="opening">
-                    Monto base
+                  <label className="mb-1.5 block text-sm font-medium" htmlFor="opening">
+                    Base inicial
                   </label>
                   <input
                     id="opening"
-                    className={inputCls}
+                    className={cashInputCls}
                     type="number"
                     inputMode="decimal"
                     min="0"
@@ -204,26 +200,14 @@ export function CashClient(props: {
                     onTotal={t => setOpening(t > 0 ? String(t) : '')}
                   />
                 </div>
-                <div>
-                  <label className="mb-1 block text-sm font-medium" htmlFor="openNotes">
-                    Notas (opcional)
-                  </label>
-                  <input
-                    id="openNotes"
-                    className={inputCls}
-                    value={openNotes}
-                    onChange={e => setOpenNotes(e.target.value)}
-                  />
-                </div>
                 <Button
+                  size="lg"
+                  className="w-full"
                   disabled={pending || opening === ''}
                   onClick={() =>
                     run(
-                      () => openCashSession(opening, openNotes || null),
-                      () => {
-                        setOpening('');
-                        setOpenNotes('');
-                      },
+                      () => openCashSession(opening, null),
+                      () => setOpening(''),
                     )}
                 >
                   Abrir caja
@@ -233,85 +217,135 @@ export function CashClient(props: {
           )
         : (
             <>
+              {/* Hero — la única pregunta que importa */}
+              <Card className="p-6">
+                <div className="
+                  flex flex-col gap-6
+                  lg:flex-row lg:items-center lg:justify-between
+                "
+                >
+                  <div>
+                    <div className="text-sm font-medium text-muted-foreground">
+                      Efectivo esperado en caja
+                    </div>
+                    <div className="
+                      mt-1 font-display text-4xl font-semibold tracking-tight
+                      tabular-nums
+                      sm:text-5xl
+                    "
+                    >
+                      {money(expected)}
+                    </div>
+                    <div className="mt-2 text-xs text-muted-foreground">
+                      Abierta por
+                      {' '}
+                      <span className="font-medium text-foreground">
+                        {session.openedBy}
+                      </span>
+                      {' · '}
+                      {relativeTime(session.openedAt)}
+                    </div>
+                  </div>
+
+                  <div className="
+                    w-full max-w-xs space-y-2 rounded-lg border border-border
+                    bg-background p-4
+                  "
+                  >
+                    <BreakdownRow label="Base inicial" value={money(breakdown.opening)} />
+                    <BreakdownRow label="Ventas efectivo" value={money(breakdown.cashSales)} sign="+" />
+                    <BreakdownRow label="Entradas" value={money(breakdown.entradas)} sign="+" />
+                    <BreakdownRow label="Salidas" value={money(breakdown.salidas)} sign="−" />
+                  </div>
+                </div>
+              </Card>
+
+              {/* Acciones rápidas */}
               <div className="
-                grid gap-4
-                sm:grid-cols-3
+                grid grid-cols-1 gap-3
+                sm:grid-cols-2
               "
               >
-                <Kpi label="Monto base" value={money(session.openingAmount)} />
-                <Kpi label="Esperado en caja" value={money(expected)} tone="good" />
-                <Kpi label="Movimientos" value={String(movements.length)} />
+                <Button
+                  size="lg"
+                  className="h-14 text-base"
+                  disabled={pending}
+                  onClick={() => openModal('in')}
+                >
+                  + Entrada
+                </Button>
+                <Button
+                  size="lg"
+                  variant="outline"
+                  className="h-14 text-base"
+                  disabled={pending}
+                  onClick={() => openModal('out')}
+                >
+                  − Salida
+                </Button>
               </div>
 
-              <div className="text-sm text-muted-foreground">
-                Abierta por
-                {' '}
-                <span className="font-medium text-foreground">{session.openedBy}</span>
-                {' · '}
-                {when(session.openedAt)}
+              {/* Tarjetas secundarias */}
+              <div className="
+                grid grid-cols-2 gap-3
+                lg:grid-cols-4
+              "
+              >
+                <StatCard label="Ventas efectivo" value={money(breakdown.cashSales)} tone="in" />
+                <StatCard label="Entradas" value={money(breakdown.entradas)} tone="in" />
+                <StatCard label="Salidas" value={money(breakdown.salidas)} tone="out" />
+                <StatCard label="Movimientos" value={String(breakdown.movementCount)} />
               </div>
 
               <div className="
                 grid gap-6
-                lg:grid-cols-2
+                lg:grid-cols-5
               "
               >
-                {/* Movimiento */}
-                <Card>
-                  <div className="mb-3 text-sm font-semibold">Registrar movimiento</div>
-                  <div className="space-y-3">
-                    <select
-                      className={inputCls}
-                      value={movType}
-                      onChange={e => setMovType(e.target.value as CashMovementType)}
-                    >
-                      {MANUAL_MOVEMENT_TYPES.map(t => (
-                        <option key={t.value} value={t.value}>{t.label}</option>
-                      ))}
-                    </select>
-                    <input
-                      className={inputCls}
-                      type="number"
-                      inputMode="decimal"
-                      min="0"
-                      placeholder="Monto"
-                      value={movAmount}
-                      onChange={e => setMovAmount(e.target.value)}
-                    />
-                    <input
-                      className={inputCls}
-                      placeholder="Motivo"
-                      value={movReason}
-                      onChange={e => setMovReason(e.target.value)}
-                    />
-                    <Button
-                      variant="outline"
-                      disabled={pending || movAmount === '' || movReason.trim() === ''}
-                      onClick={() =>
-                        run(
-                          () => addCashMovement(movType, movAmount, movReason),
-                          () => {
-                            setMovAmount('');
-                            setMovReason('');
-                          },
-                        )}
-                    >
-                      Agregar movimiento
-                    </Button>
+                {/* Actividad */}
+                <Card className="
+                  p-0
+                  lg:col-span-3
+                "
+                >
+                  <div className="
+                    border-b border-border px-5 py-3 text-sm font-semibold
+                  "
+                  >
+                    Actividad reciente
                   </div>
+                  <ActivityFeed movements={movements} />
                 </Card>
 
-                {/* Cierre / arqueo */}
-                <Card>
-                  <div className="mb-3 text-sm font-semibold">Cerrar caja (arqueo)</div>
-                  <div className="space-y-3">
+                {/* Cierre */}
+                <Card className="
+                  border-primary/30 bg-primary/5 p-5
+                  lg:col-span-2
+                "
+                >
+                  <div className="text-sm font-semibold">Cerrar caja</div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Contá el efectivo físico y compará con lo esperado.
+                  </p>
+
+                  <div className="mt-4 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-muted-foreground">Esperado</span>
+                      <span className="
+                        font-display text-lg font-medium tabular-nums
+                      "
+                      >
+                        {money(expected)}
+                      </span>
+                    </div>
+
                     <div>
-                      <label className="mb-1 block text-sm font-medium" htmlFor="counted">
+                      <label className="mb-1.5 block text-sm font-medium" htmlFor="counted">
                         Efectivo contado
                       </label>
                       <input
                         id="counted"
-                        className={inputCls}
+                        className={cashInputCls}
                         type="number"
                         inputMode="decimal"
                         min="0"
@@ -324,37 +358,48 @@ export function CashClient(props: {
                         onTotal={t => setCounted(t > 0 ? String(t) : '')}
                       />
                     </div>
+
                     {previewDiff !== null && (
-                      <div className="text-sm">
-                        Diferencia vs. esperado:
-                        {' '}
+                      <div className="
+                        flex items-center justify-between rounded-lg border
+                        border-border bg-background px-3 py-2
+                      "
+                      >
+                        <span className="text-sm text-muted-foreground">Diferencia</span>
                         <span
                           className={cn(
-                            'font-semibold tabular-nums',
+                            'font-display text-lg font-semibold tabular-nums',
                             previewDiff === 0 && 'text-success',
                             previewDiff > 0 && 'text-success',
                             previewDiff < 0 && 'text-destructive',
                           )}
                         >
+                          {previewDiff > 0 ? '+' : ''}
                           {money(previewDiff)}
                         </span>
                       </div>
                     )}
-                    <input
-                      className={inputCls}
-                      placeholder="Notas de cierre (opcional)"
-                      value={closeNotes}
-                      onChange={e => setCloseNotes(e.target.value)}
-                    />
+
+                    {previewDiff !== null && previewDiff !== 0 && (
+                      <input
+                        className={cashInputCls}
+                        placeholder="Nota: explica la diferencia (opcional)"
+                        value={closeNote}
+                        onChange={e => setCloseNote(e.target.value)}
+                      />
+                    )}
+
                     <Button
+                      size="lg"
                       variant="destructive"
+                      className="w-full"
                       disabled={pending || counted === ''}
                       onClick={() =>
                         run(
-                          () => closeCashSession(counted, closeNotes || null),
+                          () => closeCashSession(counted, closeNote || null),
                           () => {
                             setCounted('');
-                            setCloseNotes('');
+                            setCloseNote('');
                           },
                         )}
                     >
@@ -363,73 +408,15 @@ export function CashClient(props: {
                   </div>
                 </Card>
               </div>
-
-              {/* Movimientos de la sesión */}
-              <Card className="p-0">
-                <div className="
-                  border-b border-border px-5 py-3 text-sm font-semibold
-                "
-                >
-                  Movimientos de la caja actual
-                </div>
-                {movements.length === 0
-                  ? (
-                      <div className="
-                        px-5 py-8 text-center text-sm text-muted-foreground
-                      "
-                      >
-                        Sin movimientos todavía.
-                      </div>
-                    )
-                  : (
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                          <thead>
-                            <tr className="
-                              border-b border-border text-left text-xs
-                              text-muted-foreground
-                            "
-                            >
-                              <th className="px-5 py-2 font-medium">Tipo</th>
-                              <th className="px-5 py-2 font-medium">Motivo</th>
-                              <th className="px-5 py-2 text-right font-medium">Monto</th>
-                              <th className="px-5 py-2 font-medium">Cuándo</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {movements.map(m => (
-                              <tr
-                                key={m.id}
-                                className="
-                                  border-b border-border
-                                  last:border-0
-                                "
-                              >
-                                <td className="px-5 py-2">{MOVEMENT_LABEL[m.type] ?? m.type}</td>
-                                <td className="px-5 py-2 text-muted-foreground">{m.reason}</td>
-                                <td className="
-                                  px-5 py-2 text-right tabular-nums
-                                "
-                                >
-                                  {money(m.amount)}
-                                </td>
-                                <td className="px-5 py-2 text-muted-foreground">{when(m.createdAt)}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-              </Card>
             </>
           )}
 
-      {/* Historial de cajas */}
+      {/* Cierres recientes */}
       <Card className="p-0">
         <div className="border-b border-border px-5 py-3 text-sm font-semibold">
           Cierres recientes
         </div>
-        {props.sessions.filter(s => s.status === 'closed').length === 0
+        {closedSessions.length === 0
           ? (
               <div className="
                 px-5 py-8 text-center text-sm text-muted-foreground
@@ -439,54 +426,51 @@ export function CashClient(props: {
               </div>
             )
           : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="
-                      border-b border-border text-left text-xs
-                      text-muted-foreground
-                    "
+              <ul className="divide-y divide-border">
+                {closedSessions.map((s) => {
+                  const diff = Number.parseFloat(s.difference ?? '0') || 0;
+                  return (
+                    <li
+                      key={s.id}
+                      className="
+                        flex items-center justify-between gap-3 px-5 py-3
+                      "
                     >
-                      <th className="px-5 py-2 font-medium">Abierta</th>
-                      <th className="px-5 py-2 font-medium">Cerrada</th>
-                      <th className="px-5 py-2 text-right font-medium">Esperado</th>
-                      <th className="px-5 py-2 text-right font-medium">Contado</th>
-                      <th className="px-5 py-2 text-right font-medium">Diferencia</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {props.sessions
-                      .filter(s => s.status === 'closed')
-                      .map((s) => {
-                        const diff = Number.parseFloat(s.difference ?? '0') || 0;
-                        return (
-                          <tr
-                            key={s.id}
-                            className="
-                              border-b border-border
-                              last:border-0
-                            "
-                          >
-                            <td className="px-5 py-2 text-muted-foreground">{when(s.openedAt)}</td>
-                            <td className="px-5 py-2 text-muted-foreground">{when(s.closedAt)}</td>
-                            <td className="px-5 py-2 text-right tabular-nums">{money(s.expectedAmount)}</td>
-                            <td className="px-5 py-2 text-right tabular-nums">{money(s.countedAmount)}</td>
-                            <td
-                              className={cn(
-                                `px-5 py-2 text-right font-medium tabular-nums`,
-                                diff < 0 ? 'text-destructive' : 'text-success',
-                              )}
-                            >
-                              {money(diff)}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                  </tbody>
-                </table>
-              </div>
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium">{when(s.closedAt)}</div>
+                        <div className="text-xs text-muted-foreground">
+                          Contado
+                          {' '}
+                          {money(s.countedAmount)}
+                          {' · esperado '}
+                          {money(s.expectedAmount)}
+                        </div>
+                      </div>
+                      <span
+                        className={cn(
+                          'shrink-0 text-sm font-semibold tabular-nums',
+                          diff < 0 ? 'text-destructive' : 'text-success',
+                        )}
+                      >
+                        {diff > 0 ? '+' : ''}
+                        {money(diff)}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
             )}
       </Card>
+
+      {modal && (
+        <MovementModal
+          direction={modal}
+          pending={pending}
+          error={error}
+          onClose={() => setModal(null)}
+          onSubmit={submitMovement}
+        />
+      )}
     </div>
   );
 }

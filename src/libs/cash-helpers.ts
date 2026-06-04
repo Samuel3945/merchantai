@@ -15,7 +15,23 @@ export type CashMovementType
 
 export const CASH_PAYMENT_METHODS = ['efectivo', 'cash'];
 
-export const INCOME_MOVEMENT_TYPES: CashMovementType[] = ['sale', 'deposit'];
+// Cash coming INTO the drawer. `adjustment` is a manual reconciliation entry
+// that raises expected cash — it existed in the enum but was counted nowhere
+// before, that gap is fixed here.
+export const INCOME_MOVEMENT_TYPES: CashMovementType[] = [
+  'sale',
+  'deposit',
+  'adjustment',
+];
+
+// Cash leaving the drawer. This DOES include `withdrawal`: a security withdrawal
+// still removes physical cash from the register, so it belongs in the Caja
+// "expected cash" calculation.
+//
+// Finanzas (analytics.ts, dashboard.ts) deliberately uses a NARROWER set —
+// expense + salary + inventory_purchase — because a security withdrawal only
+// relocates cash to a safe/bank and is not a P&L expense, and `adjustment` is a
+// reconciliation entry, not a cost.
 export const EXPENSE_MOVEMENT_TYPES: CashMovementType[] = [
   'expense',
   'salary',
@@ -51,22 +67,65 @@ export async function findOpenSession(
   return session;
 }
 
-export async function computeExpectedAmount(
+export type CashBreakdown = {
+  /** Base inicial — opening float entered when the session was opened. */
+  opening: number;
+  /** Ventas en efectivo de la sesión (type = sale). */
+  cashSales: number;
+  /** Entradas manuales: ingresos y ajustes (deposit + adjustment). */
+  entradas: number;
+  /** Salidas: todo el efectivo que salió del cajón (gastos + retiros). */
+  salidas: number;
+  /** Efectivo esperado = opening + cashSales + entradas - salidas. */
+  expected: number;
+  /** Cantidad de movimientos de la sesión. */
+  movementCount: number;
+};
+
+/**
+ * Single source of truth for the Caja numbers. Answers the only question the
+ * Caja screen cares about — how much cash should physically be in the register
+ * right now — broken down so the header can show base / ventas / entradas /
+ * salidas without recomputing on the client.
+ */
+export async function computeCashBreakdown(
   executor: Executor,
   session: Pick<CashSession, 'id' | 'openingAmount'>,
-): Promise<number> {
+): Promise<CashBreakdown> {
   const [row] = await executor
     .select({
-      income: sql<string>`COALESCE(SUM(CASE WHEN ${cashMovementsSchema.type} IN ('sale','deposit') THEN ${cashMovementsSchema.amount} ELSE 0 END), 0)::text`,
-      expense: sql<string>`COALESCE(SUM(CASE WHEN ${cashMovementsSchema.type} IN ('expense','salary','inventory_purchase','withdrawal') THEN ${cashMovementsSchema.amount} ELSE 0 END), 0)::text`,
+      cashSales: sql<string>`COALESCE(SUM(${cashMovementsSchema.amount}) FILTER (WHERE ${cashMovementsSchema.type} = 'sale'), 0)::text`,
+      entradas: sql<string>`COALESCE(SUM(${cashMovementsSchema.amount}) FILTER (WHERE ${cashMovementsSchema.type} IN ('deposit','adjustment')), 0)::text`,
+      salidas: sql<string>`COALESCE(SUM(${cashMovementsSchema.amount}) FILTER (WHERE ${cashMovementsSchema.type} IN ('expense','salary','inventory_purchase','withdrawal')), 0)::text`,
+      movementCount: sql<number>`COUNT(*)::int`,
     })
     .from(cashMovementsSchema)
     .where(eq(cashMovementsSchema.sessionId, session.id));
 
   const opening = Number.parseFloat(session.openingAmount) || 0;
-  const income = Number.parseFloat(row?.income ?? '0') || 0;
-  const expense = Number.parseFloat(row?.expense ?? '0') || 0;
-  return Number.parseFloat((opening + income - expense).toFixed(2));
+  const cashSales = Number.parseFloat(row?.cashSales ?? '0') || 0;
+  const entradas = Number.parseFloat(row?.entradas ?? '0') || 0;
+  const salidas = Number.parseFloat(row?.salidas ?? '0') || 0;
+  const expected = Number.parseFloat(
+    (opening + cashSales + entradas - salidas).toFixed(2),
+  );
+
+  return {
+    opening,
+    cashSales,
+    entradas,
+    salidas,
+    expected,
+    movementCount: Number(row?.movementCount ?? 0),
+  };
+}
+
+export async function computeExpectedAmount(
+  executor: Executor,
+  session: Pick<CashSession, 'id' | 'openingAmount'>,
+): Promise<number> {
+  const { expected } = await computeCashBreakdown(executor, session);
+  return expected;
 }
 
 export async function recordCashMovement(

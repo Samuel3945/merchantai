@@ -191,8 +191,10 @@ async function netRevenue(
 }
 
 // Real cash-drawer flow: money in (sale + deposit) vs money out
-// (expense, salary, inventory_purchase, withdrawal). This is where the owner
-// finally sees that selling a lot ≠ keeping a lot.
+// (expense, salary, inventory_purchase). A security withdrawal (withdrawal)
+// only relocates cash to a safe/bank — it is not a financial expense — so it is
+// excluded here; `adjustment` is a reconciliation entry and is excluded too.
+// This is where the owner finally sees that selling a lot ≠ keeping a lot.
 async function cashFlowStats(
   orgId: string,
   start: string,
@@ -201,7 +203,7 @@ async function cashFlowStats(
   const result = await db.execute(sql`
     SELECT
       COALESCE(SUM(amount) FILTER (WHERE type IN ('sale', 'deposit')), 0)::float8 AS income,
-      COALESCE(SUM(amount) FILTER (WHERE type IN ('expense', 'salary', 'inventory_purchase', 'withdrawal')), 0)::float8 AS expenses
+      COALESCE(SUM(amount) FILTER (WHERE type IN ('expense', 'salary', 'inventory_purchase')), 0)::float8 AS expenses
     FROM cash_movements
     WHERE organization_id = ${orgId}
       AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date

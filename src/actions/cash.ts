@@ -1,7 +1,7 @@
 'use server';
 
 import type { ActionResult } from '@/libs/action-result';
-import type { CashMovement, CashMovementType, CashSession } from '@/libs/cash-helpers';
+import type { CashBreakdown, CashMovement, CashMovementType, CashSession } from '@/libs/cash-helpers';
 import { auth, currentUser } from '@clerk/nextjs/server';
 import { and, desc, eq, gte, lt, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
@@ -11,6 +11,7 @@ import {
 } from '@/libs/action-result';
 import { logAction } from '@/libs/audit-log';
 import {
+  computeCashBreakdown,
   computeExpectedAmount,
   EXPENSE_MOVEMENT_TYPES,
   findOpenSession,
@@ -209,7 +210,7 @@ export async function addCashMovement(
   type: CashMovementType,
   amount: number | string,
   reason: string,
-  options?: { authorizedBy?: string | null },
+  options?: { authorizedBy?: string | null; category?: string | null },
 ): Promise<ActionResult<CashMovement>> {
   const { userId, orgId } = await requireOrg();
   const actor = await getActorName(userId);
@@ -257,6 +258,7 @@ export async function addCashMovement(
           type,
           amount: amt,
           reason: reasonTrimmed,
+          category: options?.category?.trim() || null,
           createdBy: actor,
           authorizedBy: options?.authorizedBy ?? null,
         })
@@ -278,10 +280,20 @@ export async function addCashMovement(
   return { ok: true, data: movement };
 }
 
+const EMPTY_BREAKDOWN: CashBreakdown = {
+  opening: 0,
+  cashSales: 0,
+  entradas: 0,
+  salidas: 0,
+  expected: 0,
+  movementCount: 0,
+};
+
 export type GetCurrentCashResult = {
   session: CashSession | null;
   movements: CashMovement[];
   expected: number;
+  breakdown: CashBreakdown;
 };
 
 export async function getCurrentCash(): Promise<GetCurrentCashResult> {
@@ -289,19 +301,29 @@ export async function getCurrentCash(): Promise<GetCurrentCashResult> {
 
   const session = await findOpenSession(db, orgId);
   if (!session) {
-    return { session: null, movements: [], expected: 0 };
+    return {
+      session: null,
+      movements: [],
+      expected: 0,
+      breakdown: EMPTY_BREAKDOWN,
+    };
   }
 
-  const [movements, expected] = await Promise.all([
+  const [movements, breakdown] = await Promise.all([
     db
       .select()
       .from(cashMovementsSchema)
       .where(eq(cashMovementsSchema.sessionId, session.id))
       .orderBy(desc(cashMovementsSchema.createdAt)),
-    computeExpectedAmount(db, session),
+    computeCashBreakdown(db, session),
   ]);
 
-  return { session, movements, expected };
+  return {
+    session,
+    movements,
+    expected: breakdown.expected,
+    breakdown,
+  };
 }
 
 export async function listCashSessions(limit = 30): Promise<CashSession[]> {

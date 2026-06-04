@@ -36,6 +36,13 @@
       "when": 1780433238269,
       "tag": "0004_tricky_deathbird",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1780575144520,
+      "tag": "0005_exotic_daimon_hellstrom",
+      "breakpoints": true
     }
   ]
 }

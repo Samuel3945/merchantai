@@ -224,6 +224,9 @@ export const cashMovementsSchema = pgTable('cash_movements', {
   type: cashMovementTypeEnum('type').notNull(),
   amount: numeric('amount', { precision: 12, scale: 2 }).notNull(),
   reason: text('reason').notNull(),
+  // Optional expense category for "pago de gasto" outflows (nomina, servicios,
+  // arriendo, transporte, marketing, otros). Null for every other movement.
+  category: text('category'),
   authorizedBy: text('authorized_by'),
   createdBy: text('created_by').notNull(),
   saleId: uuid('sale_id').references(() => salesSchema.id, {
