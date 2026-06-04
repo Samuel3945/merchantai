@@ -32,25 +32,29 @@ ARG NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_ZmluZS1yYWNjb29uLTcuY2xlcmsuYWNjb3
 ARG NEXT_PUBLIC_APP_URL
 ARG NEXT_PUBLIC_LOGGING_LEVEL=info
 
-# Server Actions encryption key. When unset, Next.js regenerates a random key on
-# every build, which rotates every Server Action ID per deploy and breaks any
-# already-open browser tab ("Failed to find Server Action"). Pinning a stable key
-# keeps action IDs consistent across deploys for unchanged actions. It must be a
-# base64-encoded AES key (16/24/32 bytes) and present at build time (it is embedded
-# in the build output). Override with --build-arg for rotation.
-ARG NEXT_SERVER_ACTIONS_ENCRYPTION_KEY=YhpHdhNUpnXwlS6N8zxuNLO2NDFCTczJNUHXypDTT2Q=
-
 ENV NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY} \
     NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL} \
     NEXT_PUBLIC_LOGGING_LEVEL=${NEXT_PUBLIC_LOGGING_LEVEL} \
-    NEXT_SERVER_ACTIONS_ENCRYPTION_KEY=${NEXT_SERVER_ACTIONS_ENCRYPTION_KEY} \
     NEXT_PUBLIC_SENTRY_DISABLED=true \
     SKIP_ENV_VALIDATION=true \
     NEXT_TELEMETRY_DISABLED=1 \
     NODE_ENV=production
 
+# Server Actions encryption key. When unset, Next.js regenerates a random key on
+# every build, which rotates every Server Action ID per deploy and breaks any
+# already-open browser tab ("Failed to find Server Action"). Pinning a stable key
+# keeps action IDs consistent across deploys for unchanged actions; it must be a
+# base64-encoded AES key (16/24/32 bytes) and is embedded into the build output.
+#
+# Passed as a BuildKit secret — never an ARG/ENV layer — so it doesn't trip
+# Docker's SecretsUsedInArgOrEnv check. Falls back to a committed stable default
+# for platforms (EasyPanel) that don't forward build secrets. Rotate in prod with:
+#   docker build --secret id=sa_key,env=NEXT_SERVER_ACTIONS_ENCRYPTION_KEY .
+#
 # Build the app only (migrations run at container startup, not at build time).
-RUN npm run build:next
+RUN --mount=type=secret,id=sa_key,env=NEXT_SERVER_ACTIONS_ENCRYPTION_KEY \
+    NEXT_SERVER_ACTIONS_ENCRYPTION_KEY="${NEXT_SERVER_ACTIONS_ENCRYPTION_KEY:-YhpHdhNUpnXwlS6N8zxuNLO2NDFCTczJNUHXypDTT2Q=}" \
+    npm run build:next
 
 ##########
 # 3) runner: minimal production image
