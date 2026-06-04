@@ -50,6 +50,13 @@
       "when": 1780597304560,
       "tag": "0006_loving_miek",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1780600102550,
+      "tag": "0007_white_medusa",
+      "breakpoints": true
     }
   ]
 }

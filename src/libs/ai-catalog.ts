@@ -16,7 +16,7 @@ Available tables (all scoped by organization_id — always filter with WHERE org
 
 6. cash_sessions (id uuid PK, organization_id, opened_at, opened_by, opening_amount numeric, closed_at, closed_by, expected_amount, counted_amount, difference, status enum(open|closed))
 
-7. cash_movements (id uuid PK, session_id FK→cash_sessions, organization_id, type enum(sale|deposit|expense|salary|inventory_purchase|withdrawal|adjustment), amount numeric, reason, created_by, sale_id, created_at)
+7. cash_movements (id uuid PK, session_id FK→cash_sessions, organization_id, type enum(sale|deposit|expense|salary|inventory_purchase|withdrawal|adjustment|advance), amount numeric, reason, created_by, sale_id, created_at)
 
 8. stock_movements (id uuid PK, organization_id, product_id, product_name, type enum(entry|exit|adjustment), qty int, remaining_qty int, unit_cost numeric, expires_at date, reason, created_at)
 

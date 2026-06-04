@@ -11,11 +11,21 @@ import type { CashMovement, CashMovementType } from '@/libs/cash-helpers';
 export type Direction = 'in' | 'out';
 
 /** Motivos shown when registering an Entrada (cash in). */
-export type EntryMotivo = 'ajuste' | 'otro';
+export type EntryMotivo
+  = | 'fondo_caja'
+    | 'reposicion_caja_chica'
+    | 'correccion_error'
+    | 'aporte_capital'
+    | 'otro';
 
 /** Motivos shown when registering a Salida (cash out). */
 export type ExitMotivo
-  = 'retiro_seguridad' | 'pago_gasto' | 'pago_proveedor' | 'otro';
+  = | 'retiro_seguridad'
+    | 'pago_proveedor'
+    | 'gasto_menor'
+    | 'devolucion_cliente'
+    | 'vale_empleado'
+    | 'otro';
 
 /** Expense categories for "Pago de gasto" outflows. */
 export type ExpenseCategory
@@ -27,14 +37,19 @@ export type ExpenseCategory
     | 'otros';
 
 export const ENTRY_MOTIVOS: { value: EntryMotivo; label: string }[] = [
-  { value: 'ajuste', label: 'Ajuste' },
+  { value: 'fondo_caja', label: 'Fondo de caja' },
+  { value: 'reposicion_caja_chica', label: 'Reposición de caja chica' },
+  { value: 'correccion_error', label: 'Corrección de error' },
+  { value: 'aporte_capital', label: 'Aporte de capital' },
   { value: 'otro', label: 'Otro' },
 ];
 
 export const EXIT_MOTIVOS: { value: ExitMotivo; label: string }[] = [
   { value: 'retiro_seguridad', label: 'Retiro de seguridad' },
-  { value: 'pago_gasto', label: 'Pago de gasto' },
   { value: 'pago_proveedor', label: 'Pago a proveedor' },
+  { value: 'gasto_menor', label: 'Gasto menor' },
+  { value: 'devolucion_cliente', label: 'Devolución a cliente' },
+  { value: 'vale_empleado', label: 'Vale de empleado' },
   { value: 'otro', label: 'Otro' },
 ];
 
@@ -64,27 +79,24 @@ export function categoryLabel(value: string | null | undefined): string | null {
 // are real expenses. See cash-helpers for the income/expense groupings.
 
 export function entryTypeFor(motivo: EntryMotivo): CashMovementType {
-  return motivo === 'ajuste' ? 'adjustment' : 'deposit';
+  // Corrección de error is a reconciliation entry; every other entrada (fondo de
+  // caja, reposición, aporte de capital, otro) is real cash coming in -> deposit.
+  return motivo === 'correccion_error' ? 'adjustment' : 'deposit';
 }
 
-export function exitTypeFor(
-  motivo: ExitMotivo,
-  category: ExpenseCategory | null,
-): CashMovementType {
+export function exitTypeFor(motivo: ExitMotivo): CashMovementType {
   if (motivo === 'retiro_seguridad') {
+    // Relocates cash to a safe/bank — a salida, but NOT a P&L expense.
     return 'withdrawal';
   }
-  if (motivo === 'pago_gasto') {
-    return category === 'nomina' ? 'salary' : 'expense';
+  if (motivo === 'vale_empleado') {
+    // Employee advance: cash out + a receivable against future salary, not an
+    // expense yet. Its own type so reports can isolate "vales empleados".
+    return 'advance';
   }
-  // Pago a proveedor is an operating expense (gasto operativo). The supplier link
-  // lives on cash_movements.supplier_id, so reports can isolate supplier payments
-  // by that FK — no separate financial record, single source of truth.
-  if (motivo === 'pago_proveedor') {
-    return 'expense';
-  }
-  // "Otro" salida — money left the drawer for an unspecified reason; treat it
-  // as a generic expense (the dedicated non-expense case is retiro de seguridad).
+  // Pago a proveedor, gasto menor, devolución a cliente y "otro" son gasto
+  // operativo (expense). El proveedor se distingue por cash_movements.supplier_id,
+  // no por una tabla aparte — una sola fuente de verdad.
   return 'expense';
 }
 
@@ -96,10 +108,11 @@ const TYPE_META: Record<CashMovementType, TypeMeta> = {
   sale: { direction: 'in', label: 'Venta en efectivo' },
   deposit: { direction: 'in', label: 'Entrada' },
   adjustment: { direction: 'in', label: 'Ajuste' },
-  expense: { direction: 'out', label: 'Pago de gasto' },
+  expense: { direction: 'out', label: 'Gasto' },
   salary: { direction: 'out', label: 'Nómina' },
   inventory_purchase: { direction: 'out', label: 'Compra de inventario' },
   withdrawal: { direction: 'out', label: 'Retiro de seguridad' },
+  advance: { direction: 'out', label: 'Vale de empleado' },
 };
 
 export function describeMovement(

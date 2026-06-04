@@ -188,6 +188,10 @@ export const cashMovementTypeEnum = pgEnum('cash_movement_type', [
   'inventory_purchase',
   'withdrawal',
   'adjustment',
+  // Employee advance ("vale de empleado"): cash leaves the drawer but it is a
+  // receivable against future salary, not a P&L expense. Behaves like withdrawal
+  // for the cash math (a salida) and is excluded from operating expenses.
+  'advance',
 ]);
 
 export const cashSessionsSchema = pgTable(

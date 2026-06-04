@@ -28,6 +28,7 @@ const TYPE_LABELS: Record<string, string> = {
   inventory_purchase: 'Compra de inventario',
   withdrawal: 'Retiros',
   adjustment: 'Ajustes',
+  advance: 'Vales empleados',
 };
 
 export default function FlujoCajaPage() {

@@ -1,0 +1,1 @@
+ALTER TYPE "public"."cash_movement_type" ADD VALUE 'advance';

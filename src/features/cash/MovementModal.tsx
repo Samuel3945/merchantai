@@ -1,6 +1,6 @@
 'use client';
 
-import type { Direction, EntryMotivo, ExitMotivo, ExpenseCategory } from './cash-ui';
+import type { Direction, EntryMotivo, ExitMotivo } from './cash-ui';
 import type { Supplier, SupplierOption } from '@/features/suppliers/actions';
 import type { CashMovementType } from '@/libs/cash-helpers';
 import { useEffect, useState } from 'react';
@@ -11,15 +11,10 @@ import { SupplierSelect } from '@/features/suppliers/SupplierSelect';
 import { cn } from '@/utils/Helpers';
 import {
   cashInputCls,
-
   ENTRY_MOTIVOS,
-
   entryTypeFor,
   EXIT_MOTIVOS,
-
   exitTypeFor,
-  EXPENSE_CATEGORIES,
-
 } from './cash-ui';
 import { DenominationCounter } from './DenominationCounter';
 
@@ -54,7 +49,6 @@ export function MovementModal(props: {
 
   const [motivo, setMotivo] = useState<string>(motivos[0]!.value);
   const [amount, setAmount] = useState('');
-  const [category, setCategory] = useState<ExpenseCategory>('servicios');
   const [description, setDescription] = useState('');
   const [supplier, setSupplier] = useState<SupplierOption | null>(null);
   const [supplierOptions, setSupplierOptions] = useState<SupplierOption[]>([]);
@@ -71,7 +65,6 @@ export function MovementModal(props: {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const isExpense = !isIn && motivo === 'pago_gasto';
   const isOtro = motivo === 'otro';
   const isRetiro = !isIn && motivo === 'retiro_seguridad';
   const isProveedor = !isIn && motivo === 'pago_proveedor';
@@ -107,38 +100,33 @@ export function MovementModal(props: {
       return;
     }
 
+    const motivoLabel = motivos.find(o => o.value === motivo)?.label ?? '';
+    const note = description.trim();
+
     let type: CashMovementType;
     let reason: string;
-    let cat: string | null = null;
     let supplierId: string | null = null;
 
     if (isIn) {
-      const m = motivo as EntryMotivo;
-      type = entryTypeFor(m);
-      reason = m === 'otro' ? description.trim() : 'Ajuste de caja';
+      type = entryTypeFor(motivo as EntryMotivo);
+      reason = isOtro ? note : note ? `${motivoLabel} — ${note}` : motivoLabel;
     } else {
       const m = motivo as ExitMotivo;
-      type = exitTypeFor(m, isExpense ? category : null);
-      if (m === 'pago_gasto') {
-        cat = category;
-        const catLabel
-          = EXPENSE_CATEGORIES.find(c => c.value === category)?.label ?? 'Gasto';
-        reason = description.trim() || catLabel;
-      } else if (m === 'pago_proveedor') {
+      type = exitTypeFor(m);
+      if (m === 'pago_proveedor') {
         supplierId = supplier?.id ?? null;
         const base = supplier?.name
           ? `Pago a ${supplier.name}`
           : 'Pago a proveedor';
-        const note = description.trim();
         reason = note ? `${base} — ${note}` : base;
-      } else if (m === 'retiro_seguridad') {
-        reason = description.trim() || 'Retiro de seguridad';
+      } else if (isOtro) {
+        reason = note;
       } else {
-        reason = description.trim();
+        reason = note ? `${motivoLabel} — ${note}` : motivoLabel;
       }
     }
 
-    props.onSubmit({ type, amount, reason, category: cat, supplierId });
+    props.onSubmit({ type, amount, reason, category: null, supplierId });
   }
 
   return (
@@ -232,26 +220,6 @@ export function MovementModal(props: {
               </div>
             </div>
 
-            {isExpense && (
-              <div>
-                <label className={labelCls} htmlFor="mov-category">
-                  Categoría
-                </label>
-                <select
-                  id="mov-category"
-                  className={cashInputCls}
-                  value={category}
-                  onChange={e => setCategory(e.target.value as ExpenseCategory)}
-                >
-                  {EXPENSE_CATEGORIES.map(c => (
-                    <option key={c.value} value={c.value}>
-                      {c.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-
             {isProveedor && (
               <div>
                 <label className={labelCls}>Proveedor *</label>
@@ -265,26 +233,24 @@ export function MovementModal(props: {
               </div>
             )}
 
-            {(isOtro || isRetiro || isExpense || isProveedor) && (
-              <div>
-                <label className={labelCls} htmlFor="mov-description">
-                  {isOtro
-                    ? 'Descripción'
-                    : isRetiro
-                      ? 'Destino (opcional)'
-                      : 'Nota (opcional)'}
-                </label>
-                <input
-                  id="mov-description"
-                  className={cashInputCls}
-                  placeholder={
-                    isRetiro ? 'Caja fuerte, banco, oficina…' : 'Describe el motivo'
-                  }
-                  value={description}
-                  onChange={e => setDescription(e.target.value)}
-                />
-              </div>
-            )}
+            <div>
+              <label className={labelCls} htmlFor="mov-description">
+                {isOtro
+                  ? 'Descripción'
+                  : isRetiro
+                    ? 'Destino (opcional)'
+                    : 'Nota (opcional)'}
+              </label>
+              <input
+                id="mov-description"
+                className={cashInputCls}
+                placeholder={
+                  isRetiro ? 'Caja fuerte, banco, oficina…' : 'Describe el motivo'
+                }
+                value={description}
+                onChange={e => setDescription(e.target.value)}
+              />
+            </div>
 
             {props.error && (
               <div className="

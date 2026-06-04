@@ -30,13 +30,15 @@ export const INCOME_MOVEMENT_TYPES: CashMovementType[] = [
 //
 // Finanzas (analytics.ts, dashboard.ts) deliberately uses a NARROWER set —
 // expense + salary + inventory_purchase — because a security withdrawal only
-// relocates cash to a safe/bank and is not a P&L expense, and `adjustment` is a
+// relocates cash to a safe/bank and is not a P&L expense, `advance` (vale de
+// empleado) is a receivable against future salary, and `adjustment` is a
 // reconciliation entry, not a cost.
 export const EXPENSE_MOVEMENT_TYPES: CashMovementType[] = [
   'expense',
   'salary',
   'inventory_purchase',
   'withdrawal',
+  'advance',
 ];
 
 type Executor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -96,7 +98,7 @@ export async function computeCashBreakdown(
     .select({
       cashSales: sql<string>`COALESCE(SUM(${cashMovementsSchema.amount}) FILTER (WHERE ${cashMovementsSchema.type} = 'sale'), 0)::text`,
       entradas: sql<string>`COALESCE(SUM(${cashMovementsSchema.amount}) FILTER (WHERE ${cashMovementsSchema.type} IN ('deposit','adjustment')), 0)::text`,
-      salidas: sql<string>`COALESCE(SUM(${cashMovementsSchema.amount}) FILTER (WHERE ${cashMovementsSchema.type} IN ('expense','salary','inventory_purchase','withdrawal')), 0)::text`,
+      salidas: sql<string>`COALESCE(SUM(${cashMovementsSchema.amount}) FILTER (WHERE ${cashMovementsSchema.type} IN ('expense','salary','inventory_purchase','withdrawal','advance')), 0)::text`,
       movementCount: sql<number>`COUNT(*)::int`,
     })
     .from(cashMovementsSchema)
