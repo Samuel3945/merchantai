@@ -551,7 +551,85 @@ export type ReportsOverview = {
   returns: { rate: number; totalRefunded: number };
   customers: { total: number; inactive: number };
   expiration: { atRisk: number; count: number };
+  finance: {
+    /** Utilidad bruta = ventas − COGS (igual que profit.profit, rango). */
+    grossProfit: number;
+    /** Utilidad neta = utilidad bruta − gastos operativos (rango). */
+    netProfit: number;
+    /** Gastos operativos P&L: expense + salary + inventory_purchase (rango). */
+    operatingExpenses: number;
+    /** Pagos a proveedores (movimientos con supplier_id, rango). */
+    supplierPayments: number;
+    /** Vales de empleado (type = advance, rango). */
+    employeeAdvances: number;
+    /** Retiros de seguridad (type = withdrawal, rango). */
+    securityWithdrawals: number;
+    /** Gastos operativos del día (ventana fija, no depende del rango). */
+    expensesToday: number;
+    /** Gastos operativos del mes en curso (ventana fija). */
+    expensesMonth: number;
+  };
 };
+
+export type FinanceBreakdown = {
+  supplierPayments: number;
+  employeeAdvances: number;
+  securityWithdrawals: number;
+  expensesToday: number;
+  expensesMonth: number;
+};
+
+// Financial slices the P&L cards can't express on their own: supplier payments,
+// employee advances and security withdrawals over the selected range, plus
+// fixed-window operating expenses (today / this month). All derived from the
+// cash ledger — single source of truth, no parallel financial table.
+export async function getFinanceBreakdown(
+  start: string,
+  end: string,
+): Promise<FinanceBreakdown> {
+  const { orgId } = await requireOrg();
+  const s = validateDate(start, 'start');
+  const e = validateDate(end, 'end');
+
+  const [rangeRes, fixedRes] = await Promise.all([
+    db.execute(sql`
+      SELECT
+        COALESCE(SUM(amount) FILTER (WHERE supplier_id IS NOT NULL), 0)::float8 AS supplier_payments,
+        COALESCE(SUM(amount) FILTER (WHERE type = 'advance'), 0)::float8 AS employee_advances,
+        COALESCE(SUM(amount) FILTER (WHERE type = 'withdrawal'), 0)::float8 AS security_withdrawals
+      FROM cash_movements
+      WHERE organization_id = ${orgId}
+        AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
+            BETWEEN ${s}::date AND ${e}::date
+    `),
+    db.execute(sql`
+      SELECT
+        COALESCE(SUM(amount) FILTER (
+          WHERE type IN ('expense','salary','inventory_purchase')
+            AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
+                = (now() AT TIME ZONE 'America/Bogota')::date
+        ), 0)::float8 AS expenses_today,
+        COALESCE(SUM(amount) FILTER (
+          WHERE type IN ('expense','salary','inventory_purchase')
+            AND date_trunc('month', (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota'))
+                = date_trunc('month', (now() AT TIME ZONE 'America/Bogota'))
+        ), 0)::float8 AS expenses_month
+      FROM cash_movements
+      WHERE organization_id = ${orgId}
+    `),
+  ]);
+
+  const r = (rangeRes.rows?.[0] ?? {}) as Record<string, unknown>;
+  const f = (fixedRes.rows?.[0] ?? {}) as Record<string, unknown>;
+
+  return {
+    supplierPayments: toNum(r.supplier_payments),
+    employeeAdvances: toNum(r.employee_advances),
+    securityWithdrawals: toNum(r.security_withdrawals),
+    expensesToday: toNum(f.expenses_today),
+    expensesMonth: toNum(f.expenses_month),
+  };
+}
 
 export async function getReportsOverview(
   start: string,
@@ -575,6 +653,7 @@ export async function getReportsOverview(
     returns,
     customers,
     expiration,
+    finance,
   ] = await Promise.all([
     getSalesByPeriod(s, e),
     getSalesByPeriod(prev.start, prev.end),
@@ -589,6 +668,7 @@ export async function getReportsOverview(
     getReturnsAnalysis(s, e),
     getCustomerInsights(s, e),
     getExpirationRisk(),
+    getFinanceBreakdown(s, e),
   ]);
 
   const salesTotal = period.reduce((acc, r) => acc + r.total, 0);
@@ -656,6 +736,16 @@ export async function getReportsOverview(
     expiration: {
       atRisk: expiration.totalAtRisk,
       count: expiration.byTier.reduce((acc, t) => acc + t.count, 0),
+    },
+    finance: {
+      grossProfit: profit,
+      operatingExpenses: cashFlow.expenses,
+      netProfit: profit - cashFlow.expenses,
+      supplierPayments: finance.supplierPayments,
+      employeeAdvances: finance.employeeAdvances,
+      securityWithdrawals: finance.securityWithdrawals,
+      expensesToday: finance.expensesToday,
+      expensesMonth: finance.expensesMonth,
     },
   };
 }

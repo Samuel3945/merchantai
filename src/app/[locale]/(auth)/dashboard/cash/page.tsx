@@ -1,5 +1,10 @@
 import { setRequestLocale } from 'next-intl/server';
-import { getCurrentCash, getFraudAlerts, listCashSessions } from '@/actions/cash';
+import {
+  getCurrentCash,
+  getFraudAlerts,
+  getTodayCashKpis,
+  listCashSessions,
+} from '@/actions/cash';
 import { CashClient } from '@/features/cash/CashClient';
 import { TitleBar } from '@/features/dashboard/TitleBar';
 
@@ -9,10 +14,11 @@ export default async function DashboardCashPage(props: {
   const { locale } = await props.params;
   setRequestLocale(locale);
 
-  const [current, sessions, alerts] = await Promise.all([
+  const [current, sessions, alerts, kpis] = await Promise.all([
     getCurrentCash(),
     listCashSessions(30),
     getFraudAlerts(14).catch(() => []),
+    getTodayCashKpis(),
   ]);
 
   return (
@@ -21,7 +27,12 @@ export default async function DashboardCashPage(props: {
         title="Caja"
         description="Abre y cierra la caja, registra movimientos y haz el arqueo del día."
       />
-      <CashClient current={current} sessions={sessions} alerts={alerts} />
+      <CashClient
+        current={current}
+        sessions={sessions}
+        alerts={alerts}
+        kpis={kpis}
+      />
     </>
   );
 }

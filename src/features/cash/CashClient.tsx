@@ -2,7 +2,7 @@
 
 import type { Direction } from './cash-ui';
 import type { MovementSubmit } from './MovementModal';
-import type { GetCurrentCashResult } from '@/actions/cash';
+import type { GetCurrentCashResult, TodayCashKpis } from '@/actions/cash';
 import type { ActionResult } from '@/libs/action-result';
 import type { CashSession } from '@/libs/cash-helpers';
 import { useRouter } from 'next/navigation';
@@ -89,6 +89,7 @@ export function CashClient(props: {
   current: GetCurrentCashResult;
   sessions: CashSession[];
   alerts: FraudAlert[];
+  kpis: TodayCashKpis;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -175,6 +176,29 @@ export function CashClient(props: {
           {error}
         </div>
       )}
+
+      {/* Resumen financiero del día — derivado del ledger, siempre visible */}
+      <div>
+        <div className="mb-2 text-sm font-semibold text-muted-foreground">
+          Resumen del día
+        </div>
+        <div className="
+          grid grid-cols-2 gap-3
+          lg:grid-cols-4
+        "
+        >
+          <StatCard label="Gastos hoy" value={money(props.kpis.gastosHoy)} />
+          <StatCard label="Retiros hoy" value={money(props.kpis.retirosHoy)} />
+          <StatCard
+            label="Pagos a proveedores"
+            value={money(props.kpis.pagosProveedores)}
+          />
+          <StatCard
+            label="Gastos operativos"
+            value={money(props.kpis.gastosOperativos)}
+          />
+        </div>
+      </div>
 
       {!session
         ? (

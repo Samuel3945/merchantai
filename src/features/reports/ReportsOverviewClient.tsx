@@ -233,13 +233,57 @@ export function ReportsOverviewClient({ initial }: { initial: ReportsOverview })
         </ReportCard>
 
         <ReportCard
-          title="Ganancia"
+          title="Utilidad bruta"
           value={money(data.profit.profit)}
           secondary={`margen ${data.profit.margin.toFixed(1)}%`}
           explanation="Lo que te queda después de pagar lo que costó la mercadería. Vender mucho con poca ganancia es trabajar para nada."
           delta={formatDelta(data.profit.profit, data.profit.prevProfit)}
           deltaClass={deltaTone(data.profit.profit, data.profit.prevProfit)}
           href="/dashboard/reports/ventas-periodo"
+        />
+
+        <ReportCard
+          title="Utilidad neta"
+          value={money(data.finance.netProfit)}
+          secondary={`gastos operativos ${money(data.finance.operatingExpenses)}`}
+          explanation="La ganancia real: lo que queda después de restar también los gastos del negocio (sueldos, servicios, compras). Es la plata que de verdad ganaste."
+          tone={data.finance.netProfit < 0 ? 'danger' : 'default'}
+          href="/dashboard/reports/flujo-caja"
+        />
+
+        <ReportCard
+          title="Pagos a proveedores"
+          value={money(data.finance.supplierPayments)}
+          explanation="Cuánto le pagaste a tus proveedores en el período. Sirve para negociar precios y planificar las compras."
+          href="/dashboard/reports/flujo-caja"
+        />
+
+        <ReportCard
+          title="Vales empleados"
+          value={money(data.finance.employeeAdvances)}
+          explanation="Anticipos que les diste a tus empleados a cuenta del sueldo. No es un gasto: es plata que se descuenta después."
+          href="/dashboard/reports/flujo-caja"
+        />
+
+        <ReportCard
+          title="Retiros de seguridad"
+          value={money(data.finance.securityWithdrawals)}
+          explanation="Efectivo que sacaste de la caja a la caja fuerte o al banco. No es un gasto: es tu plata, solo que en un lugar más seguro."
+          href="/dashboard/reports/flujo-caja"
+        />
+
+        <ReportCard
+          title="Gastos del día"
+          value={money(data.finance.expensesToday)}
+          explanation="Lo que gastaste hoy en operar el negocio. Un vistazo rápido para no pasarte sin darte cuenta."
+          href="/dashboard/reports/flujo-caja"
+        />
+
+        <ReportCard
+          title="Gastos del mes"
+          value={money(data.finance.expensesMonth)}
+          explanation="El acumulado de gastos operativos del mes en curso. Compáralo con tus ventas para saber si el mes cierra en verde."
+          href="/dashboard/reports/flujo-caja"
         />
 
         <ReportCard

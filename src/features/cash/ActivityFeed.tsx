@@ -12,9 +12,25 @@ import { describeMovement, money, relativeTime } from './cash-ui';
 export function ActivityFeed(props: { movements: CashMovement[] }) {
   if (props.movements.length === 0) {
     return (
-      <div className="px-5 py-10 text-center text-sm text-muted-foreground">
-        Sin movimientos todavía. Las ventas en efectivo y los registros manuales
-        aparecerán acá.
+      <div className="
+        flex flex-col items-center justify-center px-5 py-12 text-center
+      "
+      >
+        <div
+          className="
+            flex size-12 items-center justify-center rounded-full bg-muted
+            text-2xl
+          "
+          aria-hidden="true"
+        >
+          🧾
+        </div>
+        <div className="mt-3 text-sm font-semibold">
+          Sin movimientos registrados
+        </div>
+        <p className="mt-1 max-w-xs text-xs text-muted-foreground">
+          Las ventas en efectivo, entradas manuales y salidas aparecerán aquí.
+        </p>
       </div>
     );
   }
