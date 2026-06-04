@@ -1,13 +1,29 @@
 'use server';
 
-import { auth } from '@clerk/nextjs/server';
-import { and, desc, eq, exists, ilike, inArray, or, sql } from 'drizzle-orm';
+import type {
+  ReturnReason,
+} from '@/libs/sale-returns';
+import { auth, currentUser } from '@clerk/nextjs/server';
+import {
+  and,
+  desc,
+  eq,
+  exists,
+  getTableColumns,
+  ilike,
+  inArray,
+  or,
+  sql,
+} from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
 import { recordCashMovement } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import { consumeFifoExits } from '@/libs/fifo-cogs';
+import { applySaleReturn } from '@/libs/sale-returns';
 import {
+  posReturnItemsSchema,
+  posReturnsSchema,
   posTokensSchema,
   productsSchema,
   saleItemsSchema,
@@ -235,6 +251,10 @@ export async function createSale(input: CreateSaleInput) {
 
 export type Sale = typeof salesSchema.$inferSelect;
 
+// A sale row enriched with whether it already has any return on record, so the
+// listing can label the action button "Dev. parcial" vs "Devolución".
+export type SaleListRow = Sale & { hasReturn: boolean };
+
 export type ListSalesFilters = {
   limit?: number;
   offset?: number;
@@ -246,7 +266,7 @@ export type ListSalesFilters = {
 };
 
 export type ListSalesResult = {
-  items: Sale[];
+  items: SaleListRow[];
   total: number;
 };
 
@@ -338,7 +358,10 @@ export async function listSales(
 
   const [items, totalRow] = await Promise.all([
     db
-      .select()
+      .select({
+        ...getTableColumns(salesSchema),
+        hasReturn: sql<boolean>`EXISTS (SELECT 1 FROM ${posReturnsSchema} WHERE ${posReturnsSchema.saleId} = ${salesSchema.id})`,
+      })
       .from(salesSchema)
       .where(whereClause)
       .orderBy(desc(salesSchema.createdAt))
@@ -354,6 +377,160 @@ export async function listSales(
     items,
     total: totalRow[0]?.count ?? 0,
   };
+}
+
+// --- Returns ----------------------------------------------------------------
+
+export type ReturnableItem = {
+  id: string;
+  productId: string;
+  productName: string;
+  qty: number;
+  subtotal: string;
+  unitType: string;
+  /** Units already returned across previous returns of this line. */
+  returnedQty: number;
+};
+
+export type SaleReturnDetail = {
+  id: string;
+  total: string;
+  status: string;
+  items: ReturnableItem[];
+};
+
+// Loads a single sale with its line items and how much of each has already been
+// returned, so the return modal can cap quantities and grey out spent lines.
+export async function getSaleForReturn(
+  saleId: string,
+): Promise<SaleReturnDetail> {
+  const { userId, orgId } = await auth();
+  if (!userId) {
+    throw new Error('Not authenticated');
+  }
+  if (!orgId) {
+    throw new Error('No active organization');
+  }
+
+  const [sale] = await db
+    .select({
+      id: salesSchema.id,
+      total: salesSchema.total,
+      status: salesSchema.status,
+    })
+    .from(salesSchema)
+    .where(
+      and(eq(salesSchema.id, saleId), eq(salesSchema.organizationId, orgId)),
+    )
+    .limit(1);
+
+  if (!sale) {
+    throw new Error('Venta no encontrada');
+  }
+
+  const items = await db
+    .select({
+      id: saleItemsSchema.id,
+      productId: saleItemsSchema.productId,
+      productName: saleItemsSchema.productName,
+      qty: saleItemsSchema.qty,
+      subtotal: saleItemsSchema.subtotal,
+      unitType: saleItemsSchema.unitType,
+      returnedQty: sql<number>`COALESCE((
+        SELECT SUM(${posReturnItemsSchema.qty})
+        FROM ${posReturnItemsSchema}
+        WHERE ${posReturnItemsSchema.saleItemId} = ${saleItemsSchema.id}
+      ), 0)::int`,
+    })
+    .from(saleItemsSchema)
+    .where(eq(saleItemsSchema.saleId, saleId));
+
+  return { ...sale, items };
+}
+
+export type ProcessReturnInput = {
+  reason: ReturnReason;
+  refundMethod: string;
+  items: {
+    saleItemId: string;
+    qty: number;
+    refundAmount: number;
+    restock?: boolean;
+  }[];
+  notes?: string | null;
+  partial: boolean;
+};
+
+// Best-effort human label for the admin who ran the return, mirroring the
+// resolution used by the Caja actions (cash.ts:getActorName).
+async function resolveAdminName(fallback: string): Promise<string> {
+  try {
+    const user = await currentUser();
+    const candidate
+      = user?.fullName
+        || [user?.firstName, user?.lastName].filter(Boolean).join(' ').trim()
+        || user?.username
+        || user?.primaryEmailAddress?.emailAddress;
+    return candidate && candidate.length > 0 ? candidate : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+// Processes a sale return from the dashboard (Clerk admin). Shares the
+// money/stock/cash core with the POS route via applySaleReturn; the admin is
+// not a pos_user, so cashierId is null and the audit trail carries the actor.
+export async function processReturn(saleId: string, input: ProcessReturnInput) {
+  const { userId, orgId } = await auth();
+  if (!userId) {
+    throw new Error('Not authenticated');
+  }
+  if (!orgId) {
+    throw new Error('No active organization');
+  }
+
+  const actorName = await resolveAdminName(userId);
+
+  const result = await db.transaction(tx =>
+    applySaleReturn(tx, {
+      saleId,
+      organizationId: orgId,
+      cashierId: null,
+      actorName,
+      reason: input.reason,
+      refundMethod: input.refundMethod,
+      items: input.items,
+      notes: input.notes ?? null,
+      partial: input.partial,
+    }),
+  );
+
+  await logAction({
+    organizationId: orgId,
+    actor: { type: 'user', id: userId },
+    action: 'sale.returned',
+    entityType: 'pos_return',
+    entityId: result.id,
+    after: {
+      returnId: result.id,
+      saleId,
+      totalRefunded: result.totalRefunded,
+      partial: result.partial,
+      itemCount: result.items.length,
+    },
+    metadata: {
+      reason: input.reason,
+      refundMethod: input.refundMethod,
+      partial: result.partial,
+      source: 'dashboard',
+    },
+  });
+
+  revalidatePath('/dashboard/sales');
+  revalidatePath('/dashboard/products');
+  revalidatePath('/dashboard/cash');
+
+  return result;
 }
 
 // --- Caja saturation signal -------------------------------------------------

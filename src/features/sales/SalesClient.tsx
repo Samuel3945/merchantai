@@ -1,8 +1,15 @@
 'use client';
 
-import type { ListSalesResult, Sale } from '@/actions/sales';
+import type {
+  ListSalesResult,
+  ReturnableItem,
+  SaleListRow,
+  SaleReturnDetail,
+} from '@/actions/sales';
+import type { ReturnReason } from '@/libs/sale-returns';
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
-import { listSales } from '@/actions/sales';
+import { listPaymentMethods } from '@/actions/payment-methods';
+import { getSaleForReturn, listSales, processReturn } from '@/actions/sales';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/utils/Helpers';
 
@@ -17,6 +24,15 @@ const paymentOptions = [
   { value: 'transferencia', label: 'Transferencia / Nequi / Daviplata' },
 ];
 
+const RETURN_REASONS: { value: ReturnReason; label: string }[] = [
+  { value: 'customer_request', label: 'Cliente cambió de opinión' },
+  { value: 'damaged', label: 'Producto dañado' },
+  { value: 'wrong_product', label: 'Producto equivocado' },
+  { value: 'price_error', label: 'Error de precio' },
+  { value: 'duplicate', label: 'Cobro duplicado' },
+  { value: 'other', label: 'Otro motivo' },
+];
+
 const moneyFmt = new Intl.NumberFormat('es-CO', {
   style: 'currency',
   currency: 'COP',
@@ -29,12 +45,24 @@ const dateFmt = new Intl.DateTimeFormat('es-CO', {
   timeZone: 'America/Bogota',
 });
 
-function formatMoney(value: string) {
-  const n = Number.parseFloat(value);
+function formatMoney(value: string | number) {
+  const n = typeof value === 'number' ? value : Number.parseFloat(value);
   if (!Number.isFinite(n)) {
-    return value;
+    return String(value);
   }
   return moneyFmt.format(n);
+}
+
+function remainingOf(item: ReturnableItem) {
+  return Math.max(0, item.qty - item.returnedQty);
+}
+
+function lineRefund(item: ReturnableItem, qty: number) {
+  const sub = Number.parseFloat(item.subtotal);
+  if (!Number.isFinite(sub) || item.qty <= 0) {
+    return 0;
+  }
+  return Math.round(((sub / item.qty) * qty) * 100) / 100;
 }
 
 export function SalesClient({
@@ -44,7 +72,7 @@ export function SalesClient({
   initial: ListSalesResult;
   pageSize: number;
 }) {
-  const [rows, setRows] = useState<Sale[]>(initial.items);
+  const [rows, setRows] = useState<SaleListRow[]>(initial.items);
   const [total, setTotal] = useState<number>(initial.total);
   const [page, setPage] = useState(0);
 
@@ -55,42 +83,58 @@ export function SalesClient({
   const [cashierId, setCashierId] = useState('');
 
   const [pending, startTransition] = useTransition();
-  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isFirstRun = useRef(true);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isFirstRunRef = useRef(true);
+
+  // ── Return modal state ────────────────────────────────────────────────────
+  const [returnSale, setReturnSale] = useState<SaleReturnDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [qtys, setQtys] = useState<Record<string, number>>({});
+  const [reason, setReason] = useState<ReturnReason>('customer_request');
+  const [refundMethod, setRefundMethod] = useState('Efectivo');
+  const [methods, setMethods] = useState<string[]>(['Efectivo']);
+  const [notes, setNotes] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
+  const [submitSuccess, setSubmitSuccess] = useState('');
 
   const pageCount = useMemo(
     () => Math.max(1, Math.ceil(total / pageSize)),
     [total, pageSize],
   );
 
+  async function fetchSales() {
+    const data = await listSales({
+      limit: pageSize,
+      offset: page * pageSize,
+      start: start || null,
+      end: end || null,
+      payment,
+      search: search || null,
+      cashierId: cashierId || null,
+    });
+    setRows(data.items);
+    setTotal(data.total);
+  }
+
   useEffect(() => {
-    if (isFirstRun.current) {
-      isFirstRun.current = false;
+    if (isFirstRunRef.current) {
+      isFirstRunRef.current = false;
       return;
     }
-    if (debounceTimer.current) {
-      clearTimeout(debounceTimer.current);
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
     }
-    debounceTimer.current = setTimeout(() => {
-      startTransition(async () => {
-        const data = await listSales({
-          limit: pageSize,
-          offset: page * pageSize,
-          start: start || null,
-          end: end || null,
-          payment,
-          search: search || null,
-          cashierId: cashierId || null,
-        });
-        setRows(data.items);
-        setTotal(data.total);
-      });
+    debounceTimerRef.current = setTimeout(() => {
+      startTransition(fetchSales);
     }, 250);
     return () => {
-      if (debounceTimer.current) {
-        clearTimeout(debounceTimer.current);
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
       }
     };
+    // eslint-disable-next-line react/exhaustive-deps
   }, [pageSize, page, start, end, payment, search, cashierId]);
 
   function resetToFirstPage() {
@@ -106,11 +150,127 @@ export function SalesClient({
     setPage(0);
   }
 
+  async function openReturn(saleId: string) {
+    setReturnSale(null);
+    setSubmitError('');
+    setSubmitSuccess('');
+    setNotes('');
+    setReason('customer_request');
+    setDetailLoading(true);
+    try {
+      const [detail, pms] = await Promise.all([
+        getSaleForReturn(saleId),
+        listPaymentMethods({ activeOnly: true }).catch(() => []),
+      ]);
+
+      const opts = [
+        'Efectivo',
+        ...pms
+          .filter(m => m.type !== 'cash' && m.type !== 'credit')
+          .map(m => m.name),
+      ];
+      setMethods([...new Set(opts)]);
+      setRefundMethod('Efectivo');
+
+      const initSelected = new Set<string>();
+      const initQtys: Record<string, number> = {};
+      for (const item of detail.items) {
+        const remaining = remainingOf(item);
+        if (remaining > 0) {
+          initSelected.add(item.id);
+          initQtys[item.id] = remaining;
+        }
+      }
+      setSelected(initSelected);
+      setQtys(initQtys);
+      setReturnSale(detail);
+    } catch (e) {
+      setSubmitError(
+        e instanceof Error ? e.message : 'No se pudo cargar la venta',
+      );
+      // Surface the error in a minimal shell so the user sees what happened.
+      setReturnSale({ id: saleId, total: '0', status: 'error', items: [] });
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  function closeReturn() {
+    setReturnSale(null);
+    setSubmitError('');
+  }
+
+  async function confirmReturn() {
+    if (!returnSale) {
+      return;
+    }
+    setSubmitting(true);
+    setSubmitError('');
+    try {
+      const chosen = returnSale.items.filter(it => selected.has(it.id));
+      const items = chosen.map((it) => {
+        const remaining = remainingOf(it);
+        const qty = Math.min(qtys[it.id] ?? remaining, remaining);
+        return {
+          saleItemId: it.id,
+          qty,
+          refundAmount: lineRefund(it, qty),
+          restock: true,
+        };
+      });
+
+      // Partial when, after this return, any line still has units outstanding.
+      const partial = !returnSale.items.every((it) => {
+        const nowReturning = selected.has(it.id)
+          ? (qtys[it.id] ?? remainingOf(it))
+          : 0;
+        return it.returnedQty + nowReturning >= it.qty;
+      });
+
+      await processReturn(returnSale.id, {
+        reason,
+        refundMethod,
+        notes: notes || null,
+        partial,
+        items,
+      });
+
+      setSubmitSuccess(
+        partial ? 'Devolución parcial registrada' : 'Devolución registrada',
+      );
+      setReturnSale(null);
+      await fetchSales();
+      setTimeout(setSubmitSuccess, 4000, '');
+    } catch (e) {
+      setSubmitError(
+        e instanceof Error ? e.message : 'No se pudo procesar la devolución',
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const refundIsCash = ['efectivo', 'cash'].includes(refundMethod.toLowerCase());
+  const selectedCount = selected.size;
+
   const from = total === 0 ? 0 : page * pageSize + 1;
   const to = Math.min(total, (page + 1) * pageSize);
 
   return (
     <div className="space-y-4">
+      {submitSuccess && (
+        <div className="
+          rounded-md border border-emerald-500/40 bg-emerald-500/10 px-4 py-2
+          text-sm text-emerald-600
+          dark:text-emerald-400
+        "
+        >
+          {submitSuccess}
+          {' '}
+          — el stock fue actualizado en inventario.
+        </div>
+      )}
+
       <div className="
         grid grid-cols-1 gap-3
         sm:grid-cols-2
@@ -217,6 +377,7 @@ export function SalesClient({
               <th className="px-3 py-2">Estado</th>
               <th className="px-3 py-2">Cajero</th>
               <th className="px-3 py-2 text-right">Total</th>
+              <th className="px-3 py-2 text-right">Devolución</th>
             </tr>
           </thead>
           <tbody>
@@ -224,7 +385,7 @@ export function SalesClient({
               ? (
                   <tr>
                     <td
-                      colSpan={6}
+                      colSpan={7}
                       className="px-3 py-8 text-center text-muted-foreground"
                     >
                       {pending ? 'Cargando…' : 'No se encontraron ventas'}
@@ -248,6 +409,16 @@ export function SalesClient({
                       </td>
                       <td className="px-3 py-2 text-right font-medium">
                         {formatMoney(s.total)}
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={detailLoading}
+                          onClick={() => openReturn(s.id)}
+                        >
+                          {s.hasReturn ? 'Dev. parcial' : 'Devolución'}
+                        </Button>
                       </td>
                     </tr>
                   ))
@@ -285,6 +456,270 @@ export function SalesClient({
           </Button>
         </div>
       </div>
+
+      {/* ── Return modal ── */}
+      {returnSale && (
+        <div className="
+          fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4
+        "
+        >
+          <div className="
+            w-full max-w-md space-y-4 rounded-lg border bg-background p-6
+            shadow-xl
+          "
+          >
+            <div className="flex items-start justify-between">
+              <div>
+                <h2 className="font-semibold">Procesar devolución</h2>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Venta #
+                  {returnSale.id.slice(0, 6).toUpperCase()}
+                  {' '}
+                  ·
+                  {' '}
+                  {formatMoney(returnSale.total)}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeReturn}
+                className="
+                  text-muted-foreground
+                  hover:text-foreground
+                "
+                aria-label="Cerrar"
+              >
+                ✕
+              </button>
+            </div>
+
+            {returnSale.items.length === 0
+              ? (
+                  <div className="
+                    rounded-md border border-destructive/40 bg-destructive/10
+                    px-3 py-2 text-sm text-destructive
+                  "
+                  >
+                    {submitError || 'Esta venta no tiene items devolvibles.'}
+                  </div>
+                )
+              : (
+                  <>
+                    <div className="space-y-2">
+                      <p className="
+                        text-xs font-medium tracking-wider text-muted-foreground
+                        uppercase
+                      "
+                      >
+                        Selecciona qué se devuelve
+                      </p>
+                      {returnSale.items.map((item) => {
+                        const remaining = remainingOf(item);
+                        const fullyReturned = remaining <= 0;
+                        const checked = selected.has(item.id) && !fullyReturned;
+                        const qty = qtys[item.id] ?? remaining;
+                        return (
+                          <div
+                            key={item.id}
+                            className={cn(
+                              `
+                                flex items-center gap-3 rounded-md border p-2.5
+                                transition-colors
+                              `,
+                              fullyReturned
+                                ? 'opacity-50'
+                                : checked
+                                  ? 'border-primary/40 bg-primary/5'
+                                  : 'opacity-70',
+                            )}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={fullyReturned}
+                              onChange={(e) => {
+                                setSelected((prev) => {
+                                  const next = new Set(prev);
+                                  if (e.target.checked) {
+                                    next.add(item.id);
+                                  } else {
+                                    next.delete(item.id);
+                                  }
+                                  return next;
+                                });
+                                if (e.target.checked && !qtys[item.id]) {
+                                  setQtys(q => ({ ...q, [item.id]: remaining }));
+                                }
+                              }}
+                              className="size-4 accent-primary"
+                            />
+                            <div className="min-w-0 flex-1">
+                              <span className="block truncate text-sm">
+                                {item.productName}
+                              </span>
+                              {item.returnedQty > 0 && (
+                                <span className="
+                                  text-[11px] font-medium text-amber-600
+                                  dark:text-amber-400
+                                "
+                                >
+                                  {item.returnedQty}
+                                  {' '}
+                                  ya devuelta(s)
+                                </span>
+                              )}
+                            </div>
+                            {fullyReturned
+                              ? (
+                                  <span className="
+                                    px-2 text-[11px] font-medium
+                                    text-muted-foreground
+                                  "
+                                  >
+                                    Devuelto
+                                  </span>
+                                )
+                              : (
+                                  <div className="flex items-center gap-1">
+                                    <button
+                                      type="button"
+                                      disabled={!checked}
+                                      onClick={() =>
+                                        setQtys(q => ({
+                                          ...q,
+                                          [item.id]: Math.max(
+                                            1,
+                                            (q[item.id] ?? remaining) - 1,
+                                          ),
+                                        }))}
+                                      className="
+                                        size-6 rounded-sm border text-sm
+                                        disabled:opacity-30
+                                      "
+                                    >
+                                      −
+                                    </button>
+                                    <span className="
+                                      w-8 text-center text-sm font-medium
+                                      tabular-nums
+                                    "
+                                    >
+                                      {qty}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      disabled={!checked}
+                                      onClick={() =>
+                                        setQtys(q => ({
+                                          ...q,
+                                          [item.id]: Math.min(
+                                            remaining,
+                                            (q[item.id] ?? remaining) + 1,
+                                          ),
+                                        }))}
+                                      className="
+                                        size-6 rounded-sm border text-sm
+                                        disabled:opacity-30
+                                      "
+                                    >
+                                      +
+                                    </button>
+                                  </div>
+                                )}
+                            <span className="
+                              w-20 text-right text-xs text-muted-foreground
+                              tabular-nums
+                            "
+                            >
+                              {fullyReturned
+                                ? '—'
+                                : formatMoney(lineRefund(item, qty))}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className={labelCls}>Motivo</label>
+                        <select
+                          value={reason}
+                          onChange={e =>
+                            setReason(e.target.value as ReturnReason)}
+                          className={inputCls}
+                        >
+                          {RETURN_REASONS.map(r => (
+                            <option key={r.value} value={r.value}>
+                              {r.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className={labelCls}>Reembolso en</label>
+                        <select
+                          value={refundMethod}
+                          onChange={e => setRefundMethod(e.target.value)}
+                          className={inputCls}
+                        >
+                          {methods.map(m => (
+                            <option key={m} value={m}>
+                              {m}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className={labelCls}>Notas (opcional)</label>
+                      <input
+                        type="text"
+                        value={notes}
+                        onChange={e => setNotes(e.target.value)}
+                        placeholder="Detalle adicional…"
+                        className={inputCls}
+                      />
+                    </div>
+
+                    <div className="
+                      rounded-md border border-amber-500/30 bg-amber-500/10 px-3
+                      py-2 text-xs text-amber-700
+                      dark:text-amber-400
+                    "
+                    >
+                      {refundIsCash
+                        ? 'Se restockea inventario y se registra la salida de efectivo en la caja abierta.'
+                        : 'Se restockea inventario. El reembolso queda registrado en el método indicado.'}
+                    </div>
+
+                    {submitError && (
+                      <div className="
+                        rounded-md border border-destructive/40
+                        bg-destructive/10 px-3 py-2 text-sm text-destructive
+                      "
+                      >
+                        {submitError}
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button
+                        disabled={submitting || selectedCount === 0}
+                        onClick={confirmReturn}
+                      >
+                        {submitting ? 'Procesando…' : 'Confirmar devolución'}
+                      </Button>
+                      <Button variant="secondary" onClick={closeReturn}>
+                        Cancelar
+                      </Button>
+                    </div>
+                  </>
+                )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
