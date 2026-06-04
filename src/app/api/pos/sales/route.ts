@@ -6,6 +6,7 @@ import { findOpenSession, recordCashMovement, toMoney } from '@/libs/cash-helper
 import { db } from '@/libs/DB';
 import { consumeFifoExits } from '@/libs/fifo-cogs';
 import { resolvePosAuth } from '@/libs/pos-auth';
+import { assignNextSaleNumber } from '@/libs/sale-number';
 import {
   productsSchema,
   saleItemsSchema,
@@ -149,10 +150,13 @@ export async function POST(req: Request): Promise<NextResponse> {
 
       const totalStr = toMoney(total);
 
+      const saleNumber = await assignNextSaleNumber(tx, ctx.organizationId);
+
       const [sale] = await tx
         .insert(salesSchema)
         .values({
           organizationId: ctx.organizationId,
+          saleNumber,
           total: totalStr,
           paymentType,
           status: 'completed',

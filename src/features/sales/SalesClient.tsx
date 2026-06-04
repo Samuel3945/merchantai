@@ -6,11 +6,15 @@ import type {
   SaleListRow,
   SaleReturnDetail,
 } from '@/actions/sales';
-import type { ReturnReason } from '@/libs/sale-returns';
+import type { ReturnDisposition, ReturnReason } from '@/libs/sale-returns';
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { listPaymentMethods } from '@/actions/payment-methods';
 import { getSaleForReturn, listSales, processReturn } from '@/actions/sales';
+import { DateRangePicker } from '@/components/DateRangePicker';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { formatSaleNumber } from '@/libs/sale-number';
+import { buildPresetOptions, todayBogota } from '@/utils/DateRange';
 import { cn } from '@/utils/Helpers';
 
 const inputCls
@@ -24,14 +28,52 @@ const paymentOptions = [
   { value: 'transferencia', label: 'Transferencia / Nequi / Daviplata' },
 ];
 
+// Why the customer returns — kept separate from where the goods go (destino).
 const RETURN_REASONS: { value: ReturnReason; label: string }[] = [
   { value: 'customer_request', label: 'Cliente cambió de opinión' },
-  { value: 'damaged', label: 'Producto dañado' },
-  { value: 'wrong_product', label: 'Producto equivocado' },
-  { value: 'price_error', label: 'Error de precio' },
-  { value: 'duplicate', label: 'Cobro duplicado' },
-  { value: 'other', label: 'Otro motivo' },
+  { value: 'damaged', label: 'Producto defectuoso' },
+  { value: 'business_error', label: 'Error del negocio' },
+  { value: 'warranty', label: 'Garantía' },
+  { value: 'other', label: 'Otro (requiere observación)' },
 ];
+
+// What happens to the merchandise. Only "restock" returns it to sellable stock;
+// the help line is shown to the user when a destination is selected.
+const RETURN_DISPOSITIONS: {
+  value: ReturnDisposition;
+  label: string;
+  help: string;
+}[] = [
+  {
+    value: 'restock',
+    label: 'Regresar a inventario disponible',
+    help: 'El producto vuelve al inventario y podrá venderse nuevamente.',
+  },
+  {
+    value: 'damaged',
+    label: 'Enviar a mercancía dañada',
+    help: 'Se descuenta como mercancía dañada; no regresa al stock vendible.',
+  },
+  {
+    value: 'warranty',
+    label: 'Enviar a garantía',
+    help: 'Queda registrado para garantía; no regresa al stock vendible.',
+  },
+  {
+    value: 'discard',
+    label: 'Desechar producto',
+    help: 'El producto se da de baja; no regresa al stock vendible.',
+  },
+];
+
+// Wizard steps for the return modal.
+const RETURN_STEPS = [
+  'Productos',
+  'Motivo',
+  'Destino',
+  'Reembolso',
+  'Confirmar',
+] as const;
 
 const moneyFmt = new Intl.NumberFormat('es-CO', {
   style: 'currency',
@@ -57,12 +99,76 @@ function remainingOf(item: ReturnableItem) {
   return Math.max(0, item.qty - item.returnedQty);
 }
 
+// Up to two initials for the avatar fallback when a cashier has no photo.
+function initials(name: string | null): string {
+  if (!name) {
+    return '—';
+  }
+  const parts = name.trim().split(/\s+/).slice(0, 2);
+  return parts.map(p => p[0]?.toUpperCase() ?? '').join('') || '—';
+}
+
+// Cashier identity for the table: real photo when Clerk provides one, otherwise
+// a tidy initials chip. Always a human name, never a raw user id.
+function CashierCell({
+  name,
+  imageUrl,
+}: {
+  name: string | null;
+  imageUrl: string | null;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      {imageUrl
+        ? (
+            <img
+              src={imageUrl}
+              alt=""
+              className="size-6 shrink-0 rounded-full object-cover"
+            />
+          )
+        : (
+            <span className="
+              flex size-6 shrink-0 items-center justify-center rounded-full
+              bg-muted text-[10px] font-semibold text-muted-foreground
+            "
+            >
+              {initials(name)}
+            </span>
+          )}
+      <span className="truncate">{name ?? '—'}</span>
+    </div>
+  );
+}
+
 function lineRefund(item: ReturnableItem, qty: number) {
   const sub = Number.parseFloat(item.subtotal);
   if (!Number.isFinite(sub) || item.qty <= 0) {
     return 0;
   }
   return Math.round(((sub / item.qty) * qty) * 100) / 100;
+}
+
+// Return status, derived from the sale's own state — no schema change needed.
+// `returned` means the whole sale came back; `hasReturn` on a non-returned sale
+// means some lines are still outstanding (partial); otherwise it is a clean sale.
+function returnStatus(row: SaleListRow): { label: string; cls: string } {
+  if (row.status === 'returned') {
+    return {
+      label: 'Devuelta totalmente',
+      cls: 'border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400',
+    };
+  }
+  if (row.hasReturn) {
+    return {
+      label: 'Parcialmente devuelta',
+      cls: 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400',
+    };
+  }
+  return {
+    label: 'Completada',
+    cls: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+  };
 }
 
 export function SalesClient({
@@ -78,6 +184,7 @@ export function SalesClient({
 
   const [start, setStart] = useState('');
   const [end, setEnd] = useState('');
+  const [activePreset, setActivePreset] = useState<string | null>(null);
   const [payment, setPayment] = useState('all');
   const [search, setSearch] = useState('');
   const [cashierId, setCashierId] = useState('');
@@ -88,10 +195,12 @@ export function SalesClient({
 
   // ── Return modal state ────────────────────────────────────────────────────
   const [returnSale, setReturnSale] = useState<SaleReturnDetail | null>(null);
+  const [step, setStep] = useState(1);
   const [detailLoading, setDetailLoading] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [qtys, setQtys] = useState<Record<string, number>>({});
   const [reason, setReason] = useState<ReturnReason>('customer_request');
+  const [disposition, setDisposition] = useState<ReturnDisposition>('restock');
   const [refundMethod, setRefundMethod] = useState('Efectivo');
   const [methods, setMethods] = useState<string[]>(['Efectivo']);
   const [notes, setNotes] = useState('');
@@ -102,6 +211,12 @@ export function SalesClient({
   const pageCount = useMemo(
     () => Math.max(1, Math.ceil(total / pageSize)),
     [total, pageSize],
+  );
+
+  // Sales omits "Últimos 90 días" — the dashboard keeps the longer window.
+  const presetOptions = useMemo(
+    () => buildPresetOptions(['today', 'yesterday', '7d', '30d', 'mtd', 'lastMonth']),
+    [],
   );
 
   async function fetchSales() {
@@ -141,9 +256,24 @@ export function SalesClient({
     setPage(0);
   }
 
+  function applyRange(next: { start: string; end: string; preset: string | null }) {
+    setStart(next.start);
+    setEnd(next.end);
+    setActivePreset(next.preset);
+    setPage(0);
+  }
+
+  function clearRange() {
+    setStart('');
+    setEnd('');
+    setActivePreset(null);
+    setPage(0);
+  }
+
   function clearFilters() {
     setStart('');
     setEnd('');
+    setActivePreset(null);
     setPayment('all');
     setSearch('');
     setCashierId('');
@@ -156,6 +286,8 @@ export function SalesClient({
     setSubmitSuccess('');
     setNotes('');
     setReason('customer_request');
+    setDisposition('restock');
+    setStep(1);
     setDetailLoading(true);
     try {
       const [detail, pms] = await Promise.all([
@@ -189,7 +321,13 @@ export function SalesClient({
         e instanceof Error ? e.message : 'No se pudo cargar la venta',
       );
       // Surface the error in a minimal shell so the user sees what happened.
-      setReturnSale({ id: saleId, total: '0', status: 'error', items: [] });
+      setReturnSale({
+        id: saleId,
+        saleNumber: null,
+        total: '0',
+        status: 'error',
+        items: [],
+      });
     } finally {
       setDetailLoading(false);
     }
@@ -198,6 +336,7 @@ export function SalesClient({
   function closeReturn() {
     setReturnSale(null);
     setSubmitError('');
+    setStep(1);
   }
 
   async function confirmReturn() {
@@ -215,7 +354,7 @@ export function SalesClient({
           saleItemId: it.id,
           qty,
           refundAmount: lineRefund(it, qty),
-          restock: true,
+          disposition,
         };
       });
 
@@ -239,6 +378,7 @@ export function SalesClient({
         partial ? 'Devolución parcial registrada' : 'Devolución registrada',
       );
       setReturnSale(null);
+      setStep(1);
       await fetchSales();
       setTimeout(setSubmitSuccess, 4000, '');
     } catch (e) {
@@ -252,6 +392,32 @@ export function SalesClient({
 
   const refundIsCash = ['efectivo', 'cash'].includes(refundMethod.toLowerCase());
   const selectedCount = selected.size;
+
+  // "Otro" demands a written reason for a clean audit trail.
+  const otherNeedsNote = reason === 'other' && notes.trim().length === 0;
+
+  const chosenItems = returnSale
+    ? returnSale.items.filter(it => selected.has(it.id))
+    : [];
+  const totalRefund = chosenItems.reduce((acc, it) => {
+    const remaining = remainingOf(it);
+    const qty = Math.min(qtys[it.id] ?? remaining, remaining);
+    return acc + lineRefund(it, qty);
+  }, 0);
+
+  function canAdvance(s: number): boolean {
+    if (s === 1) {
+      return selectedCount > 0;
+    }
+    if (s === 2) {
+      return !otherNeedsNote;
+    }
+    return true;
+  }
+
+  const reasonLabel
+    = RETURN_REASONS.find(r => r.value === reason)?.label ?? reason;
+  const dispositionMeta = RETURN_DISPOSITIONS.find(d => d.value === disposition);
 
   const from = total === 0 ? 0 : page * pageSize + 1;
   const to = Math.min(total, (page + 1) * pageSize);
@@ -274,34 +440,27 @@ export function SalesClient({
       <div className="
         grid grid-cols-1 gap-3
         sm:grid-cols-2
-        lg:grid-cols-6
+        lg:grid-cols-4
       "
       >
-        <div className="lg:col-span-1">
-          <label className={labelCls}>Desde</label>
-          <input
-            type="date"
-            value={start}
-            onChange={(e) => {
-              setStart(e.target.value);
-              resetToFirstPage();
-            }}
-            className={inputCls}
-          />
+        <div>
+          <label className={labelCls}>Periodo</label>
+          <div className="mt-1">
+            <DateRangePicker
+              start={start}
+              end={end}
+              compare={false}
+              showCompare={false}
+              activePreset={activePreset}
+              presets={presetOptions}
+              maxDate={todayBogota()}
+              onApply={applyRange}
+              onClear={clearRange}
+              triggerClassName="w-full"
+            />
+          </div>
         </div>
-        <div className="lg:col-span-1">
-          <label className={labelCls}>Hasta</label>
-          <input
-            type="date"
-            value={end}
-            onChange={(e) => {
-              setEnd(e.target.value);
-              resetToFirstPage();
-            }}
-            className={inputCls}
-          />
-        </div>
-        <div className="lg:col-span-1">
+        <div>
           <label className={labelCls}>Pago</label>
           <select
             value={payment}
@@ -318,7 +477,7 @@ export function SalesClient({
             ))}
           </select>
         </div>
-        <div className="lg:col-span-1">
+        <div>
           <label className={labelCls}>ID de cajero</label>
           <input
             type="text"
@@ -331,7 +490,7 @@ export function SalesClient({
             className={cn(inputCls, 'font-mono text-xs')}
           />
         </div>
-        <div className="lg:col-span-2">
+        <div>
           <label className={labelCls}>Buscar</label>
           <input
             type="search"
@@ -340,7 +499,7 @@ export function SalesClient({
               setSearch(e.target.value);
               resetToFirstPage();
             }}
-            placeholder="ID de venta o nombre de producto"
+            placeholder="N.º de venta o nombre de producto"
             className={inputCls}
           />
         </div>
@@ -372,7 +531,7 @@ export function SalesClient({
           <thead className="bg-muted/50 text-left text-xs uppercase">
             <tr>
               <th className="px-3 py-2">Fecha</th>
-              <th className="px-3 py-2">ID de venta</th>
+              <th className="px-3 py-2">N.º venta</th>
               <th className="px-3 py-2">Pago</th>
               <th className="px-3 py-2">Estado</th>
               <th className="px-3 py-2">Cajero</th>
@@ -393,35 +552,49 @@ export function SalesClient({
                   </tr>
                 )
               : (
-                  rows.map(s => (
-                    <tr key={s.id} className="border-t">
-                      <td className="px-3 py-2 whitespace-nowrap">
-                        {dateFmt.format(new Date(s.createdAt))}
-                      </td>
-                      <td className="px-3 py-2 font-mono text-xs">
-                        {s.id.slice(0, 8)}
-                        …
-                      </td>
-                      <td className="px-3 py-2">{s.paymentType}</td>
-                      <td className="px-3 py-2">{s.status}</td>
-                      <td className="px-3 py-2 font-mono text-xs">
-                        {s.cashierId ?? '—'}
-                      </td>
-                      <td className="px-3 py-2 text-right font-medium">
-                        {formatMoney(s.total)}
-                      </td>
-                      <td className="px-3 py-2 text-right">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={detailLoading}
-                          onClick={() => openReturn(s.id)}
-                        >
-                          {s.hasReturn ? 'Dev. parcial' : 'Devolución'}
-                        </Button>
-                      </td>
-                    </tr>
-                  ))
+                  rows.map((s) => {
+                    const status = returnStatus(s);
+                    const fullyReturned = s.status === 'returned';
+                    return (
+                      <tr key={s.id} className="border-t">
+                        <td className="px-3 py-2 whitespace-nowrap">
+                          {dateFmt.format(new Date(s.createdAt))}
+                        </td>
+                        <td className="px-3 py-2 font-medium tabular-nums">
+                          {formatSaleNumber(s.saleNumber)}
+                        </td>
+                        <td className="px-3 py-2">{s.paymentType}</td>
+                        <td className="px-3 py-2">
+                          <Badge variant="outline" className={status.cls}>
+                            {status.label}
+                          </Badge>
+                        </td>
+                        <td className="px-3 py-2">
+                          <CashierCell
+                            name={s.cashierName}
+                            imageUrl={s.cashierImageUrl}
+                          />
+                        </td>
+                        <td className="px-3 py-2 text-right font-medium">
+                          {formatMoney(s.total)}
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={detailLoading || fullyReturned}
+                            onClick={() => openReturn(s.id)}
+                          >
+                            {fullyReturned
+                              ? 'Devuelta'
+                              : s.hasReturn
+                                ? 'Devolver más'
+                                : 'Devolver'}
+                          </Button>
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
           </tbody>
         </table>
@@ -457,14 +630,14 @@ export function SalesClient({
         </div>
       </div>
 
-      {/* ── Return modal ── */}
+      {/* ── Guided return modal ── */}
       {returnSale && (
         <div className="
           fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4
         "
         >
           <div className="
-            w-full max-w-md space-y-4 rounded-lg border bg-background p-6
+            w-full max-w-lg space-y-4 rounded-lg border bg-background p-6
             shadow-xl
           "
           >
@@ -472,8 +645,9 @@ export function SalesClient({
               <div>
                 <h2 className="font-semibold">Procesar devolución</h2>
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  Venta #
-                  {returnSale.id.slice(0, 6).toUpperCase()}
+                  Venta
+                  {' '}
+                  {formatSaleNumber(returnSale.saleNumber)}
                   {' '}
                   ·
                   {' '}
@@ -505,215 +679,442 @@ export function SalesClient({
                 )
               : (
                   <>
-                    <div className="space-y-2">
-                      <p className="
-                        text-xs font-medium tracking-wider text-muted-foreground
-                        uppercase
-                      "
-                      >
-                        Selecciona qué se devuelve
-                      </p>
-                      {returnSale.items.map((item) => {
-                        const remaining = remainingOf(item);
-                        const fullyReturned = remaining <= 0;
-                        const checked = selected.has(item.id) && !fullyReturned;
-                        const qty = qtys[item.id] ?? remaining;
+                    {/* Step indicator */}
+                    <ol className="flex items-center gap-1 text-xs">
+                      {RETURN_STEPS.map((label, i) => {
+                        const n = i + 1;
+                        const done = n < step;
+                        const current = n === step;
                         return (
-                          <div
-                            key={item.id}
-                            className={cn(
-                              `
-                                flex items-center gap-3 rounded-md border p-2.5
-                                transition-colors
-                              `,
-                              fullyReturned
-                                ? 'opacity-50'
-                                : checked
-                                  ? 'border-primary/40 bg-primary/5'
-                                  : 'opacity-70',
-                            )}
+                          <li
+                            key={label}
+                            className="flex flex-1 items-center gap-1"
                           >
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              disabled={fullyReturned}
-                              onChange={(e) => {
-                                setSelected((prev) => {
-                                  const next = new Set(prev);
-                                  if (e.target.checked) {
-                                    next.add(item.id);
-                                  } else {
-                                    next.delete(item.id);
-                                  }
-                                  return next;
-                                });
-                                if (e.target.checked && !qtys[item.id]) {
-                                  setQtys(q => ({ ...q, [item.id]: remaining }));
-                                }
-                              }}
-                              className="size-4 accent-primary"
-                            />
-                            <div className="min-w-0 flex-1">
-                              <span className="block truncate text-sm">
-                                {item.productName}
-                              </span>
-                              {item.returnedQty > 0 && (
-                                <span className="
-                                  text-[11px] font-medium text-amber-600
-                                  dark:text-amber-400
-                                "
-                                >
-                                  {item.returnedQty}
-                                  {' '}
-                                  ya devuelta(s)
-                                </span>
+                            <span
+                              className={cn(
+                                `
+                                  flex size-5 shrink-0 items-center
+                                  justify-center rounded-full text-[11px]
+                                  font-semibold
+                                `,
+                                current
+                                  ? 'bg-primary text-primary-foreground'
+                                  : done
+                                    ? 'bg-primary/15 text-primary'
+                                    : 'bg-muted text-muted-foreground',
                               )}
-                            </div>
-                            {fullyReturned
-                              ? (
-                                  <span className="
-                                    px-2 text-[11px] font-medium
-                                    text-muted-foreground
-                                  "
-                                  >
-                                    Devuelto
-                                  </span>
-                                )
-                              : (
-                                  <div className="flex items-center gap-1">
-                                    <button
-                                      type="button"
-                                      disabled={!checked}
-                                      onClick={() =>
-                                        setQtys(q => ({
-                                          ...q,
-                                          [item.id]: Math.max(
-                                            1,
-                                            (q[item.id] ?? remaining) - 1,
-                                          ),
-                                        }))}
-                                      className="
-                                        size-6 rounded-sm border text-sm
-                                        disabled:opacity-30
-                                      "
-                                    >
-                                      −
-                                    </button>
-                                    <span className="
-                                      w-8 text-center text-sm font-medium
-                                      tabular-nums
-                                    "
-                                    >
-                                      {qty}
-                                    </span>
-                                    <button
-                                      type="button"
-                                      disabled={!checked}
-                                      onClick={() =>
-                                        setQtys(q => ({
-                                          ...q,
-                                          [item.id]: Math.min(
-                                            remaining,
-                                            (q[item.id] ?? remaining) + 1,
-                                          ),
-                                        }))}
-                                      className="
-                                        size-6 rounded-sm border text-sm
-                                        disabled:opacity-30
-                                      "
-                                    >
-                                      +
-                                    </button>
-                                  </div>
-                                )}
-                            <span className="
-                              w-20 text-right text-xs text-muted-foreground
-                              tabular-nums
-                            "
                             >
-                              {fullyReturned
-                                ? '—'
-                                : formatMoney(lineRefund(item, qty))}
+                              {n}
                             </span>
-                          </div>
+                            <span
+                              className={cn(
+                                'truncate font-medium',
+                                current
+                                  ? 'text-foreground'
+                                  : 'text-muted-foreground',
+                              )}
+                            >
+                              {label}
+                            </span>
+                            {n < RETURN_STEPS.length && (
+                              <span className="
+                                mx-1 hidden h-px flex-1 bg-border
+                                sm:block
+                              "
+                              />
+                            )}
+                          </li>
                         );
                       })}
-                    </div>
+                    </ol>
 
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className={labelCls}>Motivo</label>
-                        <select
-                          value={reason}
-                          onChange={e =>
-                            setReason(e.target.value as ReturnReason)}
-                          className={inputCls}
-                        >
-                          {RETURN_REASONS.map(r => (
-                            <option key={r.value} value={r.value}>
-                              {r.label}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div>
-                        <label className={labelCls}>Reembolso en</label>
-                        <select
-                          value={refundMethod}
-                          onChange={e => setRefundMethod(e.target.value)}
-                          className={inputCls}
-                        >
-                          {methods.map(m => (
-                            <option key={m} value={m}>
-                              {m}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className={labelCls}>Notas (opcional)</label>
-                      <input
-                        type="text"
-                        value={notes}
-                        onChange={e => setNotes(e.target.value)}
-                        placeholder="Detalle adicional…"
-                        className={inputCls}
-                      />
-                    </div>
-
-                    <div className="
-                      rounded-md border border-amber-500/30 bg-amber-500/10 px-3
-                      py-2 text-xs text-amber-700
-                      dark:text-amber-400
-                    "
-                    >
-                      {refundIsCash
-                        ? 'Se restockea inventario y se registra la salida de efectivo en la caja abierta.'
-                        : 'Se restockea inventario. El reembolso queda registrado en el método indicado.'}
-                    </div>
-
-                    {submitError && (
-                      <div className="
-                        rounded-md border border-destructive/40
-                        bg-destructive/10 px-3 py-2 text-sm text-destructive
-                      "
-                      >
-                        {submitError}
+                    {/* Step 1 — products & quantities */}
+                    {step === 1 && (
+                      <div className="space-y-2">
+                        <p className="text-sm text-muted-foreground">
+                          Elegí qué productos y cuántas unidades vuelven.
+                        </p>
+                        {returnSale.items.map((item) => {
+                          const remaining = remainingOf(item);
+                          const fullyReturned = remaining <= 0;
+                          const checked
+                            = selected.has(item.id) && !fullyReturned;
+                          const qty = qtys[item.id] ?? remaining;
+                          return (
+                            <div
+                              key={item.id}
+                              className={cn(
+                                `
+                                  flex items-center gap-3 rounded-md border
+                                  p-2.5 transition-colors
+                                `,
+                                fullyReturned
+                                  ? 'opacity-50'
+                                  : checked
+                                    ? 'border-primary/40 bg-primary/5'
+                                    : 'opacity-70',
+                              )}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                disabled={fullyReturned}
+                                onChange={(e) => {
+                                  setSelected((prev) => {
+                                    const next = new Set(prev);
+                                    if (e.target.checked) {
+                                      next.add(item.id);
+                                    } else {
+                                      next.delete(item.id);
+                                    }
+                                    return next;
+                                  });
+                                  if (e.target.checked && !qtys[item.id]) {
+                                    setQtys(q => ({
+                                      ...q,
+                                      [item.id]: remaining,
+                                    }));
+                                  }
+                                }}
+                                className="size-4 accent-primary"
+                              />
+                              <div className="min-w-0 flex-1">
+                                <span className="block truncate text-sm">
+                                  {item.productName}
+                                </span>
+                                {item.returnedQty > 0 && (
+                                  <span className="
+                                    text-[11px] font-medium text-amber-600
+                                    dark:text-amber-400
+                                  "
+                                  >
+                                    {item.returnedQty}
+                                    {' '}
+                                    ya devuelta(s)
+                                  </span>
+                                )}
+                              </div>
+                              {fullyReturned
+                                ? (
+                                    <span className="
+                                      px-2 text-[11px] font-medium
+                                      text-muted-foreground
+                                    "
+                                    >
+                                      Devuelto
+                                    </span>
+                                  )
+                                : (
+                                    <div className="flex items-center gap-1">
+                                      <button
+                                        type="button"
+                                        disabled={!checked}
+                                        onClick={() =>
+                                          setQtys(q => ({
+                                            ...q,
+                                            [item.id]: Math.max(
+                                              1,
+                                              (q[item.id] ?? remaining) - 1,
+                                            ),
+                                          }))}
+                                        className="
+                                          size-6 rounded-sm border text-sm
+                                          disabled:opacity-30
+                                        "
+                                      >
+                                        −
+                                      </button>
+                                      <span className="
+                                        w-8 text-center text-sm font-medium
+                                        tabular-nums
+                                      "
+                                      >
+                                        {qty}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        disabled={!checked}
+                                        onClick={() =>
+                                          setQtys(q => ({
+                                            ...q,
+                                            [item.id]: Math.min(
+                                              remaining,
+                                              (q[item.id] ?? remaining) + 1,
+                                            ),
+                                          }))}
+                                        className="
+                                          size-6 rounded-sm border text-sm
+                                          disabled:opacity-30
+                                        "
+                                      >
+                                        +
+                                      </button>
+                                    </div>
+                                  )}
+                              <span className="
+                                w-20 text-right text-xs text-muted-foreground
+                                tabular-nums
+                              "
+                              >
+                                {fullyReturned
+                                  ? '—'
+                                  : formatMoney(lineRefund(item, qty))}
+                              </span>
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
 
-                    <div className="grid grid-cols-2 gap-2">
-                      <Button
-                        disabled={submitting || selectedCount === 0}
-                        onClick={confirmReturn}
-                      >
-                        {submitting ? 'Procesando…' : 'Confirmar devolución'}
-                      </Button>
-                      <Button variant="secondary" onClick={closeReturn}>
-                        Cancelar
-                      </Button>
+                    {/* Step 2 — reason */}
+                    {step === 2 && (
+                      <div className="space-y-3">
+                        <p className="text-sm text-muted-foreground">
+                          ¿Por qué devuelve el cliente?
+                        </p>
+                        <div className="grid grid-cols-1 gap-2">
+                          {RETURN_REASONS.map(r => (
+                            <button
+                              key={r.value}
+                              type="button"
+                              onClick={() => setReason(r.value)}
+                              className={cn(
+                                `
+                                  rounded-md border px-3 py-2 text-left text-sm
+                                  font-medium transition-colors
+                                `,
+                                reason === r.value
+                                  ? `
+                                    border-primary/50 bg-primary/5
+                                    text-foreground
+                                  `
+                                  : `
+                                    text-muted-foreground
+                                    hover:bg-accent
+                                  `,
+                              )}
+                            >
+                              {r.label}
+                            </button>
+                          ))}
+                        </div>
+                        <div>
+                          <label className={labelCls}>
+                            Observación
+                            {' '}
+                            {reason === 'other' ? '(obligatoria)' : '(opcional)'}
+                          </label>
+                          <input
+                            type="text"
+                            value={notes}
+                            onChange={e => setNotes(e.target.value)}
+                            placeholder="Detalle adicional…"
+                            className={cn(
+                              inputCls,
+                              otherNeedsNote && 'border-destructive/60',
+                            )}
+                          />
+                          {otherNeedsNote && (
+                            <p className="mt-1 text-[11px] text-destructive">
+                              Indicá el motivo para continuar.
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Step 3 — destination of the returned goods */}
+                    {step === 3 && (
+                      <div className="space-y-3">
+                        <p className="text-sm text-muted-foreground">
+                          ¿Qué ocurre con la mercancía devuelta?
+                        </p>
+                        <div className="grid grid-cols-1 gap-2">
+                          {RETURN_DISPOSITIONS.map(d => (
+                            <button
+                              key={d.value}
+                              type="button"
+                              onClick={() => setDisposition(d.value)}
+                              className={cn(
+                                `
+                                  rounded-md border px-3 py-2 text-left text-sm
+                                  font-medium transition-colors
+                                `,
+                                disposition === d.value
+                                  ? `
+                                    border-primary/50 bg-primary/5
+                                    text-foreground
+                                  `
+                                  : `
+                                    text-muted-foreground
+                                    hover:bg-accent
+                                  `,
+                              )}
+                            >
+                              {d.label}
+                            </button>
+                          ))}
+                        </div>
+                        {dispositionMeta && (
+                          <div className="
+                            rounded-md border border-sky-500/30 bg-sky-500/10
+                            px-3 py-2 text-xs text-sky-700
+                            dark:text-sky-300
+                          "
+                          >
+                            {dispositionMeta.help}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Step 4 — refund method */}
+                    {step === 4 && (
+                      <div className="space-y-3">
+                        <p className="text-sm text-muted-foreground">
+                          ¿Cómo se le devuelve el dinero al cliente?
+                        </p>
+                        <div>
+                          <label className={labelCls}>Reembolso en</label>
+                          <select
+                            value={refundMethod}
+                            onChange={e => setRefundMethod(e.target.value)}
+                            className={inputCls}
+                          >
+                            {methods.map(m => (
+                              <option key={m} value={m}>
+                                {m}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="
+                          rounded-md border border-amber-500/30 bg-amber-500/10
+                          px-3 py-2 text-xs text-amber-700
+                          dark:text-amber-400
+                        "
+                        >
+                          {refundIsCash
+                            ? 'Se registra la salida de efectivo en la caja abierta.'
+                            : 'El reembolso queda registrado en el método indicado.'}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Step 5 — confirm */}
+                    {step === 5 && (
+                      <div className="space-y-3">
+                        <p className="text-sm text-muted-foreground">
+                          Revisá antes de confirmar.
+                        </p>
+                        <dl className="space-y-2 rounded-md border p-3 text-sm">
+                          <div className="flex justify-between gap-3">
+                            <dt className="text-muted-foreground">Productos</dt>
+                            <dd className="text-right font-medium">
+                              {chosenItems.length}
+                              {' '}
+                              línea(s)
+                            </dd>
+                          </div>
+                          <div className="flex justify-between gap-3">
+                            <dt className="text-muted-foreground">Motivo</dt>
+                            <dd className="text-right font-medium">
+                              {reasonLabel}
+                            </dd>
+                          </div>
+                          <div className="flex justify-between gap-3">
+                            <dt className="text-muted-foreground">Destino</dt>
+                            <dd className="max-w-[60%] text-right font-medium">
+                              {dispositionMeta?.label ?? disposition}
+                            </dd>
+                          </div>
+                          <div className="flex justify-between gap-3">
+                            <dt className="text-muted-foreground">Reembolso</dt>
+                            <dd className="text-right font-medium">
+                              {refundMethod}
+                            </dd>
+                          </div>
+                          {notes.trim() && (
+                            <div className="flex justify-between gap-3">
+                              <dt className="text-muted-foreground">
+                                Observación
+                              </dt>
+                              <dd className="
+                                max-w-[60%] truncate text-right font-medium
+                              "
+                              >
+                                {notes.trim()}
+                              </dd>
+                            </div>
+                          )}
+                          <div className="
+                            flex justify-between gap-3 border-t pt-2
+                          "
+                          >
+                            <dt className="font-medium">Total a reembolsar</dt>
+                            <dd className="
+                              text-right font-semibold tabular-nums
+                            "
+                            >
+                              {formatMoney(totalRefund)}
+                            </dd>
+                          </div>
+                        </dl>
+
+                        {submitError && (
+                          <div className="
+                            rounded-md border border-destructive/40
+                            bg-destructive/10 px-3 py-2 text-sm text-destructive
+                          "
+                          >
+                            {submitError}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Footer navigation */}
+                    <div className="
+                      flex items-center justify-between gap-2 pt-1
+                    "
+                    >
+                      {step > 1
+                        ? (
+                            <Button
+                              variant="secondary"
+                              onClick={() => setStep(s => Math.max(1, s - 1))}
+                              disabled={submitting}
+                            >
+                              Atrás
+                            </Button>
+                          )
+                        : (
+                            <Button variant="secondary" onClick={closeReturn}>
+                              Cancelar
+                            </Button>
+                          )}
+
+                      {step < RETURN_STEPS.length
+                        ? (
+                            <Button
+                              onClick={() => setStep(s => s + 1)}
+                              disabled={!canAdvance(step)}
+                            >
+                              Siguiente
+                            </Button>
+                          )
+                        : (
+                            <Button
+                              onClick={confirmReturn}
+                              disabled={
+                                submitting
+                                || selectedCount === 0
+                                || otherNeedsNote
+                              }
+                            >
+                              {submitting ? 'Procesando…' : 'Confirmar devolución'}
+                            </Button>
+                          )}
                     </div>
                   </>
                 )}

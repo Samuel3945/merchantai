@@ -94,6 +94,10 @@ export const salesSchema = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     organizationId: text('organization_id').notNull(),
+    // Human-readable, per-organization sequential number (e.g. shown as "#1001").
+    // The UUID stays the internal/backend identifier; this is the commercial one.
+    // Allocated atomically via org_sale_counters — see libs/sale-number.ts.
+    saleNumber: integer('sale_number'),
     total: numeric('total', { precision: 10, scale: 2 }).notNull(),
     paymentType: text('payment_type').default('cash').notNull(),
     status: saleStatusEnum('status').default('completed').notNull(),
@@ -111,8 +115,25 @@ export const salesSchema = pgTable(
       table.status,
       table.createdAt,
     ),
+    // One commercial number per organization; lets lookups by number be exact.
+    uniqueIndex('sales_org_number_unique_idx').on(
+      table.organizationId,
+      table.saleNumber,
+    ),
   ],
 );
+
+// Per-organization monotonic counter behind the human-readable sale number.
+// A row is upserted-and-incremented inside the sale transaction so concurrent
+// POS and dashboard sales can never be handed the same number.
+export const orgSaleCountersSchema = pgTable('org_sale_counters', {
+  organizationId: text('organization_id').primaryKey(),
+  lastNumber: integer('last_number').default(0).notNull(),
+  updatedAt: timestamp('updated_at', { mode: 'date' })
+    .defaultNow()
+    .$onUpdate(() => new Date())
+    .notNull(),
+});
 
 export const saleItemsSchema = pgTable(
   'sale_items',
@@ -625,6 +646,18 @@ export const posReturnReasonEnum = pgEnum('pos_return_reason', [
   'price_error',
   'duplicate',
   'other',
+  // Added with the reason-vs-destination split: why the customer returns.
+  'business_error',
+  'warranty',
+]);
+
+// Destination of returned goods — what physically happens to the merchandise,
+// kept separate from the reason. Only 'restock' returns units to sellable stock.
+export const posReturnDispositionEnum = pgEnum('pos_return_disposition', [
+  'restock',
+  'damaged',
+  'warranty',
+  'discard',
 ]);
 
 export const posReturnsSchema = pgTable('pos_returns', {
@@ -661,6 +694,12 @@ export const posReturnItemsSchema = pgTable('pos_return_items', {
     .default('0')
     .notNull(),
   restock: boolean('restock').default(true).notNull(),
+  // Where the returned goods went. Only 'restock' adds them back to sellable
+  // stock; 'damaged' | 'warranty' | 'discard' are audit-only and never touch
+  // inventory. `restock` stays in sync (true iff disposition === 'restock').
+  disposition: posReturnDispositionEnum('disposition')
+    .default('restock')
+    .notNull(),
 });
 
 export const posReturnsRelations = relations(
