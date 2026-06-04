@@ -10,6 +10,7 @@ import {
   Settings,
   ShoppingCart,
   Sparkles,
+  Truck,
   UserCog,
   Users,
   Wallet,
@@ -53,6 +54,7 @@ export const navGroups: NavGroup[] = [
     title: 'Personas',
     items: [
       { href: '/dashboard/customers', label: 'Clientes', icon: Users },
+      { href: '/dashboard/suppliers', label: 'Proveedores', icon: Truck },
       { href: '/dashboard/employees', label: 'Empleados', icon: UserCog },
     ],
   },

@@ -45,6 +45,7 @@ const TENANT_TABLES: ReadonlySet<string> = new Set([
   'notifications',
   'audit_logs',
   'app_settings',
+  'suppliers',
 ]);
 
 const CHILD_TABLES: ReadonlySet<string> = new Set([

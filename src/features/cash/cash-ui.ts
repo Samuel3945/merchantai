@@ -14,7 +14,8 @@ export type Direction = 'in' | 'out';
 export type EntryMotivo = 'ajuste' | 'otro';
 
 /** Motivos shown when registering a Salida (cash out). */
-export type ExitMotivo = 'retiro_seguridad' | 'pago_gasto' | 'otro';
+export type ExitMotivo
+  = 'retiro_seguridad' | 'pago_gasto' | 'pago_proveedor' | 'otro';
 
 /** Expense categories for "Pago de gasto" outflows. */
 export type ExpenseCategory
@@ -33,6 +34,7 @@ export const ENTRY_MOTIVOS: { value: EntryMotivo; label: string }[] = [
 export const EXIT_MOTIVOS: { value: ExitMotivo; label: string }[] = [
   { value: 'retiro_seguridad', label: 'Retiro de seguridad' },
   { value: 'pago_gasto', label: 'Pago de gasto' },
+  { value: 'pago_proveedor', label: 'Pago a proveedor' },
   { value: 'otro', label: 'Otro' },
 ];
 
@@ -74,6 +76,12 @@ export function exitTypeFor(
   }
   if (motivo === 'pago_gasto') {
     return category === 'nomina' ? 'salary' : 'expense';
+  }
+  // Pago a proveedor is an operating expense (gasto operativo). The supplier link
+  // lives on cash_movements.supplier_id, so reports can isolate supplier payments
+  // by that FK — no separate financial record, single source of truth.
+  if (motivo === 'pago_proveedor') {
+    return 'expense';
   }
   // "Otro" salida — money left the drawer for an unspecified reason; treat it
   // as a generic expense (the dedicated non-expense case is retiro de seguridad).

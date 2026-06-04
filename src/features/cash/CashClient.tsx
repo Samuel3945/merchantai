@@ -134,7 +134,11 @@ export function CashClient(props: {
 
   function submitMovement(p: MovementSubmit) {
     run(
-      () => addCashMovement(p.type, p.amount, p.reason, { category: p.category }),
+      () =>
+        addCashMovement(p.type, p.amount, p.reason, {
+          category: p.category,
+          supplierId: p.supplierId,
+        }),
       () => setModal(null),
     );
   }

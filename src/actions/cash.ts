@@ -19,7 +19,11 @@ import {
   toMoney,
 } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
-import { cashMovementsSchema, cashSessionsSchema } from '@/models/Schema';
+import {
+  cashMovementsSchema,
+  cashSessionsSchema,
+  suppliersSchema,
+} from '@/models/Schema';
 import { notifyCashDifference } from './notifications';
 
 async function requireOrg() {
@@ -210,7 +214,11 @@ export async function addCashMovement(
   type: CashMovementType,
   amount: number | string,
   reason: string,
-  options?: { authorizedBy?: string | null; category?: string | null },
+  options?: {
+    authorizedBy?: string | null;
+    category?: string | null;
+    supplierId?: string | null;
+  },
 ): Promise<ActionResult<CashMovement>> {
   const { userId, orgId } = await requireOrg();
   const actor = await getActorName(userId);
@@ -240,6 +248,29 @@ export async function addCashMovement(
     return { ok: false, error: 'El monto debe ser mayor a 0' };
   }
 
+  // Supplier link is optional, but when present it must be a real, active
+  // supplier of this org — guards against stale or cross-tenant ids.
+  const supplierId = options?.supplierId ?? null;
+  if (supplierId) {
+    const [supplier] = await db
+      .select({ id: suppliersSchema.id })
+      .from(suppliersSchema)
+      .where(
+        and(
+          eq(suppliersSchema.id, supplierId),
+          eq(suppliersSchema.organizationId, orgId),
+          eq(suppliersSchema.status, 'active'),
+        ),
+      )
+      .limit(1);
+    if (!supplier) {
+      return {
+        ok: false,
+        error: 'El proveedor seleccionado no existe o está archivado',
+      };
+    }
+  }
+
   let movement: CashMovement;
   try {
     movement = await db.transaction(async (tx) => {
@@ -259,6 +290,7 @@ export async function addCashMovement(
           amount: amt,
           reason: reasonTrimmed,
           category: options?.category?.trim() || null,
+          supplierId,
           createdBy: actor,
           authorizedBy: options?.authorizedBy ?? null,
         })

@@ -215,25 +215,75 @@ export const cashSessionsSchema = pgTable(
   ],
 );
 
-export const cashMovementsSchema = pgTable('cash_movements', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  sessionId: uuid('session_id')
-    .notNull()
-    .references(() => cashSessionsSchema.id, { onDelete: 'cascade' }),
-  organizationId: text('organization_id').notNull(),
-  type: cashMovementTypeEnum('type').notNull(),
-  amount: numeric('amount', { precision: 12, scale: 2 }).notNull(),
-  reason: text('reason').notNull(),
-  // Optional expense category for "pago de gasto" outflows (nomina, servicios,
-  // arriendo, transporte, marketing, otros). Null for every other movement.
-  category: text('category'),
-  authorizedBy: text('authorized_by'),
-  createdBy: text('created_by').notNull(),
-  saleId: uuid('sale_id').references(() => salesSchema.id, {
-    onDelete: 'set null',
-  }),
-  createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
-});
+// ── Suppliers ────────────────────────────────────────────────────────────────
+// Vendors the business buys goods/services from. Owned by Caja today (supplier
+// payments) and intentionally generic so Compras, Inventario and Cuentas por
+// Pagar can reuse it later. Archived (soft) instead of deleted, so a supplier
+// with payment history can never be wiped and break the cash ledger.
+export const supplierStatusEnum = pgEnum('supplier_status', [
+  'active',
+  'archived',
+]);
+
+export const suppliersSchema = pgTable(
+  'suppliers',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: text('organization_id').notNull(),
+    name: text('name').notNull(),
+    company: text('company'),
+    phone: text('phone'),
+    email: text('email'),
+    city: text('city'),
+    address: text('address'),
+    taxId: text('tax_id'),
+    notes: text('notes'),
+    status: supplierStatusEnum('status').default('active').notNull(),
+    createdBy: text('created_by').notNull(),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
+  },
+  table => [
+    index('suppliers_org_status_idx').on(table.organizationId, table.status),
+    // NIT unique per org only when present — loading it stays optional.
+    uniqueIndex('suppliers_org_tax_id_idx')
+      .on(table.organizationId, table.taxId)
+      .where(sql`${table.taxId} IS NOT NULL`),
+  ],
+);
+
+export const cashMovementsSchema = pgTable(
+  'cash_movements',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sessionId: uuid('session_id')
+      .notNull()
+      .references(() => cashSessionsSchema.id, { onDelete: 'cascade' }),
+    organizationId: text('organization_id').notNull(),
+    type: cashMovementTypeEnum('type').notNull(),
+    amount: numeric('amount', { precision: 12, scale: 2 }).notNull(),
+    reason: text('reason').notNull(),
+    // Optional expense category for "pago de gasto" outflows (nomina, servicios,
+    // arriendo, transporte, marketing, otros). Null for every other movement.
+    category: text('category'),
+    authorizedBy: text('authorized_by'),
+    createdBy: text('created_by').notNull(),
+    saleId: uuid('sale_id').references(() => salesSchema.id, {
+      onDelete: 'set null',
+    }),
+    // Set only for supplier payments. Soft-archive keeps the row; set null is the
+    // safety net if a supplier is ever hard-deleted, so the movement survives.
+    supplierId: uuid('supplier_id').references(() => suppliersSchema.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+  },
+  table => [
+    index('cash_movements_org_supplier_idx')
+      .on(table.organizationId, table.supplierId)
+      .where(sql`${table.supplierId} IS NOT NULL`),
+  ],
+);
 
 export const cashSessionsRelations = relations(
   cashSessionsSchema,
@@ -253,8 +303,16 @@ export const cashMovementsRelations = relations(
       fields: [cashMovementsSchema.saleId],
       references: [salesSchema.id],
     }),
+    supplier: one(suppliersSchema, {
+      fields: [cashMovementsSchema.supplierId],
+      references: [suppliersSchema.id],
+    }),
   }),
 );
+
+export const suppliersRelations = relations(suppliersSchema, ({ many }) => ({
+  movements: many(cashMovementsSchema),
+}));
 
 export const posUserRoleEnum = pgEnum('pos_user_role', [
   'admin',
