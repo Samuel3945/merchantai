@@ -64,6 +64,20 @@
       "when": 1780601712800,
       "tag": "0008_cultured_satana",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1780614290423,
+      "tag": "0009_sales_number_and_counter",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1780614609826,
+      "tag": "0010_return_disposition",
+      "breakpoints": true
     }
   ]
 }

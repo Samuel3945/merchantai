@@ -1,6 +1,7 @@
 'use client';
 
 import type { DateRange } from 'react-day-picker';
+import type { RangeOption } from '@/utils/DateRange';
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Calendar } from '@/components/ui/calendar';
@@ -11,11 +12,7 @@ import {
 } from '@/components/ui/popover';
 import { cn } from '@/utils/Helpers';
 
-export type PresetOption = {
-  key: string;
-  label: string;
-  range: { start: string; end: string };
-};
+export type PresetOption = RangeOption;
 
 type Props = {
   start: string;
@@ -30,6 +27,12 @@ type Props = {
     compare: boolean;
     preset: string | null;
   }) => void;
+  /** Show the "compare previous period" toggle. Dashboard uses it; sales does not. */
+  showCompare?: boolean;
+  /** When provided, renders a "Limpiar" action that resets the range filter. */
+  onClear?: () => void;
+  /** Extra classes for the trigger button (e.g. "w-full" inside a filter grid). */
+  triggerClassName?: string;
 };
 
 // ISO 'YYYY-MM-DD' <-> local Date, kept TZ-neutral so the calendar shows the
@@ -68,9 +71,9 @@ function formatRange(start: string, end: string): string {
 }
 
 // Shopify-style range picker: a trigger that opens a popover with a preset
-// list on the left and a two-month calendar on the right, plus a compare
-// toggle. Date math stays in the parent (presets are precomputed); this
-// component only renders and stages the selection until "Aplicar".
+// list on the left and a two-month calendar on the right. Date math stays in
+// the parent (presets are precomputed); this component only renders and stages
+// the selection until "Aplicar". Shared across the dashboard and sales views.
 export function DateRangePicker({
   start,
   end,
@@ -79,6 +82,9 @@ export function DateRangePicker({
   presets,
   maxDate,
   onApply,
+  showCompare = true,
+  onClear,
+  triggerClassName,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [range, setRange] = useState<DateRange | undefined>({
@@ -117,6 +123,12 @@ export function DateRangePicker({
     setOpen(false);
   }
 
+  function clear() {
+    onClear?.();
+    setSelectedPreset(null);
+    setOpen(false);
+  }
+
   const triggerLabel
     = (activePreset && presets.find(p => p.key === activePreset)?.label)
       || formatRange(start, end);
@@ -126,9 +138,12 @@ export function DateRangePicker({
       <PopoverTrigger asChild>
         <Button
           variant="secondary"
-          className="h-9 justify-start font-medium"
+          className={cn(
+            'h-9 justify-start overflow-hidden font-medium',
+            triggerClassName,
+          )}
         >
-          {triggerLabel}
+          <span className="truncate">{triggerLabel}</span>
         </Button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-auto max-w-[95vw] p-0">
@@ -183,18 +198,32 @@ export function DateRangePicker({
               pt-2
             "
             >
-              <label className="
-                flex cursor-pointer items-center gap-2 text-sm font-medium
-              "
-              >
-                <input
-                  type="checkbox"
-                  checked={localCompare}
-                  onChange={e => setLocalCompare(e.target.checked)}
-                  className="size-4 accent-primary"
-                />
-                Comparar periodo anterior
-              </label>
+              <div className="flex items-center gap-3">
+                {showCompare && (
+                  <label className="
+                    flex cursor-pointer items-center gap-2 text-sm font-medium
+                  "
+                  >
+                    <input
+                      type="checkbox"
+                      checked={localCompare}
+                      onChange={e => setLocalCompare(e.target.checked)}
+                      className="size-4 accent-primary"
+                    />
+                    Comparar periodo anterior
+                  </label>
+                )}
+                {onClear && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={clear}
+                  >
+                    Limpiar
+                  </Button>
+                )}
+              </div>
               <div className="flex gap-2">
                 <Button
                   type="button"

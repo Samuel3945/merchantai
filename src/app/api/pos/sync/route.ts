@@ -5,6 +5,7 @@ import { applyInvoiceCustomerUpsert } from '@/features/customers/post-sale-hook'
 import { recordCashMovement, toMoney } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import { consumeFifoExits } from '@/libs/fifo-cogs';
+import { assignNextSaleNumber } from '@/libs/sale-number';
 import {
   productsSchema,
   saleItemsSchema,
@@ -156,10 +157,13 @@ export async function POST(req: Request): Promise<NextResponse> {
 
         const totalStr = toMoney(total);
 
+        const saleNumber = await assignNextSaleNumber(tx, orgId);
+
         const [sale] = await tx
           .insert(salesSchema)
           .values({
             organizationId: orgId,
+            saleNumber,
             total: totalStr,
             paymentType: queuedSale.paymentType || 'Efectivo',
             status: 'completed',

@@ -23,15 +23,30 @@ export const VALID_RETURN_REASONS = [
   'price_error',
   'duplicate',
   'other',
+  'business_error',
+  'warranty',
 ] as const;
 
 export type ReturnReason = (typeof VALID_RETURN_REASONS)[number];
+
+// Where the returned goods physically go. Only 'restock' returns units to
+// sellable stock; the rest are recorded for audit and do not touch inventory.
+export const VALID_RETURN_DISPOSITIONS = [
+  'restock',
+  'damaged',
+  'warranty',
+  'discard',
+] as const;
+
+export type ReturnDisposition = (typeof VALID_RETURN_DISPOSITIONS)[number];
 
 export type ReturnItemInput = {
   saleItemId?: string;
   qty?: number;
   refundAmount?: number | string;
+  /** @deprecated Prefer `disposition`; kept for older POS clients. */
   restock?: boolean;
+  disposition?: ReturnDisposition;
 };
 
 export type ApplySaleReturnParams = {
@@ -131,6 +146,7 @@ export async function applySaleReturn(
     qty: number;
     refundAmount: string;
     restock: boolean;
+    disposition: ReturnDisposition;
   };
 
   const resolved: Resolved[] = [];
@@ -169,6 +185,12 @@ export async function applySaleReturn(
       );
     }
 
+    // Disposition is the source of truth. Older POS clients that only sent
+    // `restock: false` are mapped to 'discard' (goods did not return to stock).
+    const disposition: ReturnDisposition
+      = it.disposition ?? (it.restock === false ? 'discard' : 'restock');
+    const restock = disposition === 'restock';
+
     totalRefund += amountNum;
     resolved.push({
       saleItemId: orig.id,
@@ -176,7 +198,8 @@ export async function applySaleReturn(
       productName: orig.productName,
       qty,
       refundAmount: toMoney(amountNum),
-      restock: it.restock !== false,
+      restock,
+      disposition,
     });
   }
 
@@ -211,6 +234,7 @@ export async function applySaleReturn(
         qty: r.qty,
         refundAmount: r.refundAmount,
         restock: r.restock,
+        disposition: r.disposition,
       })),
     )
     .returning();

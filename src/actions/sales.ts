@@ -1,9 +1,10 @@
 'use server';
 
 import type {
+  ReturnDisposition,
   ReturnReason,
 } from '@/libs/sale-returns';
-import { auth, currentUser } from '@clerk/nextjs/server';
+import { auth, clerkClient, currentUser } from '@clerk/nextjs/server';
 import {
   and,
   desc,
@@ -20,11 +21,13 @@ import { logAction } from '@/libs/audit-log';
 import { recordCashMovement } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import { consumeFifoExits } from '@/libs/fifo-cogs';
+import { assignNextSaleNumber } from '@/libs/sale-number';
 import { applySaleReturn } from '@/libs/sale-returns';
 import {
   posReturnItemsSchema,
   posReturnsSchema,
   posTokensSchema,
+  posUsersSchema,
   productsSchema,
   saleItemsSchema,
   salePaymentsSchema,
@@ -136,10 +139,13 @@ export async function createSale(input: CreateSaleInput) {
 
     const totalStr = toMoney(total);
 
+    const saleNumber = await assignNextSaleNumber(tx, orgId);
+
     const [sale] = await tx
       .insert(salesSchema)
       .values({
         organizationId: orgId,
+        saleNumber,
         total: totalStr,
         paymentType: input.paymentType,
         status: 'completed',
@@ -251,9 +257,67 @@ export async function createSale(input: CreateSaleInput) {
 
 export type Sale = typeof salesSchema.$inferSelect;
 
-// A sale row enriched with whether it already has any return on record, so the
-// listing can label the action button "Dev. parcial" vs "Devolución".
-export type SaleListRow = Sale & { hasReturn: boolean };
+// A sale row enriched for the listing: whether it already has any return on
+// record (drives the status badge / action label) and the cashier resolved to a
+// human name + optional avatar, so the table never shows a raw user id.
+export type SaleListRow = Sale & {
+  hasReturn: boolean;
+  cashierName: string | null;
+  cashierImageUrl: string | null;
+};
+
+const UUID_RE
+  = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Resolves sale cashier ids to display names in one batch per listing page.
+// POS cashiers are pos_users (uuid) with a stored name; dashboard sales carry a
+// Clerk user id ("user_..."), resolved best-effort via a single Clerk call.
+// No per-row lookups, no denormalized column, and it works for historical rows.
+async function resolveCashiers(
+  ids: string[],
+): Promise<Map<string, { name: string; imageUrl: string | null }>> {
+  const map = new Map<string, { name: string; imageUrl: string | null }>();
+  const unique = [...new Set(ids.filter(Boolean))];
+  if (unique.length === 0) {
+    return map;
+  }
+
+  const uuidIds = unique.filter(id => UUID_RE.test(id));
+  const clerkIds = unique.filter(id => id.startsWith('user_'));
+
+  if (uuidIds.length > 0) {
+    const rows = await db
+      .select({ id: posUsersSchema.id, name: posUsersSchema.name })
+      .from(posUsersSchema)
+      .where(inArray(posUsersSchema.id, uuidIds));
+    for (const r of rows) {
+      map.set(r.id, { name: r.name, imageUrl: null });
+    }
+  }
+
+  if (clerkIds.length > 0) {
+    try {
+      const client = await clerkClient();
+      const { data } = await client.users.getUserList({
+        userId: clerkIds,
+        limit: clerkIds.length,
+      });
+      for (const u of data) {
+        const name
+          = u.fullName
+            || [u.firstName, u.lastName].filter(Boolean).join(' ').trim()
+            || u.username
+            || u.primaryEmailAddress?.emailAddress
+            || 'Administrador';
+        map.set(u.id, { name, imageUrl: u.imageUrl || null });
+      }
+    } catch {
+      // Clerk unavailable → the UI falls back to initials for these rows.
+    }
+  }
+
+  return map;
+}
 
 export type ListSalesFilters = {
   limit?: number;
@@ -337,6 +401,7 @@ export async function listSales(
     const like = `%${search}%`;
     const f = or(
       sql`${salesSchema.id}::text ILIKE ${like}`,
+      sql`${salesSchema.saleNumber}::text ILIKE ${like}`,
       exists(
         db
           .select({ one: sql`1` })
@@ -373,8 +438,24 @@ export async function listSales(
       .where(whereClause),
   ]);
 
+  const cashierMap = await resolveCashiers(
+    items
+      .map(it => it.cashierId)
+      .filter((id): id is string => id != null && id !== ''),
+  );
+
+  const enriched: SaleListRow[] = items.map(it => ({
+    ...it,
+    cashierName: it.cashierId
+      ? (cashierMap.get(it.cashierId)?.name ?? null)
+      : null,
+    cashierImageUrl: it.cashierId
+      ? (cashierMap.get(it.cashierId)?.imageUrl ?? null)
+      : null,
+  }));
+
   return {
-    items,
+    items: enriched,
     total: totalRow[0]?.count ?? 0,
   };
 }
@@ -394,6 +475,7 @@ export type ReturnableItem = {
 
 export type SaleReturnDetail = {
   id: string;
+  saleNumber: number | null;
   total: string;
   status: string;
   items: ReturnableItem[];
@@ -415,6 +497,7 @@ export async function getSaleForReturn(
   const [sale] = await db
     .select({
       id: salesSchema.id,
+      saleNumber: salesSchema.saleNumber,
       total: salesSchema.total,
       status: salesSchema.status,
     })
@@ -455,7 +538,7 @@ export type ProcessReturnInput = {
     saleItemId: string;
     qty: number;
     refundAmount: number;
-    restock?: boolean;
+    disposition?: ReturnDisposition;
   }[];
   notes?: string | null;
   partial: boolean;

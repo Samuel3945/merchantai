@@ -1,6 +1,7 @@
 'use client';
 
 import type { DashboardMetrics } from '@/actions/dashboard';
+import type { RangePreset } from '@/utils/DateRange';
 import Link from 'next/link';
 import {
   useEffect,
@@ -19,8 +20,13 @@ import {
   YAxis,
 } from 'recharts';
 import { getMetrics } from '@/actions/dashboard';
+import { DateRangePicker } from '@/components/DateRangePicker';
+import {
+  buildPresetOptions,
+  computePreviousRange,
+  todayBogota,
+} from '@/utils/DateRange';
 import { cn } from '@/utils/Helpers';
-import { DateRangePicker } from './DateRangePicker';
 
 const moneyFmt = new Intl.NumberFormat('es-CO', {
   style: 'currency',
@@ -96,95 +102,6 @@ function formatDayLabel(day: string) {
   return dayFmt.format(new Date(Date.UTC(y, m - 1, d)));
 }
 
-function todayBogota(): string {
-  const now = new Date();
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/Bogota',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(now);
-  const y = parts.find(p => p.type === 'year')?.value ?? '1970';
-  const m = parts.find(p => p.type === 'month')?.value ?? '01';
-  const d = parts.find(p => p.type === 'day')?.value ?? '01';
-  return `${y}-${m}-${d}`;
-}
-
-function addDays(iso: string, days: number): string {
-  const [y, m, d] = iso.split('-').map(Number);
-  if (!y || !m || !d) {
-    return iso;
-  }
-  const date = new Date(Date.UTC(y, m - 1, d));
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
-}
-
-function diffDays(start: string, end: string): number {
-  const [ys, ms, ds] = start.split('-').map(Number);
-  const [ye, me, de] = end.split('-').map(Number);
-  if (!ys || !ms || !ds || !ye || !me || !de) {
-    return 0;
-  }
-  const a = Date.UTC(ys, ms - 1, ds);
-  const b = Date.UTC(ye, me - 1, de);
-  return Math.round((b - a) / 86_400_000);
-}
-
-function computePreviousRange(start: string, end: string) {
-  const span = diffDays(start, end);
-  const prevEnd = addDays(start, -1);
-  const prevStart = addDays(prevEnd, -span);
-  return { start: prevStart, end: prevEnd };
-}
-
-type Preset = 'today' | 'yesterday' | '7d' | '30d' | '90d' | 'mtd' | 'lastMonth';
-
-const PRESETS: { key: Preset; label: string }[] = [
-  { key: 'today', label: 'Hoy' },
-  { key: 'yesterday', label: 'Ayer' },
-  { key: '7d', label: 'Últimos 7 días' },
-  { key: '30d', label: 'Últimos 30 días' },
-  { key: '90d', label: 'Últimos 90 días' },
-  { key: 'mtd', label: 'Este mes' },
-  { key: 'lastMonth', label: 'Mes pasado' },
-];
-
-function presetRange(preset: Preset): { start: string; end: string } {
-  const end = todayBogota();
-  switch (preset) {
-    case 'today':
-      return { start: end, end };
-    case 'yesterday': {
-      const y = addDays(end, -1);
-      return { start: y, end: y };
-    }
-    case '7d':
-      return { start: addDays(end, -6), end };
-    case '30d':
-      return { start: addDays(end, -29), end };
-    case '90d':
-      return { start: addDays(end, -89), end };
-    case 'mtd':
-      return { start: `${end.slice(0, 7)}-01`, end };
-    case 'lastMonth': {
-      const [y, m] = end.split('-').map(Number);
-      const firstThis = new Date(Date.UTC(y ?? 1970, (m ?? 1) - 1, 1));
-      const lastPrev = new Date(firstThis);
-      lastPrev.setUTCDate(0); // rolls back to the last day of the previous month
-      const firstPrev = new Date(
-        Date.UTC(lastPrev.getUTCFullYear(), lastPrev.getUTCMonth(), 1),
-      );
-      return {
-        start: firstPrev.toISOString().slice(0, 10),
-        end: lastPrev.toISOString().slice(0, 10),
-      };
-    }
-    default:
-      return { start: addDays(end, -6), end };
-  }
-}
-
 /**
  * Hero KPI. Big number first, one supporting line (delta vs the comparison
  * period or a plain hint). This is the "glance every morning" tier — kept to a
@@ -231,7 +148,7 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
   const [start, setStart] = useState(initial.range.start);
   const [end, setEnd] = useState(initial.range.end);
   const [compare, setCompare] = useState<boolean>(initial.compareRange !== null);
-  const [activePreset, setActivePreset] = useState<Preset | null>(null);
+  const [activePreset, setActivePreset] = useState<RangePreset | null>(null);
 
   const [pending, startTransition] = useTransition();
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -259,11 +176,7 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
     };
   }, [start, end, compare]);
 
-  const presetOptions = PRESETS.map(p => ({
-    key: p.key,
-    label: p.label,
-    range: presetRange(p.key),
-  }));
+  const presetOptions = buildPresetOptions();
 
   function applyRange(next: {
     start: string;
@@ -274,7 +187,7 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
     setStart(next.start);
     setEnd(next.end);
     setCompare(next.compare);
-    setActivePreset((next.preset as Preset | null) ?? null);
+    setActivePreset((next.preset as RangePreset | null) ?? null);
   }
 
   const prev = data.previousPeriod;
