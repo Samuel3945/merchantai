@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import type { NavModuleFlags } from '@/features/dashboard/navItems';
 import { auth } from '@clerk/nextjs/server';
 import { getTranslations, setRequestLocale } from 'next-intl/server';
+import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { getAppSetting } from '@/actions/app-settings';
 import { getFraudAlerts } from '@/actions/cash';
@@ -68,9 +69,18 @@ export default async function DashboardLayout(props: DashboardLayoutProps) {
     employees: employeesSetting.value === 'true',
   };
 
+  // Sidebar collapsed/expanded preference, resolved server-side so the first
+  // paint matches the user's last choice (no hydration flash).
+  const cookieStore = await cookies();
+  const sidebarCollapsed = cookieStore.get('sidebar-collapsed')?.value === 'true';
+
   return (
     <div className="flex min-h-screen bg-background">
-      <DashboardSidebar cashBadge={cashBadge} navFlags={navFlags} />
+      <DashboardSidebar
+        cashBadge={cashBadge}
+        navFlags={navFlags}
+        defaultCollapsed={sidebarCollapsed}
+      />
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="
