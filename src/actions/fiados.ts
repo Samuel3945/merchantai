@@ -14,6 +14,7 @@ export type FiadoRisk = 'high' | 'mid' | 'low';
 
 export type FiadoSale = {
   id: string;
+  saleNumber: number | null;
   total: number;
   paid: number;
   pending: number;
@@ -116,6 +117,7 @@ export async function getPendingFiados(): Promise<GetPendingFiadosResult> {
   const sales = await db
     .selectDistinct({
       id: salesSchema.id,
+      saleNumber: salesSchema.saleNumber,
       total: salesSchema.total,
       notes: salesSchema.notes,
       paymentType: salesSchema.paymentType,
@@ -193,6 +195,7 @@ export async function getPendingFiados(): Promise<GetPendingFiadosResult> {
     }
     group.sales.push({
       id: s.id,
+      saleNumber: s.saleNumber,
       total,
       paid,
       pending,

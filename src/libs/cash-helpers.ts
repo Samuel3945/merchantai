@@ -1,6 +1,7 @@
 import { auth } from '@clerk/nextjs/server';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { db } from '@/libs/DB';
+import { formatSaleNumber } from '@/libs/sale-number';
 import {
   cashMovementsSchema,
   cashSessionsSchema,
@@ -156,6 +157,19 @@ export async function recordCashMovement(
     return null;
   }
 
+  // One lookup feeds both the cash-detection fallback (paymentType) and the
+  // human-readable movement label (saleNumber). Using the per-org sale number
+  // keeps the Caja ledger consistent with the Sales view (#1001) instead of a
+  // raw UUID prefix.
+  const [sale] = await db
+    .select({
+      paymentType: salesSchema.paymentType,
+      saleNumber: salesSchema.saleNumber,
+    })
+    .from(salesSchema)
+    .where(eq(salesSchema.id, saleId))
+    .limit(1);
+
   const [cashRow] = await db
     .select({
       sum: sql<string>`COALESCE(SUM(${salePaymentsSchema.amount}), 0)::text`,
@@ -171,12 +185,6 @@ export async function recordCashMovement(
   let cashAmount = Number.parseFloat(cashRow?.sum ?? '0') || 0;
 
   if (cashAmount === 0) {
-    const [sale] = await db
-      .select({ paymentType: salesSchema.paymentType })
-      .from(salesSchema)
-      .where(eq(salesSchema.id, saleId))
-      .limit(1);
-
     const pt = sale?.paymentType?.toLowerCase();
     if (pt && CASH_PAYMENT_METHODS.includes(pt)) {
       cashAmount = Number.parseFloat(toMoney(total)) || 0;
@@ -196,7 +204,7 @@ export async function recordCashMovement(
       organizationId: orgId,
       type: 'sale',
       amount: toMoney(cashAmount),
-      reason: `Venta #${saleId.slice(0, 6).toUpperCase()}`,
+      reason: `Venta ${formatSaleNumber(sale?.saleNumber ?? null)}`,
       createdBy: userId,
       saleId,
     })

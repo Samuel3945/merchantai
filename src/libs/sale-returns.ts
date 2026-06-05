@@ -1,6 +1,7 @@
 import type { db } from '@/libs/DB';
 import { and, eq, sql } from 'drizzle-orm';
 import { findOpenSession, toMoney } from '@/libs/cash-helpers';
+import { formatSaleNumber } from '@/libs/sale-number';
 import {
   cashMovementsSchema,
   posReturnItemsSchema,
@@ -111,7 +112,11 @@ export async function applySaleReturn(
   }
 
   const [sale] = await tx
-    .select({ id: salesSchema.id, status: salesSchema.status })
+    .select({
+      id: salesSchema.id,
+      status: salesSchema.status,
+      saleNumber: salesSchema.saleNumber,
+    })
     .from(salesSchema)
     .where(
       and(
@@ -297,7 +302,7 @@ export async function applySaleReturn(
         organizationId,
         type: 'adjustment',
         amount: toMoney(-totalRefund),
-        reason: `Devolución venta #${sale.id.slice(0, 6).toUpperCase()}${partial ? ' (parcial)' : ''}`,
+        reason: `Devolución venta ${formatSaleNumber(sale.saleNumber)}${partial ? ' (parcial)' : ''}`,
         createdBy: actorName,
         authorizedBy: actorName,
         saleId: sale.id,

@@ -10,6 +10,7 @@ import {
 } from '@/actions/fiados';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { formatSaleNumber } from '@/libs/sale-number';
 import { cn } from '@/utils/Helpers';
 
 const moneyFmt = new Intl.NumberFormat('es-CO', {
@@ -257,8 +258,7 @@ function ClientCard({
               "
             >
               <span className="font-mono">
-                #
-                {s.id.slice(0, 6)}
+                {formatSaleNumber(s.saleNumber)}
               </span>
               <span className="text-muted-foreground">
                 {dateFmt.format(new Date(s.createdAt))}
