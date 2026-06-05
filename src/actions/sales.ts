@@ -350,7 +350,9 @@ export async function listSales(
 
   const conds = [
     eq(salesSchema.organizationId, orgId),
-    inArray(salesSchema.status, ['completed', 'settled'] as const),
+    // Fully returned sales keep their row (status flips to 'returned'); they must
+    // stay visible in the listing with the "Devuelta totalmente" badge, not vanish.
+    inArray(salesSchema.status, ['completed', 'settled', 'returned'] as const),
   ];
 
   if (filters.start && filters.end) {
