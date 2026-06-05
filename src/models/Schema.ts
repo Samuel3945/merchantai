@@ -43,6 +43,16 @@ export const productStatusEnum = pgEnum('product_status', [
   'archived',
 ]);
 
+// Warranty coverage a product ships with. Acts as a *default template* only:
+// the binding warranty for a customer is snapshotted onto the sale line at sale
+// time (see sale_items.warranty*), because validity depends on the sale date.
+export const warrantyTypeEnum = pgEnum('warranty_type', [
+  'none',
+  'manufacturer',
+  'store',
+  'extended',
+]);
+
 export const productsSchema = pgTable(
   'products',
   {
@@ -63,6 +73,10 @@ export const productsSchema = pgTable(
     isWholesale: boolean('is_wholesale').default(false).notNull(),
     wholesaleTiers: jsonb('wholesale_tiers'),
     attributes: jsonb('attributes').default({}).notNull(),
+    // Warranty defaults (template). NULL warrantyType means "no warranty
+    // configured"; durationDays is the coverage length copied onto the sale line.
+    warrantyType: warrantyTypeEnum('warranty_type'),
+    warrantyDurationDays: integer('warranty_duration_days'),
     status: productStatusEnum('status').default('published').notNull(),
     publishAt: timestamp('publish_at', { mode: 'date' }),
     deleted: boolean('deleted').default(false).notNull(),
@@ -150,6 +164,12 @@ export const saleItemsSchema = pgTable(
     price: numeric('price', { precision: 10, scale: 2 }).notNull(),
     subtotal: numeric('subtotal', { precision: 10, scale: 2 }).notNull(),
     unitType: text('unit_type').default('unit').notNull(),
+    // Warranty snapshot — frozen at sale time. The product only provides the
+    // template; validity (warrantyEndsAt) is computed from the sale date so it
+    // never shifts if the product's defaults change later. NULL = no warranty.
+    warrantyType: warrantyTypeEnum('warranty_type'),
+    warrantyDurationDays: integer('warranty_duration_days'),
+    warrantyEndsAt: timestamp('warranty_ends_at', { mode: 'date' }),
   },
   table => [
     // Postgres does NOT auto-index FK columns. Metrics JOIN sale_items by
@@ -722,6 +742,76 @@ export const posReturnItemsRelations = relations(
     }),
     saleItem: one(saleItemsSchema, {
       fields: [posReturnItemsSchema.saleItemId],
+      references: [saleItemsSchema.id],
+    }),
+  }),
+);
+
+// ── Warranty claims ─────────────────────────────────────────────────────────
+// First-class entity from day one even though v1 only *reads* warranty validity
+// in the sale detail. Modelling it now avoids a painful migration when the claim
+// workflow (and WhatsApp/email notifications) ships in a later phase. A claim is
+// always anchored to the sale line that carries the warranty snapshot.
+export const warrantyClaimTypeEnum = pgEnum('warranty_claim_type', [
+  'exchange',
+  'refund',
+  'repair',
+]);
+
+export const warrantyClaimStatusEnum = pgEnum('warranty_claim_status', [
+  'pending',
+  'under_review',
+  'approved',
+  'rejected',
+  'closed',
+]);
+
+export const warrantyClaimsSchema = pgTable(
+  'warranty_claims',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: text('organization_id').notNull(),
+    saleId: uuid('sale_id')
+      .notNull()
+      .references(() => salesSchema.id, { onDelete: 'restrict' }),
+    saleItemId: uuid('sale_item_id')
+      .notNull()
+      .references(() => saleItemsSchema.id, { onDelete: 'restrict' }),
+    type: warrantyClaimTypeEnum('type').notNull(),
+    status: warrantyClaimStatusEnum('status').default('pending').notNull(),
+    notes: text('notes'),
+    resolution: text('resolution'),
+    // Reserved for the deferred notification phase — kept nullable so the table
+    // is forward-compatible without another migration.
+    notificationId: uuid('notification_id'),
+    createdBy: text('created_by'),
+    resolvedBy: text('resolved_by'),
+    resolvedAt: timestamp('resolved_at', { mode: 'date' }),
+    updatedAt: timestamp('updated_at', { mode: 'date' })
+      .defaultNow()
+      .$onUpdate(() => new Date())
+      .notNull(),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+  },
+  table => [
+    index('warranty_claims_org_status_idx').on(
+      table.organizationId,
+      table.status,
+    ),
+    index('warranty_claims_sale_idx').on(table.saleId),
+    index('warranty_claims_sale_item_idx').on(table.saleItemId),
+  ],
+);
+
+export const warrantyClaimsRelations = relations(
+  warrantyClaimsSchema,
+  ({ one }) => ({
+    sale: one(salesSchema, {
+      fields: [warrantyClaimsSchema.saleId],
+      references: [salesSchema.id],
+    }),
+    saleItem: one(saleItemsSchema, {
+      fields: [warrantyClaimsSchema.saleItemId],
       references: [saleItemsSchema.id],
     }),
   }),

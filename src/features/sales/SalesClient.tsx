@@ -14,6 +14,11 @@ import { DateRangePicker } from '@/components/DateRangePicker';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { formatSaleNumber } from '@/libs/sale-number';
+import {
+  isWarrantyActive,
+  WARRANTY_TYPE_LABELS,
+  warrantyDurationLabel,
+} from '@/libs/warranty';
 import { buildPresetOptions, todayBogota } from '@/utils/DateRange';
 import { cn } from '@/utils/Helpers';
 
@@ -59,6 +64,43 @@ const dateFmt = new Intl.DateTimeFormat('es-CO', {
   timeStyle: 'short',
   timeZone: 'America/Bogota',
 });
+
+const dateOnlyFmt = new Intl.DateTimeFormat('es-CO', {
+  dateStyle: 'medium',
+  timeZone: 'America/Bogota',
+});
+
+// Warranty validity line for a sale item — reads the snapshot frozen at sale
+// time, so it never shifts if the product's defaults change later.
+function WarrantyLine({ item }: { item: ReturnableItem }) {
+  if (!item.warrantyType || item.warrantyType === 'none' || !item.warrantyEndsAt) {
+    return null;
+  }
+  const endsAt = item.warrantyEndsAt instanceof Date
+    ? item.warrantyEndsAt
+    : new Date(item.warrantyEndsAt);
+  const active = isWarrantyActive(endsAt);
+  return (
+    <span className="mt-0.5 block text-[11px] text-muted-foreground">
+      {`🛡 ${WARRANTY_TYPE_LABELS[item.warrantyType]} · ${warrantyDurationLabel(item.warrantyDurationDays)} · `}
+      <span
+        className={cn(
+          'font-medium',
+          active
+            ? `
+              text-emerald-600
+              dark:text-emerald-400
+            `
+            : 'text-muted-foreground',
+        )}
+      >
+        {active
+          ? `Vigente hasta ${dateOnlyFmt.format(endsAt)}`
+          : `Vencida el ${dateOnlyFmt.format(endsAt)}`}
+      </span>
+    </span>
+  );
+}
 
 function formatMoney(value: string | number) {
   const n = typeof value === 'number' ? value : Number.parseFloat(value);
@@ -677,6 +719,7 @@ export function SalesClient({
                               <span className="block truncate text-sm">
                                 {item.productName}
                               </span>
+                              <WarrantyLine item={item} />
                               {item.returnedQty > 0 && (
                                 <span className="
                                   text-[11px] font-medium text-amber-600

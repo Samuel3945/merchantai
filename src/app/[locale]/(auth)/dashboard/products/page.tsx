@@ -10,12 +10,14 @@ export default async function DashboardProductsPage(props: {
   const { locale } = await props.params;
   setRequestLocale(locale);
 
-  const [initial, sellByWeight, wholesale, perishable] = await Promise.all([
-    listProducts(),
-    getAppSetting('features.sell_by_weight'),
-    getAppSetting('features.wholesale'),
-    getAppSetting('features.perishable'),
-  ]);
+  const [initial, sellByWeight, wholesale, perishable, warranty]
+    = await Promise.all([
+      listProducts(),
+      getAppSetting('features.sell_by_weight'),
+      getAppSetting('features.wholesale'),
+      getAppSetting('features.perishable'),
+      getAppSetting('features.warranty'),
+    ]);
 
   return (
     <>
@@ -29,6 +31,7 @@ export default async function DashboardProductsPage(props: {
           sellByWeight: sellByWeight.value === 'true',
           wholesale: wholesale.value === 'true',
           perishable: perishable.value === 'true',
+          warranty: warranty.value === 'true',
         }}
       />
     </>
