@@ -24,8 +24,6 @@ import { consumeFifoExits } from '@/libs/fifo-cogs';
 import { assignNextSaleNumber } from '@/libs/sale-number';
 import { applySaleReturn } from '@/libs/sale-returns';
 import {
-  posReturnItemsSchema,
-  posReturnsSchema,
   posTokensSchema,
   posUsersSchema,
   productsSchema,
@@ -270,6 +268,11 @@ export type Sale = typeof salesSchema.$inferSelect;
 // human name + optional avatar, so the table never shows a raw user id.
 export type SaleListRow = Sale & {
   hasReturn: boolean;
+  // True when every sold unit has been returned, computed by QUANTITY (returned
+  // units >= sold units) — not by status. A damaged full return keeps the sale
+  // 'completed', and a sale fully returned across several partials never flips
+  // to 'returned' either, so status alone would wrongly leave it reopenable.
+  fullyReturned: boolean;
   cashierName: string | null;
   cashierImageUrl: string | null;
 };
@@ -435,7 +438,27 @@ export async function listSales(
     db
       .select({
         ...getTableColumns(salesSchema),
-        hasReturn: sql<boolean>`EXISTS (SELECT 1 FROM ${posReturnsSchema} WHERE ${posReturnsSchema.saleId} = ${salesSchema.id})`,
+        // NOTE: these correlated subqueries are written with LITERAL table refs
+        // (sales.id, alias pr/pri/si) instead of drizzle column interpolation.
+        // Interpolating ${table.column} inside sql`` renders the column UNqualified
+        // (e.g. "id" not "sales"."id"); inside a subquery that bare "id" binds to
+        // the INNER table's own id, so the correlation silently never matches and
+        // the result is always false/0. Literal qualified names avoid that trap.
+        hasReturn: sql<boolean>`EXISTS (SELECT 1 FROM pos_returns pr WHERE pr.sale_id = sales.id)`,
+        // Returned units (across all returns) >= sold units. Reason-agnostic, so
+        // damaged full returns and totals reached via multiple partials both
+        // count as fully returned even though the sale row stays 'completed'.
+        fullyReturned: sql<boolean>`(
+          EXISTS (SELECT 1 FROM pos_returns pr WHERE pr.sale_id = sales.id)
+          AND COALESCE((
+            SELECT SUM(pri.qty)
+            FROM pos_return_items pri
+            JOIN sale_items si ON si.id = pri.sale_item_id
+            WHERE si.sale_id = sales.id
+          ), 0) >= COALESCE((
+            SELECT SUM(si2.qty) FROM sale_items si2 WHERE si2.sale_id = sales.id
+          ), 0)
+        )`,
       })
       .from(salesSchema)
       .where(whereClause)
@@ -529,10 +552,15 @@ export async function getSaleForReturn(
       qty: saleItemsSchema.qty,
       subtotal: saleItemsSchema.subtotal,
       unitType: saleItemsSchema.unitType,
+      // Literal table refs (alias pri + outer sale_items.id), NOT drizzle column
+      // interpolation: ${table.column} renders unqualified inside sql``, so a bare
+      // "id" in this correlated subquery would bind to pos_return_items' own id
+      // and the SUM would always be 0 (the bug that showed initial, not remaining,
+      // units in the return modal).
       returnedQty: sql<number>`COALESCE((
-        SELECT SUM(${posReturnItemsSchema.qty})
-        FROM ${posReturnItemsSchema}
-        WHERE ${posReturnItemsSchema.saleItemId} = ${saleItemsSchema.id}
+        SELECT SUM(pri.qty)
+        FROM pos_return_items pri
+        WHERE pri.sale_item_id = sale_items.id
       ), 0)::int`,
     })
     .from(saleItemsSchema)

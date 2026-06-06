@@ -127,7 +127,7 @@ function lineRefund(item: ReturnableItem, qty: number) {
 // `returned` means the whole sale came back; `hasReturn` on a non-returned sale
 // means some lines are still outstanding (partial); otherwise it is a clean sale.
 function returnStatus(row: SaleListRow): { label: string; cls: string } {
-  if (row.status === 'returned') {
+  if (row.fullyReturned) {
     return {
       label: 'Devuelta totalmente',
       cls: 'border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400',
@@ -510,7 +510,7 @@ export function SalesClient({
               : (
                   rows.map((s) => {
                     const status = returnStatus(s);
-                    const fullyReturned = s.status === 'returned';
+                    const fullyReturned = s.fullyReturned;
                     return (
                       <tr key={s.id} className="border-t">
                         <td className="px-3 py-2 whitespace-nowrap">
