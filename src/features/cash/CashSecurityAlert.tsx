@@ -33,11 +33,11 @@ const LEVEL_UI: Record<
 /**
  * Behavioural cash-security banner. Shows a learning state until there's enough
  * history, stays silent at `normal`, and escalates from a soft preventive nudge
- * to a prominent critical card — always offering the one-step quick withdrawal.
+ * to a prominent critical card — always offering a shortcut to record a cash-out.
  */
 export function CashSecurityAlert(props: {
   security: CashSecurityStatus;
-  onRetiro: () => void;
+  onWithdraw: () => void;
 }) {
   const { security } = props;
 
@@ -86,9 +86,9 @@ export function CashSecurityAlert(props: {
         <Button
           className="shrink-0"
           variant={security.level === 'critico' ? 'destructive' : 'default'}
-          onClick={props.onRetiro}
+          onClick={props.onWithdraw}
         >
-          Realizar retiro rápido
+          Registrar salida
         </Button>
       </div>
     </div>
