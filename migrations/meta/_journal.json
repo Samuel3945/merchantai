@@ -92,6 +92,13 @@
       "when": 1780708755218,
       "tag": "0012_abandoned_ben_grimm",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1780766007866,
+      "tag": "0013_remove_warranty",
+      "breakpoints": true
     }
   ]
 }

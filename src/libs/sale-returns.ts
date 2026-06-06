@@ -25,7 +25,6 @@ export const VALID_RETURN_REASONS = [
   'duplicate',
   'other',
   'business_error',
-  'warranty',
 ] as const;
 
 export type ReturnReason = (typeof VALID_RETURN_REASONS)[number];
@@ -35,7 +34,6 @@ export type ReturnReason = (typeof VALID_RETURN_REASONS)[number];
 export const VALID_RETURN_DISPOSITIONS = [
   'restock',
   'damaged',
-  'warranty',
   'discard',
 ] as const;
 
@@ -284,7 +282,7 @@ export async function applySaleReturn(
         createdBy: actorName,
       });
     }
-    // warranty | discard: recorded on pos_return_items.disposition only.
+    // discard: recorded on pos_return_items.disposition only.
   }
 
   if (!partial) {

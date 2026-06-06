@@ -1,4 +1,3 @@
-import type { WarrantyType } from '@/libs/warranty';
 import { and, asc, eq, sql } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { touchLastSync, validatePosToken } from '@/actions/pos-tokens';
@@ -7,7 +6,6 @@ import { recordCashMovement, toMoney } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import { consumeFifoExits } from '@/libs/fifo-cogs';
 import { assignNextSaleNumber } from '@/libs/sale-number';
-import { snapshotWarranty } from '@/libs/warranty';
 import {
   productsSchema,
   saleItemsSchema,
@@ -93,7 +91,6 @@ export async function POST(req: Request): Promise<NextResponse> {
         throw new Error('Sale must include at least one item');
       }
 
-      const saleDate = new Date();
       const { saleId, total: saleTotal } = await db.transaction(async (tx) => {
         let total = 0;
         const itemsToInsert: {
@@ -103,9 +100,6 @@ export async function POST(req: Request): Promise<NextResponse> {
           price: string;
           subtotal: string;
           unitType: string;
-          warrantyType: WarrantyType | null;
-          warrantyDurationDays: number | null;
-          warrantyEndsAt: Date | null;
         }[] = [];
         // products.cost per line, aligned by index, for FIFO fallback valuation.
         const lineFallbackCost: string[] = [];
@@ -150,8 +144,6 @@ export async function POST(req: Request): Promise<NextResponse> {
           const subtotal = unitPrice * qty;
           total += subtotal;
 
-          const warranty = snapshotWarranty(product, saleDate);
-
           itemsToInsert.push({
             productId: product.id,
             productName: product.name,
@@ -159,9 +151,6 @@ export async function POST(req: Request): Promise<NextResponse> {
             price: toMoney(unitPrice),
             subtotal: toMoney(subtotal),
             unitType: product.unitType,
-            warrantyType: warranty.warrantyType,
-            warrantyDurationDays: warranty.warrantyDurationDays,
-            warrantyEndsAt: warranty.warrantyEndsAt,
           });
           lineFallbackCost.push(product.cost);
         }

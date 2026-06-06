@@ -1,4 +1,3 @@
-import type { WarrantyType } from '@/libs/warranty';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { applyInvoiceCustomerUpsert } from '@/features/customers/post-sale-hook';
@@ -8,7 +7,6 @@ import { db } from '@/libs/DB';
 import { consumeFifoExits } from '@/libs/fifo-cogs';
 import { resolvePosAuth } from '@/libs/pos-auth';
 import { assignNextSaleNumber } from '@/libs/sale-number';
-import { snapshotWarranty } from '@/libs/warranty';
 import {
   productsSchema,
   saleItemsSchema,
@@ -88,7 +86,6 @@ export async function POST(req: Request): Promise<NextResponse> {
   }
 
   try {
-    const saleDate = new Date();
     const result = await db.transaction(async (tx) => {
       let total = 0;
       const itemsToInsert: {
@@ -98,9 +95,6 @@ export async function POST(req: Request): Promise<NextResponse> {
         price: string;
         subtotal: string;
         unitType: string;
-        warrantyType: WarrantyType | null;
-        warrantyDurationDays: number | null;
-        warrantyEndsAt: Date | null;
       }[] = [];
       // products.cost per line, aligned by index, for FIFO fallback valuation.
       const lineFallbackCost: string[] = [];
@@ -147,8 +141,6 @@ export async function POST(req: Request): Promise<NextResponse> {
         const subtotal = unitPrice * qty;
         total += subtotal;
 
-        const warranty = snapshotWarranty(product, saleDate);
-
         itemsToInsert.push({
           productId: product.id,
           productName: product.name,
@@ -156,9 +148,6 @@ export async function POST(req: Request): Promise<NextResponse> {
           price: toMoney(unitPrice),
           subtotal: toMoney(subtotal),
           unitType: product.unitType,
-          warrantyType: warranty.warrantyType,
-          warrantyDurationDays: warranty.warrantyDurationDays,
-          warrantyEndsAt: warranty.warrantyEndsAt,
         });
         lineFallbackCost.push(product.cost);
       }

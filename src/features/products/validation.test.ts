@@ -89,29 +89,4 @@ describe('productCreateSchema', () => {
     expect(r.success).toBe(false);
     expect(r.error?.issues.some(i => i.path.includes('publishAt'))).toBe(true);
   });
-
-  it('requires a duration when a warranty type is set', () => {
-    const r = productCreateSchema.safeParse({ ...base, warrantyType: 'store' });
-
-    expect(r.success).toBe(false);
-    expect(
-      r.error?.issues.some(i => i.path.includes('warrantyDurationDays')),
-    ).toBe(true);
-  });
-
-  it('accepts a warranty with type and duration', () => {
-    const r = productCreateSchema.safeParse({
-      ...base,
-      warrantyType: 'store',
-      warrantyDurationDays: 365,
-    });
-
-    expect(r.success).toBe(true);
-  });
-
-  it('accepts "none" warranty without a duration', () => {
-    const r = productCreateSchema.safeParse({ ...base, warrantyType: 'none' });
-
-    expect(r.success).toBe(true);
-  });
 });
