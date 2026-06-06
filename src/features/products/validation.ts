@@ -19,12 +19,6 @@ export const productStatus = z.enum([
   'published',
   'archived',
 ]);
-export const warrantyType = z.enum([
-  'none',
-  'manufacturer',
-  'store',
-  'extended',
-]);
 
 // Base fields shared by create and update. Initial-inventory fields live only on
 // the create schema — they describe the opening stock batch, not editable later.
@@ -53,15 +47,6 @@ const productBaseSchema = z.object({
   isWholesale: z.coerce.boolean().optional().default(false),
   wholesaleTiers: z.array(wholesaleTierSchema).nullable().optional(),
   attributes: z.record(z.string(), z.unknown()).optional().default({}),
-  // Warranty defaults (template). Only meaningful when the org enabled the
-  // warranty feature; otherwise the form never sends them.
-  warrantyType: warrantyType.nullable().optional(),
-  warrantyDurationDays: z.coerce
-    .number()
-    .int()
-    .positive()
-    .nullable()
-    .optional(),
   status: productStatus.optional().default('published'),
   publishAt: z.coerce.date().nullable().optional(),
 });
@@ -76,8 +61,6 @@ function refineProduct(
     status?: string;
     publishAt?: Date | null;
     isPerishable?: boolean;
-    warrantyType?: string | null;
-    warrantyDurationDays?: number | null;
     initialQty?: number;
     initialCost?: string | null;
     initialExpiresAt?: string | null;
@@ -114,20 +97,6 @@ function refineProduct(
 
   if (data.status === 'scheduled' && !data.publishAt) {
     ctx.addIssue({ code: 'custom', path: ['publishAt'], message: 'Indica la fecha de publicación' });
-  }
-
-  // A warranty type other than "none" needs a coverage length to compute the
-  // end date that gets snapshotted onto each sale.
-  if (
-    data.warrantyType != null
-    && data.warrantyType !== 'none'
-    && (data.warrantyDurationDays == null || data.warrantyDurationDays <= 0)
-  ) {
-    ctx.addIssue({
-      code: 'custom',
-      path: ['warrantyDurationDays'],
-      message: 'Indica la duración de la garantía.',
-    });
   }
 
   const qty = data.initialQty ?? 0;

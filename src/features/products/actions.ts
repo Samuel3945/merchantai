@@ -198,8 +198,6 @@ export async function createProduct(input: ProductCreateInput) {
         isWholesale: data.isWholesale,
         wholesaleTiers: data.wholesaleTiers ?? null,
         attributes: data.attributes,
-        warrantyType: data.warrantyType ?? null,
-        warrantyDurationDays: data.warrantyDurationDays ?? null,
         status: data.status,
         publishAt: data.publishAt ?? null,
       })
@@ -340,12 +338,6 @@ export async function updateProduct(id: string, input: ProductUpdateInput) {
           wholesaleTiers: data.wholesaleTiers,
         }),
         ...(data.attributes !== undefined && { attributes: data.attributes }),
-        ...(data.warrantyType !== undefined && {
-          warrantyType: data.warrantyType,
-        }),
-        ...(data.warrantyDurationDays !== undefined && {
-          warrantyDurationDays: data.warrantyDurationDays,
-        }),
         // Status is owned by the state-machine transitions (setProductStatus),
         // never by a general field edit — the edit form no longer sends it.
       })

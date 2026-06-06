@@ -39,7 +39,6 @@ export type BusinessTabValues = {
   'features.sell_by_weight': boolean;
   'features.wholesale': boolean;
   'features.perishable': boolean;
-  'features.warranty': boolean;
 };
 
 export function BusinessTab({ initial }: { initial: BusinessTabValues }) {
@@ -56,8 +55,7 @@ export function BusinessTab({ initial }: { initial: BusinessTabValues }) {
     key:
       | 'features.sell_by_weight'
       | 'features.wholesale'
-      | 'features.perishable'
-      | 'features.warranty',
+      | 'features.perishable',
     value: boolean,
   ) => save(key, value ? 'true' : 'false', { notifyConfigChange: true });
 
@@ -293,12 +291,6 @@ export function BusinessTab({ initial }: { initial: BusinessTabValues }) {
             description="Marca productos que se vencen (lácteos, carnes, panadería) y controla la caducidad por lote."
             initial={initial['features.perishable']}
             onCommit={v => persistFeature('features.perishable', v)}
-          />
-          <ToggleRow
-            label="Gestionar garantías"
-            description="Agrega tipo y duración de garantía a los productos y muestra la vigencia en cada venta."
-            initial={initial['features.warranty']}
-            onCommit={v => persistFeature('features.warranty', v)}
           />
         </div>
       </div>

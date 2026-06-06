@@ -3,7 +3,6 @@
 import type { ProductRow } from './actions';
 import type { AttrRow } from './AttributesEditor';
 import type { UITier } from './WholesaleTiersEditor';
-import type { WarrantyType } from '@/libs/warranty';
 import {
   Archive,
   ArchiveRestore,
@@ -30,10 +29,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import {
-  WARRANTY_DURATION_OPTIONS,
-  WARRANTY_TYPE_OPTIONS,
-} from '@/libs/warranty';
 import { cn } from '@/utils/Helpers';
 import {
   createProduct,
@@ -66,8 +61,6 @@ const STATUS_BADGE: Record<ProductStatus, string> = {
     'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400',
 };
 
-type WarrantyTypeForm = WarrantyType;
-
 type ProductFormState = {
   name: string;
   barcode: string;
@@ -77,8 +70,6 @@ type ProductFormState = {
   unitType: 'unit' | 'kg';
   isPerishable: boolean;
   isWholesale: boolean;
-  warrantyType: WarrantyTypeForm;
-  warrantyDurationDays: string;
   tiers: UITier[];
   attributes: AttrRow[];
   // Opening inventory — create-only.
@@ -96,8 +87,6 @@ const emptyForm: ProductFormState = {
   unitType: 'unit',
   isPerishable: false,
   isWholesale: false,
-  warrantyType: 'none',
-  warrantyDurationDays: '',
   tiers: [],
   attributes: [],
   initialQty: '',
@@ -117,8 +106,6 @@ function toFormState(p: ProductRow): ProductFormState {
     unitType: p.unitType,
     isPerishable: p.isPerishable,
     isWholesale: p.isWholesale,
-    warrantyType: (p.warrantyType as WarrantyTypeForm | null) ?? 'none',
-    warrantyDurationDays: p.warrantyDurationDays != null ? String(p.warrantyDurationDays) : '',
     tiers: tiers.map(t => ({ minQty: String(t.minQty), price: String(t.price) })),
     attributes: Object.entries(attrs).map(([key, value]) => ({
       key,
@@ -155,7 +142,6 @@ export type ProductFeatureFlags = {
   sellByWeight: boolean;
   wholesale: boolean;
   perishable: boolean;
-  warranty: boolean;
 };
 
 export function ProductsClient({
@@ -302,13 +288,6 @@ export function ProductsClient({
           .filter(t => Number.isFinite(t.minQty) && t.minQty >= 2 && t.price !== '')
       : null;
 
-    const hasWarranty = features.warranty && form.warrantyType !== 'none';
-    const warrantyType = hasWarranty ? form.warrantyType : null;
-    const warrantyDurationDays
-      = hasWarranty && form.warrantyDurationDays !== ''
-        ? Number.parseInt(form.warrantyDurationDays, 10)
-        : null;
-
     const common = {
       name: form.name,
       barcode: form.barcode.trim() === '' ? null : form.barcode.trim(),
@@ -320,8 +299,6 @@ export function ProductsClient({
       isWholesale: form.isWholesale,
       wholesaleTiers,
       attributes,
-      warrantyType,
-      warrantyDurationDays,
     };
 
     startTransition(async () => {
@@ -713,62 +690,6 @@ export function ProductsClient({
                   tiers={form.tiers}
                   onChange={tiers => setForm(f => ({ ...f, tiers }))}
                 />
-              )}
-
-              {features.warranty && (
-                <div className="space-y-2 rounded-md border bg-muted/30 p-3">
-                  <p className="
-                    text-xs font-semibold tracking-wider text-muted-foreground
-                    uppercase
-                  "
-                  >
-                    Garantía
-                  </p>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="text-[11px] text-muted-foreground">Tipo</label>
-                      <select
-                        value={form.warrantyType}
-                        onChange={e => setForm({
-                          ...form,
-                          warrantyType: e.target.value as WarrantyTypeForm,
-                        })}
-                        className={cn(inputCls, 'mt-1')}
-                      >
-                        {WARRANTY_TYPE_OPTIONS.map(opt => (
-                          <option key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    {form.warrantyType !== 'none' && (
-                      <div>
-                        <label className="text-[11px] text-muted-foreground">
-                          Duración
-                        </label>
-                        <select
-                          value={form.warrantyDurationDays}
-                          onChange={e => setForm({
-                            ...form,
-                            warrantyDurationDays: e.target.value,
-                          })}
-                          className={cn(inputCls, 'mt-1')}
-                        >
-                          <option value="">Selecciona…</option>
-                          {WARRANTY_DURATION_OPTIONS.map(opt => (
-                            <option key={opt.days} value={String(opt.days)}>
-                              {opt.label}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    La vigencia se calcula desde la fecha de cada venta.
-                  </p>
-                </div>
               )}
 
               {!editing && (
