@@ -17,7 +17,6 @@ import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
 import {
   productsSchema,
-  saleItemsSchema,
   stockMovementsSchema,
 } from '@/models/Schema';
 import {
@@ -65,19 +64,25 @@ export type ProductRow = Product & {
 // unique UUID PK that the outer query already scopes to the org, and a child row
 // (sale_item/movement) can only reference a product owned by that same org — so
 // cross-tenant leakage is impossible by construction.
+//
+// LITERAL table refs (alias si/sm + outer products.id), NOT drizzle column
+// interpolation: ${table.column} renders UNqualified inside sql``, so a bare
+// "id" in this correlated subquery would bind to the inner table's own id
+// (sale_items/stock_movements both have an id PK) and the EXISTS would always be
+// false — wrongly marking every product as virgin/deletable. Every site that
+// uses these probes selects `.from(productsSchema)` unaliased, so `products.id`
+// resolves to the outer row.
 const hasSalesSql = sql<boolean>`EXISTS (
-  SELECT 1 FROM ${saleItemsSchema}
-  WHERE ${saleItemsSchema.productId} = ${productsSchema.id}
+  SELECT 1 FROM sale_items si WHERE si.product_id = products.id
 )`;
 const hasMovementsSql = sql<boolean>`EXISTS (
-  SELECT 1 FROM ${stockMovementsSchema}
-  WHERE ${stockMovementsSchema.productId} = ${productsSchema.id}
+  SELECT 1 FROM stock_movements sm WHERE sm.product_id = products.id
 )`;
 const hasDatedBatchesSql = sql<boolean>`EXISTS (
-  SELECT 1 FROM ${stockMovementsSchema}
-  WHERE ${stockMovementsSchema.productId} = ${productsSchema.id}
-    AND ${stockMovementsSchema.expiresAt} IS NOT NULL
-    AND COALESCE(${stockMovementsSchema.remainingQty}, 0) > 0
+  SELECT 1 FROM stock_movements sm
+  WHERE sm.product_id = products.id
+    AND sm.expires_at IS NOT NULL
+    AND COALESCE(sm.remaining_qty, 0) > 0
 )`;
 
 export async function listProducts(params?: {
