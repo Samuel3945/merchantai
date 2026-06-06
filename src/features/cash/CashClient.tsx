@@ -6,7 +6,6 @@ import type {
   CashSecurityStatus,
   GetCurrentCashResult,
   TodayCashKpis,
-  WithdrawalDestino,
 } from '@/actions/cash';
 import type { ActionResult } from '@/libs/action-result';
 import type { CashSession } from '@/libs/cash-helpers';
@@ -16,7 +15,6 @@ import {
   addCashMovement,
   closeCashSession,
   openCashSession,
-  quickWithdraw,
 } from '@/actions/cash';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/utils/Helpers';
@@ -25,7 +23,6 @@ import { cashInputCls, money, relativeTime } from './cash-ui';
 import { CashSecurityAlert } from './CashSecurityAlert';
 import { DenominationCounter } from './DenominationCounter';
 import { MovementModal } from './MovementModal';
-import { RetiroRapidoModal } from './RetiroRapidoModal';
 
 type FraudAlert = {
   kind: string;
@@ -106,7 +103,6 @@ export function CashClient(props: {
 
   const [opening, setOpening] = useState('');
   const [modal, setModal] = useState<Direction | null>(null);
-  const [retiroOpen, setRetiroOpen] = useState(false);
   const [counted, setCounted] = useState('');
   const [closeNote, setCloseNote] = useState('');
 
@@ -154,19 +150,6 @@ export function CashClient(props: {
     );
   }
 
-  function submitRetiro(amount: string, destino: WithdrawalDestino) {
-    run(
-      () => quickWithdraw(amount, destino),
-      () => setRetiroOpen(false),
-    );
-  }
-
-  const overThreshold
-    = props.security.state === 'ready'
-      && props.security.currentCash > props.security.threshold
-      ? props.security.currentCash - props.security.threshold
-      : undefined;
-
   const closedSessions = props.sessions.filter(s => s.status === 'closed');
 
   return (
@@ -192,7 +175,7 @@ export function CashClient(props: {
 
       <CashSecurityAlert
         security={props.security}
-        onRetiro={() => setRetiroOpen(true)}
+        onWithdraw={() => openModal('out')}
       />
 
       {error && !modal && (
@@ -319,7 +302,7 @@ export function CashClient(props: {
               {/* Acciones rápidas */}
               <div className="
                 grid grid-cols-1 gap-3
-                sm:grid-cols-3
+                sm:grid-cols-2
               "
               >
                 <Button
@@ -338,15 +321,6 @@ export function CashClient(props: {
                   onClick={() => openModal('out')}
                 >
                   − Salida
-                </Button>
-                <Button
-                  size="lg"
-                  variant="outline"
-                  className="h-14 text-base"
-                  disabled={pending}
-                  onClick={() => setRetiroOpen(true)}
-                >
-                  Retiro rápido
                 </Button>
               </div>
 
@@ -534,16 +508,6 @@ export function CashClient(props: {
           error={error}
           onClose={() => setModal(null)}
           onSubmit={submitMovement}
-        />
-      )}
-
-      {retiroOpen && (
-        <RetiroRapidoModal
-          pending={pending}
-          error={error}
-          suggestedAmount={overThreshold}
-          onClose={() => setRetiroOpen(false)}
-          onSubmit={submitRetiro}
         />
       )}
     </div>

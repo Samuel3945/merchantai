@@ -605,26 +605,3 @@ export async function getCashSecurityStatus(): Promise<CashSecurityStatus> {
     reasoning,
   };
 }
-
-export type WithdrawalDestino = 'caja_fuerte' | 'banco' | 'oficina' | 'otro';
-
-const DESTINO_LABEL: Record<WithdrawalDestino, string> = {
-  caja_fuerte: 'Caja fuerte',
-  banco: 'Banco',
-  oficina: 'Oficina',
-  otro: 'Otro',
-};
-
-// One-step security withdrawal for the "Retiro rápido" modal. Records a
-// `withdrawal` movement (cash out, not a P&L expense) reusing addCashMovement so
-// the open-session and amount validations stay in one place.
-export async function quickWithdraw(
-  amount: number | string,
-  destino: WithdrawalDestino,
-): Promise<ActionResult<CashMovement>> {
-  const label = DESTINO_LABEL[destino];
-  if (!label) {
-    return { ok: false, error: 'Destino inválido' };
-  }
-  return addCashMovement('withdrawal', amount, `Retiro de seguridad — ${label}`);
-}
