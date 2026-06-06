@@ -20,6 +20,7 @@ import {
   useState,
   useTransition,
 } from 'react';
+import { DatePicker } from '@/components/DatePicker';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -393,19 +394,26 @@ export function ProductsClient({
           placeholder="Buscar por nombre, código de barras o categoría"
           className={cn(inputCls, 'max-w-md')}
         />
-        <label className="
-          flex cursor-pointer items-center gap-2 text-sm text-muted-foreground
-          select-none
-        "
+        <button
+          type="button"
+          onClick={() => setShowArchived(v => !v)}
+          aria-pressed={showArchived}
+          className={cn(
+            `
+              flex items-center gap-2 rounded-md border px-3 py-2 text-sm
+              font-medium transition-colors
+            `,
+            showArchived
+              ? 'border-primary bg-primary/10 text-primary'
+              : `
+                border-input text-muted-foreground
+                hover:bg-accent
+              `,
+          )}
         >
-          <input
-            type="checkbox"
-            checked={showArchived}
-            onChange={e => setShowArchived(e.target.checked)}
-            className="size-4 accent-primary"
-          />
+          <Archive className="size-4" />
           Ver archivados
-        </label>
+        </button>
         <Button onClick={openCreate}>Nuevo artículo</Button>
         <div className="ml-auto text-sm text-muted-foreground">
           {rows.length}
@@ -779,11 +787,12 @@ export function ProductsClient({
                     <div>
                       <label className="text-[11px] text-muted-foreground">Cantidad</label>
                       <input
-                        type="number"
-                        min="0"
-                        step="1"
+                        inputMode="numeric"
                         value={form.initialQty}
-                        onChange={e => setForm({ ...form, initialQty: e.target.value })}
+                        onChange={e => setForm({
+                          ...form,
+                          initialQty: e.target.value.replace(/\D/g, ''),
+                        })}
                         placeholder="0"
                         className={cn(inputCls, 'mt-1')}
                       />
@@ -793,8 +802,6 @@ export function ProductsClient({
                         Costo unitario de ingreso
                       </label>
                       <input
-                        type="number"
-                        min="0"
                         inputMode="decimal"
                         value={form.initialCost}
                         onChange={e => setForm({ ...form, initialCost: e.target.value })}
@@ -814,13 +821,15 @@ export function ProductsClient({
                         {' '}
                         {initialQtyNum > 0 ? '*' : '(si registras stock inicial)'}
                       </label>
-                      <input
-                        type="date"
-                        value={form.initialExpiresAt}
-                        min={new Date().toISOString().slice(0, 10)}
-                        onChange={e => setForm({ ...form, initialExpiresAt: e.target.value })}
-                        className={cn(inputCls, 'mt-1')}
-                      />
+                      <div className="mt-1">
+                        <DatePicker
+                          value={form.initialExpiresAt}
+                          min={new Date().toISOString().slice(0, 10)}
+                          placeholder="¿Cuándo se vence este lote?"
+                          onChange={iso => setForm({ ...form, initialExpiresAt: iso })}
+                          triggerClassName="w-full"
+                        />
+                      </div>
                     </div>
                   )}
                   {initialQtyNum > 0 && initialCostNum > 0 && (
