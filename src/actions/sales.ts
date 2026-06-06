@@ -121,6 +121,14 @@ export async function createSale(input: CreateSaleInput) {
         throw new Error(`Product ${item.productId} not found`);
       }
 
+      // Only published products are sellable. Archived/draft must not enter a
+      // live sale — that's the whole point of archiving.
+      if (product.status !== 'published') {
+        throw new Error(
+          `"${product.name}" no está disponible para la venta.`,
+        );
+      }
+
       if (product.stock < item.qty) {
         throw new Error(
           `Insufficient stock for "${product.name}" (available: ${product.stock}, requested: ${item.qty})`,

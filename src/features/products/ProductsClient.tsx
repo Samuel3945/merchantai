@@ -12,7 +12,14 @@ import {
   Pencil,
   Trash2,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -172,12 +179,14 @@ export function ProductsClient({
 
   // One fetch path for the listing — reused by search, the archived toggle and
   // after every mutation so usage flags and status filters stay in sync.
-  function fetchRows() {
+  // useCallback keeps it stable per filter so the effect deps are honest and
+  // direct callers (runMutation/onSubmit) never capture a stale filter.
+  const fetchRows = useCallback(() => {
     startTransition(async () => {
       const data = await listProducts({ search, includeArchived: showArchived });
       setRows(data);
     });
-  }
+  }, [search, showArchived]);
 
   useEffect(() => {
     if (searchTimerRef.current) {
@@ -189,8 +198,7 @@ export function ProductsClient({
         clearTimeout(searchTimerRef.current);
       }
     };
-    // eslint-disable-next-line react/exhaustive-deps
-  }, [search, showArchived]);
+  }, [fetchRows]);
 
   const totalStock = useMemo(
     () => rows.reduce((acc, r) => acc + r.stock, 0),

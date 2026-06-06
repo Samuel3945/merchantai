@@ -61,6 +61,10 @@ export type ProductRow = Product & {
 };
 
 // EXISTS probes reused by listProducts (per row) and the single-product guards.
+// No organizationId filter needed: they correlate on products.id, a globally
+// unique UUID PK that the outer query already scopes to the org, and a child row
+// (sale_item/movement) can only reference a product owned by that same org — so
+// cross-tenant leakage is impossible by construction.
 const hasSalesSql = sql<boolean>`EXISTS (
   SELECT 1 FROM ${saleItemsSchema}
   WHERE ${saleItemsSchema.productId} = ${productsSchema.id}
@@ -258,98 +262,108 @@ export async function updateProduct(id: string, input: ProductUpdateInput) {
     }
   }
 
-  const [previous] = await db
-    .select({
-      price: productsSchema.price,
-      stock: productsSchema.stock,
-      name: productsSchema.name,
-      unitType: productsSchema.unitType,
-      isPerishable: productsSchema.isPerishable,
-      hasSales: hasSalesSql,
-      hasMovements: hasMovementsSql,
-      hasDatedBatches: hasDatedBatchesSql,
-    })
-    .from(productsSchema)
-    .where(
-      and(
-        eq(productsSchema.id, id),
-        eq(productsSchema.organizationId, orgId),
-        eq(productsSchema.deleted, false),
-      ),
-    )
-    .limit(1);
+  // Lock the product row, evaluate the guards and apply the update in one
+  // transaction so a concurrent sale/movement can't flip hasSales/hasMovements
+  // between the guard read and the write (which would let unitType change on a
+  // product that just gained history). Sale paths lock the product FOR UPDATE,
+  // so this serializes against them.
+  const { row, previous } = await db.transaction(async (tx) => {
+    const [prev] = await tx
+      .select({
+        price: productsSchema.price,
+        stock: productsSchema.stock,
+        name: productsSchema.name,
+        unitType: productsSchema.unitType,
+        isPerishable: productsSchema.isPerishable,
+        hasSales: hasSalesSql,
+        hasMovements: hasMovementsSql,
+        hasDatedBatches: hasDatedBatchesSql,
+      })
+      .from(productsSchema)
+      .where(
+        and(
+          eq(productsSchema.id, id),
+          eq(productsSchema.organizationId, orgId),
+          eq(productsSchema.deleted, false),
+        ),
+      )
+      .for('update')
+      .limit(1);
 
-  if (!previous) {
-    throw new Error('Product not found');
-  }
+    if (!prev) {
+      throw new Error('Product not found');
+    }
 
-  const inUse = previous.hasSales || previous.hasMovements;
+    const inUse = prev.hasSales || prev.hasMovements;
 
-  // Guard: unit of measure is the meaning of every stored quantity. Changing it
-  // after any sale or stock movement corrupts the FIFO ledger and inventory
-  // math, so it's locked once the product has history.
-  if (
-    data.unitType !== undefined
-    && data.unitType !== previous.unitType
-    && inUse
-  ) {
-    throw new Error(
-      'No se puede cambiar la unidad de medida: el producto ya tiene inventario o ventas. Cambiarla dañaría el cálculo de stock.',
-    );
-  }
+    // Guard: unit of measure is the meaning of every stored quantity. Changing
+    // it after any sale or stock movement corrupts the FIFO ledger and
+    // inventory math, so it's locked once the product has history.
+    if (
+      data.unitType !== undefined
+      && data.unitType !== prev.unitType
+      && inUse
+    ) {
+      throw new Error(
+        'No se puede cambiar la unidad de medida: el producto ya tiene inventario o ventas. Cambiarla dañaría el cálculo de stock.',
+      );
+    }
 
-  // Guard: a product can become perishable at any time, but it can't stop being
-  // perishable while it still has dated batches with stock — those lots would
-  // lose their expiry tracking.
-  if (
-    data.isPerishable === false
-    && previous.isPerishable
-    && previous.hasDatedBatches
-  ) {
-    throw new Error(
-      'No se puede desactivar «Se vence» mientras existan lotes con fecha de caducidad y stock. Agota o ajusta esos lotes primero.',
-    );
-  }
+    // Guard: a product can become perishable at any time, but it can't stop
+    // being perishable while it still has dated batches with stock — those lots
+    // would lose their expiry tracking.
+    if (
+      data.isPerishable === false
+      && prev.isPerishable
+      && prev.hasDatedBatches
+    ) {
+      throw new Error(
+        'No se puede desactivar «Se vence» mientras existan lotes con fecha de caducidad y stock. Agota o ajusta esos lotes primero.',
+      );
+    }
 
-  const [row] = await db
-    .update(productsSchema)
-    .set({
-      ...(data.name !== undefined && { name: data.name }),
-      ...(data.barcode !== undefined && { barcode: data.barcode }),
-      ...(data.price !== undefined && { price: data.price }),
-      ...(data.cost !== undefined && { cost: data.cost }),
-      ...(data.stock !== undefined && { stock: data.stock }),
-      ...(data.category !== undefined && { category: data.category }),
-      ...(data.unitType !== undefined && { unitType: data.unitType }),
-      ...(data.isPerishable !== undefined && {
-        isPerishable: data.isPerishable,
-      }),
-      ...(data.isWholesale !== undefined && { isWholesale: data.isWholesale }),
-      ...(data.wholesaleTiers !== undefined && {
-        wholesaleTiers: data.wholesaleTiers,
-      }),
-      ...(data.attributes !== undefined && { attributes: data.attributes }),
-      ...(data.warrantyType !== undefined && {
-        warrantyType: data.warrantyType,
-      }),
-      ...(data.warrantyDurationDays !== undefined && {
-        warrantyDurationDays: data.warrantyDurationDays,
-      }),
-      // Status is owned by the state-machine transitions (setProductStatus),
-      // never by a general field edit — the edit form no longer sends it.
-    })
-    .where(
-      and(
-        eq(productsSchema.id, id),
-        eq(productsSchema.organizationId, orgId),
-        eq(productsSchema.deleted, false),
-      ),
-    )
-    .returning();
+    const [updatedRow] = await tx
+      .update(productsSchema)
+      .set({
+        ...(data.name !== undefined && { name: data.name }),
+        ...(data.barcode !== undefined && { barcode: data.barcode }),
+        ...(data.price !== undefined && { price: data.price }),
+        ...(data.cost !== undefined && { cost: data.cost }),
+        ...(data.stock !== undefined && { stock: data.stock }),
+        ...(data.category !== undefined && { category: data.category }),
+        ...(data.unitType !== undefined && { unitType: data.unitType }),
+        ...(data.isPerishable !== undefined && {
+          isPerishable: data.isPerishable,
+        }),
+        ...(data.isWholesale !== undefined && { isWholesale: data.isWholesale }),
+        ...(data.wholesaleTiers !== undefined && {
+          wholesaleTiers: data.wholesaleTiers,
+        }),
+        ...(data.attributes !== undefined && { attributes: data.attributes }),
+        ...(data.warrantyType !== undefined && {
+          warrantyType: data.warrantyType,
+        }),
+        ...(data.warrantyDurationDays !== undefined && {
+          warrantyDurationDays: data.warrantyDurationDays,
+        }),
+        // Status is owned by the state-machine transitions (setProductStatus),
+        // never by a general field edit — the edit form no longer sends it.
+      })
+      .where(
+        and(
+          eq(productsSchema.id, id),
+          eq(productsSchema.organizationId, orgId),
+          eq(productsSchema.deleted, false),
+        ),
+      )
+      .returning();
 
-  if (!row) {
-    throw new Error('Product not found');
-  }
+    if (!updatedRow) {
+      throw new Error('Product not found');
+    }
+
+    return { row: updatedRow, previous: prev };
+  });
 
   // Only audit when price or stock actually changed — the brief calls out
   // those two as the "manual" cases worth recording; touch-ups to name,
@@ -418,6 +432,9 @@ export async function setProductStatus(
     throw new Error('Transición de estado no permitida');
   }
 
+  // Compare-and-swap: the UPDATE only matches if the status is still what we
+  // read, so two concurrent transitions can't both apply (TOCTOU-safe without a
+  // transaction). A zero-row result means another change won the race.
   const [row] = await db
     .update(productsSchema)
     .set({ status: next, publishAt: null })
@@ -426,12 +443,13 @@ export async function setProductStatus(
         eq(productsSchema.id, id),
         eq(productsSchema.organizationId, orgId),
         eq(productsSchema.deleted, false),
+        eq(productsSchema.status, current.status),
       ),
     )
     .returning();
 
   if (!row) {
-    throw new Error('Product not found');
+    throw new Error('El estado del producto cambió, vuelve a intentarlo.');
   }
 
   revalidatePath('/dashboard/products');
@@ -447,10 +465,9 @@ export async function deleteProduct(id: string) {
 
   // Lock the product row and re-check "virgin" inside one transaction so a
   // concurrent sale can't slip history in between the check and the delete.
-  // Every sale path (createSale + both POS routes) locks the product FOR UPDATE
-  // before inserting sale_items/movements, so this lock serializes against them.
-  // sale_items FK is ON DELETE restrict; stock_movements has no FK, so the lock
-  // is what makes the movements case race-safe.
+  // Both sale_items and stock_movements now carry an ON DELETE restrict FK, so
+  // the DB is the final backstop even against paths that don't lock the product;
+  // this app-level check just produces a friendlier message first.
   await db.transaction(async (tx) => {
     const [target] = await tx
       .select({

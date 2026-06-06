@@ -831,7 +831,14 @@ export const stockMovementsSchema = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     organizationId: text('organization_id').notNull(),
-    productId: uuid('product_id').notNull(),
+    // FK with ON DELETE restrict — symmetric with sale_items. Makes the DB the
+    // backstop for "you can't delete a product that has inventory history",
+    // closing the orphan-movement race regardless of which path inserts a
+    // movement. Safe to add: the codebase never hard-deleted products before, so
+    // no orphan movements can exist.
+    productId: uuid('product_id')
+      .notNull()
+      .references(() => productsSchema.id, { onDelete: 'restrict' }),
     productName: text('product_name'),
     type: stockMovementTypeEnum('type').notNull(),
     qty: integer('qty').notNull(),

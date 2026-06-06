@@ -130,6 +130,10 @@ export async function POST(req: Request): Promise<NextResponse> {
         if (!product) {
           throw new Error(`Producto no encontrado: ${item.productId}`);
         }
+        // Only published products are sellable; archived/draft are out of sale.
+        if (product.status !== 'published') {
+          throw new Error(`"${product.name}" no está disponible para la venta`);
+        }
         if (product.stock < qty) {
           throw new Error(
             `Stock insuficiente: ${product.name} (disp: ${product.stock})`,
