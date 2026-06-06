@@ -39,6 +39,7 @@ export type BusinessTabValues = {
   'features.sell_by_weight': boolean;
   'features.wholesale': boolean;
   'features.perishable': boolean;
+  'features.warranty': boolean;
 };
 
 export function BusinessTab({ initial }: { initial: BusinessTabValues }) {
@@ -55,7 +56,8 @@ export function BusinessTab({ initial }: { initial: BusinessTabValues }) {
     key:
       | 'features.sell_by_weight'
       | 'features.wholesale'
-      | 'features.perishable',
+      | 'features.perishable'
+      | 'features.warranty',
     value: boolean,
   ) => save(key, value ? 'true' : 'false', { notifyConfigChange: true });
 
@@ -273,11 +275,30 @@ export function BusinessTab({ initial }: { initial: BusinessTabValues }) {
             initial={initial['features.wholesale']}
             onCommit={v => persistFeature('features.wholesale', v)}
           />
+        </div>
+      </div>
+
+      <div className="space-y-4 border-t pt-6">
+        <div>
+          <h2 className="text-lg font-semibold">Ventas</h2>
+          <p className="text-sm text-muted-foreground">
+            Controles operativos de tu catálogo. Solo aparecen en los productos
+            si los activas aquí.
+          </p>
+        </div>
+
+        <div className="space-y-3">
           <ToggleRow
-            label="Productos perecederos"
-            description="Productos que se vencen (lácteos, carnes, panadería). Habilita el control de caducidad por lote."
+            label="Controlar vencimiento de productos"
+            description="Marca productos que se vencen (lácteos, carnes, panadería) y controla la caducidad por lote."
             initial={initial['features.perishable']}
             onCommit={v => persistFeature('features.perishable', v)}
+          />
+          <ToggleRow
+            label="Gestionar garantías"
+            description="Agrega tipo y duración de garantía a los productos y muestra la vigencia en cada venta."
+            initial={initial['features.warranty']}
+            onCommit={v => persistFeature('features.warranty', v)}
           />
         </div>
       </div>

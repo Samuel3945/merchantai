@@ -4,6 +4,7 @@ import type {
   ReturnDisposition,
   ReturnReason,
 } from '@/libs/sale-returns';
+import type { WarrantyType } from '@/libs/warranty';
 import { auth, clerkClient, currentUser } from '@clerk/nextjs/server';
 import {
   and,
@@ -23,6 +24,7 @@ import { db } from '@/libs/DB';
 import { consumeFifoExits } from '@/libs/fifo-cogs';
 import { assignNextSaleNumber } from '@/libs/sale-number';
 import { applySaleReturn } from '@/libs/sale-returns';
+import { snapshotWarranty } from '@/libs/warranty';
 import {
   posReturnItemsSchema,
   posReturnsSchema,
@@ -80,6 +82,9 @@ export async function createSale(input: CreateSaleInput) {
     }
   }
 
+  // Warranty validity is anchored to the sale date, snapshotted per line below.
+  const saleDate = new Date();
+
   const result = await db.transaction(async (tx) => {
     let total = 0;
     const itemsToInsert: {
@@ -89,6 +94,9 @@ export async function createSale(input: CreateSaleInput) {
       price: string;
       subtotal: string;
       unitType: string;
+      warrantyType: WarrantyType | null;
+      warrantyDurationDays: number | null;
+      warrantyEndsAt: Date | null;
     }[] = [];
     // Reference cost per line (products.cost), used as a fallback when the FIFO
     // ledger doesn't fully cover the sold quantity (e.g. legacy stock with no
@@ -113,6 +121,14 @@ export async function createSale(input: CreateSaleInput) {
         throw new Error(`Product ${item.productId} not found`);
       }
 
+      // Only published products are sellable. Archived/draft must not enter a
+      // live sale — that's the whole point of archiving.
+      if (product.status !== 'published') {
+        throw new Error(
+          `"${product.name}" no está disponible para la venta.`,
+        );
+      }
+
       if (product.stock < item.qty) {
         throw new Error(
           `Insufficient stock for "${product.name}" (available: ${product.stock}, requested: ${item.qty})`,
@@ -126,6 +142,8 @@ export async function createSale(input: CreateSaleInput) {
       const subtotal = unitPrice * item.qty;
       total += subtotal;
 
+      const warranty = snapshotWarranty(product, saleDate);
+
       itemsToInsert.push({
         productId: product.id,
         productName: product.name,
@@ -133,6 +151,9 @@ export async function createSale(input: CreateSaleInput) {
         price: toMoney(unitPrice),
         subtotal: toMoney(subtotal),
         unitType: product.unitType,
+        warrantyType: warranty.warrantyType,
+        warrantyDurationDays: warranty.warrantyDurationDays,
+        warrantyEndsAt: warranty.warrantyEndsAt,
       });
       lineFallbackCost.push(product.cost);
     }
@@ -473,6 +494,10 @@ export type ReturnableItem = {
   unitType: string;
   /** Units already returned across previous returns of this line. */
   returnedQty: number;
+  /** Warranty snapshot frozen at sale time — null when the line had none. */
+  warrantyType: WarrantyType | null;
+  warrantyDurationDays: number | null;
+  warrantyEndsAt: Date | null;
 };
 
 export type SaleReturnDetail = {
@@ -521,6 +546,9 @@ export async function getSaleForReturn(
       qty: saleItemsSchema.qty,
       subtotal: saleItemsSchema.subtotal,
       unitType: saleItemsSchema.unitType,
+      warrantyType: saleItemsSchema.warrantyType,
+      warrantyDurationDays: saleItemsSchema.warrantyDurationDays,
+      warrantyEndsAt: saleItemsSchema.warrantyEndsAt,
       returnedQty: sql<number>`COALESCE((
         SELECT SUM(${posReturnItemsSchema.qty})
         FROM ${posReturnItemsSchema}

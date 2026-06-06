@@ -18,6 +18,7 @@ const KEYS = [
   'features.sell_by_weight',
   'features.wholesale',
   'features.perishable',
+  'features.warranty',
   // Modules
   'modules.delivery',
   'modules.employees',
@@ -84,6 +85,7 @@ export default async function DashboardSettingsPage(props: {
           'features.sell_by_weight': asBool(map['features.sell_by_weight']),
           'features.wholesale': asBool(map['features.wholesale']),
           'features.perishable': asBool(map['features.perishable']),
+          'features.warranty': asBool(map['features.warranty']),
         }}
         modules={{
           'modules.delivery': asBool(map['modules.delivery']),

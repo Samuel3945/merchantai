@@ -1,15 +1,44 @@
 'use client';
 
-import type { Product } from './actions';
+import type { ProductRow } from './actions';
 import type { AttrRow } from './AttributesEditor';
 import type { UITier } from './WholesaleTiersEditor';
-import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
+import type { WarrantyType } from '@/libs/warranty';
+import {
+  Archive,
+  ArchiveRestore,
+  Copy,
+  MoreVertical,
+  Pencil,
+  Trash2,
+} from 'lucide-react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from 'react';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
+  WARRANTY_DURATION_OPTIONS,
+  WARRANTY_TYPE_OPTIONS,
+} from '@/libs/warranty';
 import { cn } from '@/utils/Helpers';
 import {
   createProduct,
+  deleteProduct,
   listProducts,
-  softDeleteProduct,
+  setProductStatus,
   updateProduct,
 } from './actions';
 import { categorizeProduct } from './ai-categorize';
@@ -25,6 +54,19 @@ const STATUS_LABELS: Record<ProductStatus, string> = {
   archived: 'Archivado',
 };
 
+// Color language: published = live (green), archived = out of sale (amber/muted),
+// draft = work in progress (neutral).
+const STATUS_BADGE: Record<ProductStatus, string> = {
+  draft: 'border-border bg-muted text-muted-foreground',
+  scheduled: 'border-border bg-muted text-muted-foreground',
+  published:
+    'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+  archived:
+    'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400',
+};
+
+type WarrantyTypeForm = WarrantyType;
+
 type ProductFormState = {
   name: string;
   barcode: string;
@@ -34,8 +76,8 @@ type ProductFormState = {
   unitType: 'unit' | 'kg';
   isPerishable: boolean;
   isWholesale: boolean;
-  status: ProductStatus;
-  publishAt: string;
+  warrantyType: WarrantyTypeForm;
+  warrantyDurationDays: string;
   tiers: UITier[];
   attributes: AttrRow[];
   // Opening inventory — create-only.
@@ -53,8 +95,8 @@ const emptyForm: ProductFormState = {
   unitType: 'unit',
   isPerishable: false,
   isWholesale: false,
-  status: 'published',
-  publishAt: '',
+  warrantyType: 'none',
+  warrantyDurationDays: '',
   tiers: [],
   attributes: [],
   initialQty: '',
@@ -62,7 +104,7 @@ const emptyForm: ProductFormState = {
   initialExpiresAt: '',
 };
 
-function toFormState(p: Product): ProductFormState {
+function toFormState(p: ProductRow): ProductFormState {
   const tiers = (p.wholesaleTiers as { minQty: number; price: string }[] | null) ?? [];
   const attrs = (p.attributes as Record<string, unknown> | null) ?? {};
   return {
@@ -74,8 +116,8 @@ function toFormState(p: Product): ProductFormState {
     unitType: p.unitType,
     isPerishable: p.isPerishable,
     isWholesale: p.isWholesale,
-    status: p.status,
-    publishAt: p.publishAt ? new Date(p.publishAt).toISOString().slice(0, 16) : '',
+    warrantyType: (p.warrantyType as WarrantyTypeForm | null) ?? 'none',
+    warrantyDurationDays: p.warrantyDurationDays != null ? String(p.warrantyDurationDays) : '',
     tiers: tiers.map(t => ({ minQty: String(t.minQty), price: String(t.price) })),
     attributes: Object.entries(attrs).map(([key, value]) => ({
       key,
@@ -84,6 +126,16 @@ function toFormState(p: Product): ProductFormState {
     initialQty: '',
     initialCost: '',
     initialExpiresAt: '',
+  };
+}
+
+// A duplicate lands as a fresh draft-of-the-form: copies the commercial fields
+// but clears the unique barcode and any opening stock so it's a clean new entry.
+function toDuplicateForm(p: ProductRow): ProductFormState {
+  return {
+    ...toFormState(p),
+    name: `${p.name} (copia)`,
+    barcode: '',
   };
 }
 
@@ -102,43 +154,51 @@ export type ProductFeatureFlags = {
   sellByWeight: boolean;
   wholesale: boolean;
   perishable: boolean;
+  warranty: boolean;
 };
 
 export function ProductsClient({
   initial,
   features,
 }: {
-  initial: Product[];
+  initial: ProductRow[];
   features: ProductFeatureFlags;
 }) {
-  const [rows, setRows] = useState<Product[]>(initial);
+  const [rows, setRows] = useState<ProductRow[]>(initial);
   const [search, setSearch] = useState('');
+  const [showArchived, setShowArchived] = useState(false);
   const [open, setOpen] = useState(false);
-  const [editing, setEditing] = useState<Product | null>(null);
+  const [editing, setEditing] = useState<ProductRow | null>(null);
   const [form, setForm] = useState<ProductFormState>(emptyForm);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const [ai, setAi] = useState<AiState>({ status: 'idle' });
   const [aiSuggestions, setAiSuggestions] = useState<string[]>([]);
-  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastCategorized = useRef<string>('');
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastCategorizedRef = useRef<string>('');
+
+  // One fetch path for the listing — reused by search, the archived toggle and
+  // after every mutation so usage flags and status filters stay in sync.
+  // useCallback keeps it stable per filter so the effect deps are honest and
+  // direct callers (runMutation/onSubmit) never capture a stale filter.
+  const fetchRows = useCallback(() => {
+    startTransition(async () => {
+      const data = await listProducts({ search, includeArchived: showArchived });
+      setRows(data);
+    });
+  }, [search, showArchived]);
 
   useEffect(() => {
-    if (searchTimer.current) {
-      clearTimeout(searchTimer.current);
+    if (searchTimerRef.current) {
+      clearTimeout(searchTimerRef.current);
     }
-    searchTimer.current = setTimeout(() => {
-      startTransition(async () => {
-        const data = await listProducts({ search });
-        setRows(data);
-      });
-    }, 250);
+    searchTimerRef.current = setTimeout(fetchRows, 250);
     return () => {
-      if (searchTimer.current) {
-        clearTimeout(searchTimer.current);
+      if (searchTimerRef.current) {
+        clearTimeout(searchTimerRef.current);
       }
     };
-  }, [search]);
+  }, [fetchRows]);
 
   const totalStock = useMemo(
     () => rows.reduce((acc, r) => acc + r.stock, 0),
@@ -149,23 +209,40 @@ export function ProductsClient({
   const initialQtyNum = Number.parseFloat(form.initialQty) || 0;
   const initialCostNum = Number.parseFloat(form.initialCost) || 0;
 
+  // Edit guards — derived from the product being edited. The server enforces
+  // these too; the UI just explains why a field is locked.
+  const inUse = editing ? editing.hasSales || editing.hasMovements : false;
+  const unitLocked = inUse;
+  const perishableLocked = editing ? editing.hasDatedBatches : false;
+  const barcodeWarn = editing ? editing.hasSales : false;
+
   function openCreate() {
     setEditing(null);
     setForm(emptyForm);
     setError(null);
     setAi({ status: 'idle' });
     setAiSuggestions([]);
-    lastCategorized.current = '';
+    lastCategorizedRef.current = '';
     setOpen(true);
   }
 
-  function openEdit(p: Product) {
+  function openEdit(p: ProductRow) {
     setEditing(p);
     setForm(toFormState(p));
     setError(null);
     setAi({ status: 'idle' });
     setAiSuggestions([]);
-    lastCategorized.current = '';
+    lastCategorizedRef.current = '';
+    setOpen(true);
+  }
+
+  function openDuplicate(p: ProductRow) {
+    setEditing(null);
+    setForm(toDuplicateForm(p));
+    setError(null);
+    setAi({ status: 'idle' });
+    setAiSuggestions([]);
+    lastCategorizedRef.current = '';
     setOpen(true);
   }
 
@@ -180,10 +257,10 @@ export function ProductsClient({
   // never re-runs for the same value.
   function runCategorize() {
     const name = form.name.trim();
-    if (editing || name.length < 3 || name === lastCategorized.current) {
+    if (editing || name.length < 3 || name === lastCategorizedRef.current) {
       return;
     }
-    lastCategorized.current = name;
+    lastCategorizedRef.current = name;
     setAi({ status: 'loading' });
     startTransition(async () => {
       try {
@@ -224,9 +301,11 @@ export function ProductsClient({
           .filter(t => Number.isFinite(t.minQty) && t.minQty >= 2 && t.price !== '')
       : null;
 
-    const publishAt
-      = form.status === 'scheduled' && form.publishAt
-        ? new Date(form.publishAt)
+    const hasWarranty = features.warranty && form.warrantyType !== 'none';
+    const warrantyType = hasWarranty ? form.warrantyType : null;
+    const warrantyDurationDays
+      = hasWarranty && form.warrantyDurationDays !== ''
+        ? Number.parseInt(form.warrantyDurationDays, 10)
         : null;
 
     const common = {
@@ -240,45 +319,68 @@ export function ProductsClient({
       isWholesale: form.isWholesale,
       wholesaleTiers,
       attributes,
-      status: form.status,
-      publishAt,
+      warrantyType,
+      warrantyDurationDays,
     };
 
     startTransition(async () => {
       try {
         if (editing) {
-          const updated = await updateProduct(editing.id, common);
-          setRows(prev => prev.map(r => (r.id === updated.id ? updated : r)));
+          await updateProduct(editing.id, common);
         } else {
-          const created = await createProduct({
+          // No status field: a new product is created published and ready to
+          // sell. Draft is reserved for future agent workflows, not the UI.
+          await createProduct({
             ...common,
             initialQty: initialQtyNum,
             initialCost: form.initialCost.trim() === '' ? null : form.initialCost.trim(),
             initialExpiresAt:
               form.initialExpiresAt.trim() === '' ? null : form.initialExpiresAt.trim(),
           });
-          setRows(prev => [created, ...prev]);
         }
         close();
+        fetchRows();
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Error inesperado');
       }
     });
   }
 
-  function onDelete(p: Product) {
-    // eslint-disable-next-line no-alert -- native confirm matches the existing delete UX
-    if (!globalThis.confirm(`¿Eliminar "${p.name}"?`)) {
-      return;
-    }
+  function runMutation(fn: () => Promise<unknown>) {
     startTransition(async () => {
       try {
-        await softDeleteProduct(p.id);
-        setRows(prev => prev.filter(r => r.id !== p.id));
+        await fn();
+        fetchRows();
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Error inesperado');
       }
     });
+  }
+
+  function handlePublish(p: ProductRow) {
+    runMutation(() => setProductStatus(p.id, 'published'));
+  }
+
+  function handleArchive(p: ProductRow) {
+    // eslint-disable-next-line no-alert -- native confirm matches the existing pattern
+    const ok = globalThis.confirm(
+      `Vas a quitar de la venta «${p.name}».\n\nDejará de venderse y no estará disponible para los agentes, pero conservas todo su historial. Puedes reactivarlo cuando quieras.`,
+    );
+    if (!ok) {
+      return;
+    }
+    runMutation(() => setProductStatus(p.id, 'archived'));
+  }
+
+  function handleDelete(p: ProductRow) {
+    // eslint-disable-next-line no-alert -- native confirm matches the existing pattern
+    const ok = globalThis.confirm(
+      `¿Eliminar «${p.name}»?\n\nEste producto nunca se vendió ni tuvo inventario, así que se borra por completo.`,
+    );
+    if (!ok) {
+      return;
+    }
+    runMutation(() => deleteProduct(p.id));
   }
 
   return (
@@ -291,6 +393,19 @@ export function ProductsClient({
           placeholder="Buscar por nombre, código de barras o categoría"
           className={cn(inputCls, 'max-w-md')}
         />
+        <label className="
+          flex cursor-pointer items-center gap-2 text-sm text-muted-foreground
+          select-none
+        "
+        >
+          <input
+            type="checkbox"
+            checked={showArchived}
+            onChange={e => setShowArchived(e.target.checked)}
+            className="size-4 accent-primary"
+          />
+          Ver archivados
+        </label>
         <Button onClick={openCreate}>Nuevo artículo</Button>
         <div className="ml-auto text-sm text-muted-foreground">
           {rows.length}
@@ -328,41 +443,95 @@ export function ProductsClient({
                   </tr>
                 )
               : (
-                  rows.map(p => (
-                    <tr key={p.id} className="border-t">
-                      <td className="px-3 py-2 font-medium">{p.name}</td>
-                      <td className="px-3 py-2 font-mono text-xs">
-                        {p.barcode ?? '—'}
-                      </td>
-                      <td className="px-3 py-2">{p.category ?? '—'}</td>
-                      <td className="px-3 py-2 text-right">{p.price}</td>
-                      <td className="px-3 py-2 text-right">{p.stock}</td>
-                      <td className="px-3 py-2">{p.unitType}</td>
-                      <td className="px-3 py-2">{STATUS_LABELS[p.status]}</td>
-                      <td className="px-3 py-2 text-right">
-                        <div className="flex justify-end gap-2">
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            onClick={() => openEdit(p)}
+                  rows.map((p) => {
+                    const canDelete = !p.hasSales && !p.hasMovements;
+                    const isArchived = p.status === 'archived';
+                    return (
+                      <tr
+                        key={p.id}
+                        className={cn('border-t', isArchived && 'opacity-60')}
+                      >
+                        <td className="px-3 py-2 font-medium">{p.name}</td>
+                        <td className="px-3 py-2 font-mono text-xs">
+                          {p.barcode ?? '—'}
+                        </td>
+                        <td className="px-3 py-2">{p.category ?? '—'}</td>
+                        <td className="px-3 py-2 text-right">{p.price}</td>
+                        <td className="px-3 py-2 text-right">{p.stock}</td>
+                        <td className="px-3 py-2">{p.unitType}</td>
+                        <td className="px-3 py-2">
+                          <Badge
+                            variant="outline"
+                            className={STATUS_BADGE[p.status as ProductStatus]}
                           >
-                            Editar
-                          </Button>
-                          <Button
-                            variant="destructive"
-                            size="sm"
-                            onClick={() => onDelete(p)}
-                          >
-                            Eliminar
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
+                            {STATUS_LABELS[p.status as ProductStatus]}
+                          </Badge>
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                aria-label="Acciones"
+                              >
+                                <MoreVertical className="size-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem onClick={() => openEdit(p)}>
+                                <Pencil />
+                                Editar
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => openDuplicate(p)}>
+                                <Copy />
+                                Duplicar
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                              {p.status === 'published'
+                                ? (
+                                    <DropdownMenuItem onClick={() => handleArchive(p)}>
+                                      <Archive />
+                                      Quitar de la venta
+                                    </DropdownMenuItem>
+                                  )
+                                : (
+                                    <DropdownMenuItem onClick={() => handlePublish(p)}>
+                                      <ArchiveRestore />
+                                      Publicar
+                                    </DropdownMenuItem>
+                                  )}
+                              {canDelete && (
+                                <>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem
+                                    variant="destructive"
+                                    onClick={() => handleDelete(p)}
+                                  >
+                                    <Trash2 />
+                                    Eliminar
+                                  </DropdownMenuItem>
+                                </>
+                              )}
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
           </tbody>
         </table>
       </div>
+
+      {error && !open && (
+        <div className="
+          rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive
+        "
+        >
+          {error}
+        </div>
+      )}
 
       {open && (
         <div
@@ -417,6 +586,12 @@ export function ProductsClient({
                   onChange={e => setForm({ ...form, barcode: e.target.value })}
                   className={cn(inputCls, 'mt-1')}
                 />
+                {barcodeWarn && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Este producto ya tiene ventas. Cambiar el código solo afecta
+                    el escaneo futuro, no las ventas ya registradas.
+                  </p>
+                )}
               </div>
 
               {features.sellByWeight && (
@@ -427,6 +602,7 @@ export function ProductsClient({
                       <button
                         key={u}
                         type="button"
+                        disabled={unitLocked}
                         onClick={() => setForm({ ...form, unitType: u })}
                         className={cn(
                           `
@@ -439,12 +615,19 @@ export function ProductsClient({
                               border-input text-muted-foreground
                               hover:bg-accent
                             `,
+                          unitLocked && 'cursor-not-allowed opacity-50',
                         )}
                       >
                         {u === 'unit' ? 'Unidad' : 'Kg'}
                       </button>
                     ))}
                   </div>
+                  {unitLocked && (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      No se puede cambiar: el producto ya tiene inventario o
+                      ventas. Cambiar la unidad dañaría el cálculo de stock.
+                    </p>
+                  )}
                 </div>
               )}
 
@@ -473,6 +656,7 @@ export function ProductsClient({
                   {features.perishable && (
                     <button
                       type="button"
+                      disabled={perishableLocked}
                       onClick={() => setForm({ ...form, isPerishable: !form.isPerishable })}
                       title="Marca productos que se vencen para registrar caducidad por lote."
                       className={cn(
@@ -486,12 +670,20 @@ export function ProductsClient({
                             border-input text-muted-foreground
                             hover:bg-accent
                           `,
+                        perishableLocked && 'cursor-not-allowed opacity-50',
                       )}
                     >
                       Se vence
                     </button>
                   )}
                 </div>
+              )}
+
+              {features.perishable && perishableLocked && (
+                <p className="text-xs text-muted-foreground">
+                  «Se vence» no se puede desactivar mientras existan lotes con
+                  fecha de caducidad y stock.
+                </p>
               )}
 
               <div>
@@ -513,6 +705,62 @@ export function ProductsClient({
                   tiers={form.tiers}
                   onChange={tiers => setForm(f => ({ ...f, tiers }))}
                 />
+              )}
+
+              {features.warranty && (
+                <div className="space-y-2 rounded-md border bg-muted/30 p-3">
+                  <p className="
+                    text-xs font-semibold tracking-wider text-muted-foreground
+                    uppercase
+                  "
+                  >
+                    Garantía
+                  </p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[11px] text-muted-foreground">Tipo</label>
+                      <select
+                        value={form.warrantyType}
+                        onChange={e => setForm({
+                          ...form,
+                          warrantyType: e.target.value as WarrantyTypeForm,
+                        })}
+                        className={cn(inputCls, 'mt-1')}
+                      >
+                        {WARRANTY_TYPE_OPTIONS.map(opt => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    {form.warrantyType !== 'none' && (
+                      <div>
+                        <label className="text-[11px] text-muted-foreground">
+                          Duración
+                        </label>
+                        <select
+                          value={form.warrantyDurationDays}
+                          onChange={e => setForm({
+                            ...form,
+                            warrantyDurationDays: e.target.value,
+                          })}
+                          className={cn(inputCls, 'mt-1')}
+                        >
+                          <option value="">Selecciona…</option>
+                          {WARRANTY_DURATION_OPTIONS.map(opt => (
+                            <option key={opt.days} value={String(opt.days)}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    La vigencia se calcula desde la fecha de cada venta.
+                  </p>
+                </div>
               )}
 
               {!editing && (
@@ -605,41 +853,6 @@ export function ProductsClient({
                 onChange={attributes => setForm(f => ({ ...f, attributes }))}
               />
 
-              <div>
-                <label className={labelCls}>Publicación</label>
-                <div className="mt-1 grid grid-cols-4 gap-2">
-                  {(['draft', 'scheduled', 'published', 'archived'] as ProductStatus[]).map(s => (
-                    <button
-                      key={s}
-                      type="button"
-                      onClick={() => setForm({ ...form, status: s })}
-                      className={cn(
-                        `
-                          rounded-md border p-2 text-xs font-semibold
-                          transition-colors
-                        `,
-                        form.status === s
-                          ? 'border-primary bg-primary/10 text-primary'
-                          : `
-                            border-input text-muted-foreground
-                            hover:bg-accent
-                          `,
-                      )}
-                    >
-                      {STATUS_LABELS[s]}
-                    </button>
-                  ))}
-                </div>
-                {form.status === 'scheduled' && (
-                  <input
-                    type="datetime-local"
-                    value={form.publishAt}
-                    onChange={e => setForm({ ...form, publishAt: e.target.value })}
-                    className={cn(inputCls, 'mt-2')}
-                  />
-                )}
-              </div>
-
               {!editing && (
                 <div className="
                   rounded-md border bg-muted/30 px-3 py-2 text-xs
@@ -671,7 +884,7 @@ export function ProductsClient({
                   Cancelar
                 </Button>
                 <Button type="submit" disabled={pending}>
-                  {pending ? 'Guardando…' : editing ? 'Guardar cambios' : 'Crear artículo'}
+                  {pending ? 'Guardando…' : editing ? 'Guardar cambios' : 'Crear'}
                 </Button>
               </div>
             </form>

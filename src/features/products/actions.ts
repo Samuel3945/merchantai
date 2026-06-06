@@ -2,11 +2,24 @@
 
 import type { ProductCreateInput, ProductUpdateInput } from './validation';
 import { auth } from '@clerk/nextjs/server';
-import { and, desc, eq, ilike, or, sql } from 'drizzle-orm';
+import {
+  and,
+  desc,
+  eq,
+  getTableColumns,
+  ilike,
+  ne,
+  or,
+  sql,
+} from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
-import { productsSchema, stockMovementsSchema } from '@/models/Schema';
+import {
+  productsSchema,
+  saleItemsSchema,
+  stockMovementsSchema,
+} from '@/models/Schema';
 import {
 
   productCreateSchema,
@@ -37,7 +50,40 @@ async function requireOrgAndUser() {
 
 export type Product = typeof productsSchema.$inferSelect;
 
-export async function listProducts(params?: { search?: string }) {
+// Product augmented with usage flags. These drive the action menu (delete only
+// for a virgin product) and the edit guards (lock unit of measure / perishable
+// once the product has history). Computed server-side so the UI can never be
+// tricked into an unsafe edit.
+export type ProductRow = Product & {
+  hasSales: boolean;
+  hasMovements: boolean;
+  hasDatedBatches: boolean;
+};
+
+// EXISTS probes reused by listProducts (per row) and the single-product guards.
+// No organizationId filter needed: they correlate on products.id, a globally
+// unique UUID PK that the outer query already scopes to the org, and a child row
+// (sale_item/movement) can only reference a product owned by that same org — so
+// cross-tenant leakage is impossible by construction.
+const hasSalesSql = sql<boolean>`EXISTS (
+  SELECT 1 FROM ${saleItemsSchema}
+  WHERE ${saleItemsSchema.productId} = ${productsSchema.id}
+)`;
+const hasMovementsSql = sql<boolean>`EXISTS (
+  SELECT 1 FROM ${stockMovementsSchema}
+  WHERE ${stockMovementsSchema.productId} = ${productsSchema.id}
+)`;
+const hasDatedBatchesSql = sql<boolean>`EXISTS (
+  SELECT 1 FROM ${stockMovementsSchema}
+  WHERE ${stockMovementsSchema.productId} = ${productsSchema.id}
+    AND ${stockMovementsSchema.expiresAt} IS NOT NULL
+    AND COALESCE(${stockMovementsSchema.remainingQty}, 0) > 0
+)`;
+
+export async function listProducts(params?: {
+  search?: string;
+  includeArchived?: boolean;
+}): Promise<ProductRow[]> {
   const orgId = await requireOrgId();
   const search = params?.search?.trim();
 
@@ -45,6 +91,12 @@ export async function listProducts(params?: { search?: string }) {
     eq(productsSchema.organizationId, orgId),
     eq(productsSchema.deleted, false),
   ];
+
+  // Archived products are hidden by default so the listing doesn't fill up with
+  // discontinued items; the table's "Ver archivados" toggle opts back in.
+  if (!params?.includeArchived) {
+    filters.push(ne(productsSchema.status, 'archived'));
+  }
 
   if (search) {
     const like = `%${search}%`;
@@ -59,7 +111,12 @@ export async function listProducts(params?: { search?: string }) {
   }
 
   return db
-    .select()
+    .select({
+      ...getTableColumns(productsSchema),
+      hasSales: hasSalesSql,
+      hasMovements: hasMovementsSql,
+      hasDatedBatches: hasDatedBatchesSql,
+    })
     .from(productsSchema)
     .where(and(...filters))
     .orderBy(desc(productsSchema.createdAt));
@@ -141,6 +198,8 @@ export async function createProduct(input: ProductCreateInput) {
         isWholesale: data.isWholesale,
         wholesaleTiers: data.wholesaleTiers ?? null,
         attributes: data.attributes,
+        warrantyType: data.warrantyType ?? null,
+        warrantyDurationDays: data.warrantyDurationDays ?? null,
         status: data.status,
         publishAt: data.publishAt ?? null,
       })
@@ -203,55 +262,108 @@ export async function updateProduct(id: string, input: ProductUpdateInput) {
     }
   }
 
-  const [previous] = await db
-    .select({
-      price: productsSchema.price,
-      stock: productsSchema.stock,
-      name: productsSchema.name,
-    })
-    .from(productsSchema)
-    .where(
-      and(
-        eq(productsSchema.id, id),
-        eq(productsSchema.organizationId, orgId),
-        eq(productsSchema.deleted, false),
-      ),
-    )
-    .limit(1);
+  // Lock the product row, evaluate the guards and apply the update in one
+  // transaction so a concurrent sale/movement can't flip hasSales/hasMovements
+  // between the guard read and the write (which would let unitType change on a
+  // product that just gained history). Sale paths lock the product FOR UPDATE,
+  // so this serializes against them.
+  const { row, previous } = await db.transaction(async (tx) => {
+    const [prev] = await tx
+      .select({
+        price: productsSchema.price,
+        stock: productsSchema.stock,
+        name: productsSchema.name,
+        unitType: productsSchema.unitType,
+        isPerishable: productsSchema.isPerishable,
+        hasSales: hasSalesSql,
+        hasMovements: hasMovementsSql,
+        hasDatedBatches: hasDatedBatchesSql,
+      })
+      .from(productsSchema)
+      .where(
+        and(
+          eq(productsSchema.id, id),
+          eq(productsSchema.organizationId, orgId),
+          eq(productsSchema.deleted, false),
+        ),
+      )
+      .for('update')
+      .limit(1);
 
-  const [row] = await db
-    .update(productsSchema)
-    .set({
-      ...(data.name !== undefined && { name: data.name }),
-      ...(data.barcode !== undefined && { barcode: data.barcode }),
-      ...(data.price !== undefined && { price: data.price }),
-      ...(data.cost !== undefined && { cost: data.cost }),
-      ...(data.stock !== undefined && { stock: data.stock }),
-      ...(data.category !== undefined && { category: data.category }),
-      ...(data.unitType !== undefined && { unitType: data.unitType }),
-      ...(data.isPerishable !== undefined && {
-        isPerishable: data.isPerishable,
-      }),
-      ...(data.isWholesale !== undefined && { isWholesale: data.isWholesale }),
-      ...(data.wholesaleTiers !== undefined && {
-        wholesaleTiers: data.wholesaleTiers,
-      }),
-      ...(data.attributes !== undefined && { attributes: data.attributes }),
-      ...(data.status !== undefined && { status: data.status }),
-      ...(data.publishAt !== undefined && { publishAt: data.publishAt }),
-    })
-    .where(
-      and(
-        eq(productsSchema.id, id),
-        eq(productsSchema.organizationId, orgId),
-        eq(productsSchema.deleted, false),
-      ),
-    )
-    .returning();
+    if (!prev) {
+      throw new Error('Product not found');
+    }
 
-  if (!row) {
-    throw new Error('Product not found');
-  }
+    const inUse = prev.hasSales || prev.hasMovements;
+
+    // Guard: unit of measure is the meaning of every stored quantity. Changing
+    // it after any sale or stock movement corrupts the FIFO ledger and
+    // inventory math, so it's locked once the product has history.
+    if (
+      data.unitType !== undefined
+      && data.unitType !== prev.unitType
+      && inUse
+    ) {
+      throw new Error(
+        'No se puede cambiar la unidad de medida: el producto ya tiene inventario o ventas. Cambiarla dañaría el cálculo de stock.',
+      );
+    }
+
+    // Guard: a product can become perishable at any time, but it can't stop
+    // being perishable while it still has dated batches with stock — those lots
+    // would lose their expiry tracking.
+    if (
+      data.isPerishable === false
+      && prev.isPerishable
+      && prev.hasDatedBatches
+    ) {
+      throw new Error(
+        'No se puede desactivar «Se vence» mientras existan lotes con fecha de caducidad y stock. Agota o ajusta esos lotes primero.',
+      );
+    }
+
+    const [updatedRow] = await tx
+      .update(productsSchema)
+      .set({
+        ...(data.name !== undefined && { name: data.name }),
+        ...(data.barcode !== undefined && { barcode: data.barcode }),
+        ...(data.price !== undefined && { price: data.price }),
+        ...(data.cost !== undefined && { cost: data.cost }),
+        ...(data.stock !== undefined && { stock: data.stock }),
+        ...(data.category !== undefined && { category: data.category }),
+        ...(data.unitType !== undefined && { unitType: data.unitType }),
+        ...(data.isPerishable !== undefined && {
+          isPerishable: data.isPerishable,
+        }),
+        ...(data.isWholesale !== undefined && { isWholesale: data.isWholesale }),
+        ...(data.wholesaleTiers !== undefined && {
+          wholesaleTiers: data.wholesaleTiers,
+        }),
+        ...(data.attributes !== undefined && { attributes: data.attributes }),
+        ...(data.warrantyType !== undefined && {
+          warrantyType: data.warrantyType,
+        }),
+        ...(data.warrantyDurationDays !== undefined && {
+          warrantyDurationDays: data.warrantyDurationDays,
+        }),
+        // Status is owned by the state-machine transitions (setProductStatus),
+        // never by a general field edit — the edit form no longer sends it.
+      })
+      .where(
+        and(
+          eq(productsSchema.id, id),
+          eq(productsSchema.organizationId, orgId),
+          eq(productsSchema.deleted, false),
+        ),
+      )
+      .returning();
+
+    if (!updatedRow) {
+      throw new Error('Product not found');
+    }
+
+    return { row: updatedRow, previous: prev };
+  });
 
   // Only audit when price or stock actually changed — the brief calls out
   // those two as the "manual" cases worth recording; touch-ups to name,
@@ -268,7 +380,13 @@ export async function updateProduct(id: string, input: ProductUpdateInput) {
       action: 'product.updated',
       entityType: 'product',
       entityId: row.id,
-      before: previous,
+      // Only the real stored fields — not the synthetic hasSales/hasMovements
+      // guard flags carried on `previous` — belong in the audit trail.
+      before: {
+        name: previous.name,
+        price: previous.price,
+        stock: previous.stock,
+      },
       after: { name: row.name, price: row.price, stock: row.stock },
       metadata: {
         priceChanged,
@@ -285,12 +403,20 @@ export async function updateProduct(id: string, input: ProductUpdateInput) {
   return row;
 }
 
-export async function softDeleteProduct(id: string) {
+export type ProductStatusTransition = 'published' | 'archived';
+
+// State machine: draft/archived -> published, published -> archived. A product
+// never returns to draft once it leaves it, and archiving keeps the full
+// history intact (nothing is deleted).
+export async function setProductStatus(
+  id: string,
+  next: ProductStatusTransition,
+): Promise<Product> {
   const orgId = await requireOrgId();
 
-  const [row] = await db
-    .update(productsSchema)
-    .set({ deleted: true })
+  const [current] = await db
+    .select({ status: productsSchema.status })
+    .from(productsSchema)
     .where(
       and(
         eq(productsSchema.id, id),
@@ -298,14 +424,93 @@ export async function softDeleteProduct(id: string) {
         eq(productsSchema.deleted, false),
       ),
     )
-    .returning({ id: productsSchema.id });
+    .limit(1);
 
-  if (!row) {
+  if (!current) {
     throw new Error('Product not found');
   }
 
+  const allowed
+    = (next === 'published' && current.status !== 'published')
+      || (next === 'archived' && current.status === 'published');
+
+  if (!allowed) {
+    throw new Error('Transición de estado no permitida');
+  }
+
+  // Compare-and-swap: the UPDATE only matches if the status is still what we
+  // read, so two concurrent transitions can't both apply (TOCTOU-safe without a
+  // transaction). A zero-row result means another change won the race.
+  const [row] = await db
+    .update(productsSchema)
+    .set({ status: next, publishAt: null })
+    .where(
+      and(
+        eq(productsSchema.id, id),
+        eq(productsSchema.organizationId, orgId),
+        eq(productsSchema.deleted, false),
+        eq(productsSchema.status, current.status),
+      ),
+    )
+    .returning();
+
+  if (!row) {
+    throw new Error('El estado del producto cambió, vuelve a intentarlo.');
+  }
+
   revalidatePath('/dashboard/products');
-  return { id: row.id };
+  return row;
+}
+
+// Hard delete is only allowed for a virgin product — one with no sales and no
+// stock movements, so there is no history to damage. Anything with history must
+// be archived instead. The FK restrict on sale_items/stock_movements is the
+// last-resort backstop; this check produces a clear message first.
+export async function deleteProduct(id: string) {
+  const orgId = await requireOrgId();
+
+  // Lock the product row and re-check "virgin" inside one transaction so a
+  // concurrent sale can't slip history in between the check and the delete.
+  // Both sale_items and stock_movements now carry an ON DELETE restrict FK, so
+  // the DB is the final backstop even against paths that don't lock the product;
+  // this app-level check just produces a friendlier message first.
+  await db.transaction(async (tx) => {
+    const [target] = await tx
+      .select({
+        id: productsSchema.id,
+        hasSales: hasSalesSql,
+        hasMovements: hasMovementsSql,
+      })
+      .from(productsSchema)
+      .where(
+        and(
+          eq(productsSchema.id, id),
+          eq(productsSchema.organizationId, orgId),
+          eq(productsSchema.deleted, false),
+        ),
+      )
+      .for('update')
+      .limit(1);
+
+    if (!target) {
+      throw new Error('Product not found');
+    }
+
+    if (target.hasSales || target.hasMovements) {
+      throw new Error(
+        'No se puede eliminar un producto con ventas o movimientos de inventario. Archívalo para quitarlo de la venta sin perder el historial.',
+      );
+    }
+
+    await tx
+      .delete(productsSchema)
+      .where(
+        and(eq(productsSchema.id, id), eq(productsSchema.organizationId, orgId)),
+      );
+  });
+
+  revalidatePath('/dashboard/products');
+  return { id };
 }
 
 export async function decrementStock(id: string, qty: number) {
