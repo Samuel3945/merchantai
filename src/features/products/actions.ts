@@ -445,40 +445,46 @@ export async function setProductStatus(
 export async function deleteProduct(id: string) {
   const orgId = await requireOrgId();
 
-  const [target] = await db
-    .select({
-      id: productsSchema.id,
-      hasSales: hasSalesSql,
-      hasMovements: hasMovementsSql,
-    })
-    .from(productsSchema)
-    .where(
-      and(
-        eq(productsSchema.id, id),
-        eq(productsSchema.organizationId, orgId),
-        eq(productsSchema.deleted, false),
-      ),
-    )
-    .limit(1);
+  // Lock the product row and re-check "virgin" inside one transaction so a
+  // concurrent sale can't slip history in between the check and the delete.
+  // Every sale path (createSale + both POS routes) locks the product FOR UPDATE
+  // before inserting sale_items/movements, so this lock serializes against them.
+  // sale_items FK is ON DELETE restrict; stock_movements has no FK, so the lock
+  // is what makes the movements case race-safe.
+  await db.transaction(async (tx) => {
+    const [target] = await tx
+      .select({
+        id: productsSchema.id,
+        hasSales: hasSalesSql,
+        hasMovements: hasMovementsSql,
+      })
+      .from(productsSchema)
+      .where(
+        and(
+          eq(productsSchema.id, id),
+          eq(productsSchema.organizationId, orgId),
+          eq(productsSchema.deleted, false),
+        ),
+      )
+      .for('update')
+      .limit(1);
 
-  if (!target) {
-    throw new Error('Product not found');
-  }
+    if (!target) {
+      throw new Error('Product not found');
+    }
 
-  if (target.hasSales || target.hasMovements) {
-    throw new Error(
-      'No se puede eliminar un producto con ventas o movimientos de inventario. Archívalo para quitarlo de la venta sin perder el historial.',
-    );
-  }
+    if (target.hasSales || target.hasMovements) {
+      throw new Error(
+        'No se puede eliminar un producto con ventas o movimientos de inventario. Archívalo para quitarlo de la venta sin perder el historial.',
+      );
+    }
 
-  await db
-    .delete(productsSchema)
-    .where(
-      and(
-        eq(productsSchema.id, id),
-        eq(productsSchema.organizationId, orgId),
-      ),
-    );
+    await tx
+      .delete(productsSchema)
+      .where(
+        and(eq(productsSchema.id, id), eq(productsSchema.organizationId, orgId)),
+      );
+  });
 
   revalidatePath('/dashboard/products');
   return { id };
