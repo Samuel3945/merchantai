@@ -380,7 +380,13 @@ export async function updateProduct(id: string, input: ProductUpdateInput) {
       action: 'product.updated',
       entityType: 'product',
       entityId: row.id,
-      before: previous,
+      // Only the real stored fields — not the synthetic hasSales/hasMovements
+      // guard flags carried on `previous` — belong in the audit trail.
+      before: {
+        name: previous.name,
+        price: previous.price,
+        stock: previous.stock,
+      },
       after: { name: row.name, price: row.price, stock: row.stock },
       metadata: {
         priceChanged,
