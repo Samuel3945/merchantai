@@ -270,6 +270,11 @@ export type Sale = typeof salesSchema.$inferSelect;
 // human name + optional avatar, so the table never shows a raw user id.
 export type SaleListRow = Sale & {
   hasReturn: boolean;
+  // True when every sold unit has been returned, computed by QUANTITY (returned
+  // units >= sold units) — not by status. A damaged full return keeps the sale
+  // 'completed', and a sale fully returned across several partials never flips
+  // to 'returned' either, so status alone would wrongly leave it reopenable.
+  fullyReturned: boolean;
   cashierName: string | null;
   cashierImageUrl: string | null;
 };
@@ -436,6 +441,22 @@ export async function listSales(
       .select({
         ...getTableColumns(salesSchema),
         hasReturn: sql<boolean>`EXISTS (SELECT 1 FROM ${posReturnsSchema} WHERE ${posReturnsSchema.saleId} = ${salesSchema.id})`,
+        // Returned units (across all returns) >= sold units. Reason-agnostic, so
+        // damaged full returns and totals reached via multiple partials both
+        // count as fully returned even though the sale row stays 'completed'.
+        fullyReturned: sql<boolean>`(
+          EXISTS (SELECT 1 FROM ${posReturnsSchema} WHERE ${posReturnsSchema.saleId} = ${salesSchema.id})
+          AND COALESCE((
+            SELECT SUM(${posReturnItemsSchema.qty})
+            FROM ${posReturnItemsSchema}
+            JOIN ${saleItemsSchema} ON ${saleItemsSchema.id} = ${posReturnItemsSchema.saleItemId}
+            WHERE ${saleItemsSchema.saleId} = ${salesSchema.id}
+          ), 0) >= COALESCE((
+            SELECT SUM(${saleItemsSchema.qty})
+            FROM ${saleItemsSchema}
+            WHERE ${saleItemsSchema.saleId} = ${salesSchema.id}
+          ), 0)
+        )`,
       })
       .from(salesSchema)
       .where(whereClause)
