@@ -1,6 +1,7 @@
 import type { db } from '@/libs/DB';
-import { and, eq, gt, sql } from 'drizzle-orm';
+import { and, eq, gt, isNotNull, sql } from 'drizzle-orm';
 import { findOpenSession, toMoney } from '@/libs/cash-helpers';
+import { fifoBatchOrder } from '@/libs/fifo-cogs';
 import { formatSaleNumber } from '@/libs/sale-number';
 import {
   cashMovementsSchema,
@@ -117,7 +118,7 @@ async function recordDamagedExit(
         gt(stockMovementsSchema.remainingQty, 0),
       ),
     )
-    .orderBy(stockMovementsSchema.createdAt)
+    .orderBy(fifoBatchOrder)
     .for('update');
 
   let remaining = line.qty;
@@ -356,14 +357,59 @@ export async function applySaleReturn(
             eq(productsSchema.organizationId, organizationId),
           ),
         );
+
+      // Re-attribute the cost this line was actually sold at, captured on the
+      // sale's FIFO exit, so the returned units carry truthful COGS when resold.
+      // NULL (legacy sales with no ledger exit) is fine: FIFO falls back to the
+      // product's reference cost on consumption.
+      const [soldExit] = await tx
+        .select({ unitCost: stockMovementsSchema.unitCost })
+        .from(stockMovementsSchema)
+        .where(
+          and(
+            eq(stockMovementsSchema.saleId, sale.id),
+            eq(stockMovementsSchema.productId, r.productId),
+            eq(stockMovementsSchema.type, 'exit'),
+            eq(stockMovementsSchema.reason, 'sale'),
+          ),
+        )
+        .limit(1);
+
+      // A returned unit belongs to an older batch, so inherit the soonest-
+      // expiring open batch's date. This keeps a perishable return on the
+      // expiration engine's radar (it only tracks entries that carry expiresAt)
+      // and reflects that this stock is closer to its expiry than fresh stock.
+      const [frontBatch] = await tx
+        .select({ expiresAt: stockMovementsSchema.expiresAt })
+        .from(stockMovementsSchema)
+        .where(
+          and(
+            eq(stockMovementsSchema.organizationId, organizationId),
+            eq(stockMovementsSchema.productId, r.productId),
+            eq(stockMovementsSchema.type, 'entry'),
+            gt(stockMovementsSchema.remainingQty, 0),
+            isNotNull(stockMovementsSchema.expiresAt),
+          ),
+        )
+        .orderBy(stockMovementsSchema.expiresAt)
+        .limit(1);
+
       // Drizzle insert (not raw SQL) so organization_id — a NOT NULL column — is
       // always written; the previous raw INSERT omitted it and broke restocks.
+      // remainingQty is REQUIRED: without it the units increment product.stock
+      // but never re-enter the FIFO ledger (consumers filter remaining_qty > 0),
+      // so the next sale would draw the wrong batch and COGS would drift. The
+      // 'return_sale' reason sends this batch to the FRONT of the queue (see
+      // fifoBatchOrder) so it sells before fresh stock.
       await tx.insert(stockMovementsSchema).values({
         organizationId,
         productId: r.productId,
         productName: r.productName,
         type: 'entry',
         qty: r.qty,
+        remainingQty: r.qty,
+        unitCost: soldExit?.unitCost ?? null,
+        expiresAt: frontBatch?.expiresAt ?? null,
         reason: 'return_sale',
         saleId: sale.id,
         createdBy: actorName,

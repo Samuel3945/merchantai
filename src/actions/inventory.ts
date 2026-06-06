@@ -5,6 +5,7 @@ import { auth } from '@clerk/nextjs/server';
 import { and, desc, eq, gt, gte, lte, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { db } from '@/libs/db-context';
+import { fifoBatchOrder } from '@/libs/fifo-cogs';
 import {
   productsSchema,
   saleItemsSchema,
@@ -99,7 +100,7 @@ export async function recordMovement(input: RecordMovementInput) {
             gt(stockMovementsSchema.remainingQty, 0),
           ),
         )
-        .orderBy(stockMovementsSchema.createdAt)
+        .orderBy(fifoBatchOrder)
         .for('update');
 
       const fallback = Number(product.cost) || 0;
