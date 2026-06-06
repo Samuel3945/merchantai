@@ -44,7 +44,8 @@ const RETURN_REASONS: {
   {
     value: 'damaged',
     label: 'Producto dañado',
-    effect: 'Sale del inventario como dañado; no vuelve al stock vendible.',
+    effect:
+      'Se entrega un reemplazo: no se devuelve dinero. Sale del stock como merma, valuada al costo.',
   },
 ];
 
@@ -323,7 +324,7 @@ export function SalesClient({
         return {
           saleItemId: it.id,
           qty,
-          refundAmount: lineRefund(it, qty),
+          refundAmount: reason === 'damaged' ? 0 : lineRefund(it, qty),
           disposition,
         };
       });
@@ -362,15 +363,19 @@ export function SalesClient({
   const refundIsCash = ['efectivo', 'cash'].includes(refundMethod.toLowerCase());
   const selectedCount = selected.size;
   const reasonMeta = RETURN_REASONS.find(r => r.value === reason);
+  const isDamaged = reason === 'damaged';
 
   const chosenItems = returnSale
     ? returnSale.items.filter(it => selected.has(it.id))
     : [];
-  const totalRefund = chosenItems.reduce((acc, it) => {
-    const remaining = remainingOf(it);
-    const qty = Math.min(qtys[it.id] ?? remaining, remaining);
-    return acc + lineRefund(it, qty);
-  }, 0);
+  // A damaged exchange returns no cash, so there is nothing to refund.
+  const totalRefund = isDamaged
+    ? 0
+    : chosenItems.reduce((acc, it) => {
+        const remaining = remainingOf(it);
+        const qty = Math.min(qtys[it.id] ?? remaining, remaining);
+        return acc + lineRefund(it, qty);
+      }, 0);
 
   const from = total === 0 ? 0 : page * pageSize + 1;
   const to = Math.min(total, (page + 1) * pageSize);
@@ -753,7 +758,9 @@ export function SalesClient({
                             >
                               {fullyReturned
                                 ? '—'
-                                : formatMoney(lineRefund(item, qty))}
+                                : isDamaged
+                                  ? 'Reemplazo'
+                                  : formatMoney(lineRefund(item, qty))}
                             </span>
                           </div>
                         );
@@ -799,53 +806,72 @@ export function SalesClient({
                       )}
                     </div>
 
-                    {/* Refund — quick buttons for the configured methods */}
-                    <div className="space-y-2">
-                      <p className={labelCls}>Reembolso en</p>
-                      <div className="flex flex-wrap gap-2">
-                        {methods.map(m => (
-                          <button
-                            key={m}
-                            type="button"
-                            onClick={() => setRefundMethod(m)}
-                            className={cn(
-                              `
-                                rounded-md border px-3 py-1.5 text-sm
-                                font-medium transition-colors
-                              `,
-                              refundMethod === m
-                                ? `
-                                  border-primary/50 bg-primary/5 text-foreground
-                                `
-                                : `
-                                  text-muted-foreground
-                                  hover:bg-accent
-                                `,
-                            )}
+                    {/* A damaged exchange returns no cash, so we replace the
+                        refund method + total with the merma note. */}
+                    {isDamaged
+                      ? (
+                          <div className="
+                            rounded-md border border-amber-500/40
+                            bg-amber-500/10 px-3 py-2 text-xs text-amber-700
+                          "
                           >
-                            {m}
-                          </button>
-                        ))}
-                      </div>
-                      {refundIsCash && (
-                        <p className="text-xs text-muted-foreground">
-                          Se registra la salida de efectivo en la caja abierta.
-                        </p>
-                      )}
-                    </div>
+                            No se devuelve dinero: se entrega un reemplazo y el
+                            producto dañado se registra como merma al costo.
+                          </div>
+                        )
+                      : (
+                          <>
+                            {/* Refund — quick buttons for the configured methods */}
+                            <div className="space-y-2">
+                              <p className={labelCls}>Reembolso en</p>
+                              <div className="flex flex-wrap gap-2">
+                                {methods.map(m => (
+                                  <button
+                                    key={m}
+                                    type="button"
+                                    onClick={() => setRefundMethod(m)}
+                                    className={cn(
+                                      `
+                                        rounded-md border px-3 py-1.5 text-sm
+                                        font-medium transition-colors
+                                      `,
+                                      refundMethod === m
+                                        ? `
+                                          border-primary/50 bg-primary/5
+                                          text-foreground
+                                        `
+                                        : `
+                                          text-muted-foreground
+                                          hover:bg-accent
+                                        `,
+                                    )}
+                                  >
+                                    {m}
+                                  </button>
+                                ))}
+                              </div>
+                              {refundIsCash && (
+                                <p className="text-xs text-muted-foreground">
+                                  Se registra la salida de efectivo en la caja
+                                  abierta.
+                                </p>
+                              )}
+                            </div>
 
-                    <div className="
-                      flex items-center justify-between rounded-md border p-3
-                      text-sm
-                    "
-                    >
-                      <span className="text-muted-foreground">
-                        Total a reembolsar
-                      </span>
-                      <span className="font-semibold tabular-nums">
-                        {formatMoney(totalRefund)}
-                      </span>
-                    </div>
+                            <div className="
+                              flex items-center justify-between rounded-md
+                              border p-3 text-sm
+                            "
+                            >
+                              <span className="text-muted-foreground">
+                                Total a reembolsar
+                              </span>
+                              <span className="font-semibold tabular-nums">
+                                {formatMoney(totalRefund)}
+                              </span>
+                            </div>
+                          </>
+                        )}
 
                     {submitError && (
                       <div className="

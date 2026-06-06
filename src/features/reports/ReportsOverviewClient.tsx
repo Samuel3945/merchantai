@@ -381,7 +381,7 @@ export function ReportsOverviewClient({ initial }: { initial: ReportsOverview })
           title="Devoluciones"
           value={`${data.returns.rate.toFixed(1)}%`}
           secondary={`${money(data.returns.totalRefunded)} reembolsado`}
-          explanation="Qué porcentaje de tus ventas vuelve. Una tasa alta esconde un problema de calidad, precio o proceso que te cuesta plata."
+          explanation="Qué porcentaje de tus ventas vuelve. En un cambio de opinión recuperás la mercancía y devolvés la plata: neto cero. Lo dañado no se reembolsa; su costo aparece en Pérdidas (mermas). Una tasa alta igual avisa un problema de calidad o proceso."
           tone={data.returns.rate > 5 ? 'danger' : data.returns.rate > 2 ? 'warn' : 'default'}
           href="/dashboard/reports/devoluciones"
         />

@@ -1,5 +1,5 @@
 import type { db } from '@/libs/DB';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, gt, sql } from 'drizzle-orm';
 import { findOpenSession, toMoney } from '@/libs/cash-helpers';
 import { formatSaleNumber } from '@/libs/sale-number';
 import {
@@ -72,6 +72,96 @@ export type ApplySaleReturnResult = {
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 const CASH_METHODS = new Set(['efectivo', 'cash']);
+
+/**
+ * FIFO-values and records a damaged unit leaving sellable stock as a merma.
+ *
+ * Mirrors recordMovement()'s exit path: draw down the oldest open entry batches
+ * to capture the weighted unit cost, decrement their remaining_qty, write ONE
+ * 'exit' movement (reason 'damaged') so it surfaces in the Mermas report at
+ * cost, and lower product.stock. saleId is intentionally left null: this is a
+ * merma, not part of the sale's COGS, so the cost queries that filter by
+ * sale_id never double-count it.
+ */
+async function recordDamagedExit(
+  tx: Tx,
+  organizationId: string,
+  actorName: string,
+  line: { productId: string; productName: string; qty: number },
+): Promise<void> {
+  const [product] = await tx
+    .select({ cost: productsSchema.cost })
+    .from(productsSchema)
+    .where(
+      and(
+        eq(productsSchema.id, line.productId),
+        eq(productsSchema.organizationId, organizationId),
+      ),
+    )
+    .limit(1);
+
+  const fallback = Number(product?.cost) || 0;
+
+  const batches = await tx
+    .select({
+      id: stockMovementsSchema.id,
+      remainingQty: stockMovementsSchema.remainingQty,
+      unitCost: stockMovementsSchema.unitCost,
+    })
+    .from(stockMovementsSchema)
+    .where(
+      and(
+        eq(stockMovementsSchema.organizationId, organizationId),
+        eq(stockMovementsSchema.productId, line.productId),
+        eq(stockMovementsSchema.type, 'entry'),
+        gt(stockMovementsSchema.remainingQty, 0),
+      ),
+    )
+    .orderBy(stockMovementsSchema.createdAt)
+    .for('update');
+
+  let remaining = line.qty;
+  let totalCost = 0;
+  for (const b of batches) {
+    if (remaining <= 0) {
+      break;
+    }
+    const take = Math.min(b.remainingQty ?? 0, remaining);
+    totalCost += take * (b.unitCost != null ? Number(b.unitCost) : fallback);
+    remaining -= take;
+    await tx
+      .update(stockMovementsSchema)
+      .set({ remainingQty: sql`${stockMovementsSchema.remainingQty} - ${take}` })
+      .where(eq(stockMovementsSchema.id, b.id));
+  }
+  // Units the FIFO ledger doesn't cover fall back to the product's reference cost.
+  if (remaining > 0) {
+    totalCost += remaining * fallback;
+  }
+  const unitCost = line.qty > 0 ? (totalCost / line.qty).toFixed(2) : '0';
+
+  await tx.insert(stockMovementsSchema).values({
+    organizationId,
+    productId: line.productId,
+    productName: line.productName,
+    type: 'exit',
+    qty: line.qty,
+    reason: 'damaged',
+    unitCost,
+    saleId: null,
+    createdBy: actorName,
+  });
+
+  await tx
+    .update(productsSchema)
+    .set({ stock: sql`GREATEST(0, ${productsSchema.stock} - ${line.qty})` })
+    .where(
+      and(
+        eq(productsSchema.id, line.productId),
+        eq(productsSchema.organizationId, organizationId),
+      ),
+    );
+}
 
 /**
  * Applies a (full or partial) return for a sale within the given transaction.
@@ -188,19 +278,31 @@ export async function applySaleReturn(
       );
     }
 
-    // Disposition is the source of truth. Older POS clients that only sent
-    // `restock: false` are mapped to 'discard' (goods did not return to stock).
+    // `reason` is the return-level intent: a damaged return means every line is
+    // a damaged exchange, no matter what the client sent per item — so neither
+    // the POS nor a stale client can accidentally restock or refund it. For any
+    // other reason the per-item disposition wins; older POS clients that only
+    // sent `restock: false` are mapped to 'discard' (goods did not return).
     const disposition: ReturnDisposition
-      = it.disposition ?? (it.restock === false ? 'discard' : 'restock');
+      = reason === 'damaged'
+        ? 'damaged'
+        : (it.disposition ?? (it.restock === false ? 'discard' : 'restock'));
     const restock = disposition === 'restock';
 
-    totalRefund += amountNum;
+    // A damaged unit is an exchange, not a money-back return: the customer gets
+    // a replacement, so no cash leaves the register. The only economic loss is
+    // the unit cost, booked as a 'damaged' exit (merma) below. Force the refund
+    // to 0 server-side so neither the POS nor the dashboard can refund a damaged
+    // line by mistake.
+    const refund = disposition === 'damaged' ? 0 : amountNum;
+
+    totalRefund += refund;
     resolved.push({
       saleItemId: orig.id,
       productId: orig.productId,
       productName: orig.productName,
       qty,
-      refundAmount: toMoney(amountNum),
+      refundAmount: toMoney(refund),
       restock,
       disposition,
     });
@@ -267,25 +369,21 @@ export async function applySaleReturn(
         createdBy: actorName,
       });
     } else if (r.disposition === 'damaged') {
-      // Damaged return: the goods do NOT re-enter sellable stock. We log the
-      // loss in the ledger (type 'adjustment', no remaining_qty so FIFO ignores
-      // it and product.stock is untouched) so inventory history shows the unit
-      // left because it was damaged.
-      await tx.insert(stockMovementsSchema).values({
-        organizationId,
-        productId: r.productId,
-        productName: r.productName,
-        type: 'adjustment',
-        qty: r.qty,
-        reason: 'return_damaged',
-        saleId: sale.id,
-        createdBy: actorName,
-      });
+      // Damaged exchange: the customer keeps a replacement and the damaged unit
+      // is binned, so ONE unit leaves sellable stock. Record a single 'exit'
+      // (reason 'damaged') valued via FIFO — exactly like a manual merma in
+      // recordMovement() — so the history shows one salida, the stock drops, and
+      // the loss surfaces in the Mermas report at cost.
+      await recordDamagedExit(tx, organizationId, actorName, r);
     }
     // discard: recorded on pos_return_items.disposition only.
   }
 
-  if (!partial) {
+  // A change-of-mind return voids the sale (goods back, money back → net zero),
+  // so a full one flips it to 'returned'. A damaged exchange does NOT: the
+  // customer walks out with a working replacement and the sale's revenue stands,
+  // so the sale stays 'completed' and only the merma is recorded.
+  if (!partial && reason !== 'damaged') {
     await tx
       .update(salesSchema)
       .set({ status: 'returned' })
