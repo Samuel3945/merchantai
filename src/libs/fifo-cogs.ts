@@ -5,6 +5,25 @@ import { sql } from 'drizzle-orm';
 // The exact transaction type drizzle hands to a db.transaction callback.
 type RawTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
+// The ONE batch-consumption order every FIFO consumer (sales, manual mermas,
+// damaged-exchange mermas) must share so they never diverge.
+//
+// Change-of-mind restocks (reason 'return_sale') jump to the FRONT of the queue
+// and are sold before regular stock — and among themselves the most recent
+// return goes first ("como pila"/LIFO). A returned unit belongs to an older
+// batch (closer to its expiry), so it must be the next one out the door instead
+// of sitting behind fresh stock until it expires. Regular stock keeps strict
+// FIFO by entry date. created_at is never mutated, so the audit/history trail
+// stays truthful; priority lives here in the ordering, not in the timestamp.
+//
+// CASE (not `(reason = 'return_sale') DESC`) so a NULL reason sorts as a normal
+// batch instead of NULLS-FIRST jumping the queue.
+export const fifoBatchOrder = sql`
+  CASE WHEN reason = 'return_sale' THEN 0 ELSE 1 END ASC,
+  CASE WHEN reason = 'return_sale' THEN created_at END DESC,
+  created_at ASC
+`;
+
 export type FifoSaleLine = {
   productId: string;
   productName: string;
@@ -41,7 +60,7 @@ export async function consumeFifoExits(
         AND type = 'entry'
         AND remaining_qty IS NOT NULL
         AND remaining_qty > 0
-      ORDER BY created_at ASC
+      ORDER BY ${fifoBatchOrder}
       FOR UPDATE
     `);
 
