@@ -4,6 +4,7 @@ import { applyInvoiceCustomerUpsert } from '@/features/customers/post-sale-hook'
 import { logAction, resolvePosActor } from '@/libs/audit-log';
 import { findOpenSession, recordCashMovement, toMoney } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
+import { createFiado } from '@/libs/fiados';
 import { consumeFifoExits } from '@/libs/fifo-cogs';
 import { resolvePosAuth } from '@/libs/pos-auth';
 import { assignNextSaleNumber } from '@/libs/sale-number';
@@ -31,6 +32,9 @@ type CreateSaleBody = {
   paymentType?: string;
   notes?: string | null;
   payments?: SalePaymentInput[];
+  // Optional manual due date ('YYYY-MM-DD') for fiado sales; org default term
+  // applies when omitted.
+  dueDate?: string | null;
 };
 
 export async function POST(req: Request): Promise<NextResponse> {
@@ -234,6 +238,26 @@ export async function POST(req: Request): Promise<NextResponse> {
         .insert(salePaymentsSchema)
         .values(paymentRows)
         .returning();
+
+      // Fiado: book the credit account for the portion not paid upfront with a
+      // non-fiado method. Same rule as the dashboard createSale action.
+      const nonFiadoPaid = paymentRows
+        .filter(p => !/fiado/i.test(p.method))
+        .reduce((acc, p) => acc + (Number.parseFloat(p.amount) || 0), 0);
+      const fiadoAmount = Number.parseFloat((total - nonFiadoPaid).toFixed(2));
+      const isFiado
+        = /fiado/i.test(paymentType)
+          || paymentRows.some(p => /fiado/i.test(p.method));
+      if (isFiado && fiadoAmount > 0) {
+        await createFiado(tx, {
+          organizationId: ctx.organizationId,
+          saleId: sale.id,
+          originalAmount: fiadoAmount,
+          dueDate: body.dueDate ?? null,
+          createdBy: ctx.cashierId ?? ctx.cashierName ?? null,
+          notes: body.notes ?? null,
+        });
+      }
 
       return { ...sale, items: insertedItems, payments: insertedPayments };
     });

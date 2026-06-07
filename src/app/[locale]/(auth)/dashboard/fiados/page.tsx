@@ -1,5 +1,5 @@
 import { setRequestLocale } from 'next-intl/server';
-import { getPendingFiados } from '@/actions/fiados';
+import { fetchFiadosOverview } from '@/actions/fiados';
 import { TitleBar } from '@/features/dashboard/TitleBar';
 import { FiadosClient } from '@/features/fiados/FiadosClient';
 
@@ -9,13 +9,13 @@ export default async function DashboardFiadosPage(props: {
   const { locale } = await props.params;
   setRequestLocale(locale);
 
-  const initial = await getPendingFiados();
+  const initial = await fetchFiadosOverview();
 
   return (
     <>
       <TitleBar
-        title="Fiados"
-        description="Clientes con saldo pendiente. Cobra, abona o marca como pagado."
+        title="Clientes que deben"
+        description="Quién te debe, cuánto y cuándo paga. Cobra abonos y extiende plazos."
       />
       <FiadosClient initial={initial} />
     </>

@@ -23,6 +23,10 @@ export const INCOME_MOVEMENT_TYPES: CashMovementType[] = [
   'sale',
   'deposit',
   'adjustment',
+  // Cobro de fiado en efectivo: real cash into the drawer, so it raises the
+  // expected amount for the arqueo. It is NOT revenue (Finanzas excludes it —
+  // revenue was booked when the fiado sale happened), only drawer cash.
+  'fiado_payment',
 ];
 
 // Cash leaving the drawer. This DOES include `withdrawal`: a security withdrawal
@@ -98,7 +102,7 @@ export async function computeCashBreakdown(
   const [row] = await executor
     .select({
       cashSales: sql<string>`COALESCE(SUM(${cashMovementsSchema.amount}) FILTER (WHERE ${cashMovementsSchema.type} = 'sale'), 0)::text`,
-      entradas: sql<string>`COALESCE(SUM(${cashMovementsSchema.amount}) FILTER (WHERE ${cashMovementsSchema.type} IN ('deposit','adjustment')), 0)::text`,
+      entradas: sql<string>`COALESCE(SUM(${cashMovementsSchema.amount}) FILTER (WHERE ${cashMovementsSchema.type} IN ('deposit','adjustment','fiado_payment')), 0)::text`,
       salidas: sql<string>`COALESCE(SUM(${cashMovementsSchema.amount}) FILTER (WHERE ${cashMovementsSchema.type} IN ('expense','salary','inventory_purchase','withdrawal','advance')), 0)::text`,
       movementCount: sql<number>`COUNT(*)::int`,
     })

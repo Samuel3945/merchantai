@@ -213,6 +213,12 @@ export const cashMovementTypeEnum = pgEnum('cash_movement_type', [
   // receivable against future salary, not a P&L expense. Behaves like withdrawal
   // for the cash math (a salida) and is excluded from operating expenses.
   'advance',
+  // Cobro de fiado: a customer pays down a credit account IN CASH. It is drawer
+  // income for the arqueo, but it is NOT new revenue (the sale already booked
+  // revenue when the fiado was created) — so Finanzas excludes it. Only the
+  // efectivo portion lands here; digital abonos (nequi/daviplata/transfer) are
+  // recorded on the fiado ledger but never touch the physical drawer.
+  'fiado_payment',
 ]);
 
 export const cashSessionsSchema = pgTable(
