@@ -29,6 +29,7 @@ import {
 } from '@/actions/payment-methods';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
+import { FiadoTermField } from '@/features/settings/FiadoTermField';
 import { ToggleRow } from './fields';
 import { useSettingSave } from './useSettingSave';
 
@@ -236,6 +237,8 @@ export function PaymentMethodsClient({
           initial={fiado}
           onCommit={handleToggleFiado}
         />
+
+        {fiado && <FiadoTermField />}
       </div>
 
       <div className="flex items-center justify-between pt-2">
