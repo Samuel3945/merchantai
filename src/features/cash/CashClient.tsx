@@ -106,7 +106,7 @@ export function CashClient(props: {
   const [counted, setCounted] = useState('');
   const [closeNote, setCloseNote] = useState('');
 
-  const { session, movements, breakdown } = props.current;
+  const { session, movements, breakdown, collections } = props.current;
   const expected = breakdown.expected;
 
   const countedNum = Number.parseFloat(counted);
@@ -334,6 +334,33 @@ export function CashClient(props: {
                 <StatCard label="Entradas" value={money(breakdown.entradas)} tone="in" />
                 <StatCard label="Salidas" value={money(breakdown.salidas)} tone="out" />
                 <StatCard label="Movimientos" value={String(breakdown.movementCount)} />
+              </div>
+
+              {/* Cobros por método: efectivo (en cajón) vs digital (no entra al
+                  cajón). Incluye ventas y abonos de fiado de esta sesión. */}
+              <div className="space-y-2">
+                <div className="text-sm font-medium">
+                  Cobros por método
+                  <span className="
+                    ml-1 text-xs font-normal text-muted-foreground
+                  "
+                  >
+                    · esta sesión · ventas + abonos
+                  </span>
+                </div>
+                <div className="
+                  grid grid-cols-2 gap-3
+                  sm:grid-cols-3
+                  lg:grid-cols-6
+                "
+                >
+                  <StatCard label="Efectivo" value={money(collections.efectivo)} tone="in" />
+                  <StatCard label="Transferencia" value={money(collections.transferencia)} />
+                  <StatCard label="Nequi" value={money(collections.nequi)} />
+                  <StatCard label="Daviplata" value={money(collections.daviplata)} />
+                  <StatCard label="Otros" value={money(collections.otros)} />
+                  <StatCard label="Total general" value={money(collections.total)} tone="in" />
+                </div>
               </div>
 
               <div className="

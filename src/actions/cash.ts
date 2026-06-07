@@ -1,7 +1,7 @@
 'use server';
 
 import type { ActionResult } from '@/libs/action-result';
-import type { CashBreakdown, CashMovement, CashMovementType, CashSession } from '@/libs/cash-helpers';
+import type { CashBreakdown, CashMovement, CashMovementType, CashSession, CollectionsByMethod } from '@/libs/cash-helpers';
 import type { CashRiskLevel } from '@/libs/cash-security-policy';
 import { auth, currentUser } from '@clerk/nextjs/server';
 import { and, desc, eq, gte, lt, sql } from 'drizzle-orm';
@@ -13,7 +13,9 @@ import {
 import { logAction } from '@/libs/audit-log';
 import {
   computeCashBreakdown,
+  computeCollectionsByMethod,
   computeExpectedAmount,
+  EMPTY_COLLECTIONS,
   EXPENSE_MOVEMENT_TYPES,
   findOpenSession,
   INCOME_MOVEMENT_TYPES,
@@ -333,6 +335,7 @@ export type GetCurrentCashResult = {
   movements: CashMovement[];
   expected: number;
   breakdown: CashBreakdown;
+  collections: CollectionsByMethod;
 };
 
 export async function getCurrentCash(): Promise<GetCurrentCashResult> {
@@ -345,16 +348,18 @@ export async function getCurrentCash(): Promise<GetCurrentCashResult> {
       movements: [],
       expected: 0,
       breakdown: EMPTY_BREAKDOWN,
+      collections: EMPTY_COLLECTIONS,
     };
   }
 
-  const [movements, breakdown] = await Promise.all([
+  const [movements, breakdown, collections] = await Promise.all([
     db
       .select()
       .from(cashMovementsSchema)
       .where(eq(cashMovementsSchema.sessionId, session.id))
       .orderBy(desc(cashMovementsSchema.createdAt)),
     computeCashBreakdown(db, session),
+    computeCollectionsByMethod(db, session),
   ]);
 
   return {
@@ -362,6 +367,7 @@ export async function getCurrentCash(): Promise<GetCurrentCashResult> {
     movements,
     expected: breakdown.expected,
     breakdown,
+    collections,
   };
 }
 

@@ -1,10 +1,11 @@
 import { auth } from '@clerk/nextjs/server';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, lte, sql } from 'drizzle-orm';
 import { db } from '@/libs/DB';
 import { formatSaleNumber } from '@/libs/sale-number';
 import {
   cashMovementsSchema,
   cashSessionsSchema,
+  fiadoMovementsSchema,
   salePaymentsSchema,
   salesSchema,
 } from '@/models/Schema';
@@ -215,4 +216,113 @@ export async function recordCashMovement(
     .returning();
 
   return created ?? null;
+}
+
+// ── Collections by payment method ────────────────────────────────────────────
+// Caja shows the physical drawer (efectivo) — but the owner also wants to see
+// how much came in by each digital method this session. Digital collections
+// never enter the drawer, so they live in sale_payments + the fiado ledger, not
+// cash_movements. This aggregates BOTH over the session window and buckets them.
+
+export type CollectionsByMethod = {
+  efectivo: number;
+  transferencia: number;
+  nequi: number;
+  daviplata: number;
+  otros: number;
+  total: number;
+};
+
+export const EMPTY_COLLECTIONS: CollectionsByMethod = {
+  efectivo: 0,
+  transferencia: 0,
+  nequi: 0,
+  daviplata: 0,
+  otros: 0,
+  total: 0,
+};
+
+type CollectionBucket = keyof Omit<CollectionsByMethod, 'total'>;
+
+function bucketForMethod(method: string | null): CollectionBucket {
+  const m = (method ?? '').trim().toLowerCase();
+  if (m.includes('efectivo') || m.includes('cash')) {
+    return 'efectivo';
+  }
+  if (m.includes('nequi')) {
+    return 'nequi';
+  }
+  if (m.includes('daviplata')) {
+    return 'daviplata';
+  }
+  if (m.includes('transfer')) {
+    return 'transferencia';
+  }
+  return 'otros';
+}
+
+function round2(n: number): number {
+  return Number.parseFloat(n.toFixed(2));
+}
+
+export async function computeCollectionsByMethod(
+  executor: Executor,
+  session: Pick<CashSession, 'id' | 'openedAt' | 'closedAt' | 'organizationId'>,
+): Promise<CollectionsByMethod> {
+  const start = session.openedAt;
+  const end = session.closedAt ?? new Date();
+
+  const [saleRows, fiadoRows] = await Promise.all([
+    // Sale collections (excluding the fiado-credit portion, which is not money in).
+    executor
+      .select({
+        method: salePaymentsSchema.method,
+        sum: sql<string>`COALESCE(SUM(${salePaymentsSchema.amount}), 0)::text`,
+      })
+      .from(salePaymentsSchema)
+      .innerJoin(salesSchema, eq(salesSchema.id, salePaymentsSchema.saleId))
+      .where(
+        and(
+          eq(salesSchema.organizationId, session.organizationId),
+          gte(salePaymentsSchema.createdAt, start),
+          lte(salePaymentsSchema.createdAt, end),
+          sql`${salePaymentsSchema.method} NOT ILIKE '%fiado%'`,
+        ),
+      )
+      .groupBy(salePaymentsSchema.method),
+    // Fiado abonos collected this session.
+    executor
+      .select({
+        method: fiadoMovementsSchema.method,
+        sum: sql<string>`COALESCE(SUM(${fiadoMovementsSchema.amount}), 0)::text`,
+      })
+      .from(fiadoMovementsSchema)
+      .where(
+        and(
+          eq(fiadoMovementsSchema.organizationId, session.organizationId),
+          eq(fiadoMovementsSchema.type, 'payment'),
+          gte(fiadoMovementsSchema.createdAt, start),
+          lte(fiadoMovementsSchema.createdAt, end),
+        ),
+      )
+      .groupBy(fiadoMovementsSchema.method),
+  ]);
+
+  const result: CollectionsByMethod = { ...EMPTY_COLLECTIONS };
+  for (const row of [...saleRows, ...fiadoRows]) {
+    const amount = Number.parseFloat(row.sum) || 0;
+    if (amount === 0) {
+      continue;
+    }
+    const bucket = bucketForMethod(row.method);
+    result[bucket] = round2(result[bucket] + amount);
+  }
+  result.total = round2(
+    result.efectivo
+    + result.transferencia
+    + result.nequi
+    + result.daviplata
+    + result.otros,
+  );
+  return result;
 }
