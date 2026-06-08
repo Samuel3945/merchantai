@@ -5,6 +5,7 @@ import { logAction, resolvePosActor } from '@/libs/audit-log';
 import { findOpenSession, recordCashMovement, toMoney } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import { createFiado } from '@/libs/fiados';
+import { fiadoAmountFor } from '@/libs/fiados-math';
 import { consumeFifoExits } from '@/libs/fifo-cogs';
 import { resolvePosAuth } from '@/libs/pos-auth';
 import { assignNextSaleNumber } from '@/libs/sale-number';
@@ -241,10 +242,7 @@ export async function POST(req: Request): Promise<NextResponse> {
 
       // Fiado: book the credit account for the portion not paid upfront with a
       // non-fiado method. Same rule as the dashboard createSale action.
-      const nonFiadoPaid = paymentRows
-        .filter(p => !/fiado/i.test(p.method))
-        .reduce((acc, p) => acc + (Number.parseFloat(p.amount) || 0), 0);
-      const fiadoAmount = Number.parseFloat((total - nonFiadoPaid).toFixed(2));
+      const fiadoAmount = fiadoAmountFor(total, paymentRows);
       const isFiado
         = /fiado/i.test(paymentType)
           || paymentRows.some(p => /fiado/i.test(p.method));

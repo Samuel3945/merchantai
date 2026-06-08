@@ -5,6 +5,7 @@ import { applyInvoiceCustomerUpsert } from '@/features/customers/post-sale-hook'
 import { recordCashMovement, toMoney } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import { createFiado } from '@/libs/fiados';
+import { fiadoAmountFor } from '@/libs/fiados-math';
 import { consumeFifoExits } from '@/libs/fifo-cogs';
 import { assignNextSaleNumber } from '@/libs/sale-number';
 import {
@@ -239,10 +240,7 @@ export async function POST(req: Request): Promise<NextResponse> {
 
         // Fiado: book the credit account for the unpaid (non-upfront) portion,
         // same rule as the online POS and dashboard paths.
-        const nonFiadoPaid = paymentRows
-          .filter(p => !/fiado/i.test(p.method))
-          .reduce((acc, p) => acc + (Number.parseFloat(p.amount) || 0), 0);
-        const fiadoAmount = Number.parseFloat((total - nonFiadoPaid).toFixed(2));
+        const fiadoAmount = fiadoAmountFor(total, paymentRows);
         const isFiado
           = /fiado/i.test(queuedSale.paymentType || '')
             || paymentRows.some(p => /fiado/i.test(p.method));
