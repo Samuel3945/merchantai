@@ -52,7 +52,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       note: body.notes ?? null,
       createdBy: ctx.cashierId ?? ctx.cashierName ?? 'pos',
     });
-    const settledSaleIds = await saleIdsForFiados(result.paidFiadoIds);
+    const settledSaleIds = await saleIdsForFiados(ctx.organizationId, result.paidFiadoIds);
     return NextResponse.json({
       applied: result.applied,
       remaining: result.remaining,

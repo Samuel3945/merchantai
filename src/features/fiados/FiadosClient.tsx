@@ -2,7 +2,7 @@
 
 import type { ClientDebt, FiadosOverview } from '@/actions/fiados';
 import type { FiadoDueState } from '@/libs/fiados-shared';
-import { useState, useTransition } from 'react';
+import { useId, useState, useTransition } from 'react';
 import {
   abonarFiado,
   extenderPlazo,
@@ -14,11 +14,10 @@ import { Button } from '@/components/ui/button';
 import {
   dueStateLabel,
   FIADO_PAYMENT_METHODS,
-
 } from '@/libs/fiados-shared';
 import { Link } from '@/libs/I18nNavigation';
 import { cn } from '@/utils/Helpers';
-import { DUE_STATE_META, formatMoney, relativeTime } from './ui';
+import { DUE_STATE_META, formatDate, formatMoney, relativeTime } from './ui';
 
 const inputCls
   = 'flex h-10 w-full rounded-lg border border-input bg-card px-3 text-sm outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring/30';
@@ -77,6 +76,10 @@ function AbonarForm({
   onDone: () => void;
   onCancel: () => void;
 }) {
+  const formId = useId();
+  const amountId = `${formId}-amount`;
+  const methodId = `${formId}-method`;
+  const noteId = `${formId}-note`;
   const [amount, setAmount] = useState('');
   const [method, setMethod] = useState('efectivo');
   const [note, setNote] = useState('');
@@ -122,13 +125,17 @@ function AbonarForm({
       "
       >
         <div>
-          <label className="text-xs font-medium text-muted-foreground">
+          <label
+            htmlFor={amountId}
+            className="text-xs font-medium text-muted-foreground"
+          >
             Monto (saldo
             {' '}
             {formatMoney(client.balance)}
             )
           </label>
           <input
+            id={amountId}
             type="number"
             inputMode="decimal"
             min="0"
@@ -141,8 +148,14 @@ function AbonarForm({
           />
         </div>
         <div>
-          <label className="text-xs font-medium text-muted-foreground">Método</label>
+          <label
+            htmlFor={methodId}
+            className="text-xs font-medium text-muted-foreground"
+          >
+            Método
+          </label>
           <select
+            id={methodId}
             value={method}
             onChange={e => setMethod(e.target.value)}
             className={inputCls}
@@ -154,8 +167,14 @@ function AbonarForm({
         </div>
       </div>
       <div>
-        <label className="text-xs font-medium text-muted-foreground">Notas (opcional)</label>
+        <label
+          htmlFor={noteId}
+          className="text-xs font-medium text-muted-foreground"
+        >
+          Notas (opcional)
+        </label>
         <input
+          id={noteId}
           type="text"
           value={note}
           onChange={e => setNote(e.target.value)}
@@ -194,6 +213,9 @@ function ExtenderForm({
   onDone: () => void;
   onCancel: () => void;
 }) {
+  const formId = useId();
+  const dateId = `${formId}-date`;
+  const reasonId = `${formId}-reason`;
   const [newDate, setNewDate] = useState(() => todayPlus(15));
   const [reason, setReason] = useState('');
   const [pending, startTransition] = useTransition();
@@ -227,8 +249,14 @@ function ExtenderForm({
       "
       >
         <div>
-          <label className="text-xs font-medium text-muted-foreground">Nueva fecha de pago</label>
+          <label
+            htmlFor={dateId}
+            className="text-xs font-medium text-muted-foreground"
+          >
+            Nueva fecha de pago
+          </label>
           <input
+            id={dateId}
             type="date"
             min={todayPlus(1)}
             value={newDate}
@@ -237,8 +265,14 @@ function ExtenderForm({
           />
         </div>
         <div>
-          <label className="text-xs font-medium text-muted-foreground">Motivo (opcional)</label>
+          <label
+            htmlFor={reasonId}
+            className="text-xs font-medium text-muted-foreground"
+          >
+            Motivo (opcional)
+          </label>
           <input
+            id={reasonId}
             type="text"
             value={reason}
             onChange={e => setReason(e.target.value)}
@@ -299,28 +333,44 @@ function ClientCard({
             </a>
           )}
         </div>
-        <Badge variant={meta.badge}>
+        <Badge variant={meta.badge} className={meta.badgeClassName}>
           {dueStateLabel(client.dueState, client.dueDays)}
         </Badge>
+      </div>
+
+      {/* Due date — the single most important date for a tendero scanning cards. */}
+      <div className="mt-1.5 text-xs text-muted-foreground">
+        {history ? 'Pagado' : `Vence: ${formatDate(client.dueDate)}`}
       </div>
 
       <div className="mt-3 flex items-end justify-between gap-2">
         <div>
           <div className="text-xs text-muted-foreground">
-            {history ? 'Pagó' : 'Saldo pendiente'}
+            {history ? 'Monto original' : 'Saldo pendiente'}
           </div>
           <div className="text-2xl font-semibold tabular-nums">
             {formatMoney(history ? client.original : client.balance)}
           </div>
         </div>
         <div className="text-right text-xs text-muted-foreground">
-          {formatMoney(client.paid)}
-          {' de '}
-          {formatMoney(client.original)}
-          <div className="font-medium text-foreground">
-            {client.pct}
-            % pagado
-          </div>
+          {history
+            ? (
+                <>
+                  {formatMoney(client.paid)}
+                  {' pagado'}
+                </>
+              )
+            : (
+                <>
+                  {formatMoney(client.paid)}
+                  {' de '}
+                  {formatMoney(client.original)}
+                  <div className="font-medium text-foreground">
+                    {client.pct}
+                    % pagado
+                  </div>
+                </>
+              )}
         </div>
       </div>
 
@@ -417,11 +467,13 @@ function EmptyState() {
 type Filter = 'all' | FiadoDueState;
 type Tab = 'pending' | 'history';
 
+// "Al día" was dropped: a tendero reads it as "no debe nada", but it actually
+// meant "debe, sin apuro" — clashing with "Pagados" (which IS "no debe nada").
+// Pending clients without a near due date already show under "Todos".
 const FILTERS: { value: Filter; label: string }[] = [
   { value: 'all', label: 'Todos' },
   { value: 'overdue', label: 'Vencidos' },
   { value: 'due_soon', label: 'Próximos a vencer' },
-  { value: 'on_track', label: 'Al día' },
 ];
 
 export function FiadosClient({ initial }: { initial: FiadosOverview }) {
@@ -523,7 +575,7 @@ export function FiadosClient({ initial }: { initial: FiadosOverview }) {
               `,
           )}
         >
-          Historial
+          Pagados
         </button>
         <Button
           size="sm"

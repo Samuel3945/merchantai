@@ -157,9 +157,25 @@ export async function recordCashMovement(
     return null;
   }
 
-  const open = await findOpenSession(db, orgId);
+  // Auto-create a minimal session when cash enters the drawer so the cash is
+  // always accounted for. No silent gaps that surface as unexplained surpluses
+  // at closing time.
+  let open = await findOpenSession(db, orgId);
   if (!open) {
-    return null;
+    const [autoSession] = await db
+      .insert(cashSessionsSchema)
+      .values({
+        organizationId: orgId,
+        openedBy: userId,
+        openingAmount: '0',
+        status: 'open',
+        notes: 'Auto-abierta por venta en efectivo (no había caja abierta)',
+      })
+      .returning();
+    open = autoSession;
+    if (!open) {
+      return null;
+    }
   }
 
   // One lookup feeds both the cash-detection fallback (paymentType) and the

@@ -452,7 +452,7 @@ describe('recordAbonoTx', () => {
     expect(result.applied).toBe(100);
   });
 
-  it('cash method without open session: abono saved, hitCaja=false', async () => {
+  it('cash method without open session: auto-creates session, hitCaja=true', async () => {
     await closeAllSessions();
     await seedFiado();
 
@@ -464,9 +464,20 @@ describe('recordAbonoTx', () => {
       createdBy: USER,
     });
 
-    expect(result.hitCaja).toBe(false);
-    expect(result.cashMovementId).toBeNull();
+    // Auto-creates a session so the cash is always accounted for.
+    expect(result.hitCaja).toBe(true);
+    expect(result.cashMovementId).not.toBeNull();
     expect(result.applied).toBe(50);
+
+    // Verify the auto-created session exists and is open.
+    const [autoSession] = await db
+      .select()
+      .from(cashSessionsSchema)
+      .where(eq(cashSessionsSchema.status, 'open' as any))
+      .execute();
+
+    expect(autoSession).toBeDefined();
+    expect(autoSession!.notes).toContain('Auto-abierta');
 
     const movements = await db
       .select()

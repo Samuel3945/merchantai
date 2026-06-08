@@ -58,7 +58,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       note: 'Marcar como pagado',
       createdBy: ctx.cashierId ?? ctx.cashierName ?? 'pos',
     });
-    const settledSaleIds = await saleIdsForFiados(result.paidFiadoIds);
+    const settledSaleIds = await saleIdsForFiados(ctx.organizationId, result.paidFiadoIds);
     return NextResponse.json({
       settledSaleIds,
       settled: settledSaleIds.length,

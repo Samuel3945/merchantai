@@ -16,6 +16,7 @@ import {
 import {
   appSettingsSchema,
   cashMovementsSchema,
+  cashSessionsSchema,
   fiadoMovementsSchema,
   fiadosSchema,
 } from '@/models/Schema';
@@ -206,8 +207,10 @@ export async function recordAbonoTx(
     throw new Error('El abono no puede ser de tipo fiado');
   }
 
-  // Lock the org's pending fiados, oldest due first, then filter to the client.
-  const pending = await executor
+  // Scan the org's pending fiados (no lock) to find the client's IDs,
+  // oldest-due-first. Then lock only those rows — avoids serializing
+  // unrelated clients' abonos in the same org.
+  const candidates = await executor
     .select({
       id: fiadosSchema.id,
       customerId: fiadosSchema.customerId,
@@ -221,13 +224,27 @@ export async function recordAbonoTx(
         eq(fiadosSchema.status, 'pending'),
       ),
     )
-    .orderBy(asc(fiadosSchema.dueDate), asc(fiadosSchema.createdAt))
-    .for('update');
+    .orderBy(asc(fiadosSchema.dueDate), asc(fiadosSchema.createdAt));
 
-  const client = pending.filter(f => clientKeyOf(f) === args.clientKey);
-  if (client.length === 0) {
+  const clientIds = candidates
+    .filter(f => clientKeyOf(f) === args.clientKey)
+    .map(f => f.id);
+  if (clientIds.length === 0) {
     throw new Error('No se encontraron fiados pendientes para este cliente');
   }
+
+  // Lock only the client's rows — not the whole org.
+  const client = await executor
+    .select({
+      id: fiadosSchema.id,
+      customerId: fiadosSchema.customerId,
+      notes: fiadosSchema.notes,
+      originalAmount: fiadosSchema.originalAmount,
+    })
+    .from(fiadosSchema)
+    .where(inArray(fiadosSchema.id, clientIds))
+    .orderBy(asc(fiadosSchema.dueDate), asc(fiadosSchema.createdAt))
+    .for('update');
 
   const ids = client.map(f => f.id);
   const paidRows = await executor
@@ -261,10 +278,25 @@ export async function recordAbonoTx(
     amt,
   );
 
-  // One Caja movement for the whole cash portion, only when a session is open.
+  // One Caja movement for the whole cash portion. If no session is open, a
+  // minimal one is auto-created so the cash is always accounted for — no silent
+  // gaps that surface as unexplained surpluses at closing time.
   let cashMovementId: string | null = null;
   if (isCashMethod(method) && appliedTotal > 0) {
-    const session = await findOpenSession(executor, args.organizationId);
+    let session = await findOpenSession(executor, args.organizationId);
+    if (!session) {
+      const [autoSession] = await executor
+        .insert(cashSessionsSchema)
+        .values({
+          organizationId: args.organizationId,
+          openedBy: args.createdBy,
+          openingAmount: '0',
+          status: 'open',
+          notes: 'Auto-abierta por cobro de fiado (no había caja abierta)',
+        })
+        .returning();
+      session = autoSession;
+    }
     if (session) {
       const [cm] = await executor
         .insert(cashMovementsSchema)
@@ -678,14 +710,22 @@ export async function getFiadosForPos(
 
 // Maps paid fiado ids back to their origin sale ids, for the legacy
 // `settledSaleIds` field in the cashier abono response.
-export async function saleIdsForFiados(ids: string[]): Promise<string[]> {
+export async function saleIdsForFiados(
+  organizationId: string,
+  ids: string[],
+): Promise<string[]> {
   if (ids.length === 0) {
     return [];
   }
   const rows = await db
     .select({ saleId: fiadosSchema.saleId })
     .from(fiadosSchema)
-    .where(inArray(fiadosSchema.id, ids));
+    .where(
+      and(
+        eq(fiadosSchema.organizationId, organizationId),
+        inArray(fiadosSchema.id, ids),
+      ),
+    );
   return rows.map(r => r.saleId).filter((x): x is string => x != null);
 }
 
@@ -713,6 +753,7 @@ export type FiadoTimelineEntry = {
   dueDateBefore: string | null;
   dueDateAfter: string | null;
   note: string | null;
+  createdBy: string | null;
   hitCaja: boolean;
   createdAt: string;
 };
@@ -784,6 +825,7 @@ export async function getClientDetail(
       dueDateBefore: fiadoMovementsSchema.dueDateBefore,
       dueDateAfter: fiadoMovementsSchema.dueDateAfter,
       note: fiadoMovementsSchema.note,
+      createdBy: fiadoMovementsSchema.createdBy,
       createdAt: fiadoMovementsSchema.createdAt,
     })
     .from(fiadoMovementsSchema)
@@ -799,6 +841,7 @@ export async function getClientDetail(
     dueDateBefore: m.dueDateBefore,
     dueDateAfter: m.dueDateAfter,
     note: m.note,
+    createdBy: m.createdBy,
     hitCaja: m.cashMovementId != null,
     createdAt: m.createdAt.toISOString(),
   }));

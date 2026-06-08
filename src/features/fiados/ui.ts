@@ -74,6 +74,11 @@ export type BadgeVariant = 'default' | 'secondary' | 'destructive' | 'outline';
 
 export type DueMeta = {
   badge: BadgeVariant;
+  /**
+   * Extra classes so the badge color matches the card's accent — red >
+   * amber > green hierarchy, scannable at a glance.
+   */
+  badgeClassName?: string;
   /** Left accent border for the card. */
   tint: string;
   /** Timeline / status dot. */
@@ -90,19 +95,22 @@ export const DUE_STATE_META: Record<FiadoDueState, DueMeta> = {
     bar: 'bg-destructive',
   },
   due_soon: {
-    badge: 'secondary',
+    badge: 'outline',
+    badgeClassName: 'border-amber-500 text-amber-700 dark:text-amber-400',
     tint: 'border-l-amber-500',
     dot: 'bg-amber-500',
     bar: 'bg-amber-500',
   },
   on_track: {
     badge: 'outline',
+    badgeClassName: 'border-emerald-500 text-emerald-700 dark:text-emerald-400',
     tint: 'border-l-emerald-500',
     dot: 'bg-emerald-500',
     bar: 'bg-emerald-500',
   },
   paid: {
-    badge: 'outline',
+    badge: 'default',
+    badgeClassName: 'border-transparent bg-emerald-500 text-white',
     tint: 'border-l-emerald-500',
     dot: 'bg-emerald-500',
     bar: 'bg-emerald-500',

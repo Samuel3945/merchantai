@@ -5,8 +5,12 @@ import { Buffer } from 'node:buffer';
 // This is where the money-critical rules live (FIFO distribution, the credited
 // amount, client grouping), isolated so they can be tested exhaustively.
 
+// Rounds to 2 decimal places using integer arithmetic. Avoids IEEE 754 edge
+// cases where toFixed can lose a cent (e.g. 10.005 → 10.004999... → "10.00").
+// The epsilon correction guards against values that land just below the next
+// cent due to floating-point representation.
 export function round2(n: number): number {
-  return Number.parseFloat(n.toFixed(2));
+  return Math.round((Math.abs(n) + Number.EPSILON) * 100) / 100 * (n < 0 ? -1 : 1);
 }
 
 const NOTES_NAME_RE = /(?:Cliente|Nombre):\s*([^|]+)/i;

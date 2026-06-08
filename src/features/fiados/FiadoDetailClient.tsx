@@ -122,6 +122,12 @@ function Timeline({ entries }: { entries: FiadoTimelineEntry[] }) {
                 )}
                 <div className="mt-0.5 text-xs text-muted-foreground">
                   {formatDateTime(m.createdAt)}
+                  {m.createdBy && (
+                    <span>
+                      {' · '}
+                      {m.createdBy}
+                    </span>
+                  )}
                 </div>
               </div>
               {c.amount && (
@@ -331,7 +337,7 @@ export function FiadoDetailClient({ detail }: { detail: ClientDetail }) {
           >
             <div className="flex items-center justify-between gap-2">
               <div className="text-lg font-semibold">{client.name}</div>
-              <Badge variant={meta.badge}>
+              <Badge variant={meta.badge} className={meta.badgeClassName}>
                 {dueStateLabel(client.dueState, client.dueDays)}
               </Badge>
             </div>
@@ -421,7 +427,7 @@ export function FiadoDetailClient({ detail }: { detail: ClientDetail }) {
                     "
                   >
                     <span className="text-muted-foreground">{formatDate(f.createdAt)}</span>
-                    <Badge variant={fm.badge} className="text-[10px]">
+                    <Badge variant={fm.badge} className={cn('text-[10px]', fm.badgeClassName)}>
                       {dueStateLabel(f.dueState, f.dueDays)}
                     </Badge>
                     <span className="font-medium tabular-nums">
