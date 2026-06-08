@@ -20,6 +20,8 @@ import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
 import { recordCashMovement } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
+import { createFiado } from '@/libs/fiados';
+import { fiadoAmountFor } from '@/libs/fiados-math';
 import { consumeFifoExits } from '@/libs/fifo-cogs';
 import { assignNextSaleNumber } from '@/libs/sale-number';
 import { applySaleReturn } from '@/libs/sale-returns';
@@ -46,6 +48,9 @@ export type CreateSaleInput = {
   paymentType: string;
   notes?: string | null;
   payments?: SalePaymentInput[];
+  // For fiado sales: optional manual due date ('YYYY-MM-DD'). When omitted, the
+  // org default term applies (fiados.default_term_days, 30 by default).
+  dueDate?: string | null;
 };
 
 function toMoney(value: number | string): string {
@@ -227,6 +232,25 @@ export async function createSale(input: CreateSaleInput) {
       .insert(salePaymentsSchema)
       .values(paymentRows)
       .returning();
+
+    // Fiado: book the credit account for the portion NOT covered by an upfront
+    // non-fiado payment. A 100%-fiado sale owes the full total; a split sale
+    // (e.g. part efectivo now, rest fiado) owes only the remainder. The efectivo
+    // part still hits the drawer via recordCashMovement below.
+    const fiadoAmount = fiadoAmountFor(total, paymentRows);
+    const isFiado
+      = /fiado/i.test(input.paymentType)
+        || paymentRows.some(p => /fiado/i.test(p.method));
+    if (isFiado && fiadoAmount > 0) {
+      await createFiado(tx, {
+        organizationId: orgId,
+        saleId: sale.id,
+        originalAmount: fiadoAmount,
+        dueDate: input.dueDate ?? null,
+        createdBy: userId,
+        notes: input.notes ?? null,
+      });
+    }
 
     return { ...sale, items: insertedItems, payments: insertedPayments };
   });

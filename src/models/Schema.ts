@@ -213,6 +213,12 @@ export const cashMovementTypeEnum = pgEnum('cash_movement_type', [
   // receivable against future salary, not a P&L expense. Behaves like withdrawal
   // for the cash math (a salida) and is excluded from operating expenses.
   'advance',
+  // Cobro de fiado: a customer pays down a credit account IN CASH. It is drawer
+  // income for the arqueo, but it is NOT new revenue (the sale already booked
+  // revenue when the fiado was created) — so Finanzas excludes it. Only the
+  // efectivo portion lands here; digital abonos (nequi/daviplata/transfer) are
+  // recorded on the fiado ledger but never touch the physical drawer.
+  'fiado_payment',
 ]);
 
 export const cashSessionsSchema = pgTable(
@@ -637,6 +643,155 @@ export const customersSchema = pgTable(
         sql`${table.whatsapp} IS NOT NULL AND ${table.deleted} = false`,
       ),
   ],
+);
+
+// ── Fiados (store-credit accounts) ─────────────────────────────────────────
+// A fiado is a first-class receivable: the customer took goods now and pays
+// later. It replaces the old "derived from sales.notes" hack — see
+// actions/fiados.ts. The account holds the headline figures (original amount,
+// due date, status); fiado_movements is the append-only ledger that records
+// every charge, payment, plazo extension and adjustment chronologically. That
+// ledger IS the timeline shown in the detail view and the full audit trail.
+//
+// Balance = original_amount − SUM(payment movements). A fiado is `paid` when the
+// balance reaches zero and `written_off` when forgiven. Rows are never deleted,
+// so the Historial tab always has the complete record.
+export const fiadoStatusEnum = pgEnum('fiado_status', [
+  'pending',
+  'paid',
+  'written_off',
+]);
+
+export const fiadoMovementTypeEnum = pgEnum('fiado_movement_type', [
+  // Origin of the debt — one per fiado, amount = original_amount.
+  'charge',
+  // Customer pays down the balance (efectivo/nequi/daviplata/transferencia/otro).
+  'payment',
+  // Plazo extended — carries due_date_before / due_date_after for the audit.
+  'extension',
+  // Debt forgiven.
+  'writeoff',
+  // Manual correction (e.g. a return that reduces what is owed).
+  'adjustment',
+]);
+
+export const fiadosSchema = pgTable(
+  'fiados',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: text('organization_id').notNull(),
+    // Linked once the notes-regex identity is replaced by a real customer FK.
+    // SET NULL (not cascade): archiving a customer must never wipe the debt.
+    customerId: uuid('customer_id').references(() => customersSchema.id, {
+      onDelete: 'set null',
+    }),
+    // Origin sale. SET NULL keeps the fiado alive even if the sale is purged;
+    // the unique index below makes the backfill idempotent (one fiado per sale).
+    saleId: uuid('sale_id').references(() => salesSchema.id, {
+      onDelete: 'set null',
+    }),
+    originalAmount: numeric('original_amount', {
+      precision: 12,
+      scale: 2,
+    }).notNull(),
+    // The real payment deadline — the field the old model never stored. Used by
+    // Vencido / Próximo a vencer / "Vence mañana" and the Caja-free risk states.
+    dueDate: date('due_date').notNull(),
+    status: fiadoStatusEnum('status').default('pending').notNull(),
+    // Display continuity during migration: holds the parsed "name | Tel: phone"
+    // until customer_id is fully populated.
+    notes: text('notes'),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { mode: 'date' })
+      .defaultNow()
+      .$onUpdate(() => new Date())
+      .notNull(),
+  },
+  table => [
+    // Pendientes/Historial tabs and the dashboard counts filter org + status.
+    index('fiados_org_status_idx').on(table.organizationId, table.status),
+    // Vencidos / Próximos a vencer scan org + due_date.
+    index('fiados_org_due_date_idx').on(table.organizationId, table.dueDate),
+    index('fiados_customer_idx').on(table.customerId),
+    // One fiado per origin sale. Lets the backfill be re-run safely to catch
+    // fiados created between Phase 0 and the Phase 1 write path going live.
+    uniqueIndex('fiados_sale_unique_idx')
+      .on(table.saleId)
+      .where(sql`${table.saleId} IS NOT NULL`),
+  ],
+);
+
+export const fiadoMovementsSchema = pgTable(
+  'fiado_movements',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    fiadoId: uuid('fiado_id')
+      .notNull()
+      .references(() => fiadosSchema.id, { onDelete: 'cascade' }),
+    organizationId: text('organization_id').notNull(),
+    type: fiadoMovementTypeEnum('type').notNull(),
+    // Always positive; `type` decides the direction. Zero for pure extensions.
+    amount: numeric('amount', { precision: 12, scale: 2 })
+      .default('0')
+      .notNull(),
+    // Set on payments only. Null for charge/extension.
+    method: text('method'),
+    // Links a cash (efectivo) payment to the Caja drawer movement it created.
+    // Null for digital payments (nequi/daviplata/transferencia) — those are
+    // collected but must NOT inflate the physical-cash arqueo. SET NULL so the
+    // ledger survives if the cash movement is ever removed.
+    cashMovementId: uuid('cash_movement_id').references(
+      () => cashMovementsSchema.id,
+      { onDelete: 'set null' },
+    ),
+    // Plazo-extension audit: the deadline before and after the change.
+    dueDateBefore: date('due_date_before'),
+    dueDateAfter: date('due_date_after'),
+    note: text('note'),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+  },
+  table => [
+    // The timeline: every movement of a fiado, oldest first.
+    index('fiado_movements_fiado_created_idx').on(
+      table.fiadoId,
+      table.createdAt,
+    ),
+    // "Recuperado este mes" and the digital-vs-cash report split scan
+    // org + type + time window.
+    index('fiado_movements_org_type_created_idx').on(
+      table.organizationId,
+      table.type,
+      table.createdAt,
+    ),
+  ],
+);
+
+export const fiadosRelations = relations(fiadosSchema, ({ one, many }) => ({
+  customer: one(customersSchema, {
+    fields: [fiadosSchema.customerId],
+    references: [customersSchema.id],
+  }),
+  sale: one(salesSchema, {
+    fields: [fiadosSchema.saleId],
+    references: [salesSchema.id],
+  }),
+  movements: many(fiadoMovementsSchema),
+}));
+
+export const fiadoMovementsRelations = relations(
+  fiadoMovementsSchema,
+  ({ one }) => ({
+    fiado: one(fiadosSchema, {
+      fields: [fiadoMovementsSchema.fiadoId],
+      references: [fiadosSchema.id],
+    }),
+    cashMovement: one(cashMovementsSchema, {
+      fields: [fiadoMovementsSchema.cashMovementId],
+      references: [cashMovementsSchema.id],
+    }),
+  }),
 );
 
 export const posReturnReasonEnum = pgEnum('pos_return_reason', [
