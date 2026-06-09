@@ -15,6 +15,14 @@ function money(value: number): string {
   return `$${Math.round(value).toLocaleString('es-CO')}`;
 }
 
+// Short hook shown by default; "Ver más" reveals the full FIFO explanation.
+const COPY_SHORT
+  = 'Cada tarjeta es una compra. Al vender, salen primero las más antiguas.';
+const COPY_FULL_PERISHABLE
+  = 'Cada tarjeta es una compra de este producto. Al vender salen primero las más antiguas: así no se te vence nada y la ganancia se calcula con lo que de verdad pagaste en cada compra.';
+const COPY_FULL
+  = 'Cada tarjeta es una compra de este producto. Al vender salen primero las más antiguas, así la ganancia de cada venta usa el costo real de esa compra, aunque un lote te haya salido más caro que otro.';
+
 export function ProductLotsDrawer({
   product,
   onClose,
@@ -23,6 +31,7 @@ export function ProductLotsDrawer({
   onClose: () => void;
 }) {
   const [lots, setLots] = useState<ProductLot[] | null>(null);
+  const [showFullCopy, setShowFullCopy] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -82,9 +91,20 @@ export function ProductLotsDrawer({
                 text-sm text-muted-foreground
               "
               >
-                {product.isPerishable
-                  ? 'Cada tarjeta es una compra de este producto. Al vender salen primero las más antiguas: así no se te vence nada y la ganancia se calcula con lo que de verdad pagaste en cada compra.'
-                  : 'Cada tarjeta es una compra de este producto. Al vender salen primero las más antiguas, así la ganancia de cada venta usa el costo real de esa compra, aunque un lote te haya salido más caro que otro.'}
+                {showFullCopy
+                  ? (product.isPerishable ? COPY_FULL_PERISHABLE : COPY_FULL)
+                  : COPY_SHORT}
+                {' '}
+                <button
+                  type="button"
+                  onClick={() => setShowFullCopy(v => !v)}
+                  className="
+                    font-medium text-brand
+                    hover:underline
+                  "
+                >
+                  {showFullCopy ? 'Ver menos' : 'Ver más'}
+                </button>
               </DialogPrimitive.Description>
             </div>
             <DialogPrimitive.Close
