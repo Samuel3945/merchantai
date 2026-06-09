@@ -34,11 +34,20 @@ export const customerCreateSchema = z.object({
     .nullable()
     .optional()
     .transform(v => (v === '' || v === undefined ? null : v)),
-  marketingOptIn: z.coerce.boolean().optional().default(true),
+  // No `.default(true)` here: Zod keeps schema defaults through `.partial()`,
+  // so a default would re-inject `marketingOptIn: true` on every edit and
+  // silently re-subscribe a customer who had opted out. createCustomer applies
+  // the `?? true` fallback explicitly instead.
+  marketingOptIn: z.coerce.boolean().optional(),
   totalSpent: decimalString.optional(),
 });
 
-export const customerUpdateSchema = customerCreateSchema.partial();
+// `totalSpent` is an accumulator owned by sales (post-sale-hook), never by a
+// manual edit — omit it so an update can't overwrite it. (Same class of bug as
+// product stock: a base field leaking into a partial update.)
+export const customerUpdateSchema = customerCreateSchema
+  .omit({ totalSpent: true })
+  .partial();
 
 export type CustomerCreateInput = z.input<typeof customerCreateSchema>;
 export type CustomerUpdateInput = z.input<typeof customerUpdateSchema>;
