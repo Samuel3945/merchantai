@@ -11,6 +11,10 @@ function isExpired(lot: ProductLot): boolean {
   return !!lot.expiresAt && new Date(lot.expiresAt) <= new Date();
 }
 
+function money(value: number): string {
+  return `$${Math.round(value).toLocaleString('es-CO')}`;
+}
+
 export function ProductLotsDrawer({
   product,
   onClose,
@@ -40,7 +44,7 @@ export function ProductLotsDrawer({
 
   const dateFmt = new Intl.DateTimeFormat('es-CO', {
     day: '2-digit',
-    month: 'short',
+    month: 'long',
     year: 'numeric',
   });
 
@@ -70,7 +74,7 @@ export function ProductLotsDrawer({
           "
         >
           <div className="flex items-start justify-between border-b p-4">
-            <div>
+            <div className="pr-4">
               <DialogPrimitive.Title className="text-lg font-semibold">
                 {product.name}
               </DialogPrimitive.Title>
@@ -78,7 +82,9 @@ export function ProductLotsDrawer({
                 text-sm text-muted-foreground
               "
               >
-                Lotes vivos en orden FIFO (el más viejo sale primero)
+                Cada tarjeta es una compra o ingreso de este producto. Al
+                vender, primero salen los más antiguos para que no se te venza
+                nada.
               </DialogPrimitive.Description>
             </div>
             <DialogPrimitive.Close
@@ -94,79 +100,94 @@ export function ProductLotsDrawer({
 
           <div className="grid grid-cols-2 gap-3 border-b p-4">
             <div className="rounded-md border p-3">
-              <div className="text-xs text-muted-foreground">Stock por lotes</div>
+              <div className="text-xs text-muted-foreground">
+                Unidades disponibles
+              </div>
               <div className="text-xl font-semibold">{totalRemaining}</div>
             </div>
             <div className="rounded-md border p-3">
-              <div className="text-xs text-muted-foreground">Valor (FIFO)</div>
-              <div className="text-xl font-semibold text-brand">
-                $
-                {totalValue.toLocaleString('es-CO')}
+              <div className="text-xs text-muted-foreground">
+                Cuánto vale tu stock
               </div>
+              <div className="text-xl font-semibold text-brand">
+                {money(totalValue)}
+              </div>
+              <div className="text-xs text-muted-foreground">a precio de costo</div>
             </div>
           </div>
 
           <div className="flex-1 overflow-y-auto p-4">
             {lots === null && (
-              <p className="text-sm text-muted-foreground">Cargando lotes...</p>
+              <p className="text-sm text-muted-foreground">Cargando...</p>
             )}
             {lots !== null && lots.length === 0 && (
               <p className="text-sm text-muted-foreground">
-                Sin lotes registrados en el ledger. El stock proviene de carga
-                histórica sin lote.
+                Todavía no hay compras registradas para este producto. El stock
+                actual viene de una carga inicial.
               </p>
             )}
             <ul className="space-y-3">
-              {(lots ?? []).map(l => (
-                <li
-                  key={l.id}
-                  className={cn(
-                    'rounded-md border p-3 text-sm',
-                    isExpired(l) && 'border-destructive/40 bg-destructive/5',
-                  )}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium">
-                      {l.remainingQty}
-                      {' '}
-                      /
-                      {' '}
-                      {l.qty}
-                      {' '}
-                      u
-                    </span>
-                    <span className="font-mono text-xs text-muted-foreground">
-                      $
-                      {l.unitCost ?? '—'}
-                      {' '}
-                      c/u
-                    </span>
-                  </div>
-                  <div className="
-                    mt-1 grid grid-cols-2 gap-1 text-xs text-muted-foreground
-                  "
+              {(lots ?? []).map((l) => {
+                const expired = isExpired(l);
+                return (
+                  <li
+                    key={l.id}
+                    className={cn(
+                      'rounded-md border p-3 text-sm',
+                      expired && 'border-destructive/40 bg-destructive/5',
+                    )}
                   >
-                    <span>
-                      Ingreso:
-                      {' '}
-                      {dateFmt.format(new Date(l.createdAt))}
-                    </span>
-                    <span className={cn(isExpired(l) && `
-                      font-medium text-destructive
-                    `)}
-                    >
-                      Vence:
-                      {' '}
-                      {l.expiresAt ? dateFmt.format(new Date(l.expiresAt)) : '—'}
-                    </span>
-                    <span className="col-span-2">
-                      Proveedor:
-                      {' '}
-                      {l.supplierName ?? '—'}
-                    </span>
-                  </div>
-                </li>
-              ))}
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium">
+                        Ingresó el
+                        {' '}
+                        {dateFmt.format(new Date(l.createdAt))}
+                      </span>
+                      {expired && (
+                        <span className="
+                          rounded-sm bg-destructive/10 px-1.5 py-0.5 text-xs
+                          font-medium text-destructive
+                        "
+                        >
+                          Vencido
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-2 space-y-1 text-muted-foreground">
+                      <p>
+                        <span className="text-foreground">
+                          Quedan
+                          {' '}
+                          {l.remainingQty}
+                          {' '}
+                          de
+                          {' '}
+                          {l.qty}
+                          {' '}
+                          unidades
+                        </span>
+                      </p>
+                      <p>
+                        Costo:
+                        {' '}
+                        {l.unitCost != null ? money(Number(l.unitCost)) : 'sin registrar'}
+                        {' '}
+                        por unidad
+                      </p>
+                      <p>
+                        Proveedor:
+                        {' '}
+                        {l.supplierName ?? 'sin registrar'}
+                      </p>
+                      <p className={cn(expired && 'font-medium text-destructive')}>
+                        {l.expiresAt
+                          ? `Se vence el ${dateFmt.format(new Date(l.expiresAt))}`
+                          : 'Sin fecha de vencimiento'}
+                      </p>
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           </div>
         </DialogPrimitive.Content>
