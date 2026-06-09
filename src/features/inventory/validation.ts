@@ -36,6 +36,24 @@ export const HISTORY_REASON_OPTIONS: ReasonOption[] = [
   { value: 'manual', label: 'Otro motivo' },
 ];
 
+// Per-type subsets for the history filter: when the user narrows to entries or
+// exits, the reason list narrows too. 'manual' applies to both directions.
+export const HISTORY_ENTRY_REASONS: ReasonOption[] = [
+  { value: 'purchase', label: 'Compra a proveedor' },
+  { value: 'return_sale', label: 'Devolución de venta' },
+  { value: 'manual', label: 'Otro motivo' },
+];
+
+export const HISTORY_EXIT_REASONS: ReasonOption[] = [
+  { value: 'sale', label: 'Venta' },
+  { value: 'damaged', label: 'Se dañó o se rompió' },
+  { value: 'expired', label: 'Se venció' },
+  { value: 'lost', label: 'Se perdió o me lo robaron' },
+  { value: 'consumption', label: 'Lo usé en el negocio' },
+  { value: 'return_supplier', label: 'Se lo devolví al proveedor' },
+  { value: 'manual', label: 'Otro motivo' },
+];
+
 // Full label map, including legacy/auto reasons, for rendering the history.
 export const REASON_LABELS: Record<string, string> = {
   purchase: 'Compra a proveedor',

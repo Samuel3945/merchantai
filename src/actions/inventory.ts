@@ -3,7 +3,7 @@
 import type { SQL } from 'drizzle-orm';
 import type { SmartStockSettings } from '@/actions/smart-stock';
 import { auth, clerkClient } from '@clerk/nextjs/server';
-import { and, desc, eq, gt, gte, inArray, lte, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, gte, inArray, isNotNull, lte, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { getSmartStockSettings } from '@/actions/smart-stock';
 import { logAction } from '@/libs/audit-log';
@@ -360,6 +360,7 @@ export type ListMovementsParams = {
   supplierId?: string;
   type?: MovementType;
   reason?: MovementReason;
+  createdBy?: string;
   from?: string;
   to?: string;
   page?: number;
@@ -384,6 +385,9 @@ export async function listMovements(params?: ListMovementsParams) {
   }
   if (params?.reason) {
     filters.push(eq(stockMovementsSchema.reason, params.reason));
+  }
+  if (params?.createdBy) {
+    filters.push(eq(stockMovementsSchema.createdBy, params.createdBy));
   }
   if (params?.from) {
     filters.push(gte(stockMovementsSchema.createdAt, new Date(params.from)));
@@ -458,6 +462,29 @@ async function resolveActorNames(ids: string[]): Promise<Map<string, string>> {
     // Clerk unreachable — callers fall back to the raw id.
   }
   return out;
+}
+
+export type MovementActor = { id: string; name: string };
+
+// Distinct people who recorded a movement, for the history "Usuario" filter.
+// Resolved to readable names; sorted for a stable dropdown.
+export async function listMovementActors(): Promise<MovementActor[]> {
+  await requireUser();
+  const tdb = await db();
+  const rows = await tdb
+    .select({ createdBy: stockMovementsSchema.createdBy })
+    .from(stockMovementsSchema)
+    .where(isNotNull(stockMovementsSchema.createdBy))
+    .groupBy(stockMovementsSchema.createdBy);
+
+  const ids = rows
+    .map(r => r.createdBy)
+    .filter((id): id is string => !!id);
+  const names = await resolveActorNames(ids);
+
+  return ids
+    .map(id => ({ id, name: names.get(id) ?? id }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'es'));
 }
 
 // ── getInventoryView (table + KPIs + entitlement) ────────────────────────
