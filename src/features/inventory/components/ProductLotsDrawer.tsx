@@ -82,9 +82,9 @@ export function ProductLotsDrawer({
                 text-sm text-muted-foreground
               "
               >
-                Cada tarjeta es una compra o ingreso de este producto. Al
-                vender, primero salen los más antiguos para que no se te venza
-                nada.
+                {product.isPerishable
+                  ? 'Cada tarjeta es una compra de este producto. Al vender salen primero las más antiguas: así no se te vence nada y la ganancia se calcula con lo que de verdad pagaste en cada compra.'
+                  : 'Cada tarjeta es una compra de este producto. Al vender salen primero las más antiguas, así la ganancia de cada venta usa el costo real de esa compra, aunque un lote te haya salido más caro que otro.'}
               </DialogPrimitive.Description>
             </div>
             <DialogPrimitive.Close
@@ -179,11 +179,14 @@ export function ProductLotsDrawer({
                         {' '}
                         {l.supplierName ?? 'sin registrar'}
                       </p>
-                      <p className={cn(expired && 'font-medium text-destructive')}>
-                        {l.expiresAt
-                          ? `Se vence el ${dateFmt.format(new Date(l.expiresAt))}`
-                          : 'Sin fecha de vencimiento'}
-                      </p>
+                      {l.expiresAt && (
+                        <p className={cn(expired && `
+                          font-medium text-destructive
+                        `)}
+                        >
+                          {`Se vence el ${dateFmt.format(new Date(l.expiresAt))}`}
+                        </p>
+                      )}
                     </div>
                   </li>
                 );
