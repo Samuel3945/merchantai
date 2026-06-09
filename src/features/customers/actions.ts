@@ -130,7 +130,8 @@ export async function updateCustomer(id: string, input: CustomerUpdateInput) {
       ...(data.marketingOptIn !== undefined && {
         marketingOptIn: data.marketingOptIn,
       }),
-      ...(data.totalSpent !== undefined && { totalSpent: data.totalSpent }),
+      // totalSpent is intentionally NOT settable here — it's an accumulator
+      // owned by sales (post-sale-hook). An edit must never overwrite it.
     })
     .where(
       and(
