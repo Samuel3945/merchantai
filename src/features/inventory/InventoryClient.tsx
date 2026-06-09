@@ -95,7 +95,7 @@ export function InventoryClient({ initialView }: { initialView: InventoryView })
         </>
       )}
 
-      {tab === 'history' && <MovementHistory />}
+      {tab === 'history' && <MovementHistory products={view.products} />}
 
       {entryProduct && (
         <EntryModal
