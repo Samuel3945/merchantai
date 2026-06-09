@@ -135,7 +135,14 @@ export const productCreateSchema = productBaseSchema
   })
   .superRefine(refineProduct);
 
-export const productUpdateSchema = productBaseSchema.partial().superRefine(refineProduct);
+// Stock is owned by inventory movements (recordMovement), never by a product
+// edit. Omit it from the update schema so an edit can never overwrite stock —
+// otherwise an omitted `stock` field defaults to 0 (Zod keeps the base
+// `.default(0)` through `.partial()`) and silently wipes the product's stock.
+export const productUpdateSchema = productBaseSchema
+  .omit({ stock: true })
+  .partial()
+  .superRefine(refineProduct);
 
 export type ProductCreateInput = z.input<typeof productCreateSchema>;
 export type ProductUpdateInput = z.input<typeof productUpdateSchema>;
