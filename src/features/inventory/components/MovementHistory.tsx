@@ -11,6 +11,7 @@ import { useEffect, useMemo, useState, useTransition } from 'react';
 import { listMovements as fetchMovements } from '@/actions/inventory';
 import { DateRangePicker } from '@/components/DateRangePicker';
 import { Button } from '@/components/ui/button';
+import { Select } from '@/components/ui/select';
 import { toast } from '@/components/ui/toast-store';
 import { listSuppliersForSelect } from '@/features/suppliers/actions';
 import { buildPresetOptions, todayBogota } from '@/utils/DateRange';
@@ -43,9 +44,6 @@ const TYPE_BADGE: Record<string, { label: string; cls: string }> = {
   exit: { label: 'Salida', cls: 'bg-destructive/10 text-destructive' },
   adjustment: { label: 'Ajuste', cls: 'bg-muted text-muted-foreground' },
 };
-
-const fieldCls
-  = 'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50';
 
 function Field({
   label,
@@ -163,60 +161,51 @@ export function MovementHistory({ products }: { products: ProductOption[] }) {
         "
         >
           <Field label="Producto">
-            <select
+            <Select
               value={filters.productId}
-              onChange={e => set('productId', e.target.value)}
-              className={fieldCls}
-            >
-              <option value="">Todos los productos</option>
-              {products.map(p => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
+              onValueChange={v => set('productId', v)}
+              options={[
+                { value: '', label: 'Todos los productos' },
+                ...products.map(p => ({ value: p.id, label: p.name })),
+              ]}
+            />
           </Field>
 
           <Field label="Proveedor">
-            <select
+            <Select
               value={filters.supplierId}
-              onChange={e => set('supplierId', e.target.value)}
-              className={fieldCls}
-            >
-              <option value="">Todos los proveedores</option>
-              {suppliers.map(s => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
+              onValueChange={v => set('supplierId', v)}
+              options={[
+                { value: '', label: 'Todos los proveedores' },
+                ...suppliers.map(s => ({ value: s.id, label: s.name })),
+              ]}
+            />
           </Field>
 
           <Field label="Tipo de movimiento">
-            <select
+            <Select
               value={filters.type}
-              onChange={e => set('type', e.target.value as Filters['type'])}
-              className={fieldCls}
-            >
-              <option value="">Entradas y salidas</option>
-              <option value="entry">Solo entradas</option>
-              <option value="exit">Solo salidas</option>
-            </select>
+              onValueChange={v => set('type', v as Filters['type'])}
+              options={[
+                { value: '', label: 'Entradas y salidas' },
+                { value: 'entry', label: 'Solo entradas' },
+                { value: 'exit', label: 'Solo salidas' },
+              ]}
+            />
           </Field>
 
           <Field label="Motivo">
-            <select
+            <Select
               value={filters.reason}
-              onChange={e => set('reason', e.target.value as Filters['reason'])}
-              className={fieldCls}
-            >
-              <option value="">Todos los motivos</option>
-              {HISTORY_REASON_OPTIONS.map(o => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
+              onValueChange={v => set('reason', v as Filters['reason'])}
+              options={[
+                { value: '', label: 'Todos los motivos' },
+                ...HISTORY_REASON_OPTIONS.map(o => ({
+                  value: o.value,
+                  label: o.label,
+                })),
+              ]}
+            />
           </Field>
 
           <div className="flex flex-col gap-1">

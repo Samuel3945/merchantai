@@ -13,6 +13,7 @@ import { getSaleForReturn, listSales, processReturn } from '@/actions/sales';
 import { DateRangePicker } from '@/components/DateRangePicker';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Select } from '@/components/ui/select';
 import { formatSaleNumber } from '@/libs/sale-number';
 import { buildPresetOptions, todayBogota } from '@/utils/DateRange';
 import { cn } from '@/utils/Helpers';
@@ -418,20 +419,17 @@ export function SalesClient({
         </div>
         <div>
           <label className={labelCls}>Pago</label>
-          <select
+          <Select
             value={payment}
-            onChange={(e) => {
-              setPayment(e.target.value);
+            onValueChange={(v) => {
+              setPayment(v);
               resetToFirstPage();
             }}
-            className={inputCls}
-          >
-            {paymentOptions.map(opt => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
+            options={paymentOptions.map(opt => ({
+              value: opt.value,
+              label: opt.label,
+            }))}
+          />
         </div>
         <div>
           <label className={labelCls}>ID de cajero</label>

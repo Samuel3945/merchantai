@@ -11,6 +11,7 @@ import {
 } from '@/actions/fiados';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Select } from '@/components/ui/select';
 import {
   dueStateLabel,
   FIADO_PAYMENT_METHODS,
@@ -154,16 +155,15 @@ function AbonarForm({
           >
             Método
           </label>
-          <select
+          <Select
             id={methodId}
             value={method}
-            onChange={e => setMethod(e.target.value)}
-            className={inputCls}
-          >
-            {FIADO_PAYMENT_METHODS.map(m => (
-              <option key={m.value} value={m.value}>{m.label}</option>
-            ))}
-          </select>
+            onValueChange={setMethod}
+            options={FIADO_PAYMENT_METHODS.map(m => ({
+              value: m.value,
+              label: m.label,
+            }))}
+          />
         </div>
       </div>
       <div>

@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { Select } from '@/components/ui/select';
 import { toast } from '@/components/ui/toast-store';
 import { cn } from '@/utils/Helpers';
 import {
@@ -116,17 +117,14 @@ export function EntryModal({
           </div>
           <div>
             <label className={labelCls}>Motivo</label>
-            <select
+            <Select
               value={reason}
-              onChange={e => setReason(e.target.value as MovementReason)}
-              className={inputCls}
-            >
-              {ENTRY_REASON_OPTIONS.map(o => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
+              onValueChange={v => setReason(v as MovementReason)}
+              options={ENTRY_REASON_OPTIONS.map(o => ({
+                value: o.value,
+                label: o.label,
+              }))}
+            />
           </div>
           {needsNotes && (
             <div>
