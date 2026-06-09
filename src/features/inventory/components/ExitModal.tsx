@@ -192,7 +192,11 @@ export function ExitModal({
           )}
 
           <div>
-            <label className={labelCls}>Cantidad</label>
+            <label className={labelCls}>
+              Cantidad
+              {' '}
+              <span className="text-destructive">*</span>
+            </label>
             <input
               required
               type="number"

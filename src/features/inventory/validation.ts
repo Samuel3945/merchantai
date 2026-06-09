@@ -62,16 +62,18 @@ const qty = z.coerce
   .number({ message: 'Cantidad inválida' })
   .positive('La cantidad debe ser mayor a 0');
 
-const optionalMoney = z
+const requiredMoney = z
   .string()
   .trim()
-  .optional()
-  .transform(v => (v || null));
+  .min(1, 'El costo unitario es obligatorio')
+  .refine(v => Number(v) > 0, 'El costo debe ser mayor a 0');
 
 export const entryFormSchema = z
   .object({
     qty,
-    unitCost: optionalMoney,
+    // Every entry field is mandatory. Cost is always required; supplier and
+    // expiry are required conditionally (purchase / perishable) below.
+    unitCost: requiredMoney,
     supplierId: z
       .string()
       .trim()
@@ -95,6 +97,13 @@ export const entryFormSchema = z
         code: 'custom',
         path: ['notes'],
         message: 'Describí el motivo',
+      });
+    }
+    if (data.reason === 'purchase' && !data.supplierId) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['supplierId'],
+        message: 'Elegí un proveedor',
       });
     }
   });
