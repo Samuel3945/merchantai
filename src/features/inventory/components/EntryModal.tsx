@@ -42,8 +42,15 @@ export function EntryModal({
   const [pending, startTransition] = useTransition();
 
   const needsNotes = reasonRequiresNotes(reason);
+  const needsSupplier = reason === 'purchase';
+  const needsExpiry = product.isPerishable;
+  // Every visible field is mandatory before the entry can be confirmed.
   const canConfirm
-    = Number(qty) > 0 && (!needsNotes || notes.trim().length > 0);
+    = Number(qty) > 0
+      && Number(unitCost) > 0
+      && (!needsSupplier || supplierId.trim().length > 0)
+      && (!needsExpiry || expiresAt.trim().length > 0)
+      && (!needsNotes || notes.trim().length > 0);
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -92,7 +99,11 @@ export function EntryModal({
         </DialogHeader>
         <form onSubmit={onSubmit} className="space-y-4">
           <div>
-            <label className={labelCls}>Cantidad</label>
+            <label className={labelCls}>
+              Cantidad
+              {' '}
+              <span className="text-destructive">*</span>
+            </label>
             <input
               required
               type="number"
@@ -133,27 +144,40 @@ export function EntryModal({
             </div>
           )}
           <div>
-            <label className={labelCls}>Costo unitario</label>
+            <label className={labelCls}>
+              Costo unitario
+              {' '}
+              <span className="text-destructive">*</span>
+            </label>
             <input
+              required
               type="number"
               step="0.01"
               min="0"
               value={unitCost}
               onChange={e => setUnitCost(e.target.value)}
               className={inputCls}
-              placeholder="Opcional"
             />
           </div>
-          {reason === 'purchase' && (
+          {needsSupplier && (
             <div>
-              <label className={labelCls}>Proveedor</label>
+              <label className={labelCls}>
+                Proveedor
+                {' '}
+                <span className="text-destructive">*</span>
+              </label>
               <SupplierSelect value={supplierId} onChange={setSupplierId} />
             </div>
           )}
-          {product.isPerishable && (
+          {needsExpiry && (
             <div>
-              <label className={labelCls}>Fecha de caducidad</label>
+              <label className={labelCls}>
+                Fecha de caducidad
+                {' '}
+                <span className="text-destructive">*</span>
+              </label>
               <input
+                required
                 type="date"
                 value={expiresAt}
                 onChange={e => setExpiresAt(e.target.value)}

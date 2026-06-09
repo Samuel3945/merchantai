@@ -94,6 +94,7 @@ export async function recordMovement(input: RecordMovementInput) {
       name: productsSchema.name,
       stock: productsSchema.stock,
       cost: productsSchema.cost,
+      isPerishable: productsSchema.isPerishable,
     })
     .from(productsSchema)
     .where(
@@ -106,6 +107,21 @@ export async function recordMovement(input: RecordMovementInput) {
 
   if (!product) {
     throw new Error('Product not found');
+  }
+
+  // Every entry field is mandatory — enforced server-side so the form can't be
+  // bypassed. Cost is required for FIFO valuation; a purchase must name its
+  // supplier; a perishable lot must carry its expiry for the spoilage engine.
+  if (input.type === 'entry') {
+    if (input.unitCost == null || !(Number(input.unitCost) > 0)) {
+      throw new Error('El costo unitario es obligatorio y debe ser mayor a 0');
+    }
+    if (input.reason === 'purchase' && !input.supplierId) {
+      throw new Error('El proveedor es obligatorio para una compra');
+    }
+    if (product.isPerishable && !input.expiresAt) {
+      throw new Error('La fecha de caducidad es obligatoria para productos perecederos');
+    }
   }
 
   const result = await tdb.transaction(async (tx) => {
