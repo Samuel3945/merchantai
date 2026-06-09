@@ -1,6 +1,8 @@
 import { setRequestLocale } from 'next-intl/server';
 import { currentPlan } from '@/actions/plans';
+import { getSmartStockSettings } from '@/actions/smart-stock';
 import { AiAgentClient } from '@/features/ai-agent/AiAgentClient';
+import { SmartModelsSection } from '@/features/ai-agent/SmartModelsSection';
 import { TitleBar } from '@/features/dashboard/TitleBar';
 
 export default async function DashboardAiAgentPage(props: {
@@ -9,7 +11,10 @@ export default async function DashboardAiAgentPage(props: {
   const { locale } = await props.params;
   setRequestLocale(locale);
 
-  const snapshot = await currentPlan();
+  const [snapshot, smartStock] = await Promise.all([
+    currentPlan(),
+    getSmartStockSettings(),
+  ]);
 
   return (
     <>
@@ -18,6 +23,8 @@ export default async function DashboardAiAgentPage(props: {
         description="Consulta tus ventas con el Sales Manager o atiende clientes con Customer Service."
       />
       <AiAgentClient initialSnapshot={snapshot} />
+      {/* Modelos Inteligentes solo se renderiza para orgs Pro. */}
+      {smartStock.isPro && <SmartModelsSection initialSettings={smartStock} />}
     </>
   );
 }
