@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { productCreateSchema } from './validation';
+import { productCreateSchema, productUpdateSchema } from './validation';
 
 const base = { name: 'Café', price: '1000' };
 
@@ -88,5 +88,23 @@ describe('productCreateSchema', () => {
 
     expect(r.success).toBe(false);
     expect(r.error?.issues.some(i => i.path.includes('publishAt'))).toBe(true);
+  });
+});
+
+describe('productUpdateSchema', () => {
+  // Regression: editing a product (e.g. toggling wholesale) used to wipe stock.
+  // The edit form never sends `stock`, but Zod kept the base `.default(0)`
+  // through `.partial()`, so the parsed payload carried `stock: 0` and the
+  // update overwrote the product's real stock with zero. Stock is owned by
+  // inventory movements — an edit must never produce a stock value.
+  it('never produces a stock field, so an edit cannot overwrite stock', () => {
+    const r = productUpdateSchema.parse({
+      name: 'Café',
+      price: '1000',
+      isWholesale: true,
+    });
+
+    expect('stock' in r).toBe(false);
+    expect((r as Record<string, unknown>).stock).toBeUndefined();
   });
 });

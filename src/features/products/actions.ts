@@ -332,7 +332,8 @@ export async function updateProduct(id: string, input: ProductUpdateInput) {
         ...(data.barcode !== undefined && { barcode: data.barcode }),
         ...(data.price !== undefined && { price: data.price }),
         ...(data.cost !== undefined && { cost: data.cost }),
-        ...(data.stock !== undefined && { stock: data.stock }),
+        // Stock is intentionally NOT settable here — it's owned by inventory
+        // movements (recordMovement). A product edit must never change stock.
         ...(data.category !== undefined && { category: data.category }),
         ...(data.unitType !== undefined && { unitType: data.unitType }),
         ...(data.isPerishable !== undefined && {
