@@ -23,8 +23,8 @@ export default async function DashboardAiAgentPage(props: {
         description="Consulta tus ventas con el Sales Manager o atiende clientes con Customer Service."
       />
       <AiAgentClient initialSnapshot={snapshot} />
-      {/* Modelos Inteligentes solo se renderiza para orgs Pro. */}
-      {smartStock.isPro && <SmartModelsSection initialSettings={smartStock} />}
+      {/* Siempre visible: bloqueado como upsell para orgs que no son Pro. */}
+      <SmartModelsSection initialSettings={smartStock} />
     </>
   );
 }

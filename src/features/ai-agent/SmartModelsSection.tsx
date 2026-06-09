@@ -1,17 +1,18 @@
 'use client';
 
 import type { SmartStockSettings } from '@/actions/smart-stock';
-import { SparklesIcon } from 'lucide-react';
+import { LockIcon, SparklesIcon } from 'lucide-react';
 import { useState, useTransition } from 'react';
 import { setSmartStockEnabled } from '@/actions/smart-stock';
+import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Toaster } from '@/components/ui/toast';
 import { toast } from '@/components/ui/toast-store';
+import { Link } from '@/libs/I18nNavigation';
 
-// "Modelos Inteligentes" — the Pro-only control room for deterministic models.
-// Today it hosts the Smart Stock toggle; turning it on recomputes every
-// product's minimum from sales velocity. The Inventory view only READS this
-// flag — it never flips it.
+// "Modelos Inteligentes" — control room for deterministic models. Always
+// rendered: Pro orgs can toggle Smart Stock; everyone else sees it locked as an
+// upsell so they know it exists. The Inventory view only READS the flag.
 export function SmartModelsSection({
   initialSettings,
 }: {
@@ -19,6 +20,7 @@ export function SmartModelsSection({
 }) {
   const [settings, setSettings] = useState(initialSettings);
   const [pending, startTransition] = useTransition();
+  const isPro = settings.isPro;
 
   function toggle(next: boolean) {
     startTransition(async () => {
@@ -54,16 +56,35 @@ export function SmartModelsSection({
       "
       >
         <div className="space-y-1 pr-4">
-          <div className="font-medium">Smart Stock</div>
+          <div className="flex items-center gap-2 font-medium">
+            Smart Stock
+            {!isPro && (
+              <Badge variant="secondary" className="gap-1">
+                <LockIcon className="size-3" />
+                Pro
+              </Badge>
+            )}
+          </div>
           <p className="text-sm text-muted-foreground">
             Calcula y mantiene el stock mínimo de cada producto según tu
             velocidad de venta. Cuando está activo, la columna “Min” del
             inventario queda en modo IA (solo lectura).
           </p>
+          {!isPro && (
+            <Link
+              href="/dashboard/plans"
+              className="
+                inline-flex pt-1 text-sm font-medium text-brand
+                hover:underline
+              "
+            >
+              Mejorá a Pro para activarlo →
+            </Link>
+          )}
         </div>
         <Switch
           checked={settings.enabled}
-          disabled={pending}
+          disabled={pending || !isPro}
           onCheckedChange={toggle}
           aria-label="Activar Smart Stock"
         />
