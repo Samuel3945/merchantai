@@ -200,7 +200,6 @@ export function ProductsClient({
   // these too; the UI just explains why a field is locked.
   const inUse = editing ? editing.hasSales || editing.hasMovements : false;
   const unitLocked = inUse;
-  const perishableLocked = editing ? editing.hasDatedBatches : false;
   const barcodeWarn = editing ? editing.hasSales : false;
 
   function openCreate() {
@@ -616,7 +615,7 @@ export function ProductsClient({
                 </div>
               )}
 
-              {(features.wholesale || features.perishable) && (
+              {(features.wholesale || (features.perishable && !editing)) && (
                 <div className="flex flex-wrap gap-2">
                   {features.wholesale && (
                     <button
@@ -638,10 +637,9 @@ export function ProductsClient({
                       Por mayor
                     </button>
                   )}
-                  {features.perishable && (
+                  {features.perishable && !editing && (
                     <button
                       type="button"
-                      disabled={perishableLocked}
                       onClick={() => setForm({ ...form, isPerishable: !form.isPerishable })}
                       title="Marca productos que se vencen para registrar caducidad por lote."
                       className={cn(
@@ -655,20 +653,12 @@ export function ProductsClient({
                             border-input text-muted-foreground
                             hover:bg-accent
                           `,
-                        perishableLocked && 'cursor-not-allowed opacity-50',
                       )}
                     >
                       Se vence
                     </button>
                   )}
                 </div>
-              )}
-
-              {features.perishable && perishableLocked && (
-                <p className="text-xs text-muted-foreground">
-                  «Se vence» no se puede desactivar mientras existan lotes con
-                  fecha de caducidad y stock.
-                </p>
               )}
 
               <div>
