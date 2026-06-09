@@ -7,11 +7,13 @@ import type {
   MovementType,
 } from '@/actions/inventory';
 import type { SupplierOption } from '@/features/suppliers/actions';
-import { useEffect, useState, useTransition } from 'react';
+import { useEffect, useMemo, useState, useTransition } from 'react';
 import { listMovements as fetchMovements } from '@/actions/inventory';
+import { DateRangePicker } from '@/components/DateRangePicker';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast-store';
 import { listSuppliersForSelect } from '@/features/suppliers/actions';
+import { buildPresetOptions, todayBogota } from '@/utils/DateRange';
 import { cn } from '@/utils/Helpers';
 import { HISTORY_REASON_OPTIONS, REASON_LABELS } from '../validation';
 
@@ -65,7 +67,13 @@ export function MovementHistory({ products }: { products: ProductOption[] }) {
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [suppliers, setSuppliers] = useState<SupplierOption[]>([]);
   const [page, setPage] = useState(1);
+  const [activePreset, setActivePreset] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+
+  const presetOptions = useMemo(
+    () => buildPresetOptions(['today', 'yesterday', '7d', '30d', 'mtd', 'lastMonth']),
+    [],
+  );
 
   function set<K extends keyof Filters>(key: K, value: Filters[K]) {
     setFilters(prev => ({ ...prev, [key]: value }));
@@ -105,8 +113,23 @@ export function MovementHistory({ products }: { products: ProductOption[] }) {
     });
   }
 
+  function applyRange(next: { start: string; end: string; preset: string | null }) {
+    const merged = { ...filters, from: next.start, to: next.end };
+    setFilters(merged);
+    setActivePreset(next.preset);
+    doLoad(1, merged);
+  }
+
+  function clearRange() {
+    const merged = { ...filters, from: '', to: '' };
+    setFilters(merged);
+    setActivePreset(null);
+    doLoad(1, merged);
+  }
+
   function clearFilters() {
     setFilters(EMPTY_FILTERS);
+    setActivePreset(null);
     doLoad(1, EMPTY_FILTERS);
   }
 
@@ -196,23 +219,23 @@ export function MovementHistory({ products }: { products: ProductOption[] }) {
             </select>
           </Field>
 
-          <Field label="Desde">
-            <input
-              type="date"
-              value={filters.from}
-              onChange={e => set('from', e.target.value)}
-              className={fieldCls}
+          <div className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-muted-foreground">
+              Periodo
+            </span>
+            <DateRangePicker
+              start={filters.from}
+              end={filters.to}
+              compare={false}
+              showCompare={false}
+              activePreset={activePreset}
+              presets={presetOptions}
+              maxDate={todayBogota()}
+              onApply={applyRange}
+              onClear={clearRange}
+              triggerClassName="w-full"
             />
-          </Field>
-
-          <Field label="Hasta">
-            <input
-              type="date"
-              value={filters.to}
-              onChange={e => set('to', e.target.value)}
-              className={fieldCls}
-            />
-          </Field>
+          </div>
         </div>
 
         <div className="flex items-center justify-end gap-2">
