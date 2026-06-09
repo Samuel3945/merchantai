@@ -341,6 +341,9 @@ export async function getProductLots(productId: string): Promise<ProductLot[]> {
 
 export type ListMovementsParams = {
   productId?: string;
+  supplierId?: string;
+  type?: MovementType;
+  reason?: MovementReason;
   from?: string;
   to?: string;
   page?: number;
@@ -356,6 +359,15 @@ export async function listMovements(params?: ListMovementsParams) {
   const filters: SQL[] = [];
   if (params?.productId) {
     filters.push(eq(stockMovementsSchema.productId, params.productId));
+  }
+  if (params?.supplierId) {
+    filters.push(eq(stockMovementsSchema.supplierId, params.supplierId));
+  }
+  if (params?.type) {
+    filters.push(eq(stockMovementsSchema.type, params.type));
+  }
+  if (params?.reason) {
+    filters.push(eq(stockMovementsSchema.reason, params.reason));
   }
   if (params?.from) {
     filters.push(gte(stockMovementsSchema.createdAt, new Date(params.from)));
