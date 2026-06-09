@@ -40,6 +40,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { Select } from '@/components/ui/select';
 import { Link } from '@/libs/I18nNavigation';
 import { POS_DEVICES_LIMIT_REACHED } from '@/libs/plan-limits';
 
@@ -680,23 +681,18 @@ function CreateTokenModal({
             <label htmlFor="pt-cashier" className={labelCls}>
               Cajero asignado (opcional)
             </label>
-            <select
+            <Select
               id="pt-cashier"
               value={cashierId}
-              onChange={e => setCashierId(e.target.value)}
-              className={inputCls}
-            >
-              <option value="">— Sin asignar —</option>
-              {cashiers.map(c => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                  {' '}
-                  (
-                  {c.email}
-                  )
-                </option>
-              ))}
-            </select>
+              onValueChange={setCashierId}
+              options={[
+                { value: '', label: '— Sin asignar —' },
+                ...cashiers.map(c => ({
+                  value: c.id,
+                  label: `${c.name} (${c.email})`,
+                })),
+              ]}
+            />
           </div>
           <div>
             <label htmlFor="pt-expires" className={labelCls}>

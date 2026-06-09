@@ -5,6 +5,7 @@ import { useState, useTransition } from 'react';
 import { abonarFiado, extenderPlazo } from '@/actions/fiados';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Select } from '@/components/ui/select';
 import { dueStateLabel, FIADO_PAYMENT_METHODS } from '@/libs/fiados-shared';
 import { Link, useRouter } from '@/libs/I18nNavigation';
 import { cn } from '@/utils/Helpers';
@@ -208,15 +209,14 @@ function AbonoPanel({
           placeholder={`Monto (saldo ${formatMoney(balance)})`}
           className={inputCls}
         />
-        <select
+        <Select
           value={method}
-          onChange={e => setMethod(e.target.value)}
-          className={inputCls}
-        >
-          {FIADO_PAYMENT_METHODS.map(m => (
-            <option key={m.value} value={m.value}>{m.label}</option>
-          ))}
-        </select>
+          onValueChange={setMethod}
+          options={FIADO_PAYMENT_METHODS.map(m => ({
+            value: m.value,
+            label: m.label,
+          }))}
+        />
         <input
           type="text"
           value={note}

@@ -11,6 +11,7 @@ import {
   revokeInvitation,
 } from '@/actions/employees';
 import { Button } from '@/components/ui/button';
+import { Select } from '@/components/ui/select';
 import { CASHIERS_LIMIT_REACHED } from '@/libs/plan-limits';
 
 type EmployeeRow = Awaited<ReturnType<typeof listEmployees>>[number];
@@ -513,17 +514,17 @@ function InviteModal({
             <label htmlFor="emp-role" className={labelCls}>
               Rol
             </label>
-            <select
+            <Select
               id="emp-role"
               value={role}
-              onChange={e =>
-                setRole(e.target.value as 'admin' | 'cashier' | 'employee')}
-              className={inputCls}
-            >
-              <option value="cashier">Cajero</option>
-              <option value="employee">Empleado</option>
-              <option value="admin">Administrador</option>
-            </select>
+              onValueChange={v =>
+                setRole(v as 'admin' | 'cashier' | 'employee')}
+              options={[
+                { value: 'cashier', label: 'Cajero' },
+                { value: 'employee', label: 'Empleado' },
+                { value: 'admin', label: 'Administrador' },
+              ]}
+            />
           </div>
 
           <div>

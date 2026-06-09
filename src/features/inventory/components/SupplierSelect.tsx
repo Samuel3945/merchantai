@@ -4,9 +4,9 @@ import type { SupplierOption } from '@/features/suppliers/actions';
 import { PlusIcon } from 'lucide-react';
 import { useEffect, useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
+import { Select } from '@/components/ui/select';
 import { toast } from '@/components/ui/toast-store';
 import { createSupplier, listSuppliersForSelect } from '@/features/suppliers/actions';
-import { cn } from '@/utils/Helpers';
 
 const inputCls
   = 'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50';
@@ -110,19 +110,18 @@ export function SupplierSelect({
 
   return (
     <div className="flex gap-2">
-      <select
+      <Select
         value={value}
-        onChange={e => onChange(e.target.value)}
-        className={cn(inputCls, 'flex-1')}
-      >
-        <option value="">Sin proveedor</option>
-        {suppliers.map(s => (
-          <option key={s.id} value={s.id}>
-            {s.name}
-            {s.company ? ` · ${s.company}` : ''}
-          </option>
-        ))}
-      </select>
+        onValueChange={onChange}
+        className="flex-1"
+        options={[
+          { value: '', label: 'Sin proveedor' },
+          ...suppliers.map(s => ({
+            value: s.id,
+            label: `${s.name}${s.company ? ` · ${s.company}` : ''}`,
+          })),
+        ]}
+      />
       <Button
         type="button"
         size="sm"

@@ -2,6 +2,7 @@
 
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
+import { Select } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 
 const inputCls
@@ -128,18 +129,12 @@ export function SelectField<T extends string>({
 }) {
   return (
     <FieldShell label={label} htmlFor={id} hint={hint}>
-      <select
+      <Select
         id={id}
         value={initial}
-        onChange={e => onCommit(e.target.value as T)}
-        className={inputCls}
-      >
-        {options.map(opt => (
-          <option key={opt.value} value={opt.value}>
-            {opt.label}
-          </option>
-        ))}
-      </select>
+        onValueChange={v => onCommit(v as T)}
+        options={options.map(opt => ({ value: opt.value, label: opt.label }))}
+      />
     </FieldShell>
   );
 }

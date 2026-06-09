@@ -28,6 +28,7 @@ import {
   updatePaymentMethod,
 } from '@/actions/payment-methods';
 import { Button } from '@/components/ui/button';
+import { Select } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { FiadoTermField } from '@/features/settings/FiadoTermField';
 import { ToggleRow } from './fields';
@@ -544,18 +545,15 @@ function EditModal({
             <label htmlFor="pm-type" className={labelCls}>
               Tipo
             </label>
-            <select
+            <Select
               id="pm-type"
               value={type}
-              onChange={e => setType(e.target.value as PaymentMethodType)}
-              className={inputCls}
-            >
-              {TYPE_OPTIONS.map(opt => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
+              onValueChange={v => setType(v as PaymentMethodType)}
+              options={TYPE_OPTIONS.map(opt => ({
+                value: opt.value,
+                label: opt.label,
+              }))}
+            />
           </div>
 
           {type === 'transfer' && (

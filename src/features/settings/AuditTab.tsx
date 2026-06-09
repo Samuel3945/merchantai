@@ -7,6 +7,7 @@ import type {
 } from '@/actions/audit-log';
 import { useCallback, useEffect, useState } from 'react';
 import { getAuditFacets, listAuditLogs } from '@/actions/audit-log';
+import { Select } from '@/components/ui/select';
 import { exportToCSV } from '@/libs/exports';
 
 const PAGE_SIZE = 50;
@@ -172,40 +173,25 @@ export function AuditTab() {
         </label>
         <label className="text-xs">
           <span className="mb-1 block text-muted-foreground">Acción</span>
-          <select
+          <Select
             value={filters.action}
-            onChange={e => setFilters({ ...filters, action: e.target.value })}
-            className="
-              h-9 w-full rounded-md border border-input bg-background px-2
-              text-sm
-            "
-          >
-            <option value="">Todas</option>
-            {facets.actions.map(a => (
-              <option key={a} value={a}>
-                {a}
-              </option>
-            ))}
-          </select>
+            onValueChange={v => setFilters({ ...filters, action: v })}
+            options={[
+              { value: '', label: 'Todas' },
+              ...facets.actions.map(a => ({ value: a, label: a })),
+            ]}
+          />
         </label>
         <label className="text-xs">
           <span className="mb-1 block text-muted-foreground">Entidad</span>
-          <select
+          <Select
             value={filters.entityType}
-            onChange={e =>
-              setFilters({ ...filters, entityType: e.target.value })}
-            className="
-              h-9 w-full rounded-md border border-input bg-background px-2
-              text-sm
-            "
-          >
-            <option value="">Todas</option>
-            {facets.entityTypes.map(t => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
-          </select>
+            onValueChange={v => setFilters({ ...filters, entityType: v })}
+            options={[
+              { value: '', label: 'Todas' },
+              ...facets.entityTypes.map(t => ({ value: t, label: t })),
+            ]}
+          />
         </label>
         <label className="text-xs">
           <span className="mb-1 block text-muted-foreground">Actor (id)</span>
