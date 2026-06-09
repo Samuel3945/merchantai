@@ -31,7 +31,6 @@ export function StockTable({
             <th className="px-3 py-2">Categoría</th>
             <th className="px-3 py-2 text-right">Stock</th>
             <th className="px-3 py-2 text-right">Min</th>
-            <th className="px-3 py-2 text-right">Max rec.</th>
             <th className="px-3 py-2">Unidad</th>
             <th className="px-3 py-2"></th>
           </tr>
@@ -41,7 +40,7 @@ export function StockTable({
             ? (
                 <tr>
                   <td
-                    colSpan={8}
+                    colSpan={7}
                     className="px-3 py-8 text-center text-muted-foreground"
                   >
                     {pending ? 'Cargando...' : 'Sin productos'}
@@ -78,9 +77,6 @@ export function StockTable({
                       <td className="px-3 py-2 text-right font-mono">{p.stock}</td>
                       <td className="px-3 py-2 text-right">
                         <MinStockCell product={p} onSaved={onMinSaved} />
-                      </td>
-                      <td className="px-3 py-2 text-right font-mono text-xs">
-                        {p.stockMaxRecommended ?? '—'}
                       </td>
                       <td className="px-3 py-2 text-xs">{p.unitType}</td>
                       <td className="px-3 py-2">
