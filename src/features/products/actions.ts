@@ -510,32 +510,3 @@ export async function deleteProduct(id: string) {
   revalidatePath('/dashboard/products');
   return { id };
 }
-
-export async function decrementStock(id: string, qty: number) {
-  const orgId = await requireOrgId();
-
-  if (!Number.isFinite(qty) || qty <= 0) {
-    throw new Error('qty must be a positive number');
-  }
-
-  const [row] = await db
-    .update(productsSchema)
-    .set({
-      stock: sql`GREATEST(0, ${productsSchema.stock} - ${qty})`,
-    })
-    .where(
-      and(
-        eq(productsSchema.id, id),
-        eq(productsSchema.organizationId, orgId),
-        eq(productsSchema.deleted, false),
-      ),
-    )
-    .returning();
-
-  if (!row) {
-    throw new Error('Product not found');
-  }
-
-  revalidatePath('/dashboard/products');
-  return row;
-}

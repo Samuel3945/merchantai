@@ -501,7 +501,7 @@ export async function getInventoryView(): Promise<InventoryView> {
   await requireUser();
   const tdb = await db();
 
-  const [rows, expRows, valueRow, smartStock] = await Promise.all([
+  const [rows, expRows, valueRow, ledgerRows, smartStock] = await Promise.all([
     tdb
       .select()
       .from(productsSchema)
@@ -524,6 +524,19 @@ export async function getInventoryView(): Promise<InventoryView> {
           gt(stockMovementsSchema.remainingQty, 0),
         ),
       ),
+    tdb
+      .select({
+        productId: stockMovementsSchema.productId,
+        remaining: sql<string>`COALESCE(SUM(${stockMovementsSchema.remainingQty}), 0)::text`,
+      })
+      .from(stockMovementsSchema)
+      .where(
+        and(
+          eq(stockMovementsSchema.type, 'entry'),
+          gt(stockMovementsSchema.remainingQty, 0),
+        ),
+      )
+      .groupBy(stockMovementsSchema.productId),
     getSmartStockSettings(),
   ]);
 
@@ -560,8 +573,33 @@ export async function getInventoryView(): Promise<InventoryView> {
     }
   }
 
+  // products.stock is a cache of the FIFO ledger (see CLAUDE.md). When a product
+  // has open lots, the ledger is authoritative — self-heal any drift so the table
+  // can never contradict the lots drawer. We only ever reconcile UP to a positive
+  // ledger sum: a product may legitimately hold "carga inicial" stock with no
+  // lots (ledger sum 0), and zeroing it would wipe real inventory.
+  const ledgerByProduct = new Map<string, number>();
+  for (const lr of ledgerRows) {
+    ledgerByProduct.set(lr.productId, Number(lr.remaining));
+  }
+  const healedById = new Map<string, number>();
+  for (const r of rows) {
+    const ledger = ledgerByProduct.get(r.id);
+    if (ledger != null && ledger > 0 && ledger !== r.stock) {
+      healedById.set(r.id, ledger);
+    }
+  }
+  if (healedById.size > 0) {
+    await Promise.all(
+      [...healedById].map(([id, stock]) =>
+        tdb.update(productsSchema).set({ stock }).where(eq(productsSchema.id, id)),
+      ),
+    );
+  }
+
   let expiringCount = 0;
   const products: InventoryProduct[] = rows.map((r) => {
+    const stock = healedById.get(r.id) ?? r.stock;
     const expiringTier = tierByProduct.get(r.id) ?? null;
     if (expiringTier) {
       expiringCount += 1;
@@ -571,18 +609,18 @@ export async function getInventoryView(): Promise<InventoryView> {
     // can't expire, so 'critical' wins; otherwise at-risk lots outrank a low
     // reorder point because spoilage is money already lost.
     let status: InventoryStatus = 'ok';
-    if (r.minStock > 0 && r.stock <= 0) {
+    if (r.minStock > 0 && stock <= 0) {
       status = 'critical';
     } else if (expiringTier) {
       status = 'by_expiry';
-    } else if (r.minStock > 0 && r.stock <= r.minStock) {
+    } else if (r.minStock > 0 && stock <= r.minStock) {
       status = 'low';
     }
 
     return {
       id: r.id,
       name: r.name,
-      stock: r.stock,
+      stock,
       minStock: r.minStock,
       stockMaxRecommended: r.stockMaxRecommended,
       cost: r.cost,
