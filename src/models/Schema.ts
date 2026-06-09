@@ -920,6 +920,10 @@ export const stockMovementsSchema = pgTable(
       onDelete: 'set null',
     }),
     supplierId: text('supplier_id'),
+    // Free-text detail. REQUIRED when reason='manual' ("Otro motivo") so every
+    // off-book adjustment — initial inventory, count shortfall/surplus, returns
+    // to supplier, in-shop consumption — carries an auditable explanation.
+    notes: text('notes'),
     createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
   },
   table => [

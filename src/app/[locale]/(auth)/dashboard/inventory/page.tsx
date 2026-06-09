@@ -1,5 +1,5 @@
 import { setRequestLocale } from 'next-intl/server';
-import { getInventoryProducts } from '@/actions/inventory';
+import { getInventoryView } from '@/actions/inventory';
 import { TitleBar } from '@/features/dashboard/TitleBar';
 import { InventoryClient } from '@/features/inventory/InventoryClient';
 
@@ -9,15 +9,15 @@ export default async function DashboardInventoryPage(props: {
   const { locale } = await props.params;
   setRequestLocale(locale);
 
-  const products = await getInventoryProducts();
+  const view = await getInventoryView();
 
   return (
     <>
       <TitleBar
         title="Inventario"
-        description="Stock actual, movimientos, entradas, salidas y recomendaciones IA."
+        description="Stock, lotes FIFO, entradas, salidas y vencimientos."
       />
-      <InventoryClient initialProducts={products} />
+      <InventoryClient initialView={view} />
     </>
   );
 }
