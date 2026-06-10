@@ -3,33 +3,16 @@
 import { createOpenAI } from '@ai-sdk/openai';
 import { auth } from '@clerk/nextjs/server';
 import { generateObject } from 'ai';
-import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { consumeCredit } from '@/actions/plans';
-import { db } from '@/libs/DB';
 import { Env } from '@/libs/Env';
-import { appSettingsSchema } from '@/models/Schema';
+import { resolveOrgOpenAiKey } from '@/libs/openai-key';
 
 // Categorization runs on OpenAI. The key is resolved per-request with BYOK
 // precedence: if the org saved its own key in Settings › Integrations
 // (`openai_api_key`), we use it and DON'T spend a platform credit. Otherwise we
 // fall back to the platform key (OPENAI_API_KEY env) and consume one credit.
 const CATEGORIZE_MODEL = 'gpt-4o-mini';
-
-async function resolveOpenAiKey(orgId: string): Promise<string | null> {
-  const [row] = await db
-    .select({ value: appSettingsSchema.value })
-    .from(appSettingsSchema)
-    .where(
-      and(
-        eq(appSettingsSchema.organizationId, orgId),
-        eq(appSettingsSchema.key, 'openai_api_key'),
-      ),
-    )
-    .limit(1);
-  const byok = row?.value?.trim();
-  return byok || null;
-}
 
 export type CategorizeResult
   = | {
@@ -74,7 +57,7 @@ export async function categorizeProduct(
     return { ok: false, reason: 'too_short' };
   }
 
-  const byokKey = await resolveOpenAiKey(orgId);
+  const byokKey = await resolveOrgOpenAiKey(orgId);
   const apiKey = byokKey ?? Env.OPENAI_API_KEY;
   if (!apiKey) {
     return { ok: false, reason: 'no_credits' };
