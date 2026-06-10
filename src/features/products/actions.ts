@@ -17,6 +17,7 @@ import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
 import {
+  categoriesSchema,
   productsSchema,
   stockMovementsSchema,
 } from '@/models/Schema';
@@ -46,6 +47,66 @@ async function requireOrgAndUser() {
     throw new Error('No active organization');
   }
   return { userId, orgId };
+}
+
+// Drizzle transaction handle — same derivation as libs/sale-number.ts.
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+// Ensures the org has a category row for `name` (created on demand — this is what
+// makes categories dynamic) and returns its id. Idempotent via the
+// (organization_id, slug) unique index; the slug normalizes case/whitespace so
+// "Bebidas" and " bebidas " collapse to one. Never touches usageCount: that is
+// recomputed from products by recountCategory so it can't drift. On conflict the
+// existing row's source/name are kept (first writer wins).
+async function upsertCategory(
+  tx: Tx,
+  orgId: string,
+  name: string,
+  source: 'manual' | 'ai' | 'auto' = 'manual',
+): Promise<string> {
+  const trimmed = name.trim();
+  const slug = trimmed.toLowerCase();
+  const [cat] = await tx
+    .insert(categoriesSchema)
+    .values({ organizationId: orgId, name: trimmed, slug, source })
+    .onConflictDoUpdate({
+      target: [categoriesSchema.organizationId, categoriesSchema.slug],
+      // No-op touch so the existing row is RETURNed on conflict (DO NOTHING
+      // would return nothing).
+      set: { updatedAt: new Date() },
+    })
+    .returning({ id: categoriesSchema.id });
+  if (!cat) {
+    throw new Error('Failed to upsert category');
+  }
+  return cat.id;
+}
+
+// Recomputes usageCount as the live count of non-deleted products in the
+// category — the single source of truth, mirroring how products.stock follows
+// the FIFO ledger. Call after any change that re-points a product's category_id.
+async function recountCategory(
+  tx: Tx,
+  orgId: string,
+  categoryId: string | null,
+): Promise<void> {
+  if (!categoryId) {
+    return;
+  }
+  await tx
+    .update(categoriesSchema)
+    .set({
+      usageCount: sql`(
+        SELECT count(*)::int FROM products
+        WHERE products.category_id = ${categoryId} AND products.deleted = false
+      )`,
+    })
+    .where(
+      and(
+        eq(categoriesSchema.id, categoryId),
+        eq(categoriesSchema.organizationId, orgId),
+      ),
+    );
 }
 
 export type Product = typeof productsSchema.$inferSelect;
@@ -187,6 +248,12 @@ export async function createProduct(input: ProductCreateInput) {
   // stock_movements 'entry' row (remainingQty = qty) — the same lot model
   // recordMovement() uses — but inlined here so it shares this transaction.
   const row = await db.transaction(async (tx) => {
+    // Resolve (create on demand) the normalized category before the insert so we
+    // can store the FK alongside the denormalized name.
+    const categoryId = data.category
+      ? await upsertCategory(tx, orgId, data.category)
+      : null;
+
     const [created] = await tx
       .insert(productsSchema)
       .values({
@@ -199,6 +266,7 @@ export async function createProduct(input: ProductCreateInput) {
         // source of truth; otherwise it falls back to the provided value.
         stock: initialQty > 0 ? 0 : data.stock,
         category: data.category ?? null,
+        categoryId,
         unitType: data.unitType,
         isPerishable: data.isPerishable,
         isWholesale: data.isWholesale,
@@ -213,31 +281,36 @@ export async function createProduct(input: ProductCreateInput) {
       throw new Error('Failed to create product');
     }
 
-    if (initialQty <= 0) {
-      return created;
+    let finalRow = created;
+
+    if (initialQty > 0) {
+      await tx.insert(stockMovementsSchema).values({
+        organizationId: orgId,
+        productId: created.id,
+        productName: created.name,
+        type: 'entry',
+        qty: initialQty,
+        remainingQty: initialQty,
+        unitCost: data.initialCost ?? null,
+        // Expiry only matters for perishables; the engine reads it off the batch.
+        expiresAt: data.isPerishable ? (data.initialExpiresAt ?? null) : null,
+        reason: 'purchase',
+        createdBy: userId,
+      });
+
+      const [updated] = await tx
+        .update(productsSchema)
+        .set({ stock: sql`${productsSchema.stock} + ${initialQty}` })
+        .where(eq(productsSchema.id, created.id))
+        .returning();
+
+      finalRow = updated ?? created;
     }
 
-    await tx.insert(stockMovementsSchema).values({
-      organizationId: orgId,
-      productId: created.id,
-      productName: created.name,
-      type: 'entry',
-      qty: initialQty,
-      remainingQty: initialQty,
-      unitCost: data.initialCost ?? null,
-      // Expiry only matters for perishables; the engine reads it off the batch.
-      expiresAt: data.isPerishable ? (data.initialExpiresAt ?? null) : null,
-      reason: 'purchase',
-      createdBy: userId,
-    });
+    // The new product now counts toward its category.
+    await recountCategory(tx, orgId, categoryId);
 
-    const [updated] = await tx
-      .update(productsSchema)
-      .set({ stock: sql`${productsSchema.stock} + ${initialQty}` })
-      .where(eq(productsSchema.id, created.id))
-      .returning();
-
-    return updated ?? created;
+    return finalRow;
   });
 
   revalidatePath('/dashboard/products');
@@ -279,6 +352,7 @@ export async function updateProduct(id: string, input: ProductUpdateInput) {
         name: productsSchema.name,
         unitType: productsSchema.unitType,
         isPerishable: productsSchema.isPerishable,
+        categoryId: productsSchema.categoryId,
         hasSales: hasSalesSql,
         hasMovements: hasMovementsSql,
         hasDatedBatches: hasDatedBatchesSql,
@@ -326,6 +400,18 @@ export async function updateProduct(id: string, input: ProductUpdateInput) {
       );
     }
 
+    // Resolve the category FK only when the edit touches the category:
+    // undefined = leave as-is; null/'' = clear; a name = upsert (create on
+    // demand). categoryChanged drives the usageCount recount of both sides.
+    let nextCategoryId = prev.categoryId;
+    let categoryChanged = false;
+    if (data.category !== undefined) {
+      nextCategoryId = data.category
+        ? await upsertCategory(tx, orgId, data.category)
+        : null;
+      categoryChanged = nextCategoryId !== prev.categoryId;
+    }
+
     const [updatedRow] = await tx
       .update(productsSchema)
       .set({
@@ -335,7 +421,10 @@ export async function updateProduct(id: string, input: ProductUpdateInput) {
         ...(data.cost !== undefined && { cost: data.cost }),
         // Stock is intentionally NOT settable here — it's owned by inventory
         // movements (recordMovement). A product edit must never change stock.
-        ...(data.category !== undefined && { category: data.category }),
+        ...(data.category !== undefined && {
+          category: data.category,
+          categoryId: nextCategoryId,
+        }),
         ...(data.unitType !== undefined && { unitType: data.unitType }),
         ...(data.isPerishable !== undefined && {
           isPerishable: data.isPerishable,
@@ -359,6 +448,12 @@ export async function updateProduct(id: string, input: ProductUpdateInput) {
 
     if (!updatedRow) {
       throw new Error('Product not found');
+    }
+
+    // Recompute both sides when the product moved between categories.
+    if (categoryChanged) {
+      await recountCategory(tx, orgId, prev.categoryId);
+      await recountCategory(tx, orgId, nextCategoryId);
     }
 
     return { row: updatedRow, previous: prev };
@@ -477,6 +572,7 @@ export async function deleteProduct(id: string) {
     const [target] = await tx
       .select({
         id: productsSchema.id,
+        categoryId: productsSchema.categoryId,
         hasSales: hasSalesSql,
         hasMovements: hasMovementsSql,
       })
@@ -506,6 +602,9 @@ export async function deleteProduct(id: string) {
       .where(
         and(eq(productsSchema.id, id), eq(productsSchema.organizationId, orgId)),
       );
+
+    // The product no longer counts toward its category.
+    await recountCategory(tx, orgId, target.categoryId);
   });
 
   revalidatePath('/dashboard/products');

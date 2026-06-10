@@ -43,6 +43,54 @@ export const productStatusEnum = pgEnum('product_status', [
   'archived',
 ]);
 
+// How a category came to exist: 'manual' (owner typed/created it), 'ai' (an LLM
+// suggestion was accepted) or 'auto' (created on the fly when a product was
+// assigned a name not yet seen). Drives trust/ranking later.
+export const categorySourceEnum = pgEnum('category_source', [
+  'manual',
+  'ai',
+  'auto',
+]);
+
+// Per-org product categories. Categories are DYNAMIC: a row is created on demand
+// the first time a product is assigned a name (see actions#upsertCategory) and
+// ranked by usageCount. `attributeTemplate` is the learned set of characteristic
+// keys typical for this category in THIS org (populated by a later slice) — the
+// basis for "characterization that varies with the products that come in".
+// `products.category` (text) is kept as a denormalized cache alongside the FK.
+export const categoriesSchema = pgTable(
+  'categories',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: text('organization_id').notNull(),
+    name: text('name').notNull(),
+    // Normalized key (lowercased, trimmed) so "Bebidas" and "bebidas" collapse
+    // to one category per org.
+    slug: text('slug').notNull(),
+    source: categorySourceEnum('source').default('auto').notNull(),
+    usageCount: integer('usage_count').default(0).notNull(),
+    attributeTemplate: jsonb('attribute_template')
+      .$type<{ key: string; count: number }[]>()
+      .default([])
+      .notNull(),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { mode: 'date' })
+      .defaultNow()
+      .$onUpdate(() => new Date())
+      .notNull(),
+  },
+  table => [
+    uniqueIndex('categories_org_slug_unique_idx').on(
+      table.organizationId,
+      table.slug,
+    ),
+    index('categories_org_usage_idx').on(
+      table.organizationId,
+      table.usageCount,
+    ),
+  ],
+);
+
 export const productsSchema = pgTable(
   'products',
   {
@@ -57,7 +105,12 @@ export const productsSchema = pgTable(
     stock: integer('stock').default(0).notNull(),
     minStock: integer('min_stock').default(0).notNull(),
     stockMaxRecommended: integer('stock_max_recommended'),
+    // Denormalized category name (cache for cheap reads) + normalized FK. Both
+    // are kept in sync by createProduct/updateProduct via upsertCategory.
     category: text('category'),
+    categoryId: uuid('category_id').references(() => categoriesSchema.id, {
+      onDelete: 'set null',
+    }),
     unitType: productUnitTypeEnum('unit_type').default('unit').notNull(),
     isPerishable: boolean('is_perishable').default(false).notNull(),
     isWholesale: boolean('is_wholesale').default(false).notNull(),
