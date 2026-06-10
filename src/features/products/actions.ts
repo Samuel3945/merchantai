@@ -8,6 +8,7 @@ import {
   eq,
   getTableColumns,
   ilike,
+  inArray,
   ne,
   or,
   sql,
@@ -509,4 +510,114 @@ export async function deleteProduct(id: string) {
 
   revalidatePath('/dashboard/products');
   return { id };
+}
+
+// Bulk operations cap — a single call never touches more than this many rows, so
+// a runaway selection (or a tampered client payload) can't issue an unbounded
+// UPDATE. Well above any realistic on-screen selection.
+const MAX_BULK = 500;
+
+// Bulk publish/archive. Applies the SAME state-machine rules as
+// setProductStatus, but set-wise: the source-status filter is part of the WHERE,
+// so products already in the target state (or not in a valid source state) are
+// simply skipped instead of erroring. Returns how many rows actually changed.
+export async function bulkSetProductStatus(
+  ids: string[],
+  next: ProductStatusTransition,
+): Promise<{ updated: number }> {
+  const { userId, orgId } = await requireOrgAndUser();
+  const unique = [...new Set(ids)].slice(0, MAX_BULK);
+  if (unique.length === 0) {
+    return { updated: 0 };
+  }
+
+  // publish: anything not already published -> published.
+  // archive: only published -> archived (mirrors setProductStatus).
+  const sourceFilter
+    = next === 'published'
+      ? ne(productsSchema.status, 'published')
+      : eq(productsSchema.status, 'published');
+
+  const rows = await db
+    .update(productsSchema)
+    .set({ status: next, publishAt: null })
+    .where(
+      and(
+        eq(productsSchema.organizationId, orgId),
+        eq(productsSchema.deleted, false),
+        inArray(productsSchema.id, unique),
+        sourceFilter,
+      ),
+    )
+    .returning({ id: productsSchema.id });
+
+  if (rows.length > 0) {
+    await logAction({
+      organizationId: orgId,
+      actor: { type: 'user', id: userId },
+      action: 'product.bulk_status_changed',
+      entityType: 'product',
+      metadata: { status: next, count: rows.length, ids: rows.map(r => r.id) },
+    });
+  }
+
+  revalidatePath('/dashboard/products');
+  return { updated: rows.length };
+}
+
+export type BulkPriceMode = 'percent' | 'amount';
+
+// Bulk price increase — by a percentage (+15%) or a flat amount (+$500) on each
+// product's current price. The arithmetic runs in SQL so it's atomic and never
+// round-trips every row: ROUND(..., 2) keeps the result inside the numeric(10,2)
+// column precision. Increase-only by design (value must be > 0); a fat-finger
+// guard caps the percentage. The DB's numeric overflow is the final backstop.
+export async function bulkAdjustPrice(
+  ids: string[],
+  mode: BulkPriceMode,
+  value: number,
+): Promise<{ updated: number }> {
+  const { userId, orgId } = await requireOrgAndUser();
+
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error('El valor debe ser mayor a 0.');
+  }
+  if (mode === 'percent' && value > 1000) {
+    throw new Error('El porcentaje es demasiado alto (máximo 1000%).');
+  }
+
+  const unique = [...new Set(ids)].slice(0, MAX_BULK);
+  if (unique.length === 0) {
+    return { updated: 0 };
+  }
+
+  const nextPrice
+    = mode === 'percent'
+      ? sql`ROUND(${productsSchema.price} * (1 + ${value}::numeric / 100), 2)`
+      : sql`ROUND(${productsSchema.price} + ${value}::numeric, 2)`;
+
+  const rows = await db
+    .update(productsSchema)
+    .set({ price: nextPrice })
+    .where(
+      and(
+        eq(productsSchema.organizationId, orgId),
+        eq(productsSchema.deleted, false),
+        inArray(productsSchema.id, unique),
+      ),
+    )
+    .returning({ id: productsSchema.id });
+
+  if (rows.length > 0) {
+    await logAction({
+      organizationId: orgId,
+      actor: { type: 'user', id: userId },
+      action: 'product.bulk_price_updated',
+      entityType: 'product',
+      metadata: { mode, value, count: rows.length, ids: rows.map(r => r.id) },
+    });
+  }
+
+  revalidatePath('/dashboard/products');
+  return { updated: rows.length };
 }
