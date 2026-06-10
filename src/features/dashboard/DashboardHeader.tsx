@@ -10,12 +10,11 @@ import { Separator } from '@/components/ui/separator';
 import { Logo } from '@/templates/Logo';
 import { getI18nPath } from '@/utils/Helpers';
 import { MobileNavigation } from './MobileNavigation';
-import { OrganizationMenu } from './OrganizationMenu';
 
 /**
  * Topbar del dashboard (Tienda Control). La navegación principal vive en la
- * sidebar; aquí quedan el menú móvil, el selector de organización/negocio y
- * las acciones de usuario.
+ * sidebar; aquí quedan el menú móvil, el selector de negocio (uno solo) y las
+ * acciones de usuario.
  */
 export const DashboardHeader = (props: {
   cashBadge?: 'red' | null;
@@ -34,14 +33,6 @@ export const DashboardHeader = (props: {
         <Link href="/dashboard">
           <Logo isTextHidden />
         </Link>
-      </div>
-
-      <div className="
-        hidden items-center
-        lg:flex
-      "
-      >
-        <OrganizationMenu />
       </div>
 
       <div className="ml-auto flex items-center gap-x-1.5">

@@ -18,6 +18,7 @@ type ValidateResponse
       role: string;
       expiresAt: string;
       organizationId: string;
+      organizationName: string | null;
     };
   }
   | { valid: false; reason: string };
@@ -26,6 +27,7 @@ type InvitationInfo = {
   email: string;
   name: string;
   role: string;
+  organizationName: string | null;
 };
 
 type Strength = {
@@ -122,6 +124,7 @@ export function AcceptInvitationClient({
             email: data.invitation.email,
             name: data.invitation.name,
             role: data.invitation.role,
+            organizationName: data.invitation.organizationName,
           });
           setName(data.invitation.name);
         }
@@ -218,16 +221,27 @@ export function AcceptInvitationClient({
       <div className="space-y-1">
         <div className="text-2xl font-semibold">Activa tu cuenta</div>
         {invitation && (
-          <p className="text-sm text-muted-foreground">
-            Invitación para
-            {' '}
-            <span className="font-medium text-foreground">{invitation.email}</span>
-            {' '}
-            como
-            {' '}
-            <span className="font-medium text-foreground">{invitation.role}</span>
-            .
-          </p>
+          <>
+            <p className="text-sm text-muted-foreground">
+              {invitation.organizationName
+                ? (
+                    <>
+                      Te uniste al negocio
+                      {' '}
+                      <span className="font-medium text-foreground">
+                        {invitation.organizationName}
+                      </span>
+                      . Crea tu contraseña para entrar.
+                    </>
+                  )
+                : 'Crea tu contraseña para activar tu cuenta.'}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Cuenta:
+              {' '}
+              <span className="font-medium text-foreground">{invitation.email}</span>
+            </p>
+          </>
         )}
       </div>
 
