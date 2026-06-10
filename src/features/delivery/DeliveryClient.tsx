@@ -15,7 +15,6 @@ import {
   listDeliveries,
   transitionDelivery,
 } from './actions';
-import { NewDeliveryModal } from './NewDeliveryModal';
 
 type DeliveryItem = { name: string; qty: number; price: number };
 type Scope = DeliveryStatus | 'active' | 'all';
@@ -104,7 +103,6 @@ export function DeliveryClient(props: {
   const [rows, setRows] = useState<DeliveryOrder[]>(props.initial);
   const [kpis, setKpis] = useState<DeliveryKpis>(props.kpis);
   const [scope, setScope] = useState<Scope>('active');
-  const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const scopeRef = useRef<Scope>(scope);
@@ -156,12 +154,6 @@ export function DeliveryClient(props: {
     });
   }
 
-  function onCreated(order: DeliveryOrder) {
-    setRows(prev => [order, ...prev]);
-    setOpen(false);
-    setScope('active');
-  }
-
   return (
     <div className="space-y-6">
       <div className="
@@ -207,9 +199,6 @@ export function DeliveryClient(props: {
             {f.label}
           </button>
         ))}
-        <Button className="ml-auto" onClick={() => setOpen(true)}>
-          Nuevo domicilio
-        </Button>
       </div>
 
       {rows.length === 0
@@ -224,8 +213,8 @@ export function DeliveryClient(props: {
                 No hay domicilios en esta vista
               </div>
               <p className="mt-1 max-w-sm text-sm text-muted-foreground">
-                Los pedidos que tome el asistente o que registres a mano
-                aparecerán aquí para el domiciliario.
+                Los pedidos que tome el asistente aparecerán aquí para el
+                domiciliario.
               </p>
             </div>
           )
@@ -246,7 +235,6 @@ export function DeliveryClient(props: {
             </div>
           )}
 
-      <NewDeliveryModal open={open} onOpenChange={setOpen} onSaved={onCreated} />
     </div>
   );
 }
