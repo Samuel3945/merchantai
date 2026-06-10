@@ -674,3 +674,97 @@ export async function getInventoryView(): Promise<InventoryView> {
     smartStock,
   };
 }
+
+// ── Bulk stock entries (import) ──────────────────────────────────────────
+// The inventory importer assigns units to products that ALREADY exist (unlike
+// the products importer, which creates them). It needs a lightweight lookup to
+// match file rows by barcode/name and to feed the per-row product picker.
+
+export type EntryTarget = {
+  id: string;
+  name: string;
+  barcode: string | null;
+  cost: string;
+  isPerishable: boolean;
+};
+
+export async function listEntryTargets(): Promise<EntryTarget[]> {
+  await requirePanelModule('inventory');
+  const tdb = await db();
+
+  const rows = await tdb
+    .select({
+      id: productsSchema.id,
+      name: productsSchema.name,
+      barcode: productsSchema.barcode,
+      cost: productsSchema.cost,
+      isPerishable: productsSchema.isPerishable,
+    })
+    .from(productsSchema)
+    .where(eq(productsSchema.deleted, false))
+    .orderBy(productsSchema.name);
+
+  return rows.map(r => ({
+    id: r.id,
+    name: r.name,
+    barcode: r.barcode ?? null,
+    cost: String(r.cost),
+    isPerishable: r.isPerishable,
+  }));
+}
+
+export type BulkEntryRow = {
+  productId: string;
+  qty: number;
+  unitCost: string;
+  expiresAt?: string | null;
+};
+
+export type BulkEntryInput = {
+  reason: 'purchase' | 'manual';
+  supplierId?: string | null;
+  notes?: string | null;
+  rows: BulkEntryRow[];
+};
+
+export type BulkEntryResult = {
+  created: number;
+  failed: { row: number; productId: string; error: string }[];
+};
+
+// Reuses recordMovement per row so the FIFO ledger, audit log and the
+// products.stock = SUM(remaining_qty) invariant stay identical to a single
+// manual entry. Rows are independent: one bad row never blocks the rest.
+export async function bulkRecordEntries(
+  input: BulkEntryInput,
+): Promise<BulkEntryResult> {
+  await requirePanelModule('inventory');
+
+  let created = 0;
+  const failed: BulkEntryResult['failed'] = [];
+
+  for (let i = 0; i < input.rows.length; i++) {
+    const row = input.rows[i]!;
+    try {
+      await recordMovement({
+        productId: row.productId,
+        type: 'entry',
+        qty: row.qty,
+        reason: input.reason,
+        unitCost: row.unitCost,
+        supplierId: input.reason === 'purchase' ? input.supplierId ?? null : null,
+        expiresAt: row.expiresAt ?? null,
+        notes: input.reason === 'manual' ? input.notes ?? null : null,
+      });
+      created += 1;
+    } catch (err) {
+      failed.push({
+        row: i + 1,
+        productId: row.productId,
+        error: err instanceof Error ? err.message : 'Error inesperado',
+      });
+    }
+  }
+
+  return { created, failed };
+}
