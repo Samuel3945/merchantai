@@ -1,53 +1,64 @@
 'use client';
 
-import type { Direction } from './cash-ui';
-import type { CashMovement } from '@/libs/cash-helpers';
+import type { CashSession } from '@/libs/cash-helpers';
 import { useMemo, useState } from 'react';
 import { DatePicker } from '@/components/DatePicker';
 import { Select } from '@/components/ui/select';
 import { cn } from '@/utils/Helpers';
-import { actorLabel, dayKey, describeMovement, money, stamp } from './cash-ui';
+import { actorLabel, dayKey, money, stamp } from './cash-ui';
 
-type DirectionFilter = 'all' | Direction;
+type ResultFilter = 'all' | 'diff' | 'square';
 
 /**
- * Permanent cash ledger browser. Reads the full movement history (every session,
- * never deleted) and filters it client-side by date range, responsable and
- * entrada/salida — using the app's shared styled controls so the table stays
- * dense and uses the full width.
+ * Permanent closure (arqueo) history. Every closed session is kept forever, so
+ * this browses the full record and filters it client-side by date range,
+ * responsable and result (con diferencia / cuadradas) using the app's shared
+ * styled controls. Mirrors CashHistory but rendered per closed session.
  */
-export function CashHistory(props: { movements: CashMovement[] }) {
+export function CashClosuresHistory(props: { sessions: CashSession[] }) {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [actor, setActor] = useState('all');
-  const [direction, setDirection] = useState<DirectionFilter>('all');
+  const [result, setResult] = useState<ResultFilter>('all');
+
+  const closed = useMemo(
+    () => props.sessions.filter(s => s.status === 'closed'),
+    [props.sessions],
+  );
 
   const actors = useMemo(() => {
     const seen = new Map<string, string>();
-    for (const m of props.movements) {
-      if (!seen.has(m.createdBy)) {
-        seen.set(m.createdBy, actorLabel(m.createdBy));
+    for (const s of closed) {
+      const id = s.closedBy ?? '';
+      if (!seen.has(id)) {
+        seen.set(id, id ? actorLabel(id) : '—');
       }
     }
     return [...seen.entries()]
       .map(([value, label]) => ({ value, label }))
       .sort((a, b) => a.label.localeCompare(b.label));
-  }, [props.movements]);
+  }, [closed]);
 
   const rows = useMemo(() => {
-    return props.movements
-      .map((m) => {
-        const d = describeMovement(m);
-        return { m, ...d, amount: Number.parseFloat(m.amount) || 0 };
+    return closed
+      .map((s) => {
+        const diff = Number.parseFloat(s.difference ?? '0') || 0;
+        return { s, diff };
       })
       .filter((r) => {
-        if (direction !== 'all' && r.direction !== direction) {
+        if (result === 'diff' && r.diff === 0) {
           return false;
         }
-        if (actor !== 'all' && r.m.createdBy !== actor) {
+        if (result === 'square' && r.diff !== 0) {
           return false;
         }
-        const key = dayKey(r.m.createdAt);
+        if (actor !== 'all' && (r.s.closedBy ?? '') !== actor) {
+          return false;
+        }
+        if (!r.s.closedAt) {
+          return !from && !to;
+        }
+        const key = dayKey(r.s.closedAt);
         if (from && key < from) {
           return false;
         }
@@ -56,29 +67,29 @@ export function CashHistory(props: { movements: CashMovement[] }) {
         }
         return true;
       });
-  }, [props.movements, direction, actor, from, to]);
+  }, [closed, result, actor, from, to]);
 
   const totals = useMemo(() => {
-    let income = 0;
-    let outflow = 0;
+    let surplus = 0;
+    let shortage = 0;
     for (const r of rows) {
-      if (r.direction === 'in') {
-        income += r.amount;
-      } else {
-        outflow += r.amount;
+      if (r.diff > 0) {
+        surplus += r.diff;
+      } else if (r.diff < 0) {
+        shortage += -r.diff;
       }
     }
-    return { income, outflow, count: rows.length };
+    return { surplus, shortage, count: rows.length };
   }, [rows]);
 
   const hasFilters
-    = from !== '' || to !== '' || actor !== 'all' || direction !== 'all';
+    = from !== '' || to !== '' || actor !== 'all' || result !== 'all';
 
   function clearFilters() {
     setFrom('');
     setTo('');
     setActor('all');
-    setDirection('all');
+    setResult('all');
   }
 
   return (
@@ -89,9 +100,9 @@ export function CashHistory(props: { movements: CashMovement[] }) {
       "
       >
         <div>
-          <div className="text-sm font-semibold">Historial de caja</div>
+          <div className="text-sm font-semibold">Historial de cierres</div>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Todos los movimientos quedan registrados de forma permanente.
+            Cada arqueo de caja queda registrado de forma permanente.
           </p>
         </div>
         {hasFilters && (
@@ -109,7 +120,7 @@ export function CashHistory(props: { movements: CashMovement[] }) {
         )}
       </div>
 
-      {/* Filters — styled to match the rest of the app */}
+      {/* Filters — shared styled controls */}
       <div className="
         grid gap-3 border-b border-border bg-muted/30 p-3
         sm:grid-cols-2
@@ -144,14 +155,14 @@ export function CashHistory(props: { movements: CashMovement[] }) {
           />
         </label>
         <label className="text-xs">
-          <span className="mb-1 block text-muted-foreground">Movimiento</span>
+          <span className="mb-1 block text-muted-foreground">Resultado</span>
           <Select
-            value={direction}
-            onValueChange={v => setDirection(v as DirectionFilter)}
+            value={result}
+            onValueChange={v => setResult(v as ResultFilter)}
             options={[
               { value: 'all', label: 'Todos' },
-              { value: 'in', label: 'Entradas' },
-              { value: 'out', label: 'Salidas' },
+              { value: 'diff', label: 'Con diferencia' },
+              { value: 'square', label: 'Cuadradas' },
             ]}
           />
         </label>
@@ -164,19 +175,19 @@ export function CashHistory(props: { movements: CashMovement[] }) {
       "
       >
         <div className="px-3 py-2.5">
-          <div className="text-xs text-muted-foreground">Movimientos</div>
+          <div className="text-xs text-muted-foreground">Cierres</div>
           <div className="mt-0.5 font-medium tabular-nums">{totals.count}</div>
         </div>
         <div className="px-3 py-2.5">
-          <div className="text-xs text-muted-foreground">Entradas</div>
+          <div className="text-xs text-muted-foreground">Sobrantes</div>
           <div className="mt-0.5 font-medium text-success tabular-nums">
-            {money(totals.income)}
+            {money(totals.surplus)}
           </div>
         </div>
         <div className="px-3 py-2.5">
-          <div className="text-xs text-muted-foreground">Salidas</div>
+          <div className="text-xs text-muted-foreground">Faltantes</div>
           <div className="mt-0.5 font-medium text-destructive tabular-nums">
-            {money(totals.outflow)}
+            {money(totals.shortage)}
           </div>
         </div>
       </div>
@@ -187,9 +198,9 @@ export function CashHistory(props: { movements: CashMovement[] }) {
               px-5 py-10 text-center text-sm text-muted-foreground
             "
             >
-              {props.movements.length === 0
-                ? 'Aún no hay movimientos registrados.'
-                : 'Ningún movimiento coincide con los filtros.'}
+              {closed.length === 0
+                ? 'Aún no hay cierres registrados.'
+                : 'Ningún cierre coincide con los filtros.'}
             </div>
           )
         : (
@@ -201,62 +212,51 @@ export function CashHistory(props: { movements: CashMovement[] }) {
                     text-muted-foreground
                   "
                   >
-                    <th className="px-5 py-2 font-medium">Fecha</th>
-                    <th className="px-3 py-2 font-medium">Tipo</th>
-                    <th className="px-3 py-2 font-medium">Concepto</th>
-                    <th className="px-3 py-2 font-medium">Responsable</th>
-                    <th className="px-5 py-2 text-right font-medium">Monto</th>
+                    <th className="px-5 py-2 font-medium">Fecha de cierre</th>
+                    <th className="px-3 py-2 text-right font-medium">Contado</th>
+                    <th className="px-3 py-2 text-right font-medium">Esperado</th>
+                    <th className="px-3 py-2 text-right font-medium">Diferencia</th>
+                    <th className="px-5 py-2 font-medium">Responsable</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
                   {rows.map((r) => {
-                    const isIn = r.direction === 'in';
+                    const sign = r.diff > 0 ? '+' : '';
                     return (
-                      <tr key={r.m.id}>
+                      <tr key={r.s.id}>
                         <td className="
                           px-5 py-2.5 whitespace-nowrap text-muted-foreground
                           tabular-nums
                         "
                         >
-                          {stamp(r.m.createdAt)}
+                          {r.s.closedAt ? stamp(r.s.closedAt) : '—'}
                         </td>
-                        <td className="px-3 py-2.5">
-                          <span
-                            className={cn(
-                              `
-                                inline-flex items-center gap-1 rounded-full px-2
-                                py-0.5 text-xs font-medium
-                              `,
-                              isIn
-                                ? 'bg-success/10 text-success'
-                                : 'bg-destructive/10 text-destructive',
-                            )}
-                          >
-                            {isIn ? '↑ Entrada' : '↓ Salida'}
-                          </span>
+                        <td className="
+                          px-3 py-2.5 text-right font-medium tabular-nums
+                        "
+                        >
+                          {money(r.s.countedAmount)}
                         </td>
-                        <td className="px-3 py-2.5">
-                          <div className="font-medium">{r.title}</div>
-                          {r.detail && (
-                            <div className="text-xs text-muted-foreground">
-                              {r.detail}
-                            </div>
-                          )}
-                        </td>
-                        <td className="px-3 py-2.5 text-muted-foreground">
-                          {actorLabel(r.m.createdBy)}
+                        <td className="
+                          px-3 py-2.5 text-right text-muted-foreground
+                          tabular-nums
+                        "
+                        >
+                          {money(r.s.expectedAmount)}
                         </td>
                         <td
                           className={cn(
-                            `
-                              px-5 py-2.5 text-right font-semibold
-                              whitespace-nowrap tabular-nums
-                            `,
-                            isIn ? 'text-success' : 'text-foreground',
+                            'px-3 py-2.5 text-right font-semibold tabular-nums',
+                            r.diff === 0 && 'text-success',
+                            r.diff > 0 && 'text-success',
+                            r.diff < 0 && 'text-destructive',
                           )}
                         >
-                          {isIn ? '+' : '−'}
-                          {money(r.amount)}
+                          {sign}
+                          {money(r.diff)}
+                        </td>
+                        <td className="px-5 py-2.5 text-muted-foreground">
+                          {r.s.closedBy ? actorLabel(r.s.closedBy) : '—'}
                         </td>
                       </tr>
                     );

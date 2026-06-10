@@ -18,7 +18,7 @@ export default async function DashboardCashPage(props: {
 
   const [current, sessions, alerts, kpis, security, history] = await Promise.all([
     getCurrentCash(),
-    listCashSessions(30),
+    listCashSessions(2000),
     getFraudAlerts(14).catch(() => []),
     getTodayCashKpis(),
     getCashSecurityStatus(),

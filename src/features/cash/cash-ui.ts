@@ -144,6 +144,37 @@ export function money(value: number | string | null | undefined): string {
   return fmt.format(Number.isFinite(n as number) ? (n as number) : 0);
 }
 
+const dayKeyFmt = new Intl.DateTimeFormat('en-CA', {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  timeZone: 'America/Bogota',
+});
+
+const stampFmt = new Intl.DateTimeFormat('es-CO', {
+  day: '2-digit',
+  month: 'short',
+  year: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  timeZone: 'America/Bogota',
+});
+
+/** yyyy-mm-dd in Bogota time — comparable lexicographically with a date input. */
+export function dayKey(value: Date | string): string {
+  return dayKeyFmt.format(new Date(value));
+}
+
+/** Full "09 jun 2026, 18:33" stamp in Bogota time for history tables. */
+export function stamp(value: Date | string): string {
+  return stampFmt.format(new Date(value));
+}
+
+/** Manual movements store a readable name; auto (sale) ones store a Clerk id. */
+export function actorLabel(createdBy: string): string {
+  return createdBy.startsWith('user_') ? 'Sistema' : createdBy;
+}
+
 const rtf = new Intl.RelativeTimeFormat('es', { numeric: 'auto' });
 
 /** Bank-app style relative time, e.g. "hace 5 minutos". */

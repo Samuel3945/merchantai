@@ -373,7 +373,7 @@ export async function getCurrentCash(): Promise<GetCurrentCashResult> {
 
 export async function listCashSessions(limit = 30): Promise<CashSession[]> {
   const { orgId } = await requireOrg();
-  const capped = Math.min(Math.max(limit, 1), 200);
+  const capped = Math.min(Math.max(limit, 1), 5000);
   return db
     .select()
     .from(cashSessionsSchema)

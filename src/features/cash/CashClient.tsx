@@ -20,6 +20,7 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/utils/Helpers';
 import { ActivityFeed } from './ActivityFeed';
 import { cashInputCls, money, relativeTime } from './cash-ui';
+import { CashClosuresHistory } from './CashClosuresHistory';
 import { CashHistory } from './CashHistory';
 import { CashSecurityAlert } from './CashSecurityAlert';
 import { DenominationCounter } from './DenominationCounter';
@@ -32,24 +33,12 @@ type FraudAlert = {
   message: string;
 };
 
-const dateFmt = new Intl.DateTimeFormat('es-CO', {
-  day: '2-digit',
-  month: 'short',
-  hour: '2-digit',
-  minute: '2-digit',
-  timeZone: 'America/Bogota',
-});
-
 const dayFmt = new Intl.DateTimeFormat('es-CO', {
   day: '2-digit',
   month: 'short',
   year: 'numeric',
   timeZone: 'America/Bogota',
 });
-
-function when(value: Date | string | null | undefined): string {
-  return value ? dateFmt.format(new Date(value)) : '—';
-}
 
 function whenDay(value: Date | string | null | undefined): string {
   return value ? dayFmt.format(new Date(value)) : '—';
@@ -576,56 +565,8 @@ export function CashClient(props: {
             </>
           )}
 
-      {/* Cierres recientes */}
-      <Card className="p-0">
-        <div className="border-b border-border px-5 py-3 text-sm font-semibold">
-          Cierres recientes
-        </div>
-        {closedSessions.length === 0
-          ? (
-              <div className="
-                px-5 py-8 text-center text-sm text-muted-foreground
-              "
-              >
-                Aún no hay cierres registrados.
-              </div>
-            )
-          : (
-              <ul className="divide-y divide-border">
-                {closedSessions.map((s) => {
-                  const diff = Number.parseFloat(s.difference ?? '0') || 0;
-                  return (
-                    <li
-                      key={s.id}
-                      className="
-                        flex items-center justify-between gap-3 px-5 py-3
-                      "
-                    >
-                      <div className="min-w-0">
-                        <div className="text-sm font-medium">{when(s.closedAt)}</div>
-                        <div className="text-xs text-muted-foreground">
-                          Contado
-                          {' '}
-                          {money(s.countedAmount)}
-                          {' · esperado '}
-                          {money(s.expectedAmount)}
-                        </div>
-                      </div>
-                      <span
-                        className={cn(
-                          'shrink-0 text-sm font-semibold tabular-nums',
-                          diff < 0 ? 'text-destructive' : 'text-success',
-                        )}
-                      >
-                        {diff > 0 ? '+' : ''}
-                        {money(diff)}
-                      </span>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-      </Card>
+      {/* Historial de cierres — arqueos permanentes con filtros */}
+      <CashClosuresHistory sessions={props.sessions} />
 
       {/* Historial completo — ledger permanente con filtros */}
       <CashHistory movements={props.history} />
