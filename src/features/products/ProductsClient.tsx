@@ -25,6 +25,13 @@ import { DatePicker } from '@/components/DatePicker';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -33,7 +40,6 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Toaster } from '@/components/ui/toast';
 import { toast } from '@/components/ui/toast-store';
-import { Link } from '@/libs/I18nNavigation';
 import { cn } from '@/utils/Helpers';
 import {
   bulkAdjustPrice,
@@ -50,6 +56,7 @@ import { categorizeProduct } from './ai-categorize';
 import { AttributesEditor } from './AttributesEditor';
 import { BulkActionBar } from './BulkActionBar';
 import { BulkPriceDialog } from './BulkPriceDialog';
+import { ImportClient } from './ImportClient';
 import { ProductTypeToggles } from './ProductTypeToggles';
 import { WholesaleTiersEditor } from './WholesaleTiersEditor';
 
@@ -176,6 +183,7 @@ export function ProductsClient({
   // Bulk-edit selection (set of product ids) and the raise-price dialog.
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [priceDialogOpen, setPriceDialogOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   // The org's categories, for the form's autocomplete + learned suggestions.
   const [categories, setCategories] = useState<CategoryRow[]>([]);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -567,8 +575,9 @@ export function ProductsClient({
           <Archive className="size-4" />
           Ver archivados
         </button>
-        <Link
-          href="/dashboard/products/import"
+        <button
+          type="button"
+          onClick={() => setImportOpen(true)}
           className="
             inline-flex h-9 items-center justify-center rounded-md border
             border-input px-4 text-sm font-medium transition-colors
@@ -576,7 +585,7 @@ export function ProductsClient({
           "
         >
           Importar
-        </Link>
+        </button>
         <Button onClick={openCreate}>Nuevo artículo</Button>
         <div className="ml-auto text-sm text-muted-foreground">
           {rows.length}
@@ -1050,6 +1059,28 @@ export function ProductsClient({
           onClose={() => setPriceDialogOpen(false)}
         />
       )}
+
+      <Dialog open={importOpen} onOpenChange={setImportOpen}>
+        <DialogContent className="
+          max-h-[85vh] w-[95vw] max-w-5xl overflow-y-auto
+        "
+        >
+          <DialogHeader>
+            <DialogTitle>Importar productos</DialogTitle>
+            <DialogDescription>
+              Subí un CSV, Excel, foto o PDF; revisá y corregí cada fila antes de
+              cargar el catálogo.
+            </DialogDescription>
+          </DialogHeader>
+          <ImportClient
+            categoryNames={categories.map(c => c.name)}
+            onImported={() => {
+              fetchRows();
+              fetchCategories();
+            }}
+          />
+        </DialogContent>
+      </Dialog>
 
       <Toaster />
     </div>

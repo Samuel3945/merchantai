@@ -19,7 +19,15 @@ const inputCls
 
 const TEMPLATE = 'nombre,precio,costo,categoria,codigo de barras\nCoca-Cola 600ml,3000,2100,Bebidas,7702004001234\n';
 
-export function ImportClient({ categoryNames }: { categoryNames: string[] }) {
+export function ImportClient({
+  categoryNames,
+  onImported,
+}: {
+  categoryNames: string[];
+  // Called after a successful import so a host (e.g. the products modal) can
+  // refresh its own list and categories. Optional: the standalone page omits it.
+  onImported?: () => void;
+}) {
   const [drafts, setDrafts] = useState<DraftRow[]>([]);
   const [fileName, setFileName] = useState('');
   const [result, setResult] = useState<ImportResult | null>(null);
@@ -142,6 +150,10 @@ export function ImportClient({ categoryNames }: { categoryNames: string[] }) {
       const failedIdx = new Set(res.failed.map(f => f.row - 1));
       const stillFailing = valid.filter((_, i) => failedIdx.has(i));
       setDrafts([...invalid, ...stillFailing]);
+      // Let the host refresh its catalog once anything actually landed.
+      if (res.created > 0) {
+        onImported?.();
+      }
     });
   }
 
