@@ -24,6 +24,7 @@ import {
 import { DatePicker } from '@/components/DatePicker';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
   DialogContent,
@@ -614,17 +615,16 @@ export function ProductsClient({
           <thead className="bg-muted/50 text-left text-xs uppercase">
             <tr>
               <th className="w-10 px-3 py-2">
-                <input
-                  type="checkbox"
-                  className="size-4 cursor-pointer accent-primary"
+                <Checkbox
                   aria-label="Seleccionar todos"
-                  checked={allVisibleSelected}
-                  ref={(el) => {
-                    if (el) {
-                      el.indeterminate = someVisibleSelected;
-                    }
-                  }}
-                  onChange={toggleAll}
+                  checked={
+                    allVisibleSelected
+                      ? true
+                      : someVisibleSelected
+                        ? 'indeterminate'
+                        : false
+                  }
+                  onCheckedChange={() => toggleAll()}
                   disabled={rows.length === 0}
                 />
               </th>
@@ -664,12 +664,10 @@ export function ProductsClient({
                         )}
                       >
                         <td className="px-3 py-2">
-                          <input
-                            type="checkbox"
-                            className="size-4 cursor-pointer accent-primary"
+                          <Checkbox
                             aria-label={`Seleccionar ${p.name}`}
                             checked={selected.has(p.id)}
-                            onChange={() => toggleOne(p.id)}
+                            onCheckedChange={() => toggleOne(p.id)}
                           />
                         </td>
                         <td className="px-3 py-2 font-medium">{p.name}</td>
