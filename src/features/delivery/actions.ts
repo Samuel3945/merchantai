@@ -1,6 +1,6 @@
 'use server';
 
-import type { DeliveryCreateInput, DeliveryTransitionInput } from './validation';
+import type { DeliveryTransitionInput } from './validation';
 import { auth } from '@clerk/nextjs/server';
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
@@ -8,7 +8,6 @@ import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
 import { sendWhatsAppText } from '@/libs/delivery-whatsapp';
 import { deliveryEventsSchema, deliveryOrdersSchema } from '@/models/Schema';
-import { createDeliveryForOrg } from './intake';
 import { deliveryTransitionSchema } from './validation';
 
 async function requireOrgId() {
@@ -108,17 +107,6 @@ export async function getDeliveryEvents(
       ),
     )
     .orderBy(asc(deliveryEventsSchema.createdAt));
-}
-
-export async function createDelivery(
-  input: DeliveryCreateInput,
-): Promise<DeliveryOrder> {
-  const { userId, orgId } = await requireOrgId();
-  return createDeliveryForOrg(orgId, input, {
-    source: 'manual',
-    createdBy: userId,
-    actorType: 'user',
-  });
 }
 
 // Moves an order along the state machine, writing a status_change event to the
