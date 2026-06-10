@@ -127,6 +127,13 @@
       "when": 1781104975001,
       "tag": "0017_sturdy_squadron_sinister",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1781107180955,
+      "tag": "0018_watery_bruce_banner",
+      "breakpoints": true
     }
   ]
 }

@@ -407,6 +407,13 @@ export const posUsersSchema = pgTable(
     canConfirmTransfers: boolean('can_confirm_transfers')
       .default(true)
       .notNull(),
+    // Web panel access. The employee is ONE business user; Clerk is only the web
+    // identity provider. `clerkUserId` links this single user to their Clerk
+    // account (null when POS-only). `panelAccess` is INDEPENDENT from module
+    // grants: it only decides whether the user can sign into the web panel at
+    // all — which views they see once inside is governed by `enabledModules`.
+    clerkUserId: text('clerk_user_id'),
+    panelAccess: boolean('panel_access').default(false).notNull(),
     createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { mode: 'date' })
       .defaultNow()
@@ -501,6 +508,9 @@ export const employeeInvitationsSchema = pgTable(
     canConfirmTransfers: boolean('can_confirm_transfers')
       .default(true)
       .notNull(),
+    // Carried to the accept step so it knows whether to provision a Clerk web
+    // identity for this single user.
+    panelAccess: boolean('panel_access').default(false).notNull(),
     createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
   },
   table => [
