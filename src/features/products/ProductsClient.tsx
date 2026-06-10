@@ -37,6 +37,7 @@ import { Link } from '@/libs/I18nNavigation';
 import { cn } from '@/utils/Helpers';
 import {
   bulkAdjustPrice,
+  bulkDeleteProducts,
   bulkSetProductStatus,
   createProduct,
   deleteProduct,
@@ -233,6 +234,12 @@ export function ProductsClient({
     = rows.length > 0 && selectedVisible.length === rows.length;
   const someVisibleSelected
     = selectedVisible.length > 0 && !allVisibleSelected;
+  // Only virgin products (no sales/movements) can be deleted — same rule as the
+  // per-row delete, surfaced so the bulk button can disable when none qualify.
+  const deletableSelectedCount = useMemo(
+    () => selectedVisible.filter(r => !r.hasSales && !r.hasMovements).length,
+    [selectedVisible],
+  );
 
   const priceNum = Number.parseFloat(form.price) || 0;
   const initialQtyNum = Number.parseFloat(form.initialQty) || 0;
@@ -487,6 +494,49 @@ export function ProductsClient({
     );
   }
 
+  function handleBulkDelete() {
+    const ids = [...selected];
+    const deletable = selectedVisible.filter(
+      r => !r.hasSales && !r.hasMovements,
+    ).length;
+    if (deletable === 0) {
+      toast.error(
+        'Ninguno se puede eliminar: todos tienen ventas o movimientos. Archívalos.',
+      );
+      return;
+    }
+    const blocked = selectedVisible.length - deletable;
+    // eslint-disable-next-line no-alert -- native confirm matches the existing pattern
+    const ok = globalThis.confirm(
+      `Vas a eliminar ${deletable} ${deletable === 1 ? 'producto' : 'productos'} sin historial.${
+        blocked > 0
+          ? `\n\n${blocked} se omitirán porque tienen ventas o movimientos.`
+          : ''
+      }\n\nEsta acción no se puede deshacer.`,
+    );
+    if (!ok) {
+      return;
+    }
+    startTransition(async () => {
+      try {
+        const { deleted, skipped } = await bulkDeleteProducts(ids);
+        if (deleted > 0) {
+          toast.success(
+            `${deleted} ${deleted === 1 ? 'producto eliminado' : 'productos eliminados'}${
+              skipped > 0 ? ` · ${skipped} omitidos` : ''
+            }.`,
+          );
+        } else {
+          toast({ description: 'No se eliminó ningún producto.' });
+        }
+        fetchRows();
+        fetchCategories();
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Error inesperado');
+      }
+    });
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3">
@@ -540,10 +590,12 @@ export function ProductsClient({
       {selectedVisible.length > 0 && (
         <BulkActionBar
           count={selectedVisible.length}
+          deletableCount={deletableSelectedCount}
           pending={pending}
           onRaisePrice={() => setPriceDialogOpen(true)}
           onPublish={handleBulkPublish}
           onArchive={handleBulkArchive}
+          onDelete={handleBulkDelete}
           onClear={() => setSelected(new Set())}
         />
       )}
