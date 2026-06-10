@@ -869,3 +869,85 @@ export async function bulkImportProducts(
 
   return { created, failed };
 }
+
+// Bulk hard delete — same rule as the single-product delete, applied set-wise:
+// only VIRGIN products (no sales and no stock movements) are removed; any
+// selected product that has history is skipped and reported, never deleted. The
+// whole thing runs in one transaction with the rows locked FOR UPDATE so a
+// concurrent sale can't slip history in between the check and the delete. The FK
+// restrict on sale_items/stock_movements is the final DB backstop. Categories
+// that lose products are recounted so usage stays accurate.
+export async function bulkDeleteProducts(
+  ids: string[],
+): Promise<{ deleted: number; skipped: number }> {
+  const { userId, orgId } = await requireOrgAndUser();
+  const unique = [...new Set(ids)].slice(0, MAX_BULK);
+  if (unique.length === 0) {
+    return { deleted: 0, skipped: 0 };
+  }
+
+  const { deletedIds, skipped, categoryIds } = await db.transaction(
+    async (tx) => {
+      const targets = await tx
+        .select({
+          id: productsSchema.id,
+          categoryId: productsSchema.categoryId,
+          hasSales: hasSalesSql,
+          hasMovements: hasMovementsSql,
+        })
+        .from(productsSchema)
+        .where(
+          and(
+            eq(productsSchema.organizationId, orgId),
+            eq(productsSchema.deleted, false),
+            inArray(productsSchema.id, unique),
+          ),
+        )
+        .for('update');
+
+      const deletable = targets.filter(t => !t.hasSales && !t.hasMovements);
+      const skippedCount = targets.length - deletable.length;
+
+      if (deletable.length === 0) {
+        return { deletedIds: [], skipped: skippedCount, categoryIds: [] };
+      }
+
+      const toDelete = deletable.map(t => t.id);
+      await tx
+        .delete(productsSchema)
+        .where(
+          and(
+            eq(productsSchema.organizationId, orgId),
+            inArray(productsSchema.id, toDelete),
+          ),
+        );
+
+      // Recount each category that lost at least one product.
+      const cats = [
+        ...new Set(
+          deletable
+            .map(t => t.categoryId)
+            .filter((c): c is string => c !== null),
+        ),
+      ];
+      for (const categoryId of cats) {
+        await refreshCategory(tx, orgId, categoryId);
+      }
+
+      return { deletedIds: toDelete, skipped: skippedCount, categoryIds: cats };
+    },
+  );
+
+  if (deletedIds.length > 0) {
+    await logAction({
+      organizationId: orgId,
+      actor: { type: 'user', id: userId },
+      action: 'product.bulk_deleted',
+      entityType: 'product',
+      metadata: { deleted: deletedIds.length, skipped, ids: deletedIds, categoryIds },
+    });
+    revalidatePath('/dashboard/products');
+  }
+
+  return { deleted: deletedIds.length, skipped };
+}
