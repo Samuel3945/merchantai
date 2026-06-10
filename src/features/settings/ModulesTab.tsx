@@ -4,7 +4,6 @@ import { ToggleRow } from './fields';
 import { useSettingSave } from './useSettingSave';
 
 export type ModulesTabValues = {
-  'modules.delivery': boolean;
   'modules.employees': boolean;
 };
 
@@ -25,12 +24,6 @@ export function ModulesTab({ initial }: { initial: ModulesTabValues }) {
       </div>
 
       <div className="space-y-3">
-        <ToggleRow
-          label="Domicilios"
-          description="Habilita la captura de pedidos con dirección y costo de domicilio."
-          initial={initial['modules.delivery']}
-          onCommit={v => persist('modules.delivery', v)}
-        />
         <ToggleRow
           label="Empleados"
           description="Permite múltiples cajeros, turnos y permisos por rol."
