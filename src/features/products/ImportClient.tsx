@@ -7,7 +7,11 @@ import { useMemo, useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/utils/Helpers';
 import { bulkImportProducts } from './actions';
-import { extractProductsFromImage, parseSpreadsheetRows } from './import-actions';
+import {
+  extractProductsFromImage,
+  extractProductsFromPdf,
+  parseSpreadsheetRows,
+} from './import-actions';
 import { recordsToDrafts, validateDraft } from './import-parse';
 
 const inputCls
@@ -36,6 +40,38 @@ export function ImportClient({ categoryNames }: { categoryNames: string[] }) {
   );
   const invalidCount = drafts.length - validCount;
 
+  // Shared AI-extraction flow for photos and PDFs: both return the same result
+  // shape and feed the same grid, differing only in the action and the copy.
+  function runAiExtraction(file: File, kind: 'image' | 'pdf') {
+    const fd = new FormData();
+    fd.append('file', file);
+    startTransition(async () => {
+      setNotice(kind === 'pdf' ? 'Leyendo el PDF con IA…' : 'Analizando la imagen con IA…');
+      try {
+        const res
+          = kind === 'pdf'
+            ? await extractProductsFromPdf(fd)
+            : await extractProductsFromImage(fd);
+        if (res.ok) {
+          setDrafts(recordsToDrafts(res.rows));
+          setNotice(null);
+        } else {
+          setDrafts([]);
+          setNotice(
+            res.reason === 'no_key'
+              ? 'La IA no está disponible: configura tu API key de OpenAI en Integraciones (o en el servidor).'
+              : kind === 'pdf'
+                ? 'No se detectaron productos en el PDF. Si es escaneado, probá con una foto.'
+                : 'No se detectaron productos en la imagen.',
+          );
+        }
+      } catch {
+        setDrafts([]);
+        setNotice('No se pudo procesar el archivo.');
+      }
+    });
+  }
+
   function onFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) {
@@ -46,29 +82,9 @@ export function ImportClient({ categoryNames }: { categoryNames: string[] }) {
     setFileName(file.name);
 
     if (file.type.startsWith('image/')) {
-      // Photos go to the vision model, which extracts products into the grid.
-      const fd = new FormData();
-      fd.append('file', file);
-      startTransition(async () => {
-        setNotice('Analizando la imagen con IA…');
-        try {
-          const res = await extractProductsFromImage(fd);
-          if (res.ok) {
-            setDrafts(recordsToDrafts(res.rows));
-            setNotice(null);
-          } else {
-            setDrafts([]);
-            setNotice(
-              res.reason === 'no_key'
-                ? 'La IA no está disponible: configura tu API key de OpenAI en Integraciones (o en el servidor).'
-                : 'No se detectaron productos en la imagen.',
-            );
-          }
-        } catch {
-          setDrafts([]);
-          setNotice('No se pudo analizar la imagen.');
-        }
-      });
+      runAiExtraction(file, 'image');
+    } else if (file.type === 'application/pdf' || /\.pdf$/i.test(file.name)) {
+      runAiExtraction(file, 'pdf');
     } else if (/\.xlsx$/i.test(file.name)) {
       // Excel is parsed server-side (the parser stays out of the client bundle).
       const fd = new FormData();
@@ -149,10 +165,10 @@ export function ImportClient({ categoryNames }: { categoryNames: string[] }) {
           hover:bg-primary/90
         "
         >
-          Elegir archivo o foto
+          Elegir archivo, PDF o foto
           <input
             type="file"
-            accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,image/*"
+            accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.pdf,application/pdf,image/*"
             onChange={onFile}
             className="hidden"
           />
