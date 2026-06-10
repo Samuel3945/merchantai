@@ -3,8 +3,9 @@
 import type { Direction } from './cash-ui';
 import type { CashMovement } from '@/libs/cash-helpers';
 import { useMemo, useState } from 'react';
-import { DatePicker } from '@/components/DatePicker';
+import { DateRangePicker } from '@/components/DateRangePicker';
 import { Select } from '@/components/ui/select';
+import { buildPresetOptions, todayBogota } from '@/utils/DateRange';
 import { cn } from '@/utils/Helpers';
 import { actorLabel, dayKey, describeMovement, money, stamp } from './cash-ui';
 
@@ -17,10 +18,16 @@ type DirectionFilter = 'all' | Direction;
  * dense and uses the full width.
  */
 export function CashHistory(props: { movements: CashMovement[] }) {
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
+  const [start, setStart] = useState('');
+  const [end, setEnd] = useState('');
+  const [activePreset, setActivePreset] = useState<string | null>(null);
   const [actor, setActor] = useState('all');
   const [direction, setDirection] = useState<DirectionFilter>('all');
+
+  const presetOptions = useMemo(
+    () => buildPresetOptions(['today', 'yesterday', '7d', '30d', 'mtd', 'lastMonth']),
+    [],
+  );
 
   const actors = useMemo(() => {
     const seen = new Map<string, string>();
@@ -48,15 +55,15 @@ export function CashHistory(props: { movements: CashMovement[] }) {
           return false;
         }
         const key = dayKey(r.m.createdAt);
-        if (from && key < from) {
+        if (start && key < start) {
           return false;
         }
-        if (to && key > to) {
+        if (end && key > end) {
           return false;
         }
         return true;
       });
-  }, [props.movements, direction, actor, from, to]);
+  }, [props.movements, direction, actor, start, end]);
 
   const totals = useMemo(() => {
     let income = 0;
@@ -72,11 +79,22 @@ export function CashHistory(props: { movements: CashMovement[] }) {
   }, [rows]);
 
   const hasFilters
-    = from !== '' || to !== '' || actor !== 'all' || direction !== 'all';
+    = start !== '' || end !== '' || actor !== 'all' || direction !== 'all';
+
+  function applyRange(next: { start: string; end: string; preset: string | null }) {
+    setStart(next.start);
+    setEnd(next.end);
+    setActivePreset(next.preset);
+  }
+
+  function clearRange() {
+    setStart('');
+    setEnd('');
+    setActivePreset(null);
+  }
 
   function clearFilters() {
-    setFrom('');
-    setTo('');
+    clearRange();
     setActor('all');
     setDirection('all');
   }
@@ -113,25 +131,21 @@ export function CashHistory(props: { movements: CashMovement[] }) {
       <div className="
         grid gap-3 border-b border-border bg-muted/30 p-3
         sm:grid-cols-2
-        lg:grid-cols-4
+        lg:grid-cols-3
       "
       >
         <div className="text-xs">
-          <span className="mb-1 block text-muted-foreground">Desde</span>
-          <DatePicker
-            value={from}
-            onChange={setFrom}
-            placeholder="Cualquiera"
-            triggerClassName="w-full"
-          />
-        </div>
-        <div className="text-xs">
-          <span className="mb-1 block text-muted-foreground">Hasta</span>
-          <DatePicker
-            value={to}
-            onChange={setTo}
-            min={from || undefined}
-            placeholder="Cualquiera"
+          <span className="mb-1 block text-muted-foreground">Periodo</span>
+          <DateRangePicker
+            start={start}
+            end={end}
+            compare={false}
+            showCompare={false}
+            activePreset={activePreset}
+            presets={presetOptions}
+            maxDate={todayBogota()}
+            onApply={applyRange}
+            onClear={clearRange}
             triggerClassName="w-full"
           />
         </div>
