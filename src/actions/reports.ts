@@ -9,6 +9,7 @@ import {
   getReturnsAnalysis,
 } from '@/actions/analytics';
 import { db } from '@/libs/DB';
+import { requirePanelModule } from '@/libs/panel-session';
 
 async function requireOrg() {
   const { userId, orgId } = await auth();
@@ -18,6 +19,8 @@ async function requireOrg() {
   if (!orgId) {
     throw new Error('No active organization');
   }
+  // Backend enforcement: the owner passes; a member needs the Reports module.
+  await requirePanelModule('reports');
   return { userId, orgId };
 }
 
