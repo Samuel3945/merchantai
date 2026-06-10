@@ -9,6 +9,7 @@ import { getSmartStockSettings } from '@/actions/smart-stock';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/db-context';
 import { fifoBatchOrder } from '@/libs/fifo-cogs';
+import { requirePanelModule } from '@/libs/panel-session';
 import {
   expirationRiskCacheSchema,
   productsSchema,
@@ -67,6 +68,7 @@ export type StockMovement = typeof stockMovementsSchema.$inferSelect;
 // ── recordMovement ───────────────────────────────────────────────────────
 
 export async function recordMovement(input: RecordMovementInput) {
+  await requirePanelModule('inventory');
   const { userId } = await requireUser();
   const tdb = await db();
   const orgId = tdb.orgId;
@@ -238,6 +240,7 @@ export async function recordMovement(input: RecordMovementInput) {
 // minimum (Pro + flag on) — the column is read-only in that state.
 
 export async function updateMinStock(productId: string, minStock: number) {
+  await requirePanelModule('inventory');
   const { userId } = await requireUser();
   const tdb = await db();
   const orgId = tdb.orgId;

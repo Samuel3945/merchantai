@@ -8,6 +8,7 @@ import { getAppSetting } from '@/actions/app-settings';
 import { getFraudAlerts } from '@/actions/cash';
 import { DashboardHeader } from '@/features/dashboard/DashboardHeader';
 import { DashboardSidebar } from '@/features/dashboard/DashboardSidebar';
+import { getPanelUserModules } from '@/libs/panel-session';
 
 type DashboardLayoutProps = {
   params: Promise<{ locale: string }>;
@@ -33,13 +34,23 @@ export default async function DashboardLayout(props: DashboardLayoutProps) {
 
   // Onboarding gate — only org admins need to complete the wizard.
   // Cashiers/employees consume the POS, not the dashboard, so they aren't redirected.
-  const { orgId, orgRole } = await auth();
-  if (orgId && orgRole === 'org:admin') {
+  const { userId, orgId, orgRole } = await auth();
+  const isOwner = orgRole === 'org:admin';
+  if (orgId && isOwner) {
     const setting = await getAppSetting('onboarding_completed');
     if (setting.value !== 'true') {
       redirect('/onboarding');
     }
   }
+
+  // Per-user panel permissions. The owner (org admin) sees everything → null.
+  // A non-owner member's allowed modules are resolved from the DB (source of
+  // truth); deny-by-default to an empty set if they have no linked active user.
+  // Route-level enforcement also lives in the middleware; this only drives nav.
+  const panelModules: string[] | null
+    = orgId && !isOwner && userId
+      ? ((await getPanelUserModules(userId, orgId)) ?? [])
+      : null;
 
   // Fraud-alert badge for the Caja menu item. Failures are non-fatal —
   // we never want a layout to crash because the alert query failed.
@@ -79,6 +90,7 @@ export default async function DashboardLayout(props: DashboardLayoutProps) {
       <DashboardSidebar
         cashBadge={cashBadge}
         navFlags={navFlags}
+        panelModules={panelModules}
         defaultCollapsed={sidebarCollapsed}
       />
 
@@ -88,7 +100,11 @@ export default async function DashboardLayout(props: DashboardLayoutProps) {
           bg-card px-4
         "
         >
-          <DashboardHeader cashBadge={cashBadge} navFlags={navFlags} />
+          <DashboardHeader
+            cashBadge={cashBadge}
+            navFlags={navFlags}
+            panelModules={panelModules}
+          />
         </header>
 
         <main className="

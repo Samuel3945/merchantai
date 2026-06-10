@@ -10,6 +10,7 @@ import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
 import { sendInvitationEmail } from '@/libs/email';
 import { Env } from '@/libs/Env';
+import { syncPanelModules } from '@/libs/panel-access';
 import {
   cleanActionPermissions,
   cleanEnabledModules,
@@ -173,6 +174,9 @@ export type InviteEmployeeInput = {
   permissions?: Record<string, unknown>;
   enabledModules?: string[];
   canConfirmTransfers?: boolean;
+  // Whether this single user may sign into the web panel. Independent from the
+  // module grants above (a panel user can still see only Inventario, etc.).
+  panelAccess?: boolean;
 };
 
 export type InviteEmployeeResult = {
@@ -195,6 +199,7 @@ export async function invite(
   const permissions = cleanActionPermissions(
     data.permissions as Record<string, unknown> | undefined,
   );
+  const panelAccess = data.panelAccess ?? false;
 
   if (!email || !/^\S[^\s@]*@\S[^\s.]*\.\S+$/.test(email)) {
     return { ok: false, error: 'Ingresá un email válido' };
@@ -246,6 +251,7 @@ export async function invite(
         active: false,
         permissions,
         enabledModules,
+        panelAccess,
         canConfirmTransfers: data.canConfirmTransfers ?? true,
       })
       .returning();
@@ -267,6 +273,7 @@ export async function invite(
         status: 'pending',
         permissions,
         enabledModules,
+        panelAccess,
         canConfirmTransfers: data.canConfirmTransfers ?? true,
       })
       .returning();
@@ -585,6 +592,7 @@ export async function updateEmployee(
       permissions: posUsersSchema.permissions,
       enabledModules: posUsersSchema.enabledModules,
       canConfirmTransfers: posUsersSchema.canConfirmTransfers,
+      clerkUserId: posUsersSchema.clerkUserId,
     })
     .from(posUsersSchema)
     .where(
@@ -637,6 +645,17 @@ export async function updateEmployee(
     },
     after: { enabledModules, permissions, canConfirmTransfers },
   });
+
+  // Source of truth is the DB; push the new modules to the Clerk membership
+  // cache so the panel middleware authorizes the change immediately. Best-effort:
+  // a Clerk hiccup must not fail the DB write that already succeeded.
+  if (existing.clerkUserId) {
+    try {
+      await syncPanelModules(orgId, existing.clerkUserId, enabledModules);
+    } catch {
+      // DB stays authoritative; the next edit (or a reconcile) will resync.
+    }
+  }
 
   revalidatePath('/dashboard/employees');
   return { ok: true, data: updated };

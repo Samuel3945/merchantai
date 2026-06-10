@@ -1,6 +1,7 @@
 import type { LucideIcon } from 'lucide-react';
 import {
   BarChart3,
+  Bike,
   Boxes,
   CreditCard,
   HandCoins,
@@ -16,6 +17,7 @@ import {
   Users,
   Wallet,
 } from 'lucide-react';
+import { requiredModuleForPath } from '@/libs/permissions';
 
 export type NavItem = {
   href: string;
@@ -41,6 +43,7 @@ export const navGroups: NavGroup[] = [
       { href: '/dashboard/cash', label: 'Caja', icon: Wallet },
       { href: '/dashboard/sales', label: 'Ventas', icon: Receipt },
       { href: '/dashboard/pos-cajeros', label: 'Cajas POS', icon: ShoppingCart },
+      { href: '/dashboard/delivery', label: 'Domicilios', icon: Bike },
       { href: '/dashboard/fiados', label: 'Fiados', icon: HandCoins },
     ],
   },
@@ -88,15 +91,36 @@ const GATED_HREF: Record<string, keyof NavModuleFlags> = {
   '/dashboard/employees': 'employees',
 };
 
-// Returns the nav groups with module-gated items removed when their flag is off.
+// Returns the nav groups with hidden items removed. Two filters apply:
+//   1. Module toggles (NavModuleFlags) — business-level on/off (Fiados/Empleados).
+//   2. Per-user panel permissions — when `panelModules` is provided (a non-owner
+//      member), deny-by-default: keep only public items and the modules they
+//      hold, hiding owner-only items. `panelModules == null` means the owner,
+//      who sees everything the toggles allow.
 // Empty groups are dropped so the sidebar never shows an empty section header.
-export function buildNavGroups(flags: NavModuleFlags): NavGroup[] {
+export function buildNavGroups(
+  flags: NavModuleFlags,
+  panelModules?: string[] | null,
+): NavGroup[] {
   return navGroups
     .map(group => ({
       ...group,
       items: group.items.filter((item) => {
         const flag = GATED_HREF[item.href];
-        return flag ? flags[flag] : true;
+        if (flag && !flags[flag]) {
+          return false;
+        }
+        if (panelModules == null) {
+          return true;
+        }
+        const need = requiredModuleForPath(item.href);
+        if (need.kind === 'public') {
+          return true;
+        }
+        if (need.kind === 'owner') {
+          return false;
+        }
+        return panelModules.includes(need.module);
       }),
     }))
     .filter(group => group.items.length > 0);

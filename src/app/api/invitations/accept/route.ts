@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { loginCashier } from '@/libs/cashier-session';
 import { db } from '@/libs/DB';
+import { provisionPanelUser } from '@/libs/panel-access';
 import { employeeInvitationsSchema, posUsersSchema } from '@/models/Schema';
 
 export const runtime = 'nodejs';
@@ -75,6 +76,26 @@ export async function POST(req: Request): Promise<NextResponse> {
       .set({ status: 'accepted' })
       .where(eq(employeeInvitationsSchema.id, invitation.id));
   });
+
+  // If this single user was granted web panel access, provision their Clerk web
+  // identity with the SAME password and link it back to the pos_users row. The
+  // employee stays one entity; Clerk is only the web sign-in provider. This is
+  // best-effort: a failure must not block the POS account they just activated.
+  if (invitation.panelAccess) {
+    const provision = await provisionPanelUser({
+      email: invitation.email,
+      password,
+      name,
+      organizationId: invitation.organizationId,
+      enabledModules: invitation.enabledModules ?? [],
+    });
+    if (provision.ok) {
+      await db
+        .update(posUsersSchema)
+        .set({ clerkUserId: provision.clerkUserId })
+        .where(eq(posUsersSchema.id, invitation.userId));
+    }
+  }
 
   const session = await loginCashier(invitation.email, password);
 
