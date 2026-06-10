@@ -16,7 +16,6 @@ import {
   EXIT_MOTIVOS,
   exitTypeFor,
 } from './cash-ui';
-import { DenominationCounter } from './DenominationCounter';
 
 export type MovementSubmit = {
   type: CashMovementType;
@@ -189,10 +188,6 @@ export function MovementModal(props: {
                 autoFocus
                 value={amount}
                 onChange={e => setAmount(e.target.value)}
-              />
-              <DenominationCounter
-                className="mt-2"
-                onTotal={t => setAmount(t > 0 ? String(t) : '')}
               />
             </div>
 

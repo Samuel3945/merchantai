@@ -382,6 +382,23 @@ export async function listCashSessions(limit = 30): Promise<CashSession[]> {
     .limit(capped);
 }
 
+/**
+ * Full cash-movement ledger for the org, across every session — never deleted,
+ * so this is the permanent audit trail the Caja history view filters over. Capped
+ * high enough to cover a long history while staying a single, snappy query; the
+ * history UI filters this set client-side (by date, responsable, entrada/salida).
+ */
+export async function listAllCashMovements(limit = 1000): Promise<CashMovement[]> {
+  const { orgId } = await requireOrg();
+  const capped = Math.min(Math.max(limit, 1), 5000);
+  return db
+    .select()
+    .from(cashMovementsSchema)
+    .where(eq(cashMovementsSchema.organizationId, orgId))
+    .orderBy(desc(cashMovementsSchema.createdAt))
+    .limit(capped);
+}
+
 export type FraudAlertKind
   = | 'high_discrepancy'
     | 'mid_discrepancy'
