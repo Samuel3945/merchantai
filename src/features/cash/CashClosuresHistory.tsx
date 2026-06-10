@@ -3,12 +3,16 @@
 import type { CashSession } from '@/libs/cash-helpers';
 import { useMemo, useState } from 'react';
 import { DateRangePicker } from '@/components/DateRangePicker';
+import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
 import { buildPresetOptions, todayBogota } from '@/utils/DateRange';
 import { cn } from '@/utils/Helpers';
 import { actorLabel, dayKey, money, stamp } from './cash-ui';
 
 type ResultFilter = 'all' | 'diff' | 'square';
+
+// Keep the table short so relevant closures stay above the fold; page the rest.
+const PAGE_SIZE = 8;
 
 /**
  * Permanent closure (arqueo) history. Every closed session is kept forever, so
@@ -22,6 +26,7 @@ export function CashClosuresHistory(props: { sessions: CashSession[] }) {
   const [activePreset, setActivePreset] = useState<string | null>(null);
   const [actor, setActor] = useState('all');
   const [result, setResult] = useState<ResultFilter>('all');
+  const [page, setPage] = useState(0);
 
   const presetOptions = useMemo(
     () => buildPresetOptions(['today', 'yesterday', '7d', '30d', 'mtd', 'lastMonth']),
@@ -89,6 +94,11 @@ export function CashClosuresHistory(props: { sessions: CashSession[] }) {
     return { surplus, shortage, count: rows.length };
   }, [rows]);
 
+  // Clamp against the filtered set so a stale page never shows an empty table.
+  const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  const current = Math.min(page, pageCount - 1);
+  const pageRows = rows.slice(current * PAGE_SIZE, current * PAGE_SIZE + PAGE_SIZE);
+
   const hasFilters
     = start !== '' || end !== '' || actor !== 'all' || result !== 'all';
 
@@ -96,12 +106,14 @@ export function CashClosuresHistory(props: { sessions: CashSession[] }) {
     setStart(next.start);
     setEnd(next.end);
     setActivePreset(next.preset);
+    setPage(0);
   }
 
   function clearRange() {
     setStart('');
     setEnd('');
     setActivePreset(null);
+    setPage(0);
   }
 
   function clearFilters() {
@@ -164,7 +176,10 @@ export function CashClosuresHistory(props: { sessions: CashSession[] }) {
           <span className="mb-1 block text-muted-foreground">Responsable</span>
           <Select
             value={actor}
-            onValueChange={setActor}
+            onValueChange={(v) => {
+              setActor(v);
+              setPage(0);
+            }}
             options={[{ value: 'all', label: 'Todos' }, ...actors]}
           />
         </label>
@@ -172,7 +187,10 @@ export function CashClosuresHistory(props: { sessions: CashSession[] }) {
           <span className="mb-1 block text-muted-foreground">Resultado</span>
           <Select
             value={result}
-            onValueChange={v => setResult(v as ResultFilter)}
+            onValueChange={(v) => {
+              setResult(v as ResultFilter);
+              setPage(0);
+            }}
             options={[
               { value: 'all', label: 'Todos' },
               { value: 'diff', label: 'Con diferencia' },
@@ -234,7 +252,7 @@ export function CashClosuresHistory(props: { sessions: CashSession[] }) {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {rows.map((r) => {
+                  {pageRows.map((r) => {
                     const sign = r.diff > 0 ? '+' : '';
                     return (
                       <tr key={r.s.id}>
@@ -279,6 +297,40 @@ export function CashClosuresHistory(props: { sessions: CashSession[] }) {
               </table>
             </div>
           )}
+
+      {pageCount > 1 && (
+        <div className="
+          flex items-center justify-between gap-3 border-t border-border px-5
+          py-3
+        "
+        >
+          <div className="text-xs text-muted-foreground tabular-nums">
+            {current * PAGE_SIZE + 1}
+            –
+            {current * PAGE_SIZE + pageRows.length}
+            {' de '}
+            {rows.length}
+          </div>
+          <div className="flex gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={current === 0}
+              onClick={() => setPage(current - 1)}
+            >
+              Anterior
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={current >= pageCount - 1}
+              onClick={() => setPage(current + 1)}
+            >
+              Siguiente
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
