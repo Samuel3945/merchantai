@@ -157,22 +157,20 @@ export default async function proxy(
 
       const authObj = await auth();
 
-      // Redirect authenticated users without an organization to the organization selection page.
-      // This ensures users are properly associated with an organization before accessing the
-      // dashboard or the onboarding stepper (both read org-scoped settings and would otherwise
-      // throw "No active organization", rendering a blank error page).
+      // Authenticated users without an active organization belong in the
+      // onboarding wizard — its first step creates the org programmatically, so
+      // we no longer bounce them to Clerk's create-organization screen. The
+      // wizard renders fine without an org; only /dashboard needs one, so we
+      // keep that redirect. /onboarding and /organization-selection stay
+      // reachable (the latter is still used to switch between businesses).
       if (
         authObj.userId
         && !authObj.orgId
-        && (req.nextUrl.pathname.includes('/dashboard') || req.nextUrl.pathname.includes('/onboarding'))
-        && !req.nextUrl.pathname.endsWith('/organization-selection')
+        && req.nextUrl.pathname.includes('/dashboard')
       ) {
-        const orgSelection = new URL(
-          '/onboarding/organization-selection',
-          req.url,
-        );
+        const onboardingUrl = new URL('/onboarding', req.url);
 
-        return NextResponse.redirect(orgSelection);
+        return NextResponse.redirect(onboardingUrl);
       }
 
       return handleI18nRouting(req);
