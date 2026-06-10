@@ -1,5 +1,6 @@
 'use client';
 
+import type { PaymentMethodRow } from '@/actions/payment-methods';
 import type {
   ListSalesResult,
   ReturnableItem,
@@ -22,12 +23,6 @@ const inputCls
   = 'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50';
 
 const labelCls = 'text-xs font-medium text-muted-foreground';
-
-const paymentOptions = [
-  { value: 'all', label: 'Todos los pagos' },
-  { value: 'efectivo', label: 'Efectivo' },
-  { value: 'transferencia', label: 'Transferencia / Nequi / Daviplata' },
-];
 
 // Two reasons, each with its destination baked in: a change of mind returns the
 // goods to sellable stock; a defective product leaves inventory as damaged and
@@ -175,7 +170,7 @@ export function SalesClient({
   const [qtys, setQtys] = useState<Record<string, number>>({});
   const [reason, setReason] = useState<ReturnReason>('customer_request');
   const [refundMethod, setRefundMethod] = useState('Efectivo');
-  const [methods, setMethods] = useState<string[]>(['Efectivo']);
+  const [activeMethods, setActiveMethods] = useState<PaymentMethodRow[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [submitSuccess, setSubmitSuccess] = useState('');
@@ -190,6 +185,35 @@ export function SalesClient({
     () => buildPresetOptions(['today', 'yesterday', '7d', '30d', 'mtd', 'lastMonth']),
     [],
   );
+
+  // The payment filter and the refund options both come from the business's own
+  // active payment methods — never a hard-coded list. Loaded once on mount and
+  // shared so the page has a single source of truth.
+  useEffect(() => {
+    listPaymentMethods({ activeOnly: true })
+      .then(setActiveMethods)
+      .catch(() => setActiveMethods([]));
+  }, []);
+
+  const paymentOptions = useMemo(
+    () => [
+      { value: 'all', label: 'Todos los pagos' },
+      ...activeMethods.map(m => ({ value: m.name.toLowerCase(), label: m.name })),
+    ],
+    [activeMethods],
+  );
+
+  // Refunds can't be issued back to cash-only or credit methods; Efectivo is
+  // always offered as the fallback.
+  const refundMethods = useMemo(() => {
+    const opts = [
+      'Efectivo',
+      ...activeMethods
+        .filter(m => m.type !== 'cash' && m.type !== 'credit')
+        .map(m => m.name),
+    ];
+    return [...new Set(opts)];
+  }, [activeMethods]);
 
   async function fetchSales() {
     const data = await listSales({
@@ -259,18 +283,7 @@ export function SalesClient({
     setReason('customer_request');
     setDetailLoading(true);
     try {
-      const [detail, pms] = await Promise.all([
-        getSaleForReturn(saleId),
-        listPaymentMethods({ activeOnly: true }).catch(() => []),
-      ]);
-
-      const opts = [
-        'Efectivo',
-        ...pms
-          .filter(m => m.type !== 'cash' && m.type !== 'credit')
-          .map(m => m.name),
-      ];
-      setMethods([...new Set(opts)]);
+      const detail = await getSaleForReturn(saleId);
       setRefundMethod('Efectivo');
 
       const initSelected = new Set<string>();
@@ -823,7 +836,7 @@ export function SalesClient({
                             <div className="space-y-2">
                               <p className={labelCls}>Reembolso en</p>
                               <div className="flex flex-wrap gap-2">
-                                {methods.map(m => (
+                                {refundMethods.map(m => (
                                   <button
                                     key={m}
                                     type="button"
