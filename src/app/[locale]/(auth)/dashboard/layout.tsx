@@ -6,6 +6,7 @@ import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { getAppSetting } from '@/actions/app-settings';
 import { getFraudAlerts } from '@/actions/cash';
+import { ConfirmProvider } from '@/components/ui/confirm-provider';
 import { DashboardHeader } from '@/features/dashboard/DashboardHeader';
 import { DashboardSidebar } from '@/features/dashboard/DashboardSidebar';
 import { getPanelUserModules } from '@/libs/panel-session';
@@ -114,7 +115,7 @@ export default async function DashboardLayout(props: DashboardLayoutProps) {
         "
         >
           <div className="mx-auto max-w-7xl">
-            {props.children}
+            <ConfirmProvider>{props.children}</ConfirmProvider>
           </div>
         </main>
       </div>

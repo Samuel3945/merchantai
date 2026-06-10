@@ -13,6 +13,7 @@ import {
   updateEmployee,
 } from '@/actions/employees';
 import { Button } from '@/components/ui/button';
+import { useConfirm } from '@/components/ui/confirm';
 import {
   ACTION_PERMISSIONS,
   CAJERO_TEMPLATE_MODULES,
@@ -161,6 +162,7 @@ export function EmployeesClient({
   initialEmployees: EmployeeRow[];
   initialInvitations: InvitationRow[];
 }) {
+  const confirm = useConfirm();
   const [employees, setEmployees] = useState(initialEmployees);
   const [invitations, setInvitations] = useState(initialInvitations);
   const [showInviteModal, setShowInviteModal] = useState(false);
@@ -191,9 +193,14 @@ export function EmployeesClient({
     }
   };
 
-  const handleRevoke = (id: string) => {
-    // eslint-disable-next-line no-alert
-    if (!globalThis.confirm('¿Revocar esta invitación?')) {
+  const handleRevoke = async (id: string) => {
+    const ok = await confirm({
+      title: '¿Revocar esta invitación?',
+      description: 'El enlace dejará de funcionar y la persona no podrá unirse con él.',
+      confirmText: 'Revocar',
+      tone: 'destructive',
+    });
+    if (!ok) {
       return;
     }
     startTransition(async () => {
@@ -210,9 +217,13 @@ export function EmployeesClient({
     });
   };
 
-  const handleResetPin = (id: string, name: string) => {
-    // eslint-disable-next-line no-alert
-    if (!globalThis.confirm(`¿Resetear el PIN de ${name}? Quedará sin PIN y podrá configurar uno nuevo desde la caja.`)) {
+  const handleResetPin = async (id: string, name: string) => {
+    const ok = await confirm({
+      title: `¿Resetear el PIN de ${name}?`,
+      description: 'Quedará sin PIN y podrá configurar uno nuevo desde la caja.',
+      confirmText: 'Resetear PIN',
+    });
+    if (!ok) {
       return;
     }
     startTransition(async () => {
