@@ -2,7 +2,7 @@
 
 import type { DateRange } from 'react-day-picker';
 import type { RangeOption } from '@/utils/DateRange';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { Button } from '@/components/ui/button';
 import { Calendar } from '@/components/ui/calendar';
 import {
@@ -70,10 +70,25 @@ function formatRange(start: string, end: string): string {
   return `${labelFmt.format(a)} – ${labelFmt.format(b)}`;
 }
 
+// One calendar month on phones, two from >= sm. Keeps the popover from covering
+// a small screen. useSyncExternalStore subscribes to the media query without a
+// setState-in-effect and stays SSR-safe (server snapshot = narrow / one month).
+function useTwoMonths(): boolean {
+  return useSyncExternalStore(
+    (onChange) => {
+      const mq = window.matchMedia('(min-width: 640px)');
+      mq.addEventListener('change', onChange);
+      return () => mq.removeEventListener('change', onChange);
+    },
+    () => window.matchMedia('(min-width: 640px)').matches,
+    () => false,
+  );
+}
+
 // Shopify-style range picker: a trigger that opens a popover with a preset
-// list on the left and a two-month calendar on the right. Date math stays in
-// the parent (presets are precomputed); this component only renders and stages
-// the selection until "Aplicar". Shared across the dashboard and sales views.
+// list on the left and a one/two-month calendar on the right. Date math stays
+// in the parent (presets are precomputed); this component only renders and
+// stages the selection until "Aplicar". Shared across dashboard and sales.
 export function DateRangePicker({
   start,
   end,
@@ -93,6 +108,7 @@ export function DateRangePicker({
   });
   const [localCompare, setLocalCompare] = useState(compare);
   const [selectedPreset, setSelectedPreset] = useState<string | null>(activePreset);
+  const twoMonths = useTwoMonths();
 
   // Re-sync staged state from props every time the popover opens.
   useEffect(() => {
@@ -183,7 +199,7 @@ export function DateRangePicker({
           <div className="p-2">
             <Calendar
               mode="range"
-              numberOfMonths={2}
+              numberOfMonths={twoMonths ? 2 : 1}
               selected={range}
               onSelect={(r) => {
                 setRange(r);
