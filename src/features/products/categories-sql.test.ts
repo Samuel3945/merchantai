@@ -23,10 +23,23 @@ const BACKFILL_LINK = `
     AND c.slug = lower(btrim(p.category))
     AND p.category IS NOT NULL AND btrim(p.category) <> '';
 `;
-// The recount shape from recountCategory: usageCount = live non-deleted count.
-const recount = (catId: string) => `
-  UPDATE categories SET usage_count =
-    (SELECT count(*)::int FROM products WHERE products.category_id = '${catId}' AND products.deleted = false)
+// The full refresh shape from refreshCategory: usageCount = live non-deleted
+// count, attributeTemplate = top attribute keys by frequency among them.
+const refresh = (catId: string) => `
+  UPDATE categories SET
+    usage_count = (
+      SELECT count(*)::int FROM products
+      WHERE products.category_id = '${catId}' AND products.deleted = false
+    ),
+    attribute_template = COALESCE((
+      SELECT jsonb_agg(jsonb_build_object('key', t.key, 'count', t.count) ORDER BY t.count DESC, t.key)
+      FROM (
+        SELECT k AS key, count(*)::int AS count
+        FROM products p CROSS JOIN LATERAL jsonb_object_keys(p.attributes) AS k
+        WHERE p.category_id = '${catId}' AND p.deleted = false AND jsonb_typeof(p.attributes) = 'object'
+        GROUP BY k ORDER BY count(*) DESC, k LIMIT 12
+      ) t
+    ), '[]'::jsonb)
   WHERE id = '${catId}';
 `;
 
@@ -39,6 +52,7 @@ beforeEach(async () => {
       organization_id text NOT NULL,
       category text,
       category_id uuid,
+      attributes jsonb NOT NULL DEFAULT '{}'::jsonb,
       deleted boolean NOT NULL DEFAULT false
     );
     CREATE TABLE categories (
@@ -47,7 +61,8 @@ beforeEach(async () => {
       name text NOT NULL,
       slug text NOT NULL,
       source category_source NOT NULL DEFAULT 'auto',
-      usage_count integer NOT NULL DEFAULT 0
+      usage_count integer NOT NULL DEFAULT 0,
+      attribute_template jsonb NOT NULL DEFAULT '[]'::jsonb
     );
     CREATE UNIQUE INDEX categories_org_slug_unique_idx ON categories (organization_id, slug);
   `);
@@ -91,7 +106,7 @@ describe('categories backfill (migration 0020)', () => {
   });
 });
 
-describe('recountCategory invariant', () => {
+describe('refreshCategory invariant', () => {
   it('sets usage_count to the live count of non-deleted products', async () => {
     const cat = await client.query<{ id: string }>(
       `INSERT INTO categories (organization_id, name, slug, source) VALUES ('orgA','Bebidas','bebidas','manual') RETURNING id`,
@@ -102,7 +117,7 @@ describe('recountCategory invariant', () => {
       ('orgA','Bebidas','${catId}',false),
       ('orgA','Bebidas','${catId}',true);`);
 
-    await client.exec(recount(catId));
+    await client.exec(refresh(catId));
 
     const after = await client.query<{ usage_count: number }>(
       `SELECT usage_count FROM categories WHERE id = '${catId}'`,
@@ -110,5 +125,30 @@ describe('recountCategory invariant', () => {
 
     // Two live + one deleted -> count is 2, never drifts to the raw row total.
     expect(after.rows[0]!.usage_count).toBe(2);
+  });
+
+  it('learns attribute_template: top keys by frequency, excluding deleted', async () => {
+    const cat = await client.query<{ id: string }>(
+      `INSERT INTO categories (organization_id, name, slug, source) VALUES ('orgA','Bebidas','bebidas','manual') RETURNING id`,
+    );
+    const catId = cat.rows[0]!.id;
+    await client.exec(`INSERT INTO products (organization_id, category_id, attributes, deleted) VALUES
+      ('orgA','${catId}','{"Marca":"Coca","Tamaño":"600ml"}',false),
+      ('orgA','${catId}','{"Marca":"Pepsi","Sabor":"Cola"}',false),
+      ('orgA','${catId}','{"Marca":"X","Color":"rojo"}',true);`);
+
+    await client.exec(refresh(catId));
+
+    const after = await client.query<{ attribute_template: { key: string; count: number }[] }>(
+      `SELECT attribute_template FROM categories WHERE id = '${catId}'`,
+    );
+
+    // "Color" came only from the deleted row, so it is absent. Marca leads (2),
+    // then ties break alphabetically (Sabor before Tamaño).
+    expect(after.rows[0]!.attribute_template).toEqual([
+      { key: 'Marca', count: 2 },
+      { key: 'Sabor', count: 1 },
+      { key: 'Tamaño', count: 1 },
+    ]);
   });
 });
