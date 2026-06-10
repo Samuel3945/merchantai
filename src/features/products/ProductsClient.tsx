@@ -25,6 +25,7 @@ import { DatePicker } from '@/components/DatePicker';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { useConfirm } from '@/components/ui/confirm';
 import {
   Dialog,
   DialogContent,
@@ -171,6 +172,7 @@ export function ProductsClient({
   initial: ProductRow[];
   features: ProductFeatureFlags;
 }) {
+  const confirm = useConfirm();
   const [rows, setRows] = useState<ProductRow[]>(initial);
   const [search, setSearch] = useState('');
   const [showArchived, setShowArchived] = useState(false);
@@ -409,22 +411,27 @@ export function ProductsClient({
     runMutation(() => setProductStatus(p.id, 'published'));
   }
 
-  function handleArchive(p: ProductRow) {
-    // eslint-disable-next-line no-alert -- native confirm matches the existing pattern
-    const ok = globalThis.confirm(
-      `Vas a quitar de la venta «${p.name}».\n\nDejará de venderse y no estará disponible para los agentes, pero conservas todo su historial. Puedes reactivarlo cuando quieras.`,
-    );
+  async function handleArchive(p: ProductRow) {
+    const ok = await confirm({
+      title: `Quitar «${p.name}» de la venta`,
+      description:
+        'Dejará de venderse y no estará disponible para los agentes, pero conservas todo su historial. Puedes reactivarlo cuando quieras.',
+      confirmText: 'Quitar de la venta',
+    });
     if (!ok) {
       return;
     }
     runMutation(() => setProductStatus(p.id, 'archived'));
   }
 
-  function handleDelete(p: ProductRow) {
-    // eslint-disable-next-line no-alert -- native confirm matches the existing pattern
-    const ok = globalThis.confirm(
-      `¿Eliminar «${p.name}»?\n\nEste producto nunca se vendió ni tuvo inventario, así que se borra por completo.`,
-    );
+  async function handleDelete(p: ProductRow) {
+    const ok = await confirm({
+      title: `¿Eliminar «${p.name}»?`,
+      description:
+        'Este producto nunca se vendió ni tuvo inventario, así que se borra por completo. Esta acción no se puede deshacer.',
+      confirmText: 'Eliminar',
+      tone: 'destructive',
+    });
     if (!ok) {
       return;
     }
@@ -477,14 +484,16 @@ export function ProductsClient({
     );
   }
 
-  function handleBulkArchive() {
+  async function handleBulkArchive() {
     const ids = [...selected];
-    // eslint-disable-next-line no-alert -- native confirm matches the existing pattern
-    const ok = globalThis.confirm(
-      `Vas a quitar de la venta ${ids.length} ${
+    const ok = await confirm({
+      title: `Quitar de la venta ${ids.length} ${
         ids.length === 1 ? 'producto' : 'productos'
-      }.\n\nDejarán de venderse pero conservas su historial. Puedes reactivarlos cuando quieras.`,
-    );
+      }`,
+      description:
+        'Dejarán de venderse pero conservas su historial. Puedes reactivarlos cuando quieras.',
+      confirmText: 'Quitar de la venta',
+    });
     if (!ok) {
       return;
     }
@@ -503,7 +512,7 @@ export function ProductsClient({
     );
   }
 
-  function handleBulkDelete() {
+  async function handleBulkDelete() {
     const ids = [...selected];
     const deletable = selectedVisible.filter(
       r => !r.hasSales && !r.hasMovements,
@@ -515,14 +524,16 @@ export function ProductsClient({
       return;
     }
     const blocked = selectedVisible.length - deletable;
-    // eslint-disable-next-line no-alert -- native confirm matches the existing pattern
-    const ok = globalThis.confirm(
-      `Vas a eliminar ${deletable} ${deletable === 1 ? 'producto' : 'productos'} sin historial.${
+    const ok = await confirm({
+      title: `Eliminar ${deletable} ${deletable === 1 ? 'producto' : 'productos'} sin historial`,
+      description: `${
         blocked > 0
-          ? `\n\n${blocked} se omitirán porque tienen ventas o movimientos.`
+          ? `${blocked} se omitirán porque tienen ventas o movimientos.\n\n`
           : ''
-      }\n\nEsta acción no se puede deshacer.`,
-    );
+      }Esta acción no se puede deshacer.`,
+      confirmText: 'Eliminar',
+      tone: 'destructive',
+    });
     if (!ok) {
       return;
     }

@@ -56,6 +56,9 @@ export default antfu(
   // --- Custom Rule Overrides ---
   {
     rules: {
+      // Native confirm/alert/prompt are banned app-wide — they break the visual
+      // identity and can't be themed. Use useConfirm() or the toast store.
+      'no-alert': 'error',
       'antfu/no-top-level-await': 'off', // Allow top-level await
       'style/brace-style': ['error', '1tbs'], // Use the default brace style
       'ts/consistent-type-definitions': ['error', 'type'], // Use `type` instead of `interface`

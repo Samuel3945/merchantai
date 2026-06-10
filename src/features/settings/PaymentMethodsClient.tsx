@@ -28,6 +28,7 @@ import {
   updatePaymentMethod,
 } from '@/actions/payment-methods';
 import { Button } from '@/components/ui/button';
+import { useConfirm } from '@/components/ui/confirm';
 import { Select } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { FiadoTermField } from '@/features/settings/FiadoTermField';
@@ -88,6 +89,7 @@ export function PaymentMethodsClient({
   initialMethods: PaymentMethodRow[];
   fiadoEnabled: boolean;
 }) {
+  const confirm = useConfirm();
   const [methods, setMethods] = useState(initialMethods);
   const [editing, setEditing] = useState<PaymentMethodRow | null>(null);
   const [creating, setCreating] = useState(false);
@@ -150,13 +152,15 @@ export function PaymentMethodsClient({
     });
   };
 
-  const handleDelete = (row: PaymentMethodRow) => {
-    if (
-      // eslint-disable-next-line no-alert
-      !globalThis.confirm(
-        `¿Eliminar "${row.name}"? Esta acción no se puede deshacer. El historial de ventas no se ve afectado.`,
-      )
-    ) {
+  const handleDelete = async (row: PaymentMethodRow) => {
+    const ok = await confirm({
+      title: `¿Eliminar «${row.name}»?`,
+      description:
+        'Esta acción no se puede deshacer. El historial de ventas no se ve afectado.',
+      confirmText: 'Eliminar',
+      tone: 'destructive',
+    });
+    if (!ok) {
       return;
     }
     const prevMethods = methods;

@@ -35,6 +35,7 @@ import {
   unblockPosToken,
 } from '@/actions/pos-tokens';
 import { Button } from '@/components/ui/button';
+import { useConfirm } from '@/components/ui/confirm';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -124,6 +125,7 @@ export function PosCajerosClient({
   initialCashiers: CashierRow[];
   initialQuota: PosDeviceQuota;
 }) {
+  const confirm = useConfirm();
   const [tokens, setTokens] = useState(initialTokens);
   const [cashiers] = useState(initialCashiers);
   const [quota, setQuota] = useState(initialQuota);
@@ -217,9 +219,14 @@ export function PosCajerosClient({
     });
   };
 
-  const handleRegenerate = (id: string) => {
-    // eslint-disable-next-line no-alert
-    if (!globalThis.confirm('¿Cambiar el acceso de esta caja? El dispositivo actual deberá escanear el código nuevo para volver a entrar.')) {
+  const handleRegenerate = async (id: string) => {
+    const ok = await confirm({
+      title: '¿Cambiar el acceso de esta caja?',
+      description:
+        'El dispositivo actual deberá escanear el código nuevo para volver a entrar.',
+      confirmText: 'Cambiar acceso',
+    });
+    if (!ok) {
       return;
     }
     startTransition(async () => {
@@ -241,9 +248,14 @@ export function PosCajerosClient({
     });
   };
 
-  const handleForceLogout = (id: string) => {
-    // eslint-disable-next-line no-alert
-    if (!globalThis.confirm('¿Cerrar la sesión de esta caja? El empleado activo tendrá que volver a ingresar su PIN (la caja sigue activa).')) {
+  const handleForceLogout = async (id: string) => {
+    const ok = await confirm({
+      title: '¿Cerrar la sesión de esta caja?',
+      description:
+        'El empleado activo tendrá que volver a ingresar su PIN. La caja sigue activa.',
+      confirmText: 'Cerrar sesión',
+    });
+    if (!ok) {
       return;
     }
     startTransition(async () => {

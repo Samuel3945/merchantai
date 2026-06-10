@@ -3,6 +3,7 @@
 import type { CustomerListItem } from './actions';
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
+import { useConfirm } from '@/components/ui/confirm';
 import { cn } from '@/utils/Helpers';
 import {
   createCustomer,
@@ -73,6 +74,7 @@ function formatDate(d: Date | string | null) {
 }
 
 export function CustomersClient({ initial }: { initial: CustomerListItem[] }) {
+  const confirm = useConfirm();
   const [rows, setRows] = useState<CustomerListItem[]>(initial);
   const [search, setSearch] = useState('');
   const [open, setOpen] = useState(false);
@@ -192,9 +194,14 @@ export function CustomersClient({ initial }: { initial: CustomerListItem[] }) {
     });
   }
 
-  function onDelete(c: CustomerListItem) {
-    // eslint-disable-next-line no-alert
-    if (!globalThis.confirm(`Eliminar "${c.name}"?`)) {
+  async function onDelete(c: CustomerListItem) {
+    const ok = await confirm({
+      title: `¿Eliminar «${c.name}»?`,
+      description: 'Se quitará de tu lista de clientes. Esta acción no se puede deshacer.',
+      confirmText: 'Eliminar',
+      tone: 'destructive',
+    });
+    if (!ok) {
       return;
     }
     startTransition(async () => {
