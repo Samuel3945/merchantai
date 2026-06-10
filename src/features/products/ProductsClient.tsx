@@ -33,6 +33,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Toaster } from '@/components/ui/toast';
 import { toast } from '@/components/ui/toast-store';
+import { Link } from '@/libs/I18nNavigation';
 import { cn } from '@/utils/Helpers';
 import {
   bulkAdjustPrice,
@@ -516,6 +517,16 @@ export function ProductsClient({
           <Archive className="size-4" />
           Ver archivados
         </button>
+        <Link
+          href="/dashboard/products/import"
+          className="
+            inline-flex h-9 items-center justify-center rounded-md border
+            border-input px-4 text-sm font-medium transition-colors
+            hover:bg-accent
+          "
+        >
+          Importar
+        </Link>
         <Button onClick={openCreate}>Nuevo artículo</Button>
         <div className="ml-auto text-sm text-muted-foreground">
           {rows.length}

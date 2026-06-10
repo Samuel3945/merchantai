@@ -768,3 +768,104 @@ export async function bulkAdjustPrice(
   revalidatePath('/dashboard/products');
   return { updated: rows.length };
 }
+
+export type ImportProductInput = {
+  name: string;
+  barcode?: string | null;
+  price: string;
+  cost?: string | null;
+  category?: string | null;
+};
+
+export type ImportResult = {
+  created: number;
+  failed: { row: number; name: string; error: string }[];
+};
+
+// Bulk catalog import (the commit step of the products importer). Best-effort by
+// design: each row gets its own transaction, so one bad row (e.g. a duplicate
+// barcode) is reported without aborting the whole batch. Reuses upsertCategory /
+// refreshCategory so imported products feed the dynamic category model exactly
+// like single creates. v1 imports the catalog only — no opening stock (that goes
+// through inventory). The grid validates rows before they ever reach here.
+export async function bulkImportProducts(
+  rows: ImportProductInput[],
+): Promise<ImportResult> {
+  const { userId, orgId } = await requireOrgAndUser();
+  const slice = rows.slice(0, MAX_BULK);
+  const failed: ImportResult['failed'] = [];
+  let created = 0;
+
+  for (let i = 0; i < slice.length; i++) {
+    const raw = slice[i]!;
+    try {
+      const data = productCreateSchema.parse({
+        name: raw.name,
+        barcode: raw.barcode ?? null,
+        price: raw.price,
+        cost: raw.cost ?? '0',
+        category: raw.category ?? null,
+      });
+
+      await db.transaction(async (tx) => {
+        if (data.barcode) {
+          const [conflict] = await tx
+            .select({ id: productsSchema.id })
+            .from(productsSchema)
+            .where(
+              and(
+                eq(productsSchema.organizationId, orgId),
+                eq(productsSchema.barcode, data.barcode),
+                eq(productsSchema.deleted, false),
+              ),
+            )
+            .limit(1);
+          if (conflict) {
+            throw new Error(`El código de barras "${data.barcode}" ya existe`);
+          }
+        }
+
+        const categoryId = data.category
+          ? await upsertCategory(tx, orgId, data.category)
+          : null;
+
+        await tx.insert(productsSchema).values({
+          organizationId: orgId,
+          name: data.name,
+          barcode: data.barcode ?? null,
+          price: data.price,
+          cost: data.cost,
+          stock: 0,
+          category: data.category ?? null,
+          categoryId,
+          unitType: 'unit',
+          status: 'published',
+          attributes: {},
+        });
+
+        await refreshCategory(tx, orgId, categoryId);
+      });
+
+      created += 1;
+    } catch (err) {
+      failed.push({
+        row: i + 1,
+        name: raw.name?.trim() || '(sin nombre)',
+        error: err instanceof Error ? err.message : 'Error inesperado',
+      });
+    }
+  }
+
+  if (created > 0) {
+    await logAction({
+      organizationId: orgId,
+      actor: { type: 'user', id: userId },
+      action: 'product.bulk_imported',
+      entityType: 'product',
+      metadata: { created, failed: failed.length },
+    });
+    revalidatePath('/dashboard/products');
+  }
+
+  return { created, failed };
+}
