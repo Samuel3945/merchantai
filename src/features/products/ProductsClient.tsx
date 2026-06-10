@@ -304,7 +304,7 @@ export function ProductsClient({
     setAi({ status: 'loading' });
     startTransition(async () => {
       try {
-        const res = await categorizeProduct(name);
+        const res = await categorizeProduct(name, categories.map(c => c.name));
         if (!res.ok) {
           setAi(res.reason === 'no_credits' ? { status: 'no_credits' } : { status: 'idle' });
           return;

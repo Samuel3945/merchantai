@@ -60,7 +60,10 @@ const suggestionSchema = z.object({
 // credit. NOTE: reuses the 'sales_manager' credit kind as an interim — a
 // dedicated 'product_categorization' kind needs a usage_counters enum
 // migration, tracked as a follow-up.
-export async function categorizeProduct(name: string): Promise<CategorizeResult> {
+export async function categorizeProduct(
+  name: string,
+  knownCategories: string[] = [],
+): Promise<CategorizeResult> {
   const { userId, orgId } = await auth();
   if (!userId || !orgId) {
     throw new Error('Not authenticated');
@@ -87,11 +90,24 @@ export async function categorizeProduct(name: string): Promise<CategorizeResult>
     remaining = credit.remaining;
   }
 
+  // Bias toward the business's own taxonomy: if one of its existing categories
+  // fits, the model should reuse it verbatim instead of inventing a near-duplicate
+  // ("Bebida" vs "Bebidas"). This is the deterministic-meets-LLM part of the
+  // suggestion engine — the org's real categories steer the prompt.
+  const existing = knownCategories
+    .map(c => c.trim())
+    .filter(Boolean)
+    .slice(0, 30);
+  const taxonomyHint
+    = existing.length > 0
+      ? ` El negocio ya usa estas categorías: ${existing.join(', ')}. Si alguna encaja con el producto, devuelve EXACTAMENTE esa (mismas mayúsculas y tildes); si ninguna encaja, propone una nueva.`
+      : '';
+
   const openai = createOpenAI({ apiKey });
   const { object } = await generateObject({
     model: openai(CATEGORIZE_MODEL),
     schema: suggestionSchema,
-    prompt: `Eres un asistente de catálogo para un negocio colombiano. Para el producto llamado "${trimmed}", sugiere una categoría comercial corta y hasta 6 características típicas (marca, tamaño, sabor, etc.). Responde en español. Si no puedes inferir un valor concreto para una característica, déjalo vacío.`,
+    prompt: `Eres un asistente de catálogo para un negocio colombiano. Para el producto llamado "${trimmed}", sugiere una categoría comercial corta y hasta 6 características típicas (marca, tamaño, sabor, etc.). Responde en español. Si no puedes inferir un valor concreto para una característica, déjalo vacío.${taxonomyHint}`,
   });
 
   return {
