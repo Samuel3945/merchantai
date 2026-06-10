@@ -2,8 +2,9 @@
 
 import type { CashSession } from '@/libs/cash-helpers';
 import { useMemo, useState } from 'react';
-import { DatePicker } from '@/components/DatePicker';
+import { DateRangePicker } from '@/components/DateRangePicker';
 import { Select } from '@/components/ui/select';
+import { buildPresetOptions, todayBogota } from '@/utils/DateRange';
 import { cn } from '@/utils/Helpers';
 import { actorLabel, dayKey, money, stamp } from './cash-ui';
 
@@ -16,10 +17,16 @@ type ResultFilter = 'all' | 'diff' | 'square';
  * styled controls. Mirrors CashHistory but rendered per closed session.
  */
 export function CashClosuresHistory(props: { sessions: CashSession[] }) {
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
+  const [start, setStart] = useState('');
+  const [end, setEnd] = useState('');
+  const [activePreset, setActivePreset] = useState<string | null>(null);
   const [actor, setActor] = useState('all');
   const [result, setResult] = useState<ResultFilter>('all');
+
+  const presetOptions = useMemo(
+    () => buildPresetOptions(['today', 'yesterday', '7d', '30d', 'mtd', 'lastMonth']),
+    [],
+  );
 
   const closed = useMemo(
     () => props.sessions.filter(s => s.status === 'closed'),
@@ -56,18 +63,18 @@ export function CashClosuresHistory(props: { sessions: CashSession[] }) {
           return false;
         }
         if (!r.s.closedAt) {
-          return !from && !to;
+          return !start && !end;
         }
         const key = dayKey(r.s.closedAt);
-        if (from && key < from) {
+        if (start && key < start) {
           return false;
         }
-        if (to && key > to) {
+        if (end && key > end) {
           return false;
         }
         return true;
       });
-  }, [closed, result, actor, from, to]);
+  }, [closed, result, actor, start, end]);
 
   const totals = useMemo(() => {
     let surplus = 0;
@@ -83,11 +90,22 @@ export function CashClosuresHistory(props: { sessions: CashSession[] }) {
   }, [rows]);
 
   const hasFilters
-    = from !== '' || to !== '' || actor !== 'all' || result !== 'all';
+    = start !== '' || end !== '' || actor !== 'all' || result !== 'all';
+
+  function applyRange(next: { start: string; end: string; preset: string | null }) {
+    setStart(next.start);
+    setEnd(next.end);
+    setActivePreset(next.preset);
+  }
+
+  function clearRange() {
+    setStart('');
+    setEnd('');
+    setActivePreset(null);
+  }
 
   function clearFilters() {
-    setFrom('');
-    setTo('');
+    clearRange();
     setActor('all');
     setResult('all');
   }
@@ -124,25 +142,21 @@ export function CashClosuresHistory(props: { sessions: CashSession[] }) {
       <div className="
         grid gap-3 border-b border-border bg-muted/30 p-3
         sm:grid-cols-2
-        lg:grid-cols-4
+        lg:grid-cols-3
       "
       >
         <div className="text-xs">
-          <span className="mb-1 block text-muted-foreground">Desde</span>
-          <DatePicker
-            value={from}
-            onChange={setFrom}
-            placeholder="Cualquiera"
-            triggerClassName="w-full"
-          />
-        </div>
-        <div className="text-xs">
-          <span className="mb-1 block text-muted-foreground">Hasta</span>
-          <DatePicker
-            value={to}
-            onChange={setTo}
-            min={from || undefined}
-            placeholder="Cualquiera"
+          <span className="mb-1 block text-muted-foreground">Periodo</span>
+          <DateRangePicker
+            start={start}
+            end={end}
+            compare={false}
+            showCompare={false}
+            activePreset={activePreset}
+            presets={presetOptions}
+            maxDate={todayBogota()}
+            onApply={applyRange}
+            onClear={clearRange}
             triggerClassName="w-full"
           />
         </div>
