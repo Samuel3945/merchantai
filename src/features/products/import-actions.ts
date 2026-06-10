@@ -5,6 +5,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { auth } from '@clerk/nextjs/server';
 import { generateObject } from 'ai';
 import ExcelJS from 'exceljs';
+import { extractText, getDocumentProxy } from 'unpdf';
 import { z } from 'zod';
 import { consumeCredit } from '@/actions/plans';
 import { Env } from '@/libs/Env';
@@ -86,15 +87,47 @@ const extractSchema = z.object({
     .describe('Productos detectados en la imagen'),
 });
 
+type ExtractedProduct = z.infer<typeof extractSchema>['products'][number];
+
 type ExtractResult
   = | { ok: true; rows: Record<string, string>[]; remaining: number }
     | { ok: false; reason: 'no_key' | 'empty' };
 
+// Resolves AI access with BYOK precedence: the org's own OpenAI key bills their
+// account (no credit spent); otherwise the platform key is used and one credit
+// is consumed. null means no usable key — callers return reason:'no_key' instead
+// of throwing, so the UI can tell the owner to configure the key.
+async function resolveAiAccess(
+  orgId: string,
+): Promise<{ apiKey: string; remaining: number } | null> {
+  const byok = await resolveOrgOpenAiKey(orgId);
+  const apiKey = byok ?? Env.OPENAI_API_KEY;
+  if (!apiKey) {
+    return null;
+  }
+  if (byok) {
+    return { apiKey, remaining: Number.POSITIVE_INFINITY };
+  }
+  const credit = await consumeCredit('sales_manager');
+  if (!credit.success) {
+    return null;
+  }
+  return { apiKey, remaining: credit.remaining };
+}
+
+// Maps the model's products into the header-keyed rows recordsToDrafts expects.
+function productsToRows(products: ExtractedProduct[]): Record<string, string>[] {
+  return products
+    .filter(p => p.name.trim() !== '')
+    .map(p => ({
+      nombre: p.name.trim(),
+      precio: p.price.trim(),
+      categoria: p.category.trim(),
+    }));
+}
+
 // AI extraction of products from a PHOTO (price list, shelf, invoice, handwritten
-// note) into the same header-keyed rows the grid consumes. BYOK precedence like
-// categorizeProduct: the org's own key bills their account; otherwise the
-// platform key is used and one credit is spent. Returns reason:'no_key' (so the
-// UI can tell the owner to configure the key) instead of throwing.
+// note) into the same header-keyed rows the grid consumes.
 export async function extractProductsFromImage(
   formData: FormData,
 ): Promise<ExtractResult> {
@@ -108,23 +141,13 @@ export async function extractProductsFromImage(
     throw new TypeError('Archivo inválido');
   }
 
-  const byok = await resolveOrgOpenAiKey(orgId);
-  const apiKey = byok ?? Env.OPENAI_API_KEY;
-  if (!apiKey) {
+  const access = await resolveAiAccess(orgId);
+  if (!access) {
     return { ok: false, reason: 'no_key' };
   }
 
-  let remaining = Number.POSITIVE_INFINITY;
-  if (!byok) {
-    const credit = await consumeCredit('sales_manager');
-    if (!credit.success) {
-      return { ok: false, reason: 'no_key' };
-    }
-    remaining = credit.remaining;
-  }
-
   const image = new Uint8Array(await file.arrayBuffer());
-  const openai = createOpenAI({ apiKey });
+  const openai = createOpenAI({ apiKey: access.apiKey });
   const { object } = await generateObject({
     model: openai(EXTRACT_MODEL),
     schema: extractSchema,
@@ -142,16 +165,52 @@ export async function extractProductsFromImage(
     ],
   });
 
-  const rows = object.products
-    .filter(p => p.name.trim() !== '')
-    .map(p => ({
-      nombre: p.name.trim(),
-      precio: p.price.trim(),
-      categoria: p.category.trim(),
-    }));
-
+  const rows = productsToRows(object.products);
   if (rows.length === 0) {
     return { ok: false, reason: 'empty' };
   }
-  return { ok: true, rows, remaining };
+  return { ok: true, rows, remaining: access.remaining };
+}
+
+// AI extraction from a text-based PDF (price list, catalog, invoice). The text is
+// extracted locally first — so a scanned/imageless PDF returns 'empty' without
+// spending a credit — then structured by the model. Scanned-PDF vision is out of
+// scope (use a photo for those).
+export async function extractProductsFromPdf(
+  formData: FormData,
+): Promise<ExtractResult> {
+  const { userId, orgId } = await auth();
+  if (!userId || !orgId) {
+    throw new Error('Not authenticated');
+  }
+
+  const file = formData.get('file');
+  if (!(file instanceof File)) {
+    throw new TypeError('Archivo inválido');
+  }
+
+  const pdf = await getDocumentProxy(new Uint8Array(await file.arrayBuffer()));
+  const { text } = await extractText(pdf, { mergePages: true });
+  const trimmed = text.trim();
+  if (trimmed === '') {
+    return { ok: false, reason: 'empty' };
+  }
+
+  const access = await resolveAiAccess(orgId);
+  if (!access) {
+    return { ok: false, reason: 'no_key' };
+  }
+
+  const openai = createOpenAI({ apiKey: access.apiKey });
+  const { object } = await generateObject({
+    model: openai(EXTRACT_MODEL),
+    schema: extractSchema,
+    prompt: `Este es el texto extraído de un PDF de un negocio (lista de precios, catálogo o factura). Extrae todos los productos: nombre, precio de venta (solo números) y una categoría comercial corta si puedes inferirla. Ignora encabezados, totales, impuestos y texto que no sea un producto. Responde en español.\n\nTEXTO:\n${trimmed.slice(0, 12000)}`,
+  });
+
+  const rows = productsToRows(object.products);
+  if (rows.length === 0) {
+    return { ok: false, reason: 'empty' };
+  }
+  return { ok: true, rows, remaining: access.remaining };
 }
