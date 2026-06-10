@@ -7,7 +7,7 @@ import { useMemo, useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/utils/Helpers';
 import { bulkImportProducts } from './actions';
-import { parseSpreadsheetRows } from './import-actions';
+import { extractProductsFromImage, parseSpreadsheetRows } from './import-actions';
 import { recordsToDrafts, validateDraft } from './import-parse';
 
 const inputCls
@@ -19,6 +19,7 @@ export function ImportClient({ categoryNames }: { categoryNames: string[] }) {
   const [drafts, setDrafts] = useState<DraftRow[]>([]);
   const [fileName, setFileName] = useState('');
   const [result, setResult] = useState<ImportResult | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
   const errorsById = useMemo(() => {
@@ -41,9 +42,34 @@ export function ImportClient({ categoryNames }: { categoryNames: string[] }) {
       return;
     }
     setResult(null);
+    setNotice(null);
     setFileName(file.name);
 
-    if (/\.xlsx$/i.test(file.name)) {
+    if (file.type.startsWith('image/')) {
+      // Photos go to the vision model, which extracts products into the grid.
+      const fd = new FormData();
+      fd.append('file', file);
+      startTransition(async () => {
+        setNotice('Analizando la imagen con IA…');
+        try {
+          const res = await extractProductsFromImage(fd);
+          if (res.ok) {
+            setDrafts(recordsToDrafts(res.rows));
+            setNotice(null);
+          } else {
+            setDrafts([]);
+            setNotice(
+              res.reason === 'no_key'
+                ? 'La IA no está disponible: configura tu API key de OpenAI en Integraciones (o en el servidor).'
+                : 'No se detectaron productos en la imagen.',
+            );
+          }
+        } catch {
+          setDrafts([]);
+          setNotice('No se pudo analizar la imagen.');
+        }
+      });
+    } else if (/\.xlsx$/i.test(file.name)) {
       // Excel is parsed server-side (the parser stays out of the client bundle).
       const fd = new FormData();
       fd.append('file', file);
@@ -123,10 +149,10 @@ export function ImportClient({ categoryNames }: { categoryNames: string[] }) {
           hover:bg-primary/90
         "
         >
-          Elegir archivo CSV o Excel
+          Elegir archivo o foto
           <input
             type="file"
-            accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,image/*"
             onChange={onFile}
             className="hidden"
           />
@@ -145,6 +171,15 @@ export function ImportClient({ categoryNames }: { categoryNames: string[] }) {
           Descargar plantilla
         </a>
       </div>
+
+      {notice && (
+        <div className="
+          rounded-md border bg-muted/30 px-3 py-2 text-sm text-muted-foreground
+        "
+        >
+          {notice}
+        </div>
+      )}
 
       {result && (
         <div className="space-y-2 rounded-lg border bg-background p-4">
