@@ -6,6 +6,8 @@ import type { UITier } from './WholesaleTiersEditor';
 import {
   Archive,
   ArchiveRestore,
+  Boxes,
+  CalendarClock,
   Copy,
   MoreVertical,
   Pencil,
@@ -39,6 +41,7 @@ import {
 } from './actions';
 import { categorizeProduct } from './ai-categorize';
 import { AttributesEditor } from './AttributesEditor';
+import { ProductTypeToggles } from './ProductTypeToggles';
 import { WholesaleTiersEditor } from './WholesaleTiersEditor';
 
 type ProductStatus = 'draft' | 'scheduled' | 'published' | 'archived';
@@ -615,51 +618,32 @@ export function ProductsClient({
                 </div>
               )}
 
-              {(features.wholesale || (features.perishable && !editing)) && (
-                <div className="flex flex-wrap gap-2">
-                  {features.wholesale && (
-                    <button
-                      type="button"
-                      onClick={() => setForm({ ...form, isWholesale: !form.isWholesale })}
-                      className={cn(
-                        `
-                          rounded-md border px-3 py-2 text-xs font-semibold
-                          transition-colors
-                        `,
-                        form.isWholesale
-                          ? 'border-primary bg-primary/10 text-primary'
-                          : `
-                            border-input text-muted-foreground
-                            hover:bg-accent
-                          `,
-                      )}
-                    >
-                      Por mayor
-                    </button>
-                  )}
-                  {features.perishable && !editing && (
-                    <button
-                      type="button"
-                      onClick={() => setForm({ ...form, isPerishable: !form.isPerishable })}
-                      title="Marca productos que se vencen para registrar caducidad por lote."
-                      className={cn(
-                        `
-                          rounded-md border px-3 py-2 text-xs font-semibold
-                          transition-colors
-                        `,
-                        form.isPerishable
-                          ? 'border-primary bg-primary/10 text-primary'
-                          : `
-                            border-input text-muted-foreground
-                            hover:bg-accent
-                          `,
-                      )}
-                    >
-                      Se vence
-                    </button>
-                  )}
-                </div>
-              )}
+              <ProductTypeToggles
+                rows={[
+                  ...(features.wholesale
+                    ? [{
+                        id: 'product-wholesale',
+                        icon: Boxes,
+                        label: 'Por mayor',
+                        description: 'Precio especial por cantidad',
+                        checked: form.isWholesale,
+                        onCheckedChange: (v: boolean) =>
+                          setForm(f => ({ ...f, isWholesale: v })),
+                      }]
+                    : []),
+                  ...(features.perishable && !editing
+                    ? [{
+                        id: 'product-perishable',
+                        icon: CalendarClock,
+                        label: 'Se vence',
+                        description: 'Controla la caducidad por lote',
+                        checked: form.isPerishable,
+                        onCheckedChange: (v: boolean) =>
+                          setForm(f => ({ ...f, isPerishable: v })),
+                      }]
+                    : []),
+                ]}
+              />
 
               <div>
                 <label className={labelCls}>
