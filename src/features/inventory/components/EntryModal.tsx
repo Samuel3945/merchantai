@@ -3,6 +3,7 @@
 import type { InventoryProduct, MovementReason } from '@/actions/inventory';
 import { useState, useTransition } from 'react';
 import { recordMovement } from '@/actions/inventory';
+import { DatePicker } from '@/components/DatePicker';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -13,7 +14,6 @@ import {
 } from '@/components/ui/dialog';
 import { Select } from '@/components/ui/select';
 import { toast } from '@/components/ui/toast-store';
-import { cn } from '@/utils/Helpers';
 import {
   ENTRY_REASON_OPTIONS,
   entryFormSchema,
@@ -174,12 +174,12 @@ export function EntryModal({
                 {' '}
                 <span className="text-destructive">*</span>
               </label>
-              <input
-                required
-                type="date"
+              <DatePicker
                 value={expiresAt}
-                onChange={e => setExpiresAt(e.target.value)}
-                className={cn(inputCls)}
+                min={new Date().toISOString().slice(0, 10)}
+                placeholder="¿Cuándo se vence este lote?"
+                onChange={setExpiresAt}
+                triggerClassName="w-full"
               />
             </div>
           )}
