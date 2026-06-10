@@ -135,6 +135,43 @@ export const productsSchema = pgTable(
   ],
 );
 
+// Per-org business-intelligence snapshot — PLATFORM-level analytics, never shown
+// to the shop. Materialized (one row per org) and recomputed deterministically
+// from products/sales/stock_movements/categories by libs/business-profile.ts (no
+// LLM, same philosophy as smart-stock). Captures what kinds of businesses use the
+// software, how big, and how they sell, for later analysis. All counts/sums are
+// recomputed wholesale so the snapshot can't drift.
+export const businessProfileSchema = pgTable('business_profile', {
+  organizationId: text('organization_id').primaryKey(),
+  // Catalog shape.
+  productCount: integer('product_count').default(0).notNull(),
+  activeProductCount: integer('active_product_count').default(0).notNull(),
+  perishableCount: integer('perishable_count').default(0).notNull(),
+  wholesaleCount: integer('wholesale_count').default(0).notNull(),
+  distinctCategories: integer('distinct_categories').default(0).notNull(),
+  totalStockUnits: integer('total_stock_units').default(0).notNull(),
+  avgPrice: numeric('avg_price', { precision: 12, scale: 2 }),
+  minPrice: numeric('min_price', { precision: 12, scale: 2 }),
+  maxPrice: numeric('max_price', { precision: 12, scale: 2 }),
+  // Commerce, rolling 30-day window.
+  unitsSold30d: integer('units_sold_30d').default(0).notNull(),
+  salesCount30d: integer('sales_count_30d').default(0).notNull(),
+  distinctProductsSold30d: integer('distinct_products_sold_30d')
+    .default(0)
+    .notNull(),
+  purchaseEvents30d: integer('purchase_events_30d').default(0).notNull(),
+  // Derived.
+  topCategories: jsonb('top_categories')
+    .$type<{ name: string; usageCount: number }[]>()
+    .default([])
+    .notNull(),
+  // Coarse v1 classification from objective ratios (refinable later from the
+  // stored signals): 'grocery_fresh' | 'wholesale' | 'retail_general' | null.
+  inferredBusinessType: text('inferred_business_type'),
+  computedAt: timestamp('computed_at', { mode: 'date' }).defaultNow().notNull(),
+  createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+});
+
 export const saleStatusEnum = pgEnum('sale_status', [
   'completed',
   'settled',
