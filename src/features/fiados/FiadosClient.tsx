@@ -2,13 +2,16 @@
 
 import type { ClientDebt, FiadosOverview } from '@/actions/fiados';
 import type { FiadoDueState } from '@/libs/fiados-shared';
-import { useId, useState, useTransition } from 'react';
+import type { RangeOption } from '@/utils/DateRange';
+import { Search, X } from 'lucide-react';
+import { useId, useMemo, useState, useTransition } from 'react';
 import {
   abonarFiado,
   extenderPlazo,
   fetchFiadosHistory,
   fetchFiadosOverview,
 } from '@/actions/fiados';
+import { DateRangePicker } from '@/components/DateRangePicker';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
@@ -17,6 +20,7 @@ import {
   FIADO_PAYMENT_METHODS,
 } from '@/libs/fiados-shared';
 import { Link } from '@/libs/I18nNavigation';
+import { addDays, todayBogota } from '@/utils/DateRange';
 import { cn } from '@/utils/Helpers';
 import { DUE_STATE_META, formatDate, formatMoney, relativeTime } from './ui';
 
@@ -476,12 +480,104 @@ const FILTERS: { value: Filter; label: string }[] = [
   { value: 'due_soon', label: 'Próximos a vencer' },
 ];
 
+type SortKey = 'balance_desc' | 'balance_asc' | 'oldest' | 'recent' | 'name';
+
+const SORT_OPTIONS: { value: SortKey; label: string }[] = [
+  { value: 'balance_desc', label: 'Mayor deuda' },
+  { value: 'balance_asc', label: 'Menor deuda' },
+  { value: 'oldest', label: 'Debe hace más tiempo' },
+  { value: 'recent', label: 'Más reciente' },
+  { value: 'name', label: 'Nombre (A–Z)' },
+];
+
+// Pending cards rank by outstanding balance; paid history has no balance left,
+// so it ranks by the original amount instead.
+function amountOf(c: ClientDebt, history: boolean): number {
+  return history ? c.original : c.balance;
+}
+
+// Single client-side pipeline: due-state chips (pending only), free-text search
+// over name + phone digits, due-date range, then sort. Pure so the visible list
+// recomputes from one memo.
+function filterAndSortClients(
+  list: ClientDebt[],
+  opts: {
+    search: string;
+    start: string;
+    end: string;
+    sort: SortKey;
+    dueFilter: Filter;
+    history: boolean;
+  },
+): ClientDebt[] {
+  const { search, start, end, sort, dueFilter, history } = opts;
+  const q = search.trim().toLowerCase();
+  const qDigits = q.replace(/\D/g, '');
+
+  let out = list;
+  if (!history && dueFilter !== 'all') {
+    out = out.filter(c => c.dueState === dueFilter);
+  }
+  if (q) {
+    out = out.filter(
+      c =>
+        c.name.toLowerCase().includes(q)
+        || (qDigits.length > 0 && c.phone.replace(/\D/g, '').includes(qDigits)),
+    );
+  }
+  if (start && end) {
+    out = out.filter((c) => {
+      const d = c.dueDate.slice(0, 10);
+      return d >= start && d <= end;
+    });
+  }
+
+  return [...out].sort((a, b) => {
+    switch (sort) {
+      case 'balance_asc':
+        return amountOf(a, history) - amountOf(b, history);
+      case 'oldest':
+        return a.dueDate.localeCompare(b.dueDate);
+      case 'recent':
+        return b.dueDate.localeCompare(a.dueDate);
+      case 'name':
+        return a.name.localeCompare(b.name, 'es');
+      case 'balance_desc':
+      default:
+        return amountOf(b, history) - amountOf(a, history);
+    }
+  });
+}
+
 export function FiadosClient({ initial }: { initial: FiadosOverview }) {
   const [data, setData] = useState<FiadosOverview>(initial);
   const [history, setHistory] = useState<ClientDebt[] | null>(null);
   const [tab, setTab] = useState<Tab>('pending');
   const [filter, setFilter] = useState<Filter>('all');
+  const [search, setSearch] = useState('');
+  const [start, setStart] = useState('');
+  const [end, setEnd] = useState('');
+  const [activePreset, setActivePreset] = useState<string | null>(null);
+  const [sort, setSort] = useState<SortKey>('balance_desc');
   const [pending, startTransition] = useTransition();
+
+  // Fiado-specific presets filter by due date (overdue + upcoming), unlike the
+  // dashboard's past-only windows. The range picker itself is the same.
+  const presetOptions = useMemo<RangeOption[]>(() => {
+    const today = todayBogota();
+    const [y, m] = today.split('-').map(Number);
+    const lastDay = new Date(Date.UTC(y ?? 1970, m ?? 1, 0)).getUTCDate();
+    const endOfMonth = `${today.slice(0, 7)}-${String(lastDay).padStart(2, '0')}`;
+    return [
+      { key: 'overdue', label: 'Vencidos', range: { start: addDays(today, -365), end: addDays(today, -1) } },
+      { key: 'today', label: 'Vencen hoy', range: { start: today, end: today } },
+      { key: '7d', label: 'Próximos 7 días', range: { start: today, end: addDays(today, 7) } },
+      { key: '30d', label: 'Próximos 30 días', range: { start: today, end: addDays(today, 30) } },
+      { key: 'mtd', label: 'Este mes', range: { start: `${today.slice(0, 7)}-01`, end: endOfMonth } },
+    ];
+  }, []);
+  // Due dates can sit up to ~2 years out, so the calendar must allow the future.
+  const maxDate = useMemo(() => addDays(todayBogota(), 730), []);
 
   function reload() {
     startTransition(async () => {
@@ -505,11 +601,105 @@ export function FiadosClient({ initial }: { initial: FiadosOverview }) {
     }
   }
 
+  function applyRange(next: { start: string; end: string; preset: string | null }) {
+    setStart(next.start);
+    setEnd(next.end);
+    setActivePreset(next.preset);
+  }
+
+  function clearRange() {
+    setStart('');
+    setEnd('');
+    setActivePreset(null);
+  }
+
+  function clearAllFilters() {
+    setSearch('');
+    clearRange();
+    setFilter('all');
+  }
+
   const { metrics } = data;
-  const filtered
-    = filter === 'all'
-      ? data.clients
-      : data.clients.filter(c => c.dueState === filter);
+  const isHistory = tab === 'history';
+  const source = useMemo(
+    () => (isHistory ? history ?? [] : data.clients),
+    [isHistory, history, data.clients],
+  );
+  const visible = useMemo(
+    () =>
+      filterAndSortClients(source, {
+        search,
+        start,
+        end,
+        sort,
+        dueFilter: filter,
+        history: isHistory,
+      }),
+    [source, search, start, end, sort, filter, isHistory],
+  );
+  const sourceCount = isHistory ? history?.length ?? 0 : data.clients.length;
+  const hasActiveFilters
+    = search.trim() !== '' || (start !== '' && end !== '') || filter !== 'all';
+
+  const listSection = (() => {
+    if (isHistory && history === null) {
+      return (
+        <div className="p-10 text-center text-sm text-muted-foreground">
+          Cargando historial…
+        </div>
+      );
+    }
+    if (sourceCount === 0) {
+      return isHistory
+        ? (
+            <div className="
+              rounded-xl border bg-card p-10 text-center text-sm
+              text-muted-foreground
+            "
+            >
+              Todavía no hay fiados pagados en el historial.
+            </div>
+          )
+        : (
+            <EmptyState />
+          );
+    }
+    if (visible.length === 0) {
+      return (
+        <div className="
+          flex flex-col items-center gap-3 rounded-xl border bg-card p-10
+          text-center
+        "
+        >
+          <p className="text-sm text-muted-foreground">
+            Ningún cliente coincide con los filtros.
+          </p>
+          {hasActiveFilters && (
+            <Button size="sm" variant="secondary" onClick={clearAllFilters}>
+              Limpiar filtros
+            </Button>
+          )}
+        </div>
+      );
+    }
+    return (
+      <div className="
+        grid grid-cols-1 gap-3
+        md:grid-cols-2
+        xl:grid-cols-3
+      "
+      >
+        {visible.map(c => (
+          <ClientCard
+            key={c.clientKey}
+            client={c}
+            onChange={reload}
+            history={isHistory}
+          />
+        ))}
+      </div>
+    );
+  })();
 
   return (
     <div className="space-y-6">
@@ -588,83 +778,122 @@ export function FiadosClient({ initial }: { initial: FiadosOverview }) {
         </Button>
       </div>
 
-      {tab === 'pending'
-        ? (
-            <>
-              <div className="flex flex-wrap gap-2">
-                {FILTERS.map(f => (
-                  <Button
-                    key={f.value}
-                    size="sm"
-                    variant={filter === f.value ? 'default' : 'secondary'}
-                    onClick={() => setFilter(f.value)}
-                  >
-                    {f.label}
-                  </Button>
-                ))}
-              </div>
+      {/* Toolbar: search + due-date range + sort, then the result count. */}
+      <div className="space-y-3">
+        <div className="
+          flex flex-col gap-2
+          sm:flex-row sm:items-center
+        "
+        >
+          <div className="
+            relative
+            sm:flex-1
+          "
+          >
+            <Search className="
+              pointer-events-none absolute top-1/2 left-3 size-4
+              -translate-y-1/2 text-muted-foreground
+            "
+            />
+            <input
+              type="search"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Buscar por nombre o teléfono…"
+              aria-label="Buscar fiado"
+              className="
+                h-9 w-full rounded-lg border border-input bg-card px-9 text-sm
+                outline-none
+                focus-visible:border-primary focus-visible:ring-2
+                focus-visible:ring-ring/30
+              "
+            />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch('')}
+                aria-label="Limpiar búsqueda"
+                className="
+                  absolute top-1/2 right-2 flex size-6 -translate-y-1/2
+                  items-center justify-center rounded-md text-muted-foreground
+                  transition-colors
+                  hover:bg-accent hover:text-foreground
+                "
+              >
+                <X className="size-4" />
+              </button>
+            )}
+          </div>
+          <DateRangePicker
+            start={start}
+            end={end}
+            compare={false}
+            activePreset={activePreset}
+            presets={presetOptions}
+            maxDate={maxDate}
+            showCompare={false}
+            onApply={applyRange}
+            onClear={clearRange}
+            triggerClassName="h-9 sm:w-56"
+          />
+          <Select
+            value={sort}
+            onValueChange={v => setSort(v as SortKey)}
+            options={SORT_OPTIONS}
+            aria-label="Ordenar fiados"
+            className="
+              h-9
+              sm:w-52
+            "
+          />
+        </div>
 
-              {data.clients.length === 0
-                ? (
-                    <EmptyState />
-                  )
-                : filtered.length === 0
-                  ? (
-                      <div className="
-                        rounded-xl border bg-card p-10 text-center text-sm
-                        text-muted-foreground
-                      "
-                      >
-                        Ningún cliente coincide con el filtro.
-                      </div>
-                    )
-                  : (
-                      <div className="
-                        grid grid-cols-1 gap-3
-                        md:grid-cols-2
-                        xl:grid-cols-3
-                      "
-                      >
-                        {filtered.map(c => (
-                          <ClientCard key={c.clientKey} client={c} onChange={reload} />
-                        ))}
-                      </div>
-                    )}
-            </>
-          )
-        : (
-            history === null
-              ? (
-                  <div className="
-                    p-10 text-center text-sm text-muted-foreground
-                  "
-                  >
-                    Cargando historial…
-                  </div>
-                )
-              : history.length === 0
-                ? (
-                    <div className="
-                      rounded-xl border bg-card p-10 text-center text-sm
-                      text-muted-foreground
-                    "
-                    >
-                      Todavía no hay fiados pagados en el historial.
-                    </div>
-                  )
-                : (
-                    <div className="
-                      grid grid-cols-1 gap-3
-                      md:grid-cols-2
-                      xl:grid-cols-3
-                    "
-                    >
-                      {history.map(c => (
-                        <ClientCard key={c.clientKey} client={c} onChange={reload} history />
-                      ))}
-                    </div>
-                  )
-          )}
+        {tab === 'pending' && (
+          <div className="flex flex-wrap items-center gap-2">
+            {FILTERS.map(f => (
+              <Button
+                key={f.value}
+                size="sm"
+                variant={filter === f.value ? 'default' : 'secondary'}
+                onClick={() => setFilter(f.value)}
+              >
+                {f.label}
+              </Button>
+            ))}
+          </div>
+        )}
+
+        {sourceCount > 0 && (
+          <div className="
+            flex items-center justify-between gap-2 text-xs
+            text-muted-foreground
+          "
+          >
+            <span>
+              Mostrando
+              {' '}
+              {visible.length}
+              {' de '}
+              {sourceCount}
+              {isHistory ? ' pagados' : ' con deuda'}
+            </span>
+            {hasActiveFilters && (
+              <button
+                type="button"
+                onClick={clearAllFilters}
+                className="
+                  font-medium text-primary
+                  hover:underline
+                "
+              >
+                Limpiar filtros
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {listSection}
     </div>
   );
 }
