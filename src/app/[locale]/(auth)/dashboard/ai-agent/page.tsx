@@ -1,5 +1,4 @@
 import { setRequestLocale } from 'next-intl/server';
-import { currentPlan } from '@/actions/plans';
 import { getSmartStockSettings } from '@/actions/smart-stock';
 import { AgentPersonaSection } from '@/features/ai-agent/AgentPersonaSection';
 import { AiAgentClient } from '@/features/ai-agent/AiAgentClient';
@@ -13,10 +12,7 @@ export default async function DashboardAiAgentPage(props: {
   const { locale } = await props.params;
   setRequestLocale(locale);
 
-  const [snapshot, smartStock] = await Promise.all([
-    currentPlan(),
-    getSmartStockSettings(),
-  ]);
+  const smartStock = await getSmartStockSettings();
 
   return (
     <>
@@ -28,8 +24,8 @@ export default async function DashboardAiAgentPage(props: {
       <div className="space-y-10">
         <AgentPersonaSection />
 
-        {/* Chat en vivo — habla con el agente (Sales Manager / Customer Service). */}
-        <AiAgentClient initialSnapshot={snapshot} />
+        {/* Chat en vivo — habla con el agente Sales Manager. */}
+        <AiAgentClient />
 
         {/* Operación inteligente. Siempre visible: bloqueado como upsell si no es Pro. */}
         <SmartModelsSection initialSettings={smartStock} />

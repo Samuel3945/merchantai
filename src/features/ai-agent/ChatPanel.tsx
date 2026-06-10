@@ -78,7 +78,7 @@ export function ChatPanel({
 }: {
   api: string;
   placeholder: string;
-  onMessageComplete: () => void;
+  onMessageComplete?: () => void;
   onNoCredits: () => void;
 }) {
   const [inputValue, setInputValue] = useState('');
@@ -89,7 +89,7 @@ export function ChatPanel({
   const { messages, status, error, sendMessage, setMessages } = useChat({
     transport,
     onFinish: () => {
-      onMessageComplete();
+      onMessageComplete?.();
     },
     onError: (err) => {
       if (err.message?.includes('402') || err.message?.includes('no_credits')) {
@@ -119,16 +119,6 @@ export function ChatPanel({
     "
     >
       <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto p-4">
-        {messages.length === 0 && (
-          <div className="
-            flex h-full items-center justify-center text-sm
-            text-muted-foreground
-          "
-          >
-            Escribe tu primera pregunta para comenzar.
-          </div>
-        )}
-
         {messages.map((m) => {
           const isUser = m.role === 'user';
           const fullText = m.parts
