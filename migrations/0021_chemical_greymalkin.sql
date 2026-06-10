@@ -1,0 +1,20 @@
+CREATE TABLE "business_profile" (
+	"organization_id" text PRIMARY KEY NOT NULL,
+	"product_count" integer DEFAULT 0 NOT NULL,
+	"active_product_count" integer DEFAULT 0 NOT NULL,
+	"perishable_count" integer DEFAULT 0 NOT NULL,
+	"wholesale_count" integer DEFAULT 0 NOT NULL,
+	"distinct_categories" integer DEFAULT 0 NOT NULL,
+	"total_stock_units" integer DEFAULT 0 NOT NULL,
+	"avg_price" numeric(12, 2),
+	"min_price" numeric(12, 2),
+	"max_price" numeric(12, 2),
+	"units_sold_30d" integer DEFAULT 0 NOT NULL,
+	"sales_count_30d" integer DEFAULT 0 NOT NULL,
+	"distinct_products_sold_30d" integer DEFAULT 0 NOT NULL,
+	"purchase_events_30d" integer DEFAULT 0 NOT NULL,
+	"top_categories" jsonb DEFAULT '[]'::jsonb NOT NULL,
+	"inferred_business_type" text,
+	"computed_at" timestamp DEFAULT now() NOT NULL,
+	"created_at" timestamp DEFAULT now() NOT NULL
+);
