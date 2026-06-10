@@ -12,7 +12,8 @@ test.describe('Sanity', () => {
     test('should display the homepage', async ({ page }) => {
       await page.goto('/');
 
-      await expect(page.getByText('The perfect SaaS template to build')).toBeVisible();
+      // Default locale is Spanish; assert the marketing hero rendered.
+      await expect(page.getByText(/punto de venta/i).first()).toBeVisible();
     });
   });
 });
