@@ -1264,3 +1264,159 @@ export const einvoiceEmissionsSchema = pgTable(
     ),
   ],
 );
+
+// ── Domicilios (delivery orders) ────────────────────────────────────────────
+// A delivery_order is what the courier ("domiciliario") sees and acts on: an
+// order to carry to an address. The AI agent (WhatsApp intake) or the POS
+// create it; the courier moves it through the status state machine and the
+// customer is notified on each transition. `delivery_events` is the append-only
+// ledger of everything that happened to the order (status changes, notes,
+// outbound notifications) — it mirrors the fiado_movements pattern and IS the
+// "Historial" the courier view renders.
+//
+// State machine: pending → assigned → in_transit → delivered
+//                (any non-terminal) → cancelled
+// A cancellation (customer regrets the purchase) flips status to 'cancelled',
+// which drops the order from the courier's active board and triggers a notify.
+export const deliveryStatusEnum = pgEnum('delivery_status', [
+  'pending',
+  'assigned',
+  'in_transit',
+  'delivered',
+  'cancelled',
+]);
+
+export const deliveryOrdersSchema = pgTable(
+  'delivery_orders',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: text('organization_id').notNull(),
+    // Linked customer (holds the WhatsApp number used for notifications). SET
+    // NULL so archiving a customer never wipes the delivery history.
+    customerId: uuid('customer_id').references(() => customersSchema.id, {
+      onDelete: 'set null',
+    }),
+    // Set when a delivered order auto-generates a sale, or when it originated
+    // from a POS sale. SET NULL keeps the delivery row if the sale is purged.
+    saleId: uuid('sale_id').references(() => salesSchema.id, {
+      onDelete: 'set null',
+    }),
+    // Assigned courier (a pos_user). SET NULL so removing an employee never
+    // deletes the order; it just becomes unassigned.
+    courierId: uuid('courier_id').references(() => posUsersSchema.id, {
+      onDelete: 'set null',
+    }),
+    status: deliveryStatusEnum('status').default('pending').notNull(),
+    // Denormalized snapshot so the courier view renders without extra joins and
+    // survives even if the customer record later changes.
+    customerName: text('customer_name'),
+    customerPhone: text('customer_phone'),
+    address: text('address').notNull(),
+    addressNotes: text('address_notes'),
+    // What to deliver: [{ name, qty, price }]. A snapshot (not FKs) so the
+    // courier always sees what was agreed even if products change later.
+    items: jsonb('items').default([]).notNull(),
+    subtotal: numeric('subtotal', { precision: 12, scale: 2 })
+      .default('0')
+      .notNull(),
+    deliveryFee: numeric('delivery_fee', { precision: 12, scale: 2 })
+      .default('0')
+      .notNull(),
+    total: numeric('total', { precision: 12, scale: 2 })
+      .default('0')
+      .notNull(),
+    // Where the order came from: 'manual' | 'ai_agent' | 'pos'. Lets us tell
+    // agent-created orders apart and drive analytics.
+    source: text('source').default('manual').notNull(),
+    notes: text('notes'),
+    assignedAt: timestamp('assigned_at', { mode: 'date' }),
+    inTransitAt: timestamp('in_transit_at', { mode: 'date' }),
+    deliveredAt: timestamp('delivered_at', { mode: 'date' }),
+    cancelledAt: timestamp('cancelled_at', { mode: 'date' }),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { mode: 'date' })
+      .defaultNow()
+      .$onUpdate(() => new Date())
+      .notNull(),
+  },
+  table => [
+    // The courier board and admin list filter org + status, newest first.
+    index('delivery_orders_org_status_created_idx').on(
+      table.organizationId,
+      table.status,
+      table.createdAt,
+    ),
+    // "My deliveries" for a courier scans org + courier.
+    index('delivery_orders_org_courier_idx').on(
+      table.organizationId,
+      table.courierId,
+    ),
+    index('delivery_orders_customer_idx').on(table.customerId),
+  ],
+);
+
+export const deliveryEventTypeEnum = pgEnum('delivery_event_type', [
+  'created',
+  'assigned',
+  'status_change',
+  'note',
+  'customer_notified',
+]);
+
+export const deliveryEventsSchema = pgTable(
+  'delivery_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    deliveryOrderId: uuid('delivery_order_id')
+      .notNull()
+      .references(() => deliveryOrdersSchema.id, { onDelete: 'cascade' }),
+    organizationId: text('organization_id').notNull(),
+    type: deliveryEventTypeEnum('type').notNull(),
+    // Set for status_change rows: the transition recorded.
+    fromStatus: deliveryStatusEnum('from_status'),
+    toStatus: deliveryStatusEnum('to_status'),
+    note: text('note'),
+    // Who produced the event — courier (cashier), admin (user), agent (api),
+    // cron (system). Reuses the audit actor vocabulary.
+    actorType: auditActorTypeEnum('actor_type').default('user').notNull(),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+  },
+  table => [
+    // The timeline: every event of an order, oldest first.
+    index('delivery_events_order_created_idx').on(
+      table.deliveryOrderId,
+      table.createdAt,
+    ),
+  ],
+);
+
+export const deliveryOrdersRelations = relations(
+  deliveryOrdersSchema,
+  ({ one, many }) => ({
+    customer: one(customersSchema, {
+      fields: [deliveryOrdersSchema.customerId],
+      references: [customersSchema.id],
+    }),
+    sale: one(salesSchema, {
+      fields: [deliveryOrdersSchema.saleId],
+      references: [salesSchema.id],
+    }),
+    courier: one(posUsersSchema, {
+      fields: [deliveryOrdersSchema.courierId],
+      references: [posUsersSchema.id],
+    }),
+    events: many(deliveryEventsSchema),
+  }),
+);
+
+export const deliveryEventsRelations = relations(
+  deliveryEventsSchema,
+  ({ one }) => ({
+    order: one(deliveryOrdersSchema, {
+      fields: [deliveryEventsSchema.deliveryOrderId],
+      references: [deliveryOrdersSchema.id],
+    }),
+  }),
+);

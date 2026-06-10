@@ -19,7 +19,6 @@ const KEYS = [
   'features.wholesale',
   'features.perishable',
   // Modules
-  'modules.delivery',
   'modules.employees',
   'fiado-enabled',
   // Fiscal
@@ -92,7 +91,6 @@ export default async function DashboardSettingsPage(props: {
           'features.perishable': asBool(map['features.perishable']),
         }}
         modules={{
-          'modules.delivery': asBool(map['modules.delivery']),
           'modules.employees': asBool(map['modules.employees']),
         }}
         fiscal={{
