@@ -2,7 +2,8 @@
 
 import type { Direction } from './cash-ui';
 import type { CashMovement } from '@/libs/cash-helpers';
-import { useId, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
+import { Select } from '@/components/ui/select';
 import { cn } from '@/utils/Helpers';
 import { describeMovement, money } from './cash-ui';
 
@@ -45,11 +46,6 @@ function actorLabel(createdBy: string): string {
  * styling, instant, familiar — while the table stays dense to use the full width.
  */
 export function CashHistory(props: { movements: CashMovement[] }) {
-  const fromId = useId();
-  const toId = useId();
-  const actorId = useId();
-  const dirId = useId();
-
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [actor, setActor] = useState('all');
@@ -117,8 +113,8 @@ export function CashHistory(props: { movements: CashMovement[] }) {
   return (
     <div className="rounded-xl border border-border bg-card shadow-xs">
       <div className="
-        flex flex-col gap-3 border-b border-border px-5 py-3
-        sm:flex-row sm:items-end sm:justify-between
+        flex flex-col gap-1 border-b border-border px-5 py-3
+        sm:flex-row sm:items-center sm:justify-between
       "
       >
         <div>
@@ -127,69 +123,74 @@ export function CashHistory(props: { movements: CashMovement[] }) {
             Todos los movimientos quedan registrados de forma permanente.
           </p>
         </div>
+        {hasFilters && (
+          <button
+            type="button"
+            onClick={clearFilters}
+            className="
+              self-start text-xs font-medium text-primary
+              hover:underline
+              sm:self-auto
+            "
+          >
+            Limpiar filtros
+          </button>
+        )}
+      </div>
 
-        {/* Native HTML filter controls — default browser styling on purpose */}
-        <div className="flex flex-wrap items-end gap-x-4 gap-y-2 text-xs">
-          <label className="flex flex-col gap-1" htmlFor={fromId}>
-            <span className="text-muted-foreground">Desde</span>
-            <input
-              id={fromId}
-              type="date"
-              value={from}
-              max={to || undefined}
-              onChange={e => setFrom(e.target.value)}
-            />
-          </label>
-          <label className="flex flex-col gap-1" htmlFor={toId}>
-            <span className="text-muted-foreground">Hasta</span>
-            <input
-              id={toId}
-              type="date"
-              value={to}
-              min={from || undefined}
-              onChange={e => setTo(e.target.value)}
-            />
-          </label>
-          <label className="flex flex-col gap-1" htmlFor={actorId}>
-            <span className="text-muted-foreground">Responsable</span>
-            <select
-              id={actorId}
-              value={actor}
-              onChange={e => setActor(e.target.value)}
-            >
-              <option value="all">Todos</option>
-              {actors.map(a => (
-                <option key={a.value} value={a.value}>
-                  {a.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1" htmlFor={dirId}>
-            <span className="text-muted-foreground">Movimiento</span>
-            <select
-              id={dirId}
-              value={direction}
-              onChange={e => setDirection(e.target.value as DirectionFilter)}
-            >
-              <option value="all">Todos</option>
-              <option value="in">Entradas</option>
-              <option value="out">Salidas</option>
-            </select>
-          </label>
-          {hasFilters && (
-            <button
-              type="button"
-              onClick={clearFilters}
-              className="
-                pb-1.5 text-xs font-medium text-primary
-                hover:underline
-              "
-            >
-              Limpiar
-            </button>
-          )}
-        </div>
+      {/* Filters — styled to match the rest of the app */}
+      <div className="
+        grid gap-3 border-b border-border bg-muted/30 p-3
+        sm:grid-cols-2
+        lg:grid-cols-4
+      "
+      >
+        <label className="text-xs">
+          <span className="mb-1 block text-muted-foreground">Desde</span>
+          <input
+            type="date"
+            value={from}
+            max={to || undefined}
+            onChange={e => setFrom(e.target.value)}
+            className="
+              h-9 w-full rounded-md border border-input bg-background px-2
+              text-sm
+            "
+          />
+        </label>
+        <label className="text-xs">
+          <span className="mb-1 block text-muted-foreground">Hasta</span>
+          <input
+            type="date"
+            value={to}
+            min={from || undefined}
+            onChange={e => setTo(e.target.value)}
+            className="
+              h-9 w-full rounded-md border border-input bg-background px-2
+              text-sm
+            "
+          />
+        </label>
+        <label className="text-xs">
+          <span className="mb-1 block text-muted-foreground">Responsable</span>
+          <Select
+            value={actor}
+            onValueChange={setActor}
+            options={[{ value: 'all', label: 'Todos' }, ...actors]}
+          />
+        </label>
+        <label className="text-xs">
+          <span className="mb-1 block text-muted-foreground">Movimiento</span>
+          <Select
+            value={direction}
+            onValueChange={v => setDirection(v as DirectionFilter)}
+            options={[
+              { value: 'all', label: 'Todos' },
+              { value: 'in', label: 'Entradas' },
+              { value: 'out', label: 'Salidas' },
+            ]}
+          />
+        </label>
       </div>
 
       {/* Summary of the filtered set */}
