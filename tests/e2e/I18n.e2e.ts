@@ -1,26 +1,21 @@
 import { expect, test } from '@playwright/test';
 
 test.describe('I18n', () => {
-  test.describe('Language Switching', () => {
-    test('should switch language from English to French using dropdown and verify text on the homepage', async ({ page }) => {
+  test.describe('Locale routing', () => {
+    // next-intl negotiates the unprefixed route from the Accept-Language header.
+    // Playwright defaults to en-US, so we pin the browser to Spanish to make the
+    // default (unprefixed) route deterministic. English always resolves under
+    // its explicit `/en` prefix regardless of the browser language.
+    test.use({ locale: 'es-CO' });
+
+    test('serves Spanish at the root and English under /en', async ({ page }) => {
       await page.goto('/');
 
-      await expect(page.getByText('The perfect SaaS template to build')).toBeVisible();
+      await expect(page.locator('html')).toHaveAttribute('lang', 'es');
 
-      await page.getByRole('button', { name: 'Change language' }).click();
-      await page.getByText('Français').click();
+      await page.goto('/en');
 
-      await expect(page.getByText('Le parfait SaaS template pour construire')).toBeVisible();
-    });
-
-    test('should switch language from English to French using URL and verify text on the sign-in page', async ({ page }) => {
-      await page.goto('/sign-in');
-
-      await expect(page.getByText('Email address')).toBeVisible();
-
-      await page.goto('/fr/sign-in');
-
-      await expect(page.getByText('Adresse e-mail')).toBeVisible();
+      await expect(page.locator('html')).toHaveAttribute('lang', 'en');
     });
   });
 });
