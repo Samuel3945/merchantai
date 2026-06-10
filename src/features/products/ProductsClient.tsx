@@ -1,6 +1,6 @@
 'use client';
 
-import type { BulkPriceMode, ProductRow } from './actions';
+import type { BulkPriceMode, CategoryRow, ProductRow } from './actions';
 import type { AttrRow } from './AttributesEditor';
 import type { UITier } from './WholesaleTiersEditor';
 import {
@@ -39,6 +39,7 @@ import {
   bulkSetProductStatus,
   createProduct,
   deleteProduct,
+  listCategories,
   listProducts,
   setProductStatus,
   updateProduct,
@@ -173,6 +174,8 @@ export function ProductsClient({
   // Bulk-edit selection (set of product ids) and the raise-price dialog.
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [priceDialogOpen, setPriceDialogOpen] = useState(false);
+  // The org's categories, for the form's autocomplete + learned suggestions.
+  const [categories, setCategories] = useState<CategoryRow[]>([]);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastCategorizedRef = useRef<string>('');
 
@@ -202,6 +205,18 @@ export function ProductsClient({
     };
   }, [fetchRows]);
 
+  // Categories are loaded once and refreshed after a create/edit, since either
+  // can introduce a new category or shift usage counts.
+  const fetchCategories = useCallback(() => {
+    startTransition(async () => {
+      setCategories(await listCategories());
+    });
+  }, []);
+
+  useEffect(() => {
+    fetchCategories();
+  }, [fetchCategories]);
+
   const totalStock = useMemo(
     () => rows.reduce((acc, r) => acc + r.stock, 0),
     [rows],
@@ -221,6 +236,18 @@ export function ProductsClient({
   const priceNum = Number.parseFloat(form.price) || 0;
   const initialQtyNum = Number.parseFloat(form.initialQty) || 0;
   const initialCostNum = Number.parseFloat(form.initialCost) || 0;
+
+  // Characteristic suggestions learned for the typed category (matched by
+  // normalized name), merged with any AI suggestions and deduped. This makes the
+  // attribute_template useful even when the AI categorizer is unavailable.
+  const attributeSuggestions = useMemo(() => {
+    const slug = form.category.trim().toLowerCase();
+    const match = slug
+      ? categories.find(c => c.name.trim().toLowerCase() === slug)
+      : undefined;
+    const learned = match ? match.attributeTemplate.map(t => t.key) : [];
+    return [...new Set([...learned, ...aiSuggestions])];
+  }, [form.category, categories, aiSuggestions]);
 
   // Edit guards — derived from the product being edited. The server enforces
   // these too; the UI just explains why a field is locked.
@@ -343,6 +370,7 @@ export function ProductsClient({
         }
         close();
         fetchRows();
+        fetchCategories();
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Error inesperado');
       }
@@ -715,6 +743,27 @@ export function ProductsClient({
                 )}
               </div>
 
+              <div>
+                <label className={labelCls}>Categoría</label>
+                <input
+                  list="product-categories"
+                  value={form.category}
+                  onChange={e => setForm({ ...form, category: e.target.value })}
+                  placeholder="Bebidas, Aseo, Lácteos…"
+                  className={cn(inputCls, 'mt-1')}
+                />
+                <datalist id="product-categories">
+                  {categories.map(c => (
+                    <option key={c.id} value={c.name} />
+                  ))}
+                </datalist>
+                {categories.length > 0 && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Elegí una existente o escribí una nueva.
+                  </p>
+                )}
+              </div>
+
               {features.sellByWeight && (
                 <div>
                   <label className={labelCls}>Se vende por</label>
@@ -886,7 +935,7 @@ export function ProductsClient({
               )}
 
               <AttributesEditor
-                suggestions={aiSuggestions}
+                suggestions={attributeSuggestions}
                 attributes={form.attributes}
                 onChange={attributes => setForm(f => ({ ...f, attributes }))}
               />

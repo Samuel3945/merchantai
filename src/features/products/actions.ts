@@ -82,10 +82,15 @@ async function upsertCategory(
   return cat.id;
 }
 
-// Recomputes usageCount as the live count of non-deleted products in the
-// category — the single source of truth, mirroring how products.stock follows
-// the FIFO ledger. Call after any change that re-points a product's category_id.
-async function recountCategory(
+// Recomputes a category's learned stats from the products table — the single
+// source of truth, so neither value can drift (same rule as products.stock vs
+// the FIFO ledger). Call after any change that re-points a product's category_id
+// or edits its attributes:
+//   - usageCount: live count of non-deleted products in the category.
+//   - attributeTemplate: the most frequent attribute KEYS across those products
+//     (top 12, by frequency) — this is what makes "characterization that varies
+//     with the products that come in" dynamic.
+async function refreshCategory(
   tx: Tx,
   orgId: string,
   categoryId: string | null,
@@ -100,6 +105,23 @@ async function recountCategory(
         SELECT count(*)::int FROM products
         WHERE products.category_id = ${categoryId} AND products.deleted = false
       )`,
+      attributeTemplate: sql`COALESCE((
+        SELECT jsonb_agg(
+          jsonb_build_object('key', t.key, 'count', t.count)
+          ORDER BY t.count DESC, t.key
+        )
+        FROM (
+          SELECT k AS key, count(*)::int AS count
+          FROM products p
+          CROSS JOIN LATERAL jsonb_object_keys(p.attributes) AS k
+          WHERE p.category_id = ${categoryId}
+            AND p.deleted = false
+            AND jsonb_typeof(p.attributes) = 'object'
+          GROUP BY k
+          ORDER BY count(*) DESC, k
+          LIMIT 12
+        ) t
+      ), '[]'::jsonb)`,
     })
     .where(
       and(
@@ -187,6 +209,29 @@ export async function listProducts(params?: {
     .from(productsSchema)
     .where(and(...filters))
     .orderBy(desc(productsSchema.createdAt));
+}
+
+export type CategoryRow = {
+  id: string;
+  name: string;
+  usageCount: number;
+  attributeTemplate: { key: string; count: number }[];
+};
+
+// The org's categories, most-used first, for the product form's category
+// autocomplete and its learned characteristic suggestions (attributeTemplate).
+export async function listCategories(): Promise<CategoryRow[]> {
+  const orgId = await requireOrgId();
+  return db
+    .select({
+      id: categoriesSchema.id,
+      name: categoriesSchema.name,
+      usageCount: categoriesSchema.usageCount,
+      attributeTemplate: categoriesSchema.attributeTemplate,
+    })
+    .from(categoriesSchema)
+    .where(eq(categoriesSchema.organizationId, orgId))
+    .orderBy(desc(categoriesSchema.usageCount), categoriesSchema.name);
 }
 
 export async function getProductById(id: string): Promise<Product | null> {
@@ -307,8 +352,8 @@ export async function createProduct(input: ProductCreateInput) {
       finalRow = updated ?? created;
     }
 
-    // The new product now counts toward its category.
-    await recountCategory(tx, orgId, categoryId);
+    // The new product now counts toward its category and feeds its template.
+    await refreshCategory(tx, orgId, categoryId);
 
     return finalRow;
   });
@@ -450,10 +495,13 @@ export async function updateProduct(id: string, input: ProductUpdateInput) {
       throw new Error('Product not found');
     }
 
-    // Recompute both sides when the product moved between categories.
+    // Refresh stats when the product moved between categories (both sides) or
+    // its attributes changed (current category's template may shift).
     if (categoryChanged) {
-      await recountCategory(tx, orgId, prev.categoryId);
-      await recountCategory(tx, orgId, nextCategoryId);
+      await refreshCategory(tx, orgId, prev.categoryId);
+      await refreshCategory(tx, orgId, nextCategoryId);
+    } else if (data.attributes !== undefined) {
+      await refreshCategory(tx, orgId, nextCategoryId);
     }
 
     return { row: updatedRow, previous: prev };
@@ -603,8 +651,8 @@ export async function deleteProduct(id: string) {
         and(eq(productsSchema.id, id), eq(productsSchema.organizationId, orgId)),
       );
 
-    // The product no longer counts toward its category.
-    await recountCategory(tx, orgId, target.categoryId);
+    // The product no longer counts toward its category or feeds its template.
+    await refreshCategory(tx, orgId, target.categoryId);
   });
 
   revalidatePath('/dashboard/products');
