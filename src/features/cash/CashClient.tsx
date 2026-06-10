@@ -8,7 +8,7 @@ import type {
   TodayCashKpis,
 } from '@/actions/cash';
 import type { ActionResult } from '@/libs/action-result';
-import type { CashSession } from '@/libs/cash-helpers';
+import type { CashMovement, CashSession } from '@/libs/cash-helpers';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState, useTransition } from 'react';
 import {
@@ -20,6 +20,7 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/utils/Helpers';
 import { ActivityFeed } from './ActivityFeed';
 import { cashInputCls, money, relativeTime } from './cash-ui';
+import { CashHistory } from './CashHistory';
 import { CashSecurityAlert } from './CashSecurityAlert';
 import { DenominationCounter } from './DenominationCounter';
 import { MovementModal } from './MovementModal';
@@ -39,8 +40,19 @@ const dateFmt = new Intl.DateTimeFormat('es-CO', {
   timeZone: 'America/Bogota',
 });
 
+const dayFmt = new Intl.DateTimeFormat('es-CO', {
+  day: '2-digit',
+  month: 'short',
+  year: 'numeric',
+  timeZone: 'America/Bogota',
+});
+
 function when(value: Date | string | null | undefined): string {
   return value ? dateFmt.format(new Date(value)) : '—';
+}
+
+function whenDay(value: Date | string | null | undefined): string {
+  return value ? dayFmt.format(new Date(value)) : '—';
 }
 
 function Card(props: { children: React.ReactNode; className?: string }) {
@@ -96,6 +108,7 @@ export function CashClient(props: {
   alerts: FraudAlert[];
   kpis: TodayCashKpis;
   security: CashSecurityStatus;
+  history: CashMovement[];
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -151,6 +164,10 @@ export function CashClient(props: {
   }
 
   const closedSessions = props.sessions.filter(s => s.status === 'closed');
+  const lastClose = closedSessions[0] ?? null;
+  const lastCloseDiff = lastClose
+    ? Number.parseFloat(lastClose.difference ?? '0') || 0
+    : 0;
 
   return (
     <div className="space-y-6">
@@ -213,46 +230,128 @@ export function CashClient(props: {
 
       {!session
         ? (
-            <Card className="max-w-md p-5">
-              <div className="text-lg font-semibold">Abrir caja</div>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Ingresá el efectivo con el que arrancás la jornada. No se arrastra
-                el dinero del día anterior: vos decidís cuánto dejás disponible.
-              </p>
-              <div className="mt-4 space-y-3">
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium" htmlFor="opening">
-                    Base inicial
-                  </label>
-                  <input
-                    id="opening"
-                    className={cashInputCls}
-                    type="number"
-                    inputMode="decimal"
-                    min="0"
-                    placeholder="0"
-                    value={opening}
-                    onChange={e => setOpening(e.target.value)}
-                  />
-                  <DenominationCounter
-                    className="mt-2"
-                    onTotal={t => setOpening(t > 0 ? String(t) : '')}
-                  />
+            <div className="
+              grid items-start gap-6
+              lg:grid-cols-2
+            "
+            >
+              <Card className="p-5">
+                <div className="text-lg font-semibold">Abrir caja</div>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Ingresá el efectivo con el que arrancás la jornada. No se
+                  arrastra el dinero del día anterior: vos decidís cuánto dejás
+                  disponible.
+                </p>
+                <div className="mt-4 space-y-3">
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium" htmlFor="opening">
+                      Base inicial
+                    </label>
+                    <input
+                      id="opening"
+                      className={cashInputCls}
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      placeholder="0"
+                      value={opening}
+                      onChange={e => setOpening(e.target.value)}
+                    />
+                    <DenominationCounter
+                      className="mt-2"
+                      onTotal={t => setOpening(t > 0 ? String(t) : '')}
+                    />
+                  </div>
+                  <Button
+                    size="lg"
+                    className="w-full"
+                    disabled={pending || opening === ''}
+                    onClick={() =>
+                      run(
+                        () => openCashSession(opening, null),
+                        () => setOpening(''),
+                      )}
+                  >
+                    Abrir caja
+                  </Button>
                 </div>
-                <Button
-                  size="lg"
-                  className="w-full"
-                  disabled={pending || opening === ''}
-                  onClick={() =>
-                    run(
-                      () => openCashSession(opening, null),
-                      () => setOpening(''),
+              </Card>
+
+              {/* Último cierre — contexto de referencia para no abrir a ciegas */}
+              <Card className="flex h-full flex-col p-5">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-semibold text-muted-foreground">
+                    Último cierre
+                  </div>
+                  {lastClose && (
+                    <span className="text-xs text-muted-foreground">
+                      {whenDay(lastClose.closedAt)}
+                    </span>
+                  )}
+                </div>
+
+                {lastClose
+                  ? (
+                      <div className="mt-4 flex flex-1 flex-col gap-4">
+                        <div>
+                          <div className="
+                            font-display text-3xl font-semibold tracking-tight
+                            tabular-nums
+                          "
+                          >
+                            {money(lastClose.countedAmount)}
+                          </div>
+                          <div className="mt-0.5 text-xs text-muted-foreground">
+                            Efectivo contado al cierre
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="
+                            rounded-lg border border-border bg-background p-3
+                          "
+                          >
+                            <div className="text-xs text-muted-foreground">
+                              Diferencia
+                            </div>
+                            <div
+                              className={cn(
+                                'mt-1 font-medium tabular-nums',
+                                lastCloseDiff === 0 && 'text-success',
+                                lastCloseDiff > 0 && 'text-success',
+                                lastCloseDiff < 0 && 'text-destructive',
+                              )}
+                            >
+                              {lastCloseDiff > 0 ? '+' : ''}
+                              {money(lastCloseDiff)}
+                            </div>
+                          </div>
+                          <div className="
+                            rounded-lg border border-border bg-background p-3
+                          "
+                          >
+                            <div className="text-xs text-muted-foreground">
+                              Responsable
+                            </div>
+                            <div className="mt-1 truncate font-medium">
+                              {lastClose.closedBy ?? '—'}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  : (
+                      <div className="
+                        mt-4 flex flex-1 flex-col items-center justify-center
+                        rounded-lg border border-dashed border-border py-8
+                        text-center text-sm text-muted-foreground
+                      "
+                      >
+                        Aún no registraste cierres. Cuando cierres tu primera
+                        caja, vas a ver acá el resumen.
+                      </div>
                     )}
-                >
-                  Abrir caja
-                </Button>
-              </div>
-            </Card>
+              </Card>
+            </div>
           )
         : (
             <>
@@ -527,6 +626,9 @@ export function CashClient(props: {
               </ul>
             )}
       </Card>
+
+      {/* Historial completo — ledger permanente con filtros */}
+      <CashHistory movements={props.history} />
 
       {modal && (
         <MovementModal

@@ -4,6 +4,7 @@ import {
   getCurrentCash,
   getFraudAlerts,
   getTodayCashKpis,
+  listAllCashMovements,
   listCashSessions,
 } from '@/actions/cash';
 import { CashClient } from '@/features/cash/CashClient';
@@ -15,12 +16,13 @@ export default async function DashboardCashPage(props: {
   const { locale } = await props.params;
   setRequestLocale(locale);
 
-  const [current, sessions, alerts, kpis, security] = await Promise.all([
+  const [current, sessions, alerts, kpis, security, history] = await Promise.all([
     getCurrentCash(),
     listCashSessions(30),
     getFraudAlerts(14).catch(() => []),
     getTodayCashKpis(),
     getCashSecurityStatus(),
+    listAllCashMovements(1000),
   ]);
 
   return (
@@ -35,6 +37,7 @@ export default async function DashboardCashPage(props: {
         alerts={alerts}
         kpis={kpis}
         security={security}
+        history={history}
       />
     </>
   );
