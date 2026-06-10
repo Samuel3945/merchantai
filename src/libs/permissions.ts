@@ -1,17 +1,20 @@
 /**
  * Single source of truth for the business permission model.
  *
- * Product rule (decided with the owner): there are NO fixed role tiers. There
- * are only USERS, and the business owner grants each one whatever permissions
- * they want. A permission either unlocks a VIEW/MODULE or allows a sensitive
- * ACTION. The same grants govern every surface (POS and dashboard), so this
- * catalog is the one place the whole app reads from.
+ * Product rule (locked with the owner): there are NO fixed roles. There are only
+ * USERS, and the owner grants each one whatever permissions they want. A
+ * permission either unlocks a VIEW/MODULE or allows a sensitive ACTION. The same
+ * grants govern every surface (POS and web panel), so this catalog is the one
+ * place the whole app reads from. The only convenience is the optional CAJERO
+ * template, which simply preloads the POS-operational modules at creation time.
+ *
+ * Source of truth = the database: `panel_access` + `enabled_modules` +
+ * `permissions`. Clerk membership metadata is only a cached copy for fast
+ * authorization.
  *
  * Storage split (kept for backward compatibility with the POS app):
  *  - `enabledModules` (text[])  -> the keys in {@link MODULE_PERMISSIONS}
  *  - `permissions`    (jsonb)   -> action key -> boolean, see {@link ACTION_PERMISSIONS}
- *
- * Both are projections of the same checklist the owner ticks in the UI.
  */
 
 type PermissionItem = {
@@ -21,17 +24,30 @@ type PermissionItem = {
   label: string;
   /** Optional one-line hint shown under the label. */
   hint?: string;
+  /**
+   * Dashboard route this module unlocks, if any. `pos` has none — it unlocks the
+   * separate /pos app, not a dashboard view.
+   */
+  dashboardPath?: string;
 };
 
 /**
- * Views/modules a user can open. Keys MUST match what the POS app already
- * reads from `enabledModules`, so existing cashier accounts keep working.
+ * Grantable views/modules. Existing keys (pos, inventory, reports, fiados) MUST
+ * stay unchanged so current POS accounts keep working; new panel modules follow
+ * the same English-key convention.
  */
 export const MODULE_PERMISSIONS: PermissionItem[] = [
-  { key: 'pos', label: 'Caja registradora (POS)', hint: 'Vender desde la app de caja' },
-  { key: 'inventory', label: 'Inventario', hint: 'Ver y mover stock' },
-  { key: 'reports', label: 'Reportes', hint: 'Ver reportes del negocio' },
-  { key: 'fiados', label: 'Fiados', hint: 'Gestionar cuentas por cobrar' },
+  { key: 'pos', label: 'Caja registradora (POS)', hint: 'Operar la app de caja' },
+  { key: 'cash', label: 'Caja', hint: 'Arqueo y movimientos de caja', dashboardPath: '/dashboard/cash' },
+  { key: 'sales', label: 'Ventas', hint: 'Historial de ventas', dashboardPath: '/dashboard/sales' },
+  { key: 'fiados', label: 'Fiados', hint: 'Cuentas por cobrar', dashboardPath: '/dashboard/fiados' },
+  { key: 'products', label: 'Productos', hint: 'Catálogo de productos', dashboardPath: '/dashboard/products' },
+  { key: 'inventory', label: 'Inventario', hint: 'Ver y mover stock', dashboardPath: '/dashboard/inventory' },
+  { key: 'customers', label: 'Clientes', hint: 'Base de clientes', dashboardPath: '/dashboard/customers' },
+  { key: 'suppliers', label: 'Proveedores', hint: 'Base de proveedores', dashboardPath: '/dashboard/suppliers' },
+  { key: 'reports', label: 'Reportes', hint: 'Reportes del negocio', dashboardPath: '/dashboard/reports' },
+  { key: 'delivery', label: 'Domicilios', hint: 'Pedidos a domicilio para el domiciliario', dashboardPath: '/dashboard/delivery' },
+  { key: 'facturas', label: 'Facturas', hint: 'Facturación electrónica (DIAN)', dashboardPath: '/dashboard/facturas' },
 ];
 
 /** Sensitive actions, persisted in the `permissions` jsonb as key -> true. */
@@ -43,8 +59,75 @@ export const ACTION_PERMISSIONS: PermissionItem[] = [
   { key: 'reports.view', label: 'Ver reportes' },
 ];
 
+/**
+ * Optional "Cajero" template: preloads the POS-operational modules at creation.
+ * It is NOT a stored role — just a convenience that ticks these boxes; the owner
+ * adds or removes modules individually from there.
+ */
+export const CAJERO_TEMPLATE_MODULES = ['pos', 'cash', 'sales', 'fiados'];
+
 const MODULE_KEYS = MODULE_PERMISSIONS.map(p => p.key);
 const ACTION_KEYS = ACTION_PERMISSIONS.map(p => p.key);
+
+// Dashboard routes reserved for the owner (Clerk org admin). Members are never
+// granted these; deny-by-default also covers any unmapped dashboard route.
+const OWNER_ONLY_PREFIXES = [
+  '/dashboard/pos-cajeros',
+  '/dashboard/employees',
+  '/dashboard/plans',
+  '/dashboard/settings',
+  '/dashboard/ai-agent',
+];
+
+// Dashboard routes any panel user may open regardless of modules.
+const PANEL_PUBLIC_PREFIXES = ['/dashboard/user-profile'];
+
+type PathRequirement
+  = | { kind: 'public' }
+    | { kind: 'owner' }
+    | { kind: 'module'; module: string };
+
+/** Extracts the path starting at `/dashboard`, dropping any locale prefix. */
+function dashboardPath(pathname: string): string | null {
+  const idx = pathname.indexOf('/dashboard');
+  return idx === -1 ? null : pathname.slice(idx);
+}
+
+/**
+ * Resolves what a given path requires from a non-owner panel user. The Resumen
+ * landing (`/dashboard` exact) is public; known module routes require their
+ * module; everything else under /dashboard is owner-only (deny-by-default).
+ */
+export function requiredModuleForPath(pathname: string): PathRequirement {
+  const path = dashboardPath(pathname);
+  if (path === null) {
+    return { kind: 'public' };
+  }
+  if (path === '/dashboard' || path === '/dashboard/') {
+    return { kind: 'public' };
+  }
+  if (PANEL_PUBLIC_PREFIXES.some(p => path.startsWith(p))) {
+    return { kind: 'public' };
+  }
+  const mod = MODULE_PERMISSIONS.find(
+    m => m.dashboardPath && path.startsWith(m.dashboardPath),
+  );
+  if (mod) {
+    return { kind: 'module', module: mod.key };
+  }
+  if (OWNER_ONLY_PREFIXES.some(p => path.startsWith(p))) {
+    return { kind: 'owner' };
+  }
+  return { kind: 'owner' };
+}
+
+/** True when a user with these grants can access a module/view. */
+export function canAccessModule(
+  enabledModules: string[] | null | undefined,
+  moduleKey: string,
+): boolean {
+  return (enabledModules ?? []).includes(moduleKey);
+}
 
 /**
  * Normalizes a free-form permissions map to only the known action keys set to

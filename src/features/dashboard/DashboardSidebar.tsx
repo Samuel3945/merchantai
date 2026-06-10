@@ -23,10 +23,14 @@ const COOKIE_KEY = 'sidebar-collapsed';
 export const DashboardSidebar = (props: {
   cashBadge?: 'red' | null;
   navFlags?: NavModuleFlags;
+  /** Non-owner member's allowed modules; null/undefined = owner (sees all). */
+  panelModules?: string[] | null;
   defaultCollapsed?: boolean;
 }) => {
   const pathname = usePathname();
-  const groups = props.navFlags ? buildNavGroups(props.navFlags) : navGroups;
+  const groups = props.navFlags
+    ? buildNavGroups(props.navFlags, props.panelModules)
+    : navGroups;
 
   const [collapsed, setCollapsed] = useState(props.defaultCollapsed ?? false);
 

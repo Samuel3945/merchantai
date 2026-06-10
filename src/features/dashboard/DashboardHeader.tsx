@@ -19,6 +19,7 @@ import { MobileNavigation } from './MobileNavigation';
 export const DashboardHeader = (props: {
   cashBadge?: 'red' | null;
   navFlags?: NavModuleFlags;
+  panelModules?: string[] | null;
 }) => {
   const locale = useLocale();
 
@@ -29,7 +30,11 @@ export const DashboardHeader = (props: {
         lg:hidden
       "
       >
-        <MobileNavigation cashBadge={props.cashBadge} navFlags={props.navFlags} />
+        <MobileNavigation
+          cashBadge={props.cashBadge}
+          navFlags={props.navFlags}
+          panelModules={props.panelModules}
+        />
         <Link href="/dashboard">
           <Logo isTextHidden />
         </Link>

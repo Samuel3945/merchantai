@@ -3,6 +3,8 @@ import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server';
 import createMiddleware from 'next-intl/middleware';
 import { NextResponse } from 'next/server';
 import { resolveCashierSession } from '@/libs/cashier-session';
+import { getPanelUserModules } from '@/libs/panel-session';
+import { requiredModuleForPath } from '@/libs/permissions';
 import { routing } from './libs/I18nRouting';
 
 // Cashier auth needs pg + bcrypt at the edge of /api/pos/*, which are Node-only.
@@ -171,6 +173,31 @@ export default async function proxy(
         const onboardingUrl = new URL('/onboarding', req.url);
 
         return NextResponse.redirect(onboardingUrl);
+      }
+
+      // Deny-by-default panel authorization for non-owner members. They may open
+      // the Resumen landing and only the dashboard modules they were granted;
+      // anything else (owner-only views or unmapped routes) bounces to /dashboard.
+      // The DB is the source of truth (the Clerk metadata is only a cache).
+      if (
+        authObj.userId
+        && authObj.orgId
+        && authObj.orgRole === 'org:member'
+        && req.nextUrl.pathname.includes('/dashboard')
+      ) {
+        const need = requiredModuleForPath(req.nextUrl.pathname);
+        if (need.kind !== 'public') {
+          const modules = await getPanelUserModules(
+            authObj.userId,
+            authObj.orgId,
+          );
+          const allowed
+            = need.kind === 'module'
+              && (modules?.includes(need.module) ?? false);
+          if (!allowed) {
+            return NextResponse.redirect(new URL('/dashboard', req.url));
+          }
+        }
       }
 
       return handleI18nRouting(req);

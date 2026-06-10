@@ -13,7 +13,11 @@ import {
   updateEmployee,
 } from '@/actions/employees';
 import { Button } from '@/components/ui/button';
-import { ACTION_PERMISSIONS, MODULE_PERMISSIONS } from '@/libs/permissions';
+import {
+  ACTION_PERMISSIONS,
+  CAJERO_TEMPLATE_MODULES,
+  MODULE_PERMISSIONS,
+} from '@/libs/permissions';
 import { CASHIERS_LIMIT_REACHED } from '@/libs/plan-limits';
 
 type EmployeeRow = Awaited<ReturnType<typeof listEmployees>>[number];
@@ -601,7 +605,20 @@ function InviteModal({
   const [modules, setModules] = useState<Record<string, boolean>>({ pos: true });
   const [actions, setActions] = useState<Record<string, boolean>>({});
   const [canConfirmTransfers, setCanConfirmTransfers] = useState(true);
+  const [panelAccess, setPanelAccess] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  // The "Cajero" template just preloads the POS-operational modules; from there
+  // the owner adds or removes individual modules. It is NOT a stored role.
+  const applyCajeroTemplate = () => {
+    setModules((prev) => {
+      const next = { ...prev };
+      for (const key of CAJERO_TEMPLATE_MODULES) {
+        next[key] = true;
+      }
+      return next;
+    });
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -619,6 +636,7 @@ function InviteModal({
         permissions,
         enabledModules,
         canConfirmTransfers,
+        panelAccess,
       });
       if (!result.ok) {
         onFailure(result);
@@ -662,6 +680,18 @@ function InviteModal({
           />
         </div>
 
+        <div className="flex items-center justify-between">
+          <span className={labelCls}>Plantilla rápida</span>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={applyCajeroTemplate}
+          >
+            Precargar Cajero (POS)
+          </Button>
+        </div>
+
         <GrantFields
           modules={modules}
           actions={actions}
@@ -670,6 +700,25 @@ function InviteModal({
           onToggleAction={k => setActions(p => ({ ...p, [k]: !p[k] }))}
           onToggleTransfers={() => setCanConfirmTransfers(v => !v)}
         />
+
+        <label className="
+          flex items-start gap-2 rounded-md border border-input p-3 text-sm
+        "
+        >
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={panelAccess}
+            onChange={() => setPanelAccess(v => !v)}
+          />
+          <span>
+            Puede entrar al panel web
+            <span className="block text-xs text-muted-foreground">
+              Crea su acceso web con la misma contraseña. Solo verá los módulos
+              que le habilites arriba.
+            </span>
+          </span>
+        </label>
 
         <div className="flex justify-end gap-2 pt-2">
           <Button

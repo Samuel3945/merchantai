@@ -17,6 +17,8 @@ import { buildNavGroups, navGroups } from './navItems';
 export const MobileNavigation = (props: {
   cashBadge?: 'red' | null;
   navFlags?: NavModuleFlags;
+  /** Non-owner member's allowed modules; null/undefined = owner (sees all). */
+  panelModules?: string[] | null;
 }) => (
   <DropdownMenu>
     <DropdownMenuTrigger asChild>
@@ -52,7 +54,7 @@ export const MobileNavigation = (props: {
       </Button>
     </DropdownMenuTrigger>
     <DropdownMenuContent align="start" className="w-56">
-      {(props.navFlags ? buildNavGroups(props.navFlags) : navGroups).map((group, i) => (
+      {(props.navFlags ? buildNavGroups(props.navFlags, props.panelModules) : navGroups).map((group, i) => (
         <div key={group.title}>
           {i > 0 && <DropdownMenuSeparator />}
           <DropdownMenuLabel className="
