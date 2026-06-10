@@ -162,6 +162,7 @@ export function EmployeesClient({
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [editing, setEditing] = useState<EmployeeRow | null>(null);
   const [lastInviteUrl, setLastInviteUrl] = useState<string | null>(null);
+  const [lastEmailSent, setLastEmailSent] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [limitError, setLimitError] = useState<LimitErrorPayload | null>(null);
   const [pending, startTransition] = useTransition();
@@ -248,6 +249,7 @@ export function EmployeesClient({
           return;
         }
         setLastInviteUrl(result.data.inviteUrl);
+        setLastEmailSent(result.data.emailSent);
         refresh();
       } catch {
         setError('No se pudo reenviar');
@@ -322,10 +324,15 @@ export function EmployeesClient({
           text-emerald-900
         "
         >
-          <div className="font-semibold">Enlace de invitación</div>
+          <div className="font-semibold">
+            {lastEmailSent
+              ? 'Invitación enviada por correo'
+              : 'Enlace de invitación'}
+          </div>
           <div className="mt-1 text-xs">
-            Aún no enviamos correos automáticos: copiá este enlace y pasáselo a
-            la persona para que cree su contraseña.
+            {lastEmailSent
+              ? 'Le enviamos un correo a la persona para que cree su contraseña. Si no le llega, pasale este enlace:'
+              : 'Copiá este enlace y pasáselo a la persona para que cree su contraseña.'}
           </div>
           <div className="mt-1 font-mono text-xs break-all">
             {lastInviteUrl}
@@ -495,7 +502,10 @@ export function EmployeesClient({
                     <Button
                       size="sm"
                       variant="ghost"
-                      onClick={() => setLastInviteUrl(inv.inviteUrl)}
+                      onClick={() => {
+                        setLastInviteUrl(inv.inviteUrl);
+                        setLastEmailSent(null);
+                      }}
                     >
                       Ver enlace
                     </Button>
@@ -510,8 +520,9 @@ export function EmployeesClient({
       {showInviteModal && (
         <InviteModal
           onClose={() => setShowInviteModal(false)}
-          onSuccess={(inviteUrl) => {
+          onSuccess={(inviteUrl, emailSent) => {
             setLastInviteUrl(inviteUrl);
+            setLastEmailSent(emailSent);
             setShowInviteModal(false);
             setLimitError(null);
             refresh();
@@ -582,7 +593,7 @@ function InviteModal({
   onFailure,
 }: {
   onClose: () => void;
-  onSuccess: (inviteUrl: string) => void;
+  onSuccess: (inviteUrl: string, emailSent: boolean) => void;
   onFailure: (failure: ActionFailure) => void;
 }) {
   const [email, setEmail] = useState('');
@@ -613,7 +624,7 @@ function InviteModal({
         onFailure(result);
         return;
       }
-      onSuccess(result.data.inviteUrl);
+      onSuccess(result.data.inviteUrl, result.data.emailSent);
     } catch {
       onFailure({ ok: false, error: 'No se pudo enviar la invitación' });
     } finally {

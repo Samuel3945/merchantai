@@ -2,12 +2,13 @@
 
 import type { ActionResult } from '@/libs/action-result';
 import { randomUUID } from 'node:crypto';
-import { auth } from '@clerk/nextjs/server';
+import { auth, clerkClient } from '@clerk/nextjs/server';
 import bcrypt from 'bcryptjs';
 import { and, count, desc, eq, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
+import { sendInvitationEmail } from '@/libs/email';
 import { Env } from '@/libs/Env';
 import {
   cleanActionPermissions,
@@ -153,6 +154,18 @@ function buildInviteUrl(token: string, userId: string): string {
   return `${trimmed}/accept-invitation?token=${token}&userId=${userId}`;
 }
 
+/** Clerk organization name for emails; null if it can't be resolved. */
+async function resolveOrgName(orgId: string): Promise<string | null> {
+  try {
+    const org = await (await clerkClient()).organizations.getOrganization({
+      organizationId: orgId,
+    });
+    return org.name;
+  } catch {
+    return null;
+  }
+}
+
 export type InviteEmployeeInput = {
   email: string;
   name: string;
@@ -165,7 +178,7 @@ export type InviteEmployeeInput = {
 export type InviteEmployeeResult = {
   invitation: typeof employeeInvitationsSchema.$inferSelect;
   inviteUrl: string;
-  emailSent: false;
+  emailSent: boolean;
 };
 
 export async function invite(
@@ -281,14 +294,22 @@ export async function invite(
     },
   });
 
+  const inviteUrl = buildInviteUrl(result.invitation.token, result.user.id);
+  const emailSent = await sendInvitationEmail({
+    to: result.invitation.email,
+    name: result.invitation.name,
+    organizationName: await resolveOrgName(orgId),
+    inviteUrl,
+  });
+
   revalidatePath('/dashboard/employees');
 
   return {
     ok: true,
     data: {
       invitation: result.invitation,
-      inviteUrl: buildInviteUrl(result.invitation.token, result.user.id),
-      emailSent: false,
+      inviteUrl,
+      emailSent,
     },
   };
 }
@@ -459,7 +480,7 @@ export async function revokeInvitation(
 export type ResendInvitationResult = {
   invitation: typeof employeeInvitationsSchema.$inferSelect;
   inviteUrl: string;
-  emailSent: false;
+  emailSent: boolean;
 };
 
 export async function resendInvitation(
@@ -498,14 +519,22 @@ export async function resendInvitation(
     throw new Error('Failed to resend invitation');
   }
 
+  const inviteUrl = buildInviteUrl(updated.token, updated.userId);
+  const emailSent = await sendInvitationEmail({
+    to: updated.email,
+    name: updated.name,
+    organizationName: await resolveOrgName(orgId),
+    inviteUrl,
+  });
+
   revalidatePath('/dashboard/employees');
 
   return {
     ok: true,
     data: {
       invitation: updated,
-      inviteUrl: buildInviteUrl(updated.token, updated.userId),
-      emailSent: false,
+      inviteUrl,
+      emailSent,
     },
   };
 }
