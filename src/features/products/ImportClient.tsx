@@ -7,6 +7,7 @@ import { useMemo, useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/utils/Helpers';
 import { bulkImportProducts } from './actions';
+import { parseSpreadsheetRows } from './import-actions';
 import { recordsToDrafts, validateDraft } from './import-parse';
 
 const inputCls
@@ -41,11 +42,25 @@ export function ImportClient({ categoryNames }: { categoryNames: string[] }) {
     }
     setResult(null);
     setFileName(file.name);
-    Papa.parse<Record<string, unknown>>(file, {
-      header: true,
-      skipEmptyLines: true,
-      complete: res => setDrafts(recordsToDrafts(res.data)),
-    });
+
+    if (/\.xlsx$/i.test(file.name)) {
+      // Excel is parsed server-side (the parser stays out of the client bundle).
+      const fd = new FormData();
+      fd.append('file', file);
+      startTransition(async () => {
+        try {
+          setDrafts(recordsToDrafts(await parseSpreadsheetRows(fd)));
+        } catch {
+          setDrafts([]);
+        }
+      });
+    } else {
+      Papa.parse<Record<string, unknown>>(file, {
+        header: true,
+        skipEmptyLines: true,
+        complete: res => setDrafts(recordsToDrafts(res.data)),
+      });
+    }
     // Allow re-selecting the same file later.
     e.target.value = '';
   }
@@ -108,10 +123,10 @@ export function ImportClient({ categoryNames }: { categoryNames: string[] }) {
           hover:bg-primary/90
         "
         >
-          Elegir archivo CSV
+          Elegir archivo CSV o Excel
           <input
             type="file"
-            accept=".csv,text/csv"
+            accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             onChange={onFile}
             className="hidden"
           />
