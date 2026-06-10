@@ -9,29 +9,16 @@ import {
   resendInvitation,
   resetCashierPin,
   revokeInvitation,
+  setEmployeeActive,
+  updateEmployee,
 } from '@/actions/employees';
 import { Button } from '@/components/ui/button';
-import { Select } from '@/components/ui/select';
+import { ACTION_PERMISSIONS, MODULE_PERMISSIONS } from '@/libs/permissions';
 import { CASHIERS_LIMIT_REACHED } from '@/libs/plan-limits';
 
 type EmployeeRow = Awaited<ReturnType<typeof listEmployees>>[number];
 type InvitationRow = Awaited<ReturnType<typeof listPendingInvitations>>[number];
 type ActionFailure = Extract<ActionResult<unknown>, { ok: false }>;
-
-const AVAILABLE_PERMISSIONS = [
-  { key: 'sales.refund', label: 'Reembolsar ventas' },
-  { key: 'cash.withdraw', label: 'Retirar efectivo' },
-  { key: 'cash.adjust', label: 'Ajustar conteos de caja' },
-  { key: 'inventory.edit', label: 'Editar inventario' },
-  { key: 'reports.view', label: 'Ver reportes' },
-] as const;
-
-const AVAILABLE_MODULES = [
-  { key: 'pos', label: 'POS' },
-  { key: 'inventory', label: 'Inventario' },
-  { key: 'reports', label: 'Reportes' },
-  { key: 'fiados', label: 'Fiados' },
-] as const;
 
 const inputCls
   = 'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50';
@@ -73,6 +60,96 @@ function limitPayload(failure: ActionFailure): LimitErrorPayload | null {
   };
 }
 
+/** Builds a {key: boolean} map from a list of granted keys. */
+function modulesToMap(keys: string[] | null | undefined): Record<string, boolean> {
+  const map: Record<string, boolean> = {};
+  for (const k of keys ?? []) {
+    map[k] = true;
+  }
+  return map;
+}
+
+function permsToMap(
+  perms: Record<string, unknown> | null | undefined,
+): Record<string, boolean> {
+  const map: Record<string, boolean> = {};
+  for (const [k, v] of Object.entries(perms ?? {})) {
+    map[k] = Boolean(v);
+  }
+  return map;
+}
+
+// Shared grant checkboxes used by both the invite and edit dialogs. There are no
+// role tiers: the owner ticks exactly what this user can see and do.
+function GrantFields({
+  modules,
+  actions,
+  canConfirmTransfers,
+  onToggleModule,
+  onToggleAction,
+  onToggleTransfers,
+}: {
+  modules: Record<string, boolean>;
+  actions: Record<string, boolean>;
+  canConfirmTransfers: boolean;
+  onToggleModule: (key: string) => void;
+  onToggleAction: (key: string) => void;
+  onToggleTransfers: () => void;
+}) {
+  return (
+    <>
+      <div>
+        <div className={labelCls}>Vistas / Módulos</div>
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          {MODULE_PERMISSIONS.map(m => (
+            <label key={m.key} className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={!!modules[m.key]}
+                onChange={() => onToggleModule(m.key)}
+              />
+              <span>
+                {m.label}
+                {m.hint && (
+                  <span className="block text-xs text-muted-foreground">
+                    {m.hint}
+                  </span>
+                )}
+              </span>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <div className={labelCls}>Acciones sensibles</div>
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          {ACTION_PERMISSIONS.map(p => (
+            <label key={p.key} className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={!!actions[p.key]}
+                onChange={() => onToggleAction(p.key)}
+              />
+              {p.label}
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <label className="flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          checked={canConfirmTransfers}
+          onChange={onToggleTransfers}
+        />
+        Puede confirmar transferencias
+      </label>
+    </>
+  );
+}
+
 export function EmployeesClient({
   initialEmployees,
   initialInvitations,
@@ -83,6 +160,7 @@ export function EmployeesClient({
   const [employees, setEmployees] = useState(initialEmployees);
   const [invitations, setInvitations] = useState(initialInvitations);
   const [showInviteModal, setShowInviteModal] = useState(false);
+  const [editing, setEditing] = useState<EmployeeRow | null>(null);
   const [lastInviteUrl, setLastInviteUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [limitError, setLimitError] = useState<LimitErrorPayload | null>(null);
@@ -98,6 +176,15 @@ export function EmployeesClient({
       setInvitations(invs);
     });
   }, []);
+
+  const handleFailure = (failure: ActionFailure) => {
+    const limit = limitPayload(failure);
+    if (limit) {
+      setLimitError(limit);
+    } else {
+      setError(failure.error);
+    }
+  };
 
   const handleRevoke = (id: string) => {
     // eslint-disable-next-line no-alert
@@ -133,6 +220,21 @@ export function EmployeesClient({
         refresh();
       } catch {
         setError('No se pudo resetear el PIN');
+      }
+    });
+  };
+
+  const handleToggleActive = (emp: EmployeeRow) => {
+    startTransition(async () => {
+      try {
+        const result = await setEmployeeActive(emp.id, !emp.active);
+        if (!result.ok) {
+          handleFailure(result);
+          return;
+        }
+        refresh();
+      } catch {
+        setError('No se pudo cambiar el estado');
       }
     });
   };
@@ -178,7 +280,7 @@ export function EmployeesClient({
           text-amber-900
         "
         >
-          <div className="font-semibold">Límite de cajeros alcanzado</div>
+          <div className="font-semibold">Límite de usuarios alcanzado</div>
           <div>
             El plan
             {' '}
@@ -188,7 +290,10 @@ export function EmployeesClient({
             {' '}
             {limitError.base}
             {' '}
-            cajeros (+
+            usuario
+            {limitError.base === 1 ? '' : 's'}
+            {' '}
+            (+
             {limitError.addons}
             {' '}
             adicional
@@ -218,6 +323,10 @@ export function EmployeesClient({
         "
         >
           <div className="font-semibold">Enlace de invitación</div>
+          <div className="mt-1 text-xs">
+            Aún no enviamos correos automáticos: copiá este enlace y pasáselo a
+            la persona para que cree su contraseña.
+          </div>
           <div className="mt-1 font-mono text-xs break-all">
             {lastInviteUrl}
           </div>
@@ -241,12 +350,12 @@ export function EmployeesClient({
       )}
 
       <div className="flex items-center justify-between">
-        <div className="text-lg font-semibold">Empleados</div>
+        <div className="text-lg font-semibold">Usuarios del negocio</div>
         <Button
           onClick={() => setShowInviteModal(true)}
           disabled={pending}
         >
-          Invitar empleado
+          Invitar usuario
         </Button>
       </div>
 
@@ -256,9 +365,8 @@ export function EmployeesClient({
             <tr>
               <th className="px-3 py-2">Nombre</th>
               <th className="px-3 py-2">Email</th>
-              <th className="px-3 py-2">Rol</th>
               <th className="px-3 py-2">Estado</th>
-              <th className="px-3 py-2">Módulos</th>
+              <th className="px-3 py-2">Permisos</th>
               <th className="px-3 py-2">PIN</th>
               <th className="px-3 py-2">Creado</th>
               <th className="px-3 py-2">Acciones</th>
@@ -269,9 +377,9 @@ export function EmployeesClient({
               <tr>
                 <td
                   className="px-3 py-6 text-center text-muted-foreground"
-                  colSpan={8}
+                  colSpan={7}
                 >
-                  Aún no hay empleados
+                  Aún no hay usuarios
                 </td>
               </tr>
             )}
@@ -279,7 +387,6 @@ export function EmployeesClient({
               <tr key={emp.id} className="border-t">
                 <td className="px-3 py-2">{emp.name}</td>
                 <td className="px-3 py-2">{emp.email}</td>
-                <td className="px-3 py-2">{emp.role}</td>
                 <td className="px-3 py-2">
                   {emp.active
                     ? (
@@ -300,14 +407,30 @@ export function EmployeesClient({
                 <td className="px-3 py-2 text-xs">
                   {formatDate(emp.createdAt)}
                 </td>
-                <td className="px-3 py-2">
+                <td className="space-x-1 px-3 py-2 whitespace-nowrap">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => setEditing(emp)}
+                    disabled={pending}
+                  >
+                    Editar permisos
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => handleToggleActive(emp)}
+                    disabled={pending}
+                  >
+                    {emp.active ? 'Desactivar' : 'Activar'}
+                  </Button>
                   {emp.hasPin && (
                     <Button
                       size="sm"
                       variant="ghost"
                       onClick={() => handleResetPin(emp.id, emp.name)}
                       disabled={pending}
-                      title="Deja al empleado sin PIN para que configure uno nuevo"
+                      title="Deja al usuario sin PIN para que configure uno nuevo"
                     >
                       Resetear PIN
                     </Button>
@@ -327,7 +450,6 @@ export function EmployeesClient({
               <tr>
                 <th className="px-3 py-2">Email</th>
                 <th className="px-3 py-2">Nombre</th>
-                <th className="px-3 py-2">Rol</th>
                 <th className="px-3 py-2">Vence</th>
                 <th className="px-3 py-2">Acciones</th>
               </tr>
@@ -337,7 +459,7 @@ export function EmployeesClient({
                 <tr>
                   <td
                     className="px-3 py-6 text-center text-muted-foreground"
-                    colSpan={5}
+                    colSpan={4}
                   >
                     No hay invitaciones pendientes
                   </td>
@@ -347,7 +469,6 @@ export function EmployeesClient({
                 <tr key={inv.id} className="border-t">
                   <td className="px-3 py-2">{inv.email}</td>
                   <td className="px-3 py-2">{inv.name}</td>
-                  <td className="px-3 py-2">{inv.role}</td>
                   <td className="px-3 py-2 text-xs">
                     {formatDate(inv.expiresAt)}
                     {inv.expired && (
@@ -395,16 +516,62 @@ export function EmployeesClient({
             setLimitError(null);
             refresh();
           }}
+          onFailure={handleFailure}
+        />
+      )}
+
+      {editing && (
+        <EditModal
+          employee={editing}
+          onClose={() => setEditing(null)}
+          onSuccess={() => {
+            setEditing(null);
+            refresh();
+          }}
           onFailure={(failure) => {
-            const limit = limitPayload(failure);
-            if (limit) {
-              setLimitError(limit);
-            } else {
-              setError(failure.error);
-            }
+            setEditing(null);
+            handleFailure(failure);
           }}
         />
       )}
+    </div>
+  );
+}
+
+function ModalShell({
+  title,
+  onClose,
+  children,
+}: {
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="
+      fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4
+    "
+    >
+      <div className="
+        max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg bg-background
+        p-6 shadow-lg
+      "
+      >
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-lg font-semibold">{title}</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="
+              text-muted-foreground
+              hover:text-foreground
+            "
+          >
+            ✕
+          </button>
+        </div>
+        {children}
+      </div>
     </div>
   );
 }
@@ -420,18 +587,10 @@ function InviteModal({
 }) {
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
-  const [role, setRole] = useState<'admin' | 'cashier' | 'employee'>('cashier');
-  const [permissions, setPermissions] = useState<Record<string, boolean>>({});
-  const [modules, setModules] = useState<Record<string, boolean>>({
-    pos: true,
-  });
+  const [modules, setModules] = useState<Record<string, boolean>>({ pos: true });
+  const [actions, setActions] = useState<Record<string, boolean>>({});
   const [canConfirmTransfers, setCanConfirmTransfers] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-
-  const togglePerm = (key: string) =>
-    setPermissions(prev => ({ ...prev, [key]: !prev[key] }));
-  const toggleModule = (key: string) =>
-    setModules(prev => ({ ...prev, [key]: !prev[key] }));
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -440,14 +599,13 @@ function InviteModal({
       const enabledModules = Object.entries(modules)
         .filter(([, v]) => v)
         .map(([k]) => k);
-      const cleanPerms = Object.fromEntries(
-        Object.entries(permissions).filter(([, v]) => v),
+      const permissions = Object.fromEntries(
+        Object.entries(actions).filter(([, v]) => v),
       );
       const result = await invite({
         email,
         name,
-        role,
-        permissions: cleanPerms,
+        permissions,
         enabledModules,
         canConfirmTransfers,
       });
@@ -464,125 +622,141 @@ function InviteModal({
   };
 
   return (
-    <div className="
-      fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4
-    "
-    >
-      <div className="w-full max-w-lg rounded-lg bg-background p-6 shadow-lg">
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Invitar empleado</h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="
-              text-muted-foreground
-              hover:text-foreground
-            "
-          >
-            ✕
-          </button>
+    <ModalShell title="Invitar usuario" onClose={onClose}>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label htmlFor="emp-email" className={labelCls}>
+            Email
+          </label>
+          <input
+            id="emp-email"
+            type="email"
+            required
+            value={email}
+            onChange={e => setEmail(e.target.value)}
+            className={inputCls}
+          />
+        </div>
+        <div>
+          <label htmlFor="emp-name" className={labelCls}>
+            Nombre
+          </label>
+          <input
+            id="emp-name"
+            type="text"
+            required
+            value={name}
+            onChange={e => setName(e.target.value)}
+            className={inputCls}
+          />
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label htmlFor="emp-email" className={labelCls}>
-              Email
-            </label>
-            <input
-              id="emp-email"
-              type="email"
-              required
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              className={inputCls}
-            />
-          </div>
-          <div>
-            <label htmlFor="emp-name" className={labelCls}>
-              Nombre
-            </label>
-            <input
-              id="emp-name"
-              type="text"
-              required
-              value={name}
-              onChange={e => setName(e.target.value)}
-              className={inputCls}
-            />
-          </div>
-          <div>
-            <label htmlFor="emp-role" className={labelCls}>
-              Rol
-            </label>
-            <Select
-              id="emp-role"
-              value={role}
-              onValueChange={v =>
-                setRole(v as 'admin' | 'cashier' | 'employee')}
-              options={[
-                { value: 'cashier', label: 'Cajero' },
-                { value: 'employee', label: 'Empleado' },
-                { value: 'admin', label: 'Administrador' },
-              ]}
-            />
-          </div>
+        <GrantFields
+          modules={modules}
+          actions={actions}
+          canConfirmTransfers={canConfirmTransfers}
+          onToggleModule={k => setModules(p => ({ ...p, [k]: !p[k] }))}
+          onToggleAction={k => setActions(p => ({ ...p, [k]: !p[k] }))}
+          onToggleTransfers={() => setCanConfirmTransfers(v => !v)}
+        />
 
-          <div>
-            <div className={labelCls}>Permisos</div>
-            <div className="mt-2 grid grid-cols-2 gap-2">
-              {AVAILABLE_PERMISSIONS.map(p => (
-                <label key={p.key} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={!!permissions[p.key]}
-                    onChange={() => togglePerm(p.key)}
-                  />
-                  {p.label}
-                </label>
-              ))}
-            </div>
-          </div>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={onClose}
+            disabled={submitting}
+          >
+            Cancelar
+          </Button>
+          <Button type="submit" disabled={submitting}>
+            {submitting ? 'Enviando…' : 'Crear invitación'}
+          </Button>
+        </div>
+      </form>
+    </ModalShell>
+  );
+}
 
-          <div>
-            <div className={labelCls}>Módulos habilitados</div>
-            <div className="mt-2 grid grid-cols-2 gap-2">
-              {AVAILABLE_MODULES.map(m => (
-                <label key={m.key} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={!!modules[m.key]}
-                    onChange={() => toggleModule(m.key)}
-                  />
-                  {m.label}
-                </label>
-              ))}
-            </div>
-          </div>
+function EditModal({
+  employee,
+  onClose,
+  onSuccess,
+  onFailure,
+}: {
+  employee: EmployeeRow;
+  onClose: () => void;
+  onSuccess: () => void;
+  onFailure: (failure: ActionFailure) => void;
+}) {
+  const [modules, setModules] = useState<Record<string, boolean>>(
+    () => modulesToMap(employee.enabledModules),
+  );
+  const [actions, setActions] = useState<Record<string, boolean>>(
+    () => permsToMap(employee.permissions as Record<string, unknown> | null),
+  );
+  const [canConfirmTransfers, setCanConfirmTransfers] = useState(
+    employee.canConfirmTransfers,
+  );
+  const [submitting, setSubmitting] = useState(false);
 
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={canConfirmTransfers}
-              onChange={() => setCanConfirmTransfers(v => !v)}
-            />
-            Puede confirmar transferencias
-          </label>
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmitting(true);
+    try {
+      const enabledModules = Object.entries(modules)
+        .filter(([, v]) => v)
+        .map(([k]) => k);
+      const permissions = Object.fromEntries(
+        Object.entries(actions).filter(([, v]) => v),
+      );
+      const result = await updateEmployee(employee.id, {
+        permissions,
+        enabledModules,
+        canConfirmTransfers,
+      });
+      if (!result.ok) {
+        onFailure(result);
+        return;
+      }
+      onSuccess();
+    } catch {
+      onFailure({ ok: false, error: 'No se pudieron guardar los permisos' });
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
-          <div className="flex justify-end gap-2 pt-2">
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={onClose}
-              disabled={submitting}
-            >
-              Cancelar
-            </Button>
-            <Button type="submit" disabled={submitting}>
-              {submitting ? 'Enviando…' : 'Enviar invitación'}
-            </Button>
-          </div>
-        </form>
-      </div>
-    </div>
+  return (
+    <ModalShell title={`Permisos de ${employee.name}`} onClose={onClose}>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <p className="text-xs text-muted-foreground">
+          {employee.email}
+        </p>
+
+        <GrantFields
+          modules={modules}
+          actions={actions}
+          canConfirmTransfers={canConfirmTransfers}
+          onToggleModule={k => setModules(p => ({ ...p, [k]: !p[k] }))}
+          onToggleAction={k => setActions(p => ({ ...p, [k]: !p[k] }))}
+          onToggleTransfers={() => setCanConfirmTransfers(v => !v)}
+        />
+
+        <div className="flex justify-end gap-2 pt-2">
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={onClose}
+            disabled={submitting}
+          >
+            Cancelar
+          </Button>
+          <Button type="submit" disabled={submitting}>
+            {submitting ? 'Guardando…' : 'Guardar permisos'}
+          </Button>
+        </div>
+      </form>
+    </ModalShell>
   );
 }

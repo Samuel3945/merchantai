@@ -9,6 +9,10 @@ import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
 import { Env } from '@/libs/Env';
+import {
+  cleanActionPermissions,
+  cleanEnabledModules,
+} from '@/libs/permissions';
 import { CASHIERS_LIMIT_REACHED } from '@/libs/plan-limits';
 import {
   employeeInvitationsSchema,
@@ -44,7 +48,7 @@ function cashiersLimitReached(
 ): { ok: false; error: string; code: string; meta: CashierLimitMeta } {
   return {
     ok: false,
-    error: `Alcanzaste el límite de cajeros de tu plan (${meta.used}/${meta.limit}).`,
+    error: `Alcanzaste el límite de usuarios de tu plan (${meta.used}/${meta.limit}).`,
     code: CASHIERS_LIMIT_REACHED,
     meta,
   };
@@ -87,14 +91,16 @@ async function countCashierAddons(orgId: string): Promise<number> {
   return Number(row?.value ?? 0);
 }
 
-async function countActiveCashiers(orgId: string): Promise<number> {
+// Counts every active user of the org. There are no role tiers anymore: the
+// plan seat limit applies to all business users (the owner is a Clerk member,
+// not a posUser, so they never consume a seat).
+async function countActiveUsers(orgId: string): Promise<number> {
   const [row] = await db
     .select({ value: count() })
     .from(posUsersSchema)
     .where(
       and(
         eq(posUsersSchema.organizationId, orgId),
-        eq(posUsersSchema.role, 'cashier'),
         eq(posUsersSchema.active, true),
       ),
     );
@@ -122,7 +128,7 @@ export async function getCashierQuota(): Promise<CashierQuota> {
 
   const [plan, used, addons] = await Promise.all([
     getOrganizationPlan(orgId),
-    countActiveCashiers(orgId),
+    countActiveUsers(orgId),
     countCashierAddons(orgId),
   ]);
   const base = PLAN_CASHIER_LIMIT[plan];
@@ -169,7 +175,13 @@ export async function invite(
 
   const email = data.email?.trim().toLowerCase();
   const name = data.name?.trim();
-  const role = data.role ?? 'cashier';
+  // Role tiers are retired: every invited person is a plain business user whose
+  // access is defined entirely by the granted permissions/modules.
+  const role = data.role ?? 'employee';
+  const enabledModules = cleanEnabledModules(data.enabledModules);
+  const permissions = cleanActionPermissions(
+    data.permissions as Record<string, unknown> | undefined,
+  );
 
   if (!email || !/^\S[^\s@]*@\S[^\s.]*\.\S+$/.test(email)) {
     return { ok: false, error: 'Ingresá un email válido' };
@@ -178,11 +190,11 @@ export async function invite(
     return { ok: false, error: 'El nombre es obligatorio' };
   }
 
-  // 1. Quota check (only enforced for cashiers; admins/employees not gated here).
-  if (role === 'cashier') {
+  // 1. Seat quota check — applies to every user (no role exemptions).
+  {
     const [plan, used, addons] = await Promise.all([
       getOrganizationPlan(orgId),
-      countActiveCashiers(orgId),
+      countActiveUsers(orgId),
       countCashierAddons(orgId),
     ]);
     const base = PLAN_CASHIER_LIMIT[plan];
@@ -219,8 +231,8 @@ export async function invite(
         passwordHash,
         role,
         active: false,
-        permissions: data.permissions ?? {},
-        enabledModules: data.enabledModules ?? ['pos'],
+        permissions,
+        enabledModules,
         canConfirmTransfers: data.canConfirmTransfers ?? true,
       })
       .returning();
@@ -240,8 +252,8 @@ export async function invite(
         token,
         expiresAt,
         status: 'pending',
-        permissions: data.permissions ?? {},
-        enabledModules: data.enabledModules ?? ['pos'],
+        permissions,
+        enabledModules,
         canConfirmTransfers: data.canConfirmTransfers ?? true,
       })
       .returning();
@@ -372,6 +384,7 @@ export async function listEmployees() {
       role: posUsersSchema.role,
       active: posUsersSchema.active,
       enabledModules: posUsersSchema.enabledModules,
+      permissions: posUsersSchema.permissions,
       canConfirmTransfers: posUsersSchema.canConfirmTransfers,
       hasPin: sql<boolean>`(${posUsersSchema.pin} <> '')`,
       createdAt: posUsersSchema.createdAt,
@@ -518,6 +531,132 @@ export async function resetCashierPin(
   if (!updated) {
     return { ok: false, error: 'Empleado no encontrado' };
   }
+
+  revalidatePath('/dashboard/employees');
+  return { ok: true, data: updated };
+}
+
+export type UpdateEmployeeInput = {
+  permissions?: Record<string, unknown>;
+  enabledModules?: string[];
+  canConfirmTransfers?: boolean;
+};
+
+// Permissions are DYNAMIC: the owner can change what a user can see/do at any
+// time. This rewrites the granted modules/permissions for an existing user.
+export async function updateEmployee(
+  userId: string,
+  input: UpdateEmployeeInput,
+): Promise<ActionResult<{ id: string }>> {
+  const { orgId, userId: actorId } = await requireAdminContext();
+
+  const [existing] = await db
+    .select({
+      id: posUsersSchema.id,
+      permissions: posUsersSchema.permissions,
+      enabledModules: posUsersSchema.enabledModules,
+      canConfirmTransfers: posUsersSchema.canConfirmTransfers,
+    })
+    .from(posUsersSchema)
+    .where(
+      and(
+        eq(posUsersSchema.id, userId),
+        eq(posUsersSchema.organizationId, orgId),
+      ),
+    )
+    .limit(1);
+
+  if (!existing) {
+    return { ok: false, error: 'Empleado no encontrado' };
+  }
+
+  const enabledModules = cleanEnabledModules(
+    input.enabledModules ?? existing.enabledModules,
+  );
+  const permissions = cleanActionPermissions(
+    (input.permissions
+      ?? existing.permissions) as Record<string, unknown> | undefined,
+  );
+  const canConfirmTransfers
+    = input.canConfirmTransfers ?? existing.canConfirmTransfers;
+
+  const [updated] = await db
+    .update(posUsersSchema)
+    .set({ permissions, enabledModules, canConfirmTransfers })
+    .where(
+      and(
+        eq(posUsersSchema.id, userId),
+        eq(posUsersSchema.organizationId, orgId),
+      ),
+    )
+    .returning({ id: posUsersSchema.id });
+
+  if (!updated) {
+    return { ok: false, error: 'Empleado no encontrado' };
+  }
+
+  await logAction({
+    organizationId: orgId,
+    actor: { type: 'user', id: actorId },
+    action: 'employee.permissions_updated',
+    entityType: 'pos_user',
+    entityId: userId,
+    before: {
+      enabledModules: existing.enabledModules,
+      permissions: existing.permissions,
+      canConfirmTransfers: existing.canConfirmTransfers,
+    },
+    after: { enabledModules, permissions, canConfirmTransfers },
+  });
+
+  revalidatePath('/dashboard/employees');
+  return { ok: true, data: updated };
+}
+
+// Deactivating frees a plan seat without deleting history; reactivating
+// re-checks the seat quota so the owner can't exceed their plan.
+export async function setEmployeeActive(
+  userId: string,
+  active: boolean,
+): Promise<ActionResult<{ id: string }>> {
+  const { orgId, userId: actorId } = await requireAdminContext();
+
+  if (active) {
+    const [plan, used, addons] = await Promise.all([
+      getOrganizationPlan(orgId),
+      countActiveUsers(orgId),
+      countCashierAddons(orgId),
+    ]);
+    const base = PLAN_CASHIER_LIMIT[plan];
+    const limit = base + addons;
+    if (used >= limit) {
+      return cashiersLimitReached({ plan, limit, used, base, addons });
+    }
+  }
+
+  const [updated] = await db
+    .update(posUsersSchema)
+    .set({ active })
+    .where(
+      and(
+        eq(posUsersSchema.id, userId),
+        eq(posUsersSchema.organizationId, orgId),
+      ),
+    )
+    .returning({ id: posUsersSchema.id });
+
+  if (!updated) {
+    return { ok: false, error: 'Empleado no encontrado' };
+  }
+
+  await logAction({
+    organizationId: orgId,
+    actor: { type: 'user', id: actorId },
+    action: active ? 'employee.reactivated' : 'employee.deactivated',
+    entityType: 'pos_user',
+    entityId: userId,
+    after: { active },
+  });
 
   revalidatePath('/dashboard/employees');
   return { ok: true, data: updated };

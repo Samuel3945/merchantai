@@ -1,7 +1,20 @@
+import { clerkClient } from '@clerk/nextjs/server';
 import { eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { db } from '@/libs/DB';
 import { employeeInvitationsSchema } from '@/models/Schema';
+
+/** Resolves the Clerk organization name; null if it can't be read. */
+async function resolveOrgName(organizationId: string): Promise<string | null> {
+  try {
+    const org = await (await clerkClient()).organizations.getOrganization({
+      organizationId,
+    });
+    return org.name;
+  } catch {
+    return null;
+  }
+}
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -66,6 +79,8 @@ export async function GET(req: Request): Promise<NextResponse> {
     );
   }
 
+  const organizationName = await resolveOrgName(invitation.organizationId);
+
   return NextResponse.json({
     valid: true,
     invitation: {
@@ -74,6 +89,7 @@ export async function GET(req: Request): Promise<NextResponse> {
       role: invitation.role,
       expiresAt: invitation.expiresAt.toISOString(),
       organizationId: invitation.organizationId,
+      organizationName,
     },
   });
 }
