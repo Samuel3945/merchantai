@@ -1,10 +1,19 @@
 'use client';
 
 import type { InventoryProduct, InventoryView } from '@/actions/inventory';
+import { Upload } from 'lucide-react';
 import { useState, useTransition } from 'react';
 import { getInventoryView } from '@/actions/inventory';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Toaster } from '@/components/ui/toast';
 import { cn } from '@/utils/Helpers';
+import { EntryImportClient } from './components/EntryImportClient';
 import { EntryModal } from './components/EntryModal';
 import { ExitModal } from './components/ExitModal';
 import { InventoryKpis } from './components/InventoryKpis';
@@ -24,6 +33,7 @@ export function InventoryClient({ initialView }: { initialView: InventoryView })
   const [entryProduct, setEntryProduct] = useState<InventoryProduct | null>(null);
   const [exitProduct, setExitProduct] = useState<InventoryProduct | null>(null);
   const [drawerProduct, setDrawerProduct] = useState<InventoryProduct | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
 
   function reload() {
     startTransition(async () => {
@@ -82,6 +92,19 @@ export function InventoryClient({ initialView }: { initialView: InventoryView })
               placeholder="Buscar por nombre o categoría"
               className={cn(inputCls, 'max-w-md')}
             />
+            <button
+              type="button"
+              onClick={() => setImportOpen(true)}
+              className="
+                ml-auto inline-flex h-9 items-center justify-center gap-2
+                rounded-md border border-input px-4 text-sm font-medium
+                transition-colors
+                hover:bg-accent
+              "
+            >
+              <Upload className="size-4" />
+              Importar entradas
+            </button>
           </div>
 
           <StockTable
@@ -117,6 +140,22 @@ export function InventoryClient({ initialView }: { initialView: InventoryView })
           onClose={() => setDrawerProduct(null)}
         />
       )}
+
+      <Dialog open={importOpen} onOpenChange={setImportOpen}>
+        <DialogContent className="
+          max-h-[85vh] w-[95vw] max-w-4xl overflow-y-auto
+        "
+        >
+          <DialogHeader>
+            <DialogTitle>Importar entradas de stock</DialogTitle>
+            <DialogDescription>
+              Subí un CSV o Excel y asigná las unidades a productos que ya
+              existen. Revisá cada fila antes de cargar.
+            </DialogDescription>
+          </DialogHeader>
+          <EntryImportClient onImported={reload} />
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
