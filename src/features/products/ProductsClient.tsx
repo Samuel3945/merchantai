@@ -1,6 +1,6 @@
 'use client';
 
-import type { ProductRow } from './actions';
+import type { BulkPriceMode, ProductRow } from './actions';
 import type { AttrRow } from './AttributesEditor';
 import type { UITier } from './WholesaleTiersEditor';
 import {
@@ -31,8 +31,12 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { Toaster } from '@/components/ui/toast';
+import { toast } from '@/components/ui/toast-store';
 import { cn } from '@/utils/Helpers';
 import {
+  bulkAdjustPrice,
+  bulkSetProductStatus,
   createProduct,
   deleteProduct,
   listProducts,
@@ -41,6 +45,8 @@ import {
 } from './actions';
 import { categorizeProduct } from './ai-categorize';
 import { AttributesEditor } from './AttributesEditor';
+import { BulkActionBar } from './BulkActionBar';
+import { BulkPriceDialog } from './BulkPriceDialog';
 import { ProductTypeToggles } from './ProductTypeToggles';
 import { WholesaleTiersEditor } from './WholesaleTiersEditor';
 
@@ -164,6 +170,9 @@ export function ProductsClient({
   const [pending, startTransition] = useTransition();
   const [ai, setAi] = useState<AiState>({ status: 'idle' });
   const [aiSuggestions, setAiSuggestions] = useState<string[]>([]);
+  // Bulk-edit selection (set of product ids) and the raise-price dialog.
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [priceDialogOpen, setPriceDialogOpen] = useState(false);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastCategorizedRef = useRef<string>('');
 
@@ -175,6 +184,9 @@ export function ProductsClient({
     startTransition(async () => {
       const data = await listProducts({ search, includeArchived: showArchived });
       setRows(data);
+      // Drop the selection on every refetch: ids may no longer be visible after
+      // a filter change, and after a bulk mutation the work is done.
+      setSelected(new Set());
     });
   }, [search, showArchived]);
 
@@ -194,6 +206,17 @@ export function ProductsClient({
     () => rows.reduce((acc, r) => acc + r.stock, 0),
     [rows],
   );
+
+  // Selection is stored as a set of ids; everything the bulk bar needs is
+  // derived from the currently visible rows so a stale id can never act.
+  const selectedVisible = useMemo(
+    () => rows.filter(r => selected.has(r.id)),
+    [rows, selected],
+  );
+  const allVisibleSelected
+    = rows.length > 0 && selectedVisible.length === rows.length;
+  const someVisibleSelected
+    = selectedVisible.length > 0 && !allVisibleSelected;
 
   const priceNum = Number.parseFloat(form.price) || 0;
   const initialQtyNum = Number.parseFloat(form.initialQty) || 0;
@@ -363,6 +386,78 @@ export function ProductsClient({
     runMutation(() => deleteProduct(p.id));
   }
 
+  function toggleOne(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    setSelected(allVisibleSelected ? new Set() : new Set(rows.map(r => r.id)));
+  }
+
+  // Shared runner for bulk server actions: reports how many rows actually
+  // changed (the server skips rows already in the target state), then refetches
+  // — which also clears the selection.
+  function runBulk(
+    fn: () => Promise<{ updated: number }>,
+    msg: (n: number) => string,
+  ) {
+    startTransition(async () => {
+      try {
+        const { updated } = await fn();
+        if (updated > 0) {
+          toast.success(msg(updated));
+        } else {
+          toast({ description: 'No hubo productos para actualizar.' });
+        }
+        fetchRows();
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Error inesperado');
+      }
+    });
+  }
+
+  function handleBulkPublish() {
+    const ids = [...selected];
+    runBulk(
+      () => bulkSetProductStatus(ids, 'published'),
+      n => `${n} ${n === 1 ? 'producto publicado' : 'productos publicados'}.`,
+    );
+  }
+
+  function handleBulkArchive() {
+    const ids = [...selected];
+    // eslint-disable-next-line no-alert -- native confirm matches the existing pattern
+    const ok = globalThis.confirm(
+      `Vas a quitar de la venta ${ids.length} ${
+        ids.length === 1 ? 'producto' : 'productos'
+      }.\n\nDejarán de venderse pero conservas su historial. Puedes reactivarlos cuando quieras.`,
+    );
+    if (!ok) {
+      return;
+    }
+    runBulk(
+      () => bulkSetProductStatus(ids, 'archived'),
+      n => `${n} ${n === 1 ? 'producto archivado' : 'productos archivados'}.`,
+    );
+  }
+
+  function handleBulkPrice(mode: BulkPriceMode, value: number) {
+    const ids = [...selected];
+    setPriceDialogOpen(false);
+    runBulk(
+      () => bulkAdjustPrice(ids, mode, value),
+      n => `Precio actualizado en ${n} ${n === 1 ? 'producto' : 'productos'}.`,
+    );
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3">
@@ -403,10 +498,36 @@ export function ProductsClient({
         </div>
       </div>
 
+      {selectedVisible.length > 0 && (
+        <BulkActionBar
+          count={selectedVisible.length}
+          pending={pending}
+          onRaisePrice={() => setPriceDialogOpen(true)}
+          onPublish={handleBulkPublish}
+          onArchive={handleBulkArchive}
+          onClear={() => setSelected(new Set())}
+        />
+      )}
+
       <div className="overflow-x-auto rounded-md border bg-background">
         <table className="w-full text-sm">
           <thead className="bg-muted/50 text-left text-xs uppercase">
             <tr>
+              <th className="w-10 px-3 py-2">
+                <input
+                  type="checkbox"
+                  className="size-4 cursor-pointer accent-primary"
+                  aria-label="Seleccionar todos"
+                  checked={allVisibleSelected}
+                  ref={(el) => {
+                    if (el) {
+                      el.indeterminate = someVisibleSelected;
+                    }
+                  }}
+                  onChange={toggleAll}
+                  disabled={rows.length === 0}
+                />
+              </th>
               <th className="px-3 py-2">Nombre</th>
               <th className="px-3 py-2">Código de barras</th>
               <th className="px-3 py-2">Categoría</th>
@@ -422,7 +543,7 @@ export function ProductsClient({
               ? (
                   <tr>
                     <td
-                      colSpan={8}
+                      colSpan={9}
                       className="px-3 py-8 text-center text-muted-foreground"
                     >
                       {pending ? 'Cargando…' : 'Aún no hay productos'}
@@ -436,8 +557,21 @@ export function ProductsClient({
                     return (
                       <tr
                         key={p.id}
-                        className={cn('border-t', isArchived && 'opacity-60')}
+                        className={cn(
+                          'border-t',
+                          isArchived && 'opacity-60',
+                          selected.has(p.id) && 'bg-primary/5',
+                        )}
                       >
+                        <td className="px-3 py-2">
+                          <input
+                            type="checkbox"
+                            className="size-4 cursor-pointer accent-primary"
+                            aria-label={`Seleccionar ${p.name}`}
+                            checked={selected.has(p.id)}
+                            onChange={() => toggleOne(p.id)}
+                          />
+                        </td>
                         <td className="px-3 py-2 font-medium">{p.name}</td>
                         <td className="px-3 py-2 font-mono text-xs">
                           {p.barcode ?? '—'}
@@ -795,6 +929,17 @@ export function ProductsClient({
           </div>
         </div>
       )}
+
+      {priceDialogOpen && (
+        <BulkPriceDialog
+          count={selectedVisible.length}
+          pending={pending}
+          onApply={handleBulkPrice}
+          onClose={() => setPriceDialogOpen(false)}
+        />
+      )}
+
+      <Toaster />
     </div>
   );
 }
