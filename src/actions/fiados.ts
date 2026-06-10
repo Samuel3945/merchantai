@@ -12,6 +12,7 @@ import {
   recordAbono,
   TERM_SETTING_KEY,
 } from '@/libs/fiados';
+import { requirePanelModule } from '@/libs/panel-session';
 
 // Thin auth + revalidate wrappers over the fiados core (libs/fiados.ts). All the
 // money + ledger logic lives in the core so it can run inside sale transactions
@@ -33,6 +34,8 @@ async function requireOrg() {
   if (!orgId) {
     throw new Error('No active organization');
   }
+  // Backend enforcement: the owner passes; a member needs the Fiados module.
+  await requirePanelModule('fiados');
   return { userId, orgId };
 }
 
