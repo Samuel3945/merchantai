@@ -1,7 +1,7 @@
 'use client';
 
 import type { SmartStockSettings } from '@/actions/smart-stock';
-import { LockIcon, SparklesIcon } from 'lucide-react';
+import { ClockIcon, LockIcon, ShieldAlertIcon, SparklesIcon, TicketPercentIcon } from 'lucide-react';
 import { useState, useTransition } from 'react';
 import { setSmartStockEnabled } from '@/actions/smart-stock';
 import { Badge } from '@/components/ui/badge';
@@ -39,7 +39,7 @@ export function SmartModelsSection({
   }
 
   return (
-    <section className="mt-8 space-y-4">
+    <section className="space-y-4">
       <Toaster />
       <div>
         <h2 className="flex items-center gap-2 text-lg font-semibold">
@@ -89,6 +89,49 @@ export function SmartModelsSection({
           aria-label="Activar Smart Stock"
         />
       </div>
+
+      <ComingSoonModel
+        icon={ShieldAlertIcon}
+        title="Análisis de riesgo operacional"
+        description="Registra eventos (cajas, ventas, devoluciones, descuentos, ajustes…), aprende el comportamiento normal de tu negocio y marca lo que se sale de la norma con una explicación humana."
+      />
+
+      <ComingSoonModel
+        icon={TicketPercentIcon}
+        title="Ofertas automáticas para productos por vencer"
+        description="Cuando un lote perecedero entra en riesgo, la IA te propone un descuento que liquide el lote sin bajar del costo. Tú decides si lo aplicas o lo rechazas."
+      />
     </section>
+  );
+}
+
+function ComingSoonModel({
+  icon: Icon,
+  title,
+  description,
+}: {
+  icon: typeof ShieldAlertIcon;
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="
+      flex items-start justify-between gap-4 rounded-md border bg-background p-4
+      opacity-70
+    "
+    >
+      <div className="space-y-1 pr-4">
+        <div className="flex items-center gap-2 font-medium">
+          <Icon className="size-4 text-muted-foreground" />
+          {title}
+          <Badge variant="secondary" className="gap-1">
+            <ClockIcon className="size-3" />
+            Próximamente
+          </Badge>
+        </div>
+        <p className="text-sm text-muted-foreground">{description}</p>
+      </div>
+      <Switch checked={false} disabled aria-label={title} onCheckedChange={() => {}} />
+    </div>
   );
 }
