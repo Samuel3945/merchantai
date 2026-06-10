@@ -14,6 +14,7 @@ import {
   Lock,
   Monitor,
   MoreVertical,
+  Pencil,
   Plus,
   QrCode,
   RefreshCw,
@@ -29,6 +30,7 @@ import {
   getPosDeviceQuota,
   listPosTokens,
   regeneratePosToken,
+  renamePosToken,
   setPosTokenPin,
   unblockPosToken,
 } from '@/actions/pos-tokens';
@@ -129,6 +131,7 @@ export function PosCajerosClient({
   const [activeToken, setActiveToken] = useState<TokenRow | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<TokenRow | null>(null);
   const [pinTarget, setPinTarget] = useState<TokenRow | null>(null);
+  const [renameTarget, setRenameTarget] = useState<TokenRow | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [limitError, setLimitError] = useState<LimitErrorPayload | null>(null);
   const [pending, startTransition] = useTransition();
@@ -428,6 +431,10 @@ export function PosCajerosClient({
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end" className="w-48">
+                        <DropdownMenuItem onClick={() => setRenameTarget(t)}>
+                          <Pencil className="size-4" />
+                          Cambiar nombre
+                        </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => setPinTarget(t)}>
                           <KeyRound className="size-4" />
                           Cambiar PIN
@@ -503,6 +510,18 @@ export function PosCajerosClient({
 
       {activeToken && (
         <QrModal token={activeToken} onClose={() => setActiveToken(null)} />
+      )}
+
+      {renameTarget && (
+        <RenameModal
+          token={renameTarget}
+          onClose={() => setRenameTarget(null)}
+          onSaved={() => {
+            setRenameTarget(null);
+            refresh();
+          }}
+          onError={msg => setError(msg)}
+        />
       )}
 
       {pinTarget && (
@@ -850,6 +869,118 @@ function QrModal({
             <Button onClick={onClose}>Cerrar</Button>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function RenameModal({
+  token,
+  onClose,
+  onSaved,
+  onError,
+}: {
+  token: TokenRow;
+  onClose: () => void;
+  onSaved: () => void;
+  onError: (msg: string) => void;
+}) {
+  const [name, setName] = useState(token.deviceName);
+  const [submitting, setSubmitting] = useState(false);
+
+  const trimmed = name.trim();
+  const nameValid = trimmed.length > 0;
+  const unchanged = trimmed === token.deviceName.trim();
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!nameValid || unchanged) {
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const result = await renamePosToken(token.id, trimmed);
+      if (!result.ok) {
+        onError(result.error);
+        return;
+      }
+      onSaved();
+    } catch {
+      onError('No se pudo cambiar el nombre');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="
+      fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4
+    "
+    >
+      <div className="w-full max-w-md rounded-lg bg-background p-6 shadow-lg">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="flex items-center gap-2 text-lg font-semibold">
+            <Pencil className="size-5" />
+            Cambiar nombre
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="
+              text-muted-foreground
+              hover:text-foreground
+            "
+          >
+            ✕
+          </button>
+        </div>
+
+        <p className="mb-3 text-sm text-muted-foreground">
+          Cambia la etiqueta visible de esta caja. El dispositivo sigue
+          conectado: no hace falta volver a escanear el código.
+        </p>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label htmlFor="rename-input" className={labelCls}>
+              Nombre de la caja / dispositivo
+              {' '}
+              <span className="text-destructive">*</span>
+            </label>
+            <input
+              id="rename-input"
+              type="text"
+              required
+              autoFocus
+              placeholder="Caja 1 - tablet mostrador"
+              value={name}
+              onChange={e => setName(e.target.value)}
+              className={inputCls}
+            />
+            {!nameValid && (
+              <p className="mt-1 text-xs text-destructive">
+                El nombre no puede quedar vacío.
+              </p>
+            )}
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={onClose}
+              disabled={submitting}
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="submit"
+              disabled={submitting || !nameValid || unchanged}
+            >
+              {submitting ? 'Guardando…' : 'Guardar nombre'}
+            </Button>
+          </div>
+        </form>
       </div>
     </div>
   );

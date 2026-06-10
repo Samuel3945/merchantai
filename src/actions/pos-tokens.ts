@@ -398,6 +398,61 @@ export async function deletePosToken(
   return { ok: true, data: deleted };
 }
 
+// Admin renombra la caja: cambia solo el deviceName. No toca el token ni el
+// sessionEpoch, así que el dispositivo sigue conectado; solo cambia la etiqueta
+// visible en el panel y en los modales.
+export async function renamePosToken(
+  id: string,
+  newName: string,
+): Promise<ActionResult<{ id: string; deviceName: string }>> {
+  const { userId, orgId } = await requireAdminContext();
+
+  const deviceName = newName?.trim();
+  if (!deviceName) {
+    return { ok: false, error: 'El nombre de la caja es obligatorio' };
+  }
+
+  const [current] = await db
+    .select({ deviceName: posTokensSchema.deviceName })
+    .from(posTokensSchema)
+    .where(
+      and(eq(posTokensSchema.id, id), eq(posTokensSchema.organizationId, orgId)),
+    )
+    .limit(1);
+
+  if (!current) {
+    return { ok: false, error: 'Caja no encontrada' };
+  }
+
+  const [updated] = await db
+    .update(posTokensSchema)
+    .set({ deviceName })
+    .where(
+      and(eq(posTokensSchema.id, id), eq(posTokensSchema.organizationId, orgId)),
+    )
+    .returning({
+      id: posTokensSchema.id,
+      deviceName: posTokensSchema.deviceName,
+    });
+
+  if (!updated) {
+    return { ok: false, error: 'Caja no encontrada' };
+  }
+
+  await logAction({
+    organizationId: orgId,
+    actor: { type: 'user', id: userId },
+    action: 'pos_token.renamed',
+    entityType: 'pos_token',
+    entityId: id,
+    before: { deviceName: current.deviceName },
+    after: { deviceName: updated.deviceName },
+  });
+
+  revalidatePath('/dashboard/pos-cajeros');
+  return { ok: true, data: updated };
+}
+
 // Admin setea/cambia/quita el PIN de acceso de la caja. newPin='' => sin PIN.
 export async function setPosTokenPin(
   id: string,
