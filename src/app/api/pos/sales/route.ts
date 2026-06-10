@@ -4,6 +4,7 @@ import { applyInvoiceCustomerUpsert } from '@/features/customers/post-sale-hook'
 import { logAction, resolvePosActor } from '@/libs/audit-log';
 import { findOpenSession, recordCashMovement, toMoney } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
+import { maybeAutoEmitInvoice } from '@/libs/einvoice/emit';
 import { createFiado } from '@/libs/fiados';
 import { fiadoAmountFor } from '@/libs/fiados-math';
 import { consumeFifoExits } from '@/libs/fifo-cogs';
@@ -271,6 +272,10 @@ export async function POST(req: Request): Promise<NextResponse> {
       total: result.total,
       createdBy: ctx.cashierId ?? ctx.cashierName ?? null,
     }).catch(() => null);
+
+    // Best-effort: emit the electronic invoice if a provider is configured.
+    // Not awaited — a failed emission leaves the sale retriable in Facturas.
+    void maybeAutoEmitInvoice(ctx.organizationId, result.id);
 
     const forwarded = req.headers.get('x-forwarded-for');
     const ip

@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   Package,
   Receipt,
+  ReceiptText,
   Settings,
   ShoppingCart,
   Sparkles,
@@ -61,6 +62,7 @@ export const navGroups: NavGroup[] = [
   {
     title: 'Negocio',
     items: [
+      { href: '/dashboard/facturas', label: 'Facturas', icon: ReceiptText },
       { href: '/dashboard/reports', label: 'Reportes', icon: BarChart3 },
       { href: '/dashboard/plans', label: 'Planes', icon: CreditCard },
       { href: '/dashboard/settings', label: 'Ajustes', icon: Settings },

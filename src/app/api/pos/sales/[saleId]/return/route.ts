@@ -2,6 +2,7 @@ import type { ReturnItemInput, ReturnReason } from '@/libs/sale-returns';
 import { NextResponse } from 'next/server';
 import { logAction, resolvePosActor } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
+import { maybeEmitCreditNote } from '@/libs/einvoice/emit';
 import { resolvePosAuth } from '@/libs/pos-auth';
 import {
   applySaleReturn,
@@ -107,6 +108,10 @@ export async function POST(
       ip,
       userAgent: req.headers.get('user-agent'),
     });
+
+    // Best-effort: void the electronic invoice with a credit note. No-op when
+    // the sale was never emitted (no CUFE).
+    void maybeEmitCreditNote(ctx.organizationId, saleId, reason);
 
     return NextResponse.json(result, { status: 201 });
   } catch (err) {

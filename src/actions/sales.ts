@@ -20,6 +20,10 @@ import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
 import { recordCashMovement } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
+import {
+  maybeAutoEmitInvoice,
+  maybeEmitCreditNote,
+} from '@/libs/einvoice/emit';
 import { createFiado } from '@/libs/fiados';
 import { fiadoAmountFor } from '@/libs/fiados-math';
 import { consumeFifoExits } from '@/libs/fifo-cogs';
@@ -256,6 +260,11 @@ export async function createSale(input: CreateSaleInput) {
   });
 
   await recordCashMovement(result.id, result.total);
+
+  // Best-effort: emit the electronic invoice now if a provider is configured.
+  // Never awaited into the response — the sale already succeeded; a failed
+  // emission stays retriable from the Facturas module.
+  void maybeAutoEmitInvoice(orgId, result.id);
 
   await logAction({
     organizationId: orgId,
@@ -674,6 +683,10 @@ export async function processReturn(saleId: string, input: ProcessReturnInput) {
   revalidatePath('/dashboard/sales');
   revalidatePath('/dashboard/products');
   revalidatePath('/dashboard/cash');
+
+  // Best-effort: void the electronic invoice with a credit note when the sale
+  // was emitted. No-op if the sale had no CUFE.
+  void maybeEmitCreditNote(orgId, saleId, input.reason);
 
   return result;
 }

@@ -104,6 +104,14 @@ export const salesSchema = pgTable(
     notes: text('notes'),
     cashierId: text('cashier_id'),
     posTokenId: uuid('pos_token_id'),
+    // DIAN e-invoicing intent + result, mirrored onto the sale for cheap reads.
+    // Every sale starts 'pending' so it surfaces in the Facturas module; it
+    // flips to 'emitted' (with cufe/number) or 'failed' once a provider runs.
+    // The authoritative emission trail lives in `einvoice_emissions`.
+    einvoiceStatus: text('einvoice_status').default('pending').notNull(),
+    einvoiceCufe: text('einvoice_cufe'),
+    einvoiceNumber: text('einvoice_number'),
+    einvoiceId: uuid('einvoice_id'),
     createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
   },
   table => [
@@ -1198,5 +1206,51 @@ export const appSettingsSchema = pgTable(
       name: 'app_settings_pk',
       columns: [table.organizationId, table.key],
     }),
+  ],
+);
+
+// ── DIAN e-invoicing emissions ──────────────────────────────────────────────
+// Append-only audit trail of every attempt to emit an electronic document for a
+// sale through a provider (currently Factus). One sale can have several rows: a
+// failed attempt then a successful retry (kind 'invoice'), plus a 'credit_note'
+// when the sale is later returned. The provider adapter writes the request
+// `payload` and raw `response` here so a failed emission is fully debuggable.
+// `sales.einvoice_*` mirrors the latest successful invoice for cheap listing.
+export const einvoiceEmissionsSchema = pgTable(
+  'einvoice_emissions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: text('organization_id').notNull(),
+    saleId: uuid('sale_id')
+      .notNull()
+      .references(() => salesSchema.id, { onDelete: 'cascade' }),
+    // 'invoice' | 'credit_note'
+    kind: text('kind').default('invoice').notNull(),
+    // 'factus' for now; the column lets a second adapter coexist later.
+    provider: text('provider').default('factus').notNull(),
+    // 'queued' | 'sent' | 'emitted' | 'failed'
+    status: text('status').default('queued').notNull(),
+    providerId: text('provider_id'),
+    cufe: text('cufe'),
+    number: text('number'),
+    customer: jsonb('customer'),
+    payload: jsonb('payload'),
+    response: jsonb('response'),
+    attempts: integer('attempts').default(0).notNull(),
+    lastError: text('last_error'),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+    emittedAt: timestamp('emitted_at', { mode: 'date' }),
+  },
+  table => [
+    index('einvoice_emissions_org_sale_idx').on(
+      table.organizationId,
+      table.saleId,
+    ),
+    index('einvoice_emissions_sale_kind_created_idx').on(
+      table.saleId,
+      table.kind,
+      table.createdAt,
+    ),
   ],
 );

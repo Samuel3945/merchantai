@@ -28,7 +28,13 @@ const KEYS = [
   'fiscal_invoice_prefix',
   'fiscal_dian_resolution',
   'fiscal_einvoice_provider',
-  'fiscal_einvoice_token',
+  // Factus (DIAN e-invoicing) credentials
+  'einvoice_factus_email',
+  'einvoice_factus_password',
+  'einvoice_factus_client_id',
+  'einvoice_factus_client_secret',
+  'einvoice_factus_env',
+  'einvoice_factus_base_url',
   // Integrations
   'whatsapp_business_token',
   'whatsapp_phone_number_id',
@@ -95,7 +101,12 @@ export default async function DashboardSettingsPage(props: {
           fiscal_invoice_prefix: map.fiscal_invoice_prefix,
           fiscal_dian_resolution: map.fiscal_dian_resolution,
           fiscal_einvoice_provider: map.fiscal_einvoice_provider,
-          fiscal_einvoice_token: map.fiscal_einvoice_token,
+          einvoice_factus_email: map.einvoice_factus_email,
+          einvoice_factus_password: map.einvoice_factus_password,
+          einvoice_factus_client_id: map.einvoice_factus_client_id,
+          einvoice_factus_client_secret: map.einvoice_factus_client_secret,
+          einvoice_factus_env: map.einvoice_factus_env,
+          einvoice_factus_base_url: map.einvoice_factus_base_url,
         }}
         integrations={{
           whatsapp_business_token: map.whatsapp_business_token,
