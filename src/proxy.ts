@@ -17,6 +17,10 @@ const isProtectedRoute = createRouteMatcher([
   '/:locale/dashboard(.*)',
   '/onboarding(.*)',
   '/:locale/onboarding(.*)',
+  // Operator console: Clerk login is enforced here; the operator allowlist is
+  // enforced in the /platform layout and again in getPlatformDb().
+  '/platform(.*)',
+  '/:locale/platform(.*)',
 ]);
 
 const isAuthPage = createRouteMatcher([
