@@ -1,7 +1,7 @@
 'use server';
 
 import { auth } from '@clerk/nextjs/server';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
@@ -49,10 +49,42 @@ async function getDefaultPlanSlug(): Promise<string> {
 
 export type CurrentPlan = {
   plan: PlanName;
+  // Display name from the catalog; falls back to the slug for unknown plans.
+  planName: string;
   active: boolean;
   periodStart: string | null;
   periodEnd: string | null;
 };
+
+// Catalog entry as shown to tenants (public, non-archived plans only).
+export type PublicPlan = {
+  slug: string;
+  name: string;
+  description: string | null;
+  priceMonthlyCop: number;
+  priceAnnualCop: number | null;
+  featureBullets: string[];
+};
+
+// The live plan catalog for tenant-facing pages (plans page, onboarding).
+export async function listPublicPlans(): Promise<PublicPlan[]> {
+  const rows = await db
+    .select()
+    .from(plansSchema)
+    .where(
+      and(eq(plansSchema.isPublic, true), eq(plansSchema.isArchived, false)),
+    )
+    .orderBy(asc(plansSchema.sortOrder), asc(plansSchema.createdAt));
+
+  return rows.map(p => ({
+    slug: p.slug,
+    name: p.name,
+    description: p.description,
+    priceMonthlyCop: Number(p.priceMonthlyCop),
+    priceAnnualCop: p.priceAnnualCop === null ? null : Number(p.priceAnnualCop),
+    featureBullets: p.featureBullets,
+  }));
+}
 
 export type CounterRow = {
   agentKind: AgentKind;
@@ -162,9 +194,16 @@ export async function currentPlan(): Promise<PlanSnapshot> {
 
   const counters = await readCounters(orgId);
 
+  const [planRow] = await db
+    .select({ name: plansSchema.name })
+    .from(plansSchema)
+    .where(eq(plansSchema.slug, plan))
+    .limit(1);
+
   return {
     subscription: {
       plan,
+      planName: planRow?.name ?? plan,
       active: active ? active.active : true,
       periodStart: active?.periodStart
         ? active.periodStart.toISOString()

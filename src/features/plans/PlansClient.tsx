@@ -5,54 +5,11 @@ import type {
   CounterRow,
   PlanName,
   PlanSnapshot,
+  PublicPlan,
 } from '@/actions/plans';
 import { useState, useTransition } from 'react';
 import { topUp, upgradePlan } from '@/actions/plans';
 import { Button } from '@/components/ui/button';
-
-const PLANS: {
-  name: PlanName;
-  title: string;
-  priceLabel: string;
-  description: string;
-  features: string[];
-}[] = [
-  {
-    name: 'free',
-    title: 'Gratis',
-    priceLabel: 'COP 0 / mes',
-    description: 'Acceso completo al software, sin compromiso.',
-    features: [
-      'Acceso completo: POS, inventario, ventas y caja',
-      'Fiado, domicilios y empleados incluidos',
-      'Todas las modalidades de venta (peso, mayoreo, perecederos)',
-      'Reportes en PDF',
-      'Sin agentes de IA incluidos',
-    ],
-  },
-  {
-    name: 'pro',
-    title: 'Pro',
-    priceLabel: 'COP 89.000 / mes',
-    description: 'Todo el software, más IA que potencia tus ventas.',
-    features: [
-      'Todo lo del plan Gratis',
-      'Sales Manager IA: 500 consultas/mes',
-      'Reportes avanzados',
-    ],
-  },
-  {
-    name: 'business',
-    title: 'Business',
-    priceLabel: 'COP 199.000 / mes',
-    description: 'Más IA y atención al cliente automatizada.',
-    features: [
-      'Todo lo del plan Pro',
-      'Customer Service IA: 1.000 consultas/mes',
-      'Soporte prioritario',
-    ],
-  },
-];
 
 const AGENT_LABELS: Record<AgentKind, string> = {
   sales_manager: 'Sales Manager',
@@ -77,7 +34,7 @@ function PlanCard({
   busy,
   onSelect,
 }: {
-  plan: (typeof PLANS)[number];
+  plan: PublicPlan;
   current: boolean;
   busy: boolean;
   onSelect: () => void;
@@ -91,12 +48,14 @@ function PlanCard({
     }
       `}
     >
-      <div className="text-lg font-semibold">{plan.title}</div>
+      <div className="text-lg font-semibold">{plan.name}</div>
       <div className="mt-1 text-sm text-muted-foreground">{plan.description}</div>
-      <div className="mt-4 text-3xl font-bold">{plan.priceLabel}</div>
+      <div className="mt-4 text-3xl font-bold">
+        {`COP ${plan.priceMonthlyCop.toLocaleString('es-CO')} / mes`}
+      </div>
 
       <ul className="mt-6 space-y-2 text-sm">
-        {plan.features.map(f => (
+        {plan.featureBullets.map(f => (
           <li key={f} className="flex gap-2">
             <span className="text-primary">•</span>
             <span>{f}</span>
@@ -265,8 +224,10 @@ function TopUpModal({
 
 export function PlansClient({
   initialSnapshot,
+  plans,
 }: {
   initialSnapshot: PlanSnapshot;
+  plans: PublicPlan[];
 }) {
   const [snapshot, setSnapshot] = useState(initialSnapshot);
   const [topUpAgent, setTopUpAgent] = useState<AgentKind | null>(null);
@@ -319,8 +280,8 @@ export function PlansClient({
           <div className="text-sm text-muted-foreground">
             Activo:
             {' '}
-            <span className="font-medium text-foreground capitalize">
-              {snapshot.subscription.plan}
+            <span className="font-medium text-foreground">
+              {snapshot.subscription.planName}
             </span>
           </div>
         </div>
@@ -330,13 +291,13 @@ export function PlansClient({
           md:grid-cols-3
         "
         >
-          {PLANS.map(p => (
+          {plans.map(p => (
             <PlanCard
-              key={p.name}
+              key={p.slug}
               plan={p}
-              current={snapshot.subscription.plan === p.name}
+              current={snapshot.subscription.plan === p.slug}
               busy={pending}
-              onSelect={() => handleUpgrade(p.name)}
+              onSelect={() => handleUpgrade(p.slug)}
             />
           ))}
         </div>
