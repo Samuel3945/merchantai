@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { setRequestLocale } from 'next-intl/server';
 import { redirect } from 'next/navigation';
+import { ConfirmProvider } from '@/components/ui/confirm-provider';
 import { Link } from '@/libs/I18nNavigation';
 import { getPlatformOperator } from '@/libs/platform/operator';
 
@@ -57,6 +58,15 @@ export default async function PlatformLayout(props: PlatformLayoutProps) {
               Resumen
             </Link>
             <Link
+              href="/platform/plans"
+              className="
+                font-medium
+                hover:underline
+              "
+            >
+              Planes
+            </Link>
+            <Link
               href="/dashboard"
               className="
                 text-muted-foreground
@@ -68,7 +78,9 @@ export default async function PlatformLayout(props: PlatformLayoutProps) {
           </nav>
         </div>
       </header>
-      <main className="mx-auto max-w-6xl px-4 py-6">{props.children}</main>
+      <main className="mx-auto max-w-6xl px-4 py-6">
+        <ConfirmProvider>{props.children}</ConfirmProvider>
+      </main>
     </div>
   );
 }

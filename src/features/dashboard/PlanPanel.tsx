@@ -9,13 +9,6 @@ import { getPosDeviceQuota } from '@/actions/pos-tokens';
 import { getCashierSaturation } from '@/actions/sales';
 import { cn } from '@/utils/Helpers';
 
-const PLAN_LABEL: Record<string, string> = {
-  free: 'Free',
-  starter: 'Starter',
-  pro: 'Pro',
-  business: 'Business',
-};
-
 // Mirrors the labels used on the Plans screen so the two views stay in sync.
 const AGENT_LABELS: Record<AgentKind, string> = {
   sales_manager: 'Sales Manager',
@@ -161,7 +154,7 @@ export async function PlanPanel() {
             <h3 className="text-sm font-semibold">
               Plan
               {' '}
-              {PLAN_LABEL[subscription.plan] ?? subscription.plan}
+              {subscription.planName}
             </h3>
           </div>
           <p className="mt-0.5 text-xs text-muted-foreground">
