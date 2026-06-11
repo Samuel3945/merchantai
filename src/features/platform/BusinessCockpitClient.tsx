@@ -7,6 +7,7 @@ import type {
 } from '@/actions/platform-orgs';
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
+import { startImpersonation } from '@/actions/platform-impersonation';
 import {
   assignPlanToOrg,
   grantAddon,
@@ -78,6 +79,8 @@ export function BusinessCockpitClient(props: {
   const [creditAmount, setCreditAmount] = useState('100');
   const [settingKey, setSettingKey] = useState('');
   const [settingValue, setSettingValue] = useState('');
+  const [impersonationReason, setImpersonationReason] = useState('');
+  const [impersonationUrl, setImpersonationUrl] = useState<string | null>(null);
 
   const run = (fn: () => Promise<{ ok: boolean; error?: string }>) => {
     startTransition(async () => {
@@ -600,6 +603,85 @@ export function BusinessCockpitClient(props: {
               Guardar notas
             </Button>
           </div>
+        </div>
+      </Section>
+
+      <Section title="Soporte (acceso al negocio)">
+        <div className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            Genera un acceso temporal (30 min) como el dueño del negocio,
+            usando la impersonación nativa de Clerk. La sesión queda marcada
+            con un banner visible y el acceso se registra en la auditoría.
+            Uso exclusivo de soporte.
+          </p>
+          <div className="flex items-end gap-2">
+            <div className="flex-1">
+              <label htmlFor="imp-reason" className="text-xs font-medium">
+                Motivo (obligatorio)
+              </label>
+              <input
+                id="imp-reason"
+                type="text"
+                className={`
+                  ${inputClass}
+                  w-full
+                `}
+                value={impersonationReason}
+                placeholder="ej: revisar error reportado en facturación"
+                onChange={e => setImpersonationReason(e.target.value)}
+                disabled={pending}
+              />
+            </div>
+            <Button
+              variant="secondary"
+              disabled={pending || impersonationReason.trim().length < 10}
+              onClick={async () => {
+                const ok = await confirm({
+                  title: `¿Generar acceso de soporte a ${org.name}?`,
+                  description:
+                    'Vas a navegar como el dueño del negocio durante 30 minutos.',
+                  confirmText: 'Generar acceso',
+                  tone: 'destructive',
+                });
+                if (!ok) {
+                  return;
+                }
+                startTransition(async () => {
+                  const result = await startImpersonation(
+                    org.organizationId,
+                    impersonationReason,
+                  );
+                  if (result.ok) {
+                    setImpersonationUrl(result.data.url);
+                    toast.success('Acceso de soporte generado');
+                  } else {
+                    toast.error(result.error ?? 'Error inesperado');
+                  }
+                });
+              }}
+            >
+              Generar acceso
+            </Button>
+          </div>
+          {impersonationUrl && (
+            <div className="
+              flex items-center justify-between gap-2 rounded-md border
+              border-amber-300 bg-amber-50 px-3 py-2 text-sm
+            "
+            >
+              <span className="truncate text-amber-900">
+                Acceso listo (expira en 30 min).
+              </span>
+              <a
+                href={impersonationUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="shrink-0 font-medium underline"
+              >
+                Abrir sesión de soporte
+              </a>
+            </div>
+          )}
         </div>
       </Section>
     </div>
