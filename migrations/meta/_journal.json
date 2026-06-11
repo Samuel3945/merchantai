@@ -155,6 +155,20 @@
       "when": 1781125800010,
       "tag": "0021_chemical_greymalkin",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1781139069361,
+      "tag": "0022_plan_catalog",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1781139069728,
+      "tag": "0023_seed_plan_catalog",
+      "breakpoints": true
     }
   ]
 }

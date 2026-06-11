@@ -5,24 +5,47 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
+import { getPlanEntitlementsBySlug, limitOf } from '@/libs/entitlements';
 import {
+  plansSchema,
   subscriptionsSchema,
   topUpsSchema,
   usageCountersSchema,
 } from '@/models/Schema';
 
-export type PlanName = 'free' | 'pro' | 'business';
+// Plan identity is the catalog slug ('free', 'pro', ...). The catalog lives in
+// the `plans` table and is operator-managed, so this is intentionally an open
+// string instead of a closed union.
+export type PlanName = string;
 export type AgentKind = 'sales_manager' | 'customer_service';
 
-// Not exported: a "use server" module may only export async functions.
-// These are internal constants used by the actions below.
-const PLAN_LIMITS: Record<PlanName, Record<AgentKind, number>> = {
-  free: { sales_manager: 0, customer_service: 0 },
-  pro: { sales_manager: 500, customer_service: 0 },
-  business: { sales_manager: 500, customer_service: 1000 },
-};
-
 const AGENT_KINDS: AgentKind[] = ['sales_manager', 'customer_service'];
+
+// AI credit quotas come from the plan catalog (plan_entitlements), not from a
+// hardcoded map. Unknown slugs grant zero credits, matching the old fallback.
+async function aiLimitsForPlan(
+  planSlug: string,
+): Promise<Record<AgentKind, number>> {
+  const entitlements = await getPlanEntitlementsBySlug(planSlug);
+  return {
+    sales_manager: entitlements
+      ? limitOf(entitlements, 'ai_credits_sales_manager')
+      : 0,
+    customer_service: entitlements
+      ? limitOf(entitlements, 'ai_credits_customer_service')
+      : 0,
+  };
+}
+
+// The plan an org sits on without an active subscription row.
+async function getDefaultPlanSlug(): Promise<string> {
+  const [row] = await db
+    .select({ slug: plansSchema.slug })
+    .from(plansSchema)
+    .where(eq(plansSchema.isDefault, true))
+    .limit(1);
+  return row?.slug ?? 'free';
+}
 
 export type CurrentPlan = {
   plan: PlanName;
@@ -44,10 +67,6 @@ export type PlanSnapshot = {
   subscription: CurrentPlan;
   counters: CounterRow[];
 };
-
-function isPlan(value: string): value is PlanName {
-  return value === 'free' || value === 'pro' || value === 'business';
-}
 
 function isAgentKind(value: string): value is AgentKind {
   return value === 'sales_manager' || value === 'customer_service';
@@ -79,7 +98,7 @@ async function requireAdminOrg() {
 }
 
 async function ensureCountersForPlan(orgId: string, plan: PlanName) {
-  const limits = PLAN_LIMITS[plan];
+  const limits = await aiLimitsForPlan(plan);
   for (const kind of AGENT_KINDS) {
     await db
       .insert(usageCountersSchema)
@@ -137,8 +156,7 @@ export async function currentPlan(): Promise<PlanSnapshot> {
     .orderBy(desc(subscriptionsSchema.createdAt))
     .limit(1);
 
-  const plan: PlanName
-    = active && isPlan(active.plan) ? active.plan : 'free';
+  const plan: PlanName = active ? active.plan : await getDefaultPlanSlug();
 
   await ensureCountersForPlan(orgId, plan);
 
@@ -158,7 +176,17 @@ export async function currentPlan(): Promise<PlanSnapshot> {
 }
 
 export async function upgradePlan(plan: PlanName): Promise<PlanSnapshot> {
-  if (!isPlan(plan)) {
+  // Tenant-facing upgrade: only live, publicly offered catalog plans are
+  // selectable. Hidden/archived plans are operator-assigned from /platform.
+  const [planRow] = await db
+    .select({
+      isPublic: plansSchema.isPublic,
+      isArchived: plansSchema.isArchived,
+    })
+    .from(plansSchema)
+    .where(eq(plansSchema.slug, plan))
+    .limit(1);
+  if (!planRow || planRow.isArchived || !planRow.isPublic) {
     throw new Error(`Unknown plan: ${String(plan)}`);
   }
   const { userId, orgId } = await requireAdminOrg();
@@ -181,7 +209,7 @@ export async function upgradePlan(plan: PlanName): Promise<PlanSnapshot> {
     active: true,
   });
 
-  const limits = PLAN_LIMITS[plan];
+  const limits = await aiLimitsForPlan(plan);
   for (const kind of AGENT_KINDS) {
     const inserted = await db
       .insert(usageCountersSchema)
@@ -228,14 +256,15 @@ export async function upgradePlan(plan: PlanName): Promise<PlanSnapshot> {
   return currentPlan();
 }
 
-// Cancellation is modeled as a downgrade to the free plan so the invariant
-// "one active subscription per org" stays intact. Counters are reset to
-// free-tier limits, mirroring upgradePlan().
+// Cancellation is modeled as a downgrade to the default (free) plan so the
+// invariant "one active subscription per org" stays intact. Counters are reset
+// to default-tier limits, mirroring upgradePlan().
 export async function cancelSubscription(): Promise<PlanSnapshot> {
   const { userId, orgId } = await requireAdminOrg();
 
+  const defaultSlug = await getDefaultPlanSlug();
   const previousPlan = await getActivePlan(orgId);
-  if (previousPlan === 'free') {
+  if (previousPlan === defaultSlug) {
     return currentPlan();
   }
 
@@ -251,11 +280,11 @@ export async function cancelSubscription(): Promise<PlanSnapshot> {
 
   await db.insert(subscriptionsSchema).values({
     organizationId: orgId,
-    plan: 'free',
+    plan: defaultSlug,
     active: true,
   });
 
-  const limits = PLAN_LIMITS.free;
+  const limits = await aiLimitsForPlan(defaultSlug);
   for (const kind of AGENT_KINDS) {
     await db
       .update(usageCountersSchema)
@@ -275,7 +304,7 @@ export async function cancelSubscription(): Promise<PlanSnapshot> {
     entityType: 'subscription',
     entityId: orgId,
     before: { plan: previousPlan },
-    after: { plan: 'free' },
+    after: { plan: defaultSlug },
   });
 
   revalidatePath('/dashboard/plans');
@@ -336,7 +365,7 @@ async function getActivePlan(orgId: string): Promise<PlanName> {
     )
     .orderBy(desc(subscriptionsSchema.createdAt))
     .limit(1);
-  return active && isPlan(active.plan) ? active.plan : 'free';
+  return active ? active.plan : getDefaultPlanSlug();
 }
 
 export type ConsumeResult

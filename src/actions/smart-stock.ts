@@ -1,15 +1,17 @@
 'use server';
 
-import type { PlanName } from '@/libs/smart-stock';
 import { auth } from '@clerk/nextjs/server';
 import { eq, gte, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
-import { currentPlan } from '@/actions/plans';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/db-context';
 import {
+  getCurrentOrgEntitlements,
+  getOrgEntitlements,
+  hasFeature,
+} from '@/libs/entitlements';
+import {
   computeSmartStock,
-  isProPlan,
   SMART_STOCK_SALES_WINDOW_DAYS,
   SMART_STOCK_SETTING_KEY,
 } from '@/libs/smart-stock';
@@ -21,7 +23,7 @@ import {
 } from '@/models/Schema';
 
 export type SmartStockSettings = {
-  plan: PlanName;
+  plan: string;
   isPro: boolean;
   enabled: boolean;
 };
@@ -31,9 +33,9 @@ export type SmartStockSettings = {
 // minimum to manual without flipping any stored value.
 export async function getSmartStockSettings(): Promise<SmartStockSettings> {
   const tdb = await db();
-  const snapshot = await currentPlan();
-  const plan = snapshot.subscription.plan as PlanName;
-  const pro = isProPlan(plan);
+  const entitlements = await getCurrentOrgEntitlements();
+  const plan = entitlements.planSlug;
+  const pro = hasFeature(entitlements, 'feature_smart_stock');
 
   let flag = false;
   if (pro) {
@@ -65,9 +67,10 @@ export async function setSmartStockEnabled(
     throw new Error('Solo un administrador puede cambiar los Modelos Inteligentes');
   }
 
-  const snapshot = await currentPlan();
-  const plan = snapshot.subscription.plan as PlanName;
-  if (enabled && !isProPlan(plan)) {
+  const entitlements = await getOrgEntitlements(orgId);
+  const plan = entitlements.planSlug;
+  const pro = hasFeature(entitlements, 'feature_smart_stock');
+  if (enabled && !pro) {
     throw new Error('Smart Stock requiere el plan Pro');
   }
 
@@ -96,7 +99,7 @@ export async function setSmartStockEnabled(
   revalidatePath('/dashboard/inventory');
   revalidatePath('/dashboard/ai-agent');
 
-  return { plan, isPro: isProPlan(plan), enabled };
+  return { plan, isPro: pro, enabled };
 }
 
 // Recompute products.minStock from each product's trailing-window sales using

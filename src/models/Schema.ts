@@ -618,7 +618,79 @@ export const employeeInvitationsRelations = relations(
   }),
 );
 
+// Operator-managed plan catalog. Single source of truth for what each plan
+// costs and grants — replaces the hardcoded PLAN_* maps that used to live in
+// actions/plans.ts, actions/pos-tokens.ts and actions/employees.ts. Plans are
+// created/edited at runtime from the platform console; tenant code resolves an
+// org's effective limits through libs/entitlements.ts, never by reading this
+// table with a hardcoded slug.
+export const plansSchema = pgTable(
+  'plans',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    // Stable identifier stored in subscriptions.plan ('free', 'pro', ...).
+    slug: text('slug').notNull(),
+    name: text('name').notNull(),
+    description: text('description'),
+    priceMonthlyCop: numeric('price_monthly_cop', { precision: 12, scale: 2 })
+      .default('0')
+      .notNull(),
+    // Null means the plan has no annual option.
+    priceAnnualCop: numeric('price_annual_cop', { precision: 12, scale: 2 }),
+    // Marketing bullets rendered on the tenant plans page.
+    featureBullets: jsonb('feature_bullets')
+      .$type<string[]>()
+      .default([])
+      .notNull(),
+    // Public plans appear on the tenant plans page; hidden ones are
+    // operator-assigned only (custom deals, grandfathered tiers).
+    isPublic: boolean('is_public').default(true).notNull(),
+    // The plan an org falls back to when it has no active subscription.
+    isDefault: boolean('is_default').default(false).notNull(),
+    // Archived plans keep historical subscriptions resolvable but cannot be
+    // selected for new upgrades.
+    isArchived: boolean('is_archived').default(false).notNull(),
+    sortOrder: integer('sort_order').default(0).notNull(),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { mode: 'date' })
+      .defaultNow()
+      .$onUpdate(() => new Date())
+      .notNull(),
+  },
+  table => [
+    uniqueIndex('plans_slug_unique_idx').on(table.slug),
+    uniqueIndex('plans_one_default_idx')
+      .on(table.isDefault)
+      .where(sql`${table.isDefault} = true`),
+  ],
+);
+
+// What each plan grants. Numeric limits use the value directly
+// (max_cashiers, ai_credits_sales_manager, ...); boolean features use 0/1
+// (feature_smart_stock, ...). One row per (plan, key).
+export const planEntitlementsSchema = pgTable(
+  'plan_entitlements',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    planId: uuid('plan_id')
+      .notNull()
+      .references(() => plansSchema.id, { onDelete: 'cascade' }),
+    key: text('key').notNull(),
+    value: integer('value').default(0).notNull(),
+  },
+  table => [
+    uniqueIndex('plan_entitlements_plan_key_unique_idx').on(
+      table.planId,
+      table.key,
+    ),
+  ],
+);
+
 // Per-organization plan tier. Drives quota for cashiers, etc.
+// DEPRECATED: never written by app code (upgrade flows only write
+// `subscriptions`), which silently kept paying orgs on free-tier cashier
+// limits. Readers now go through libs/entitlements.ts; this table stays only
+// so existing rows remain queryable until it is dropped.
 export const organizationPlanTierEnum = pgEnum('organization_plan_tier', [
   'free',
   'starter',

@@ -17,13 +17,8 @@ export const SMART_STOCK_SALES_WINDOW_DAYS = 30;
 // or 'false' — app_settings stores text.
 export const SMART_STOCK_SETTING_KEY = 'smartStockEnabled';
 
-export type PlanName = 'free' | 'starter' | 'pro' | 'business';
-
-// Smart Stock is a paid model: only Pro and Business unlock the automatic
-// minimum-stock manager. Everyone else edits the minimum by hand.
-export function isProPlan(plan: string): boolean {
-  return plan === 'pro' || plan === 'business';
-}
+// Smart Stock is a paid model gated by the `feature_smart_stock` entitlement
+// (libs/entitlements.ts); the old hardcoded pro/business slug check is gone.
 
 export type SmartStockComputation = {
   avgDailySales: number;

@@ -9,6 +9,7 @@ import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
 import { sendInvitationEmail } from '@/libs/email';
+import { getOrgEntitlements, limitOf } from '@/libs/entitlements';
 import { Env } from '@/libs/Env';
 import { syncPanelModules } from '@/libs/panel-access';
 import {
@@ -18,25 +19,15 @@ import {
 import { CASHIERS_LIMIT_REACHED } from '@/libs/plan-limits';
 import {
   employeeInvitationsSchema,
-  organizationPlansSchema,
   planAddonsSchema,
   posUsersSchema,
 } from '@/models/Schema';
-
-type PlanTier = 'free' | 'starter' | 'pro' | 'business';
-
-const PLAN_CASHIER_LIMIT: Record<PlanTier, number> = {
-  free: 1,
-  starter: 2,
-  pro: 5,
-  business: 10,
-};
 
 const INVITE_TTL_HOURS = 72;
 const INVITE_TTL_MS = INVITE_TTL_HOURS * 60 * 60 * 1000;
 
 type CashierLimitMeta = {
-  plan: PlanTier;
+  plan: string;
   limit: number;
   used: number;
   base: number;
@@ -70,15 +61,6 @@ async function requireAdminContext() {
   return { userId, orgId };
 }
 
-async function getOrganizationPlan(orgId: string): Promise<PlanTier> {
-  const [row] = await db
-    .select({ plan: organizationPlansSchema.plan })
-    .from(organizationPlansSchema)
-    .where(eq(organizationPlansSchema.organizationId, orgId))
-    .limit(1);
-  return (row?.plan as PlanTier | undefined) ?? 'free';
-}
-
 async function countCashierAddons(orgId: string): Promise<number> {
   const [row] = await db
     .select({ value: count() })
@@ -110,7 +92,7 @@ async function countActiveUsers(orgId: string): Promise<number> {
 }
 
 export type CashierQuota = {
-  plan: PlanTier;
+  plan: string;
   used: number;
   base: number;
   addons: number;
@@ -128,12 +110,13 @@ export async function getCashierQuota(): Promise<CashierQuota> {
     throw new Error('No active organization');
   }
 
-  const [plan, used, addons] = await Promise.all([
-    getOrganizationPlan(orgId),
+  const [entitlements, used, addons] = await Promise.all([
+    getOrgEntitlements(orgId),
     countActiveUsers(orgId),
     countCashierAddons(orgId),
   ]);
-  const base = PLAN_CASHIER_LIMIT[plan];
+  const plan = entitlements.planSlug;
+  const base = limitOf(entitlements, 'max_cashiers', 1);
   const limit = base + addons;
 
   return {
@@ -210,12 +193,13 @@ export async function invite(
 
   // 1. Seat quota check — applies to every user (no role exemptions).
   {
-    const [plan, used, addons] = await Promise.all([
-      getOrganizationPlan(orgId),
+    const [entitlements, used, addons] = await Promise.all([
+      getOrgEntitlements(orgId),
       countActiveUsers(orgId),
       countCashierAddons(orgId),
     ]);
-    const base = PLAN_CASHIER_LIMIT[plan];
+    const plan = entitlements.planSlug;
+    const base = limitOf(entitlements, 'max_cashiers', 1);
     const limit = base + addons;
 
     if (used >= limit) {
@@ -670,12 +654,13 @@ export async function setEmployeeActive(
   const { orgId, userId: actorId } = await requireAdminContext();
 
   if (active) {
-    const [plan, used, addons] = await Promise.all([
-      getOrganizationPlan(orgId),
+    const [entitlements, used, addons] = await Promise.all([
+      getOrgEntitlements(orgId),
       countActiveUsers(orgId),
       countCashierAddons(orgId),
     ]);
-    const base = PLAN_CASHIER_LIMIT[plan];
+    const plan = entitlements.planSlug;
+    const base = limitOf(entitlements, 'max_cashiers', 1);
     const limit = base + addons;
     if (used >= limit) {
       return cashiersLimitReached({ plan, limit, used, base, addons });
