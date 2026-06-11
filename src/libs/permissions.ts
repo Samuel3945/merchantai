@@ -74,6 +74,7 @@ const ACTION_KEYS = ACTION_PERMISSIONS.map(p => p.key);
 const OWNER_ONLY_PREFIXES = [
   '/dashboard/pos-cajeros',
   '/dashboard/employees',
+  '/dashboard/expenses',
   '/dashboard/plans',
   '/dashboard/settings',
   '/dashboard/ai-agent',

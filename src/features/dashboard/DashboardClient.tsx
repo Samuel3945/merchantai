@@ -1,6 +1,6 @@
 'use client';
 
-import type { DashboardMetrics } from '@/actions/dashboard';
+import type { DashboardMetrics, NetProfitStats } from '@/actions/dashboard';
 import type { RangePreset } from '@/utils/DateRange';
 import Link from 'next/link';
 import {
@@ -143,6 +143,90 @@ function KpiCard({
   );
 }
 
+/**
+ * Net-profit breakdown card.
+ *
+ * Shows: gross margin, minus prorated salaries, minus operating expenses,
+ * equals net profit. When no expenses are loaded for the period, shows a
+ * guided prompt encouraging the owner to log expenses so the number is real.
+ */
+function NetProfitCard({ netProfit }: { netProfit: NetProfitStats }) {
+  const { grossMargin, salaries, expenses, net } = netProfit;
+  const hasExpenses = expenses > 0;
+  const netClass = net >= 0 ? 'text-emerald-600' : 'text-red-600';
+
+  return (
+    <div className="rounded-lg border bg-background p-4 shadow-xs">
+      <div className="text-xs font-medium text-muted-foreground">Utilidad neta</div>
+
+      {/* Main net-profit figure */}
+      <div className={cn(`
+        mt-2 font-display text-3xl font-medium tracking-tight tabular-nums
+      `, netClass)}
+      >
+        {formatMoney(net)}
+      </div>
+
+      {/* Breakdown lines */}
+      <div className="mt-3 space-y-1 text-xs">
+        <div className="flex items-center justify-between text-muted-foreground">
+          <span>Margen bruto</span>
+          <span className="tabular-nums">{formatMoney(grossMargin)}</span>
+        </div>
+        <div className="flex items-center justify-between text-muted-foreground">
+          <span>− Salarios</span>
+          <span className="text-red-500 tabular-nums">{formatMoney(salaries)}</span>
+        </div>
+        <div className="flex items-center justify-between text-muted-foreground">
+          <span>− Gastos</span>
+          <span className="text-red-500 tabular-nums">{formatMoney(expenses)}</span>
+        </div>
+        <div className={cn(`
+          flex items-center justify-between border-t pt-1 font-semibold
+        `, netClass)}
+        >
+          <span>= Utilidad neta</span>
+          <span className="tabular-nums">{formatMoney(net)}</span>
+        </div>
+      </div>
+
+      {/* Guided prompt: show when there are no expenses logged for the period */}
+      {!hasExpenses && (
+        <div className="
+          mt-3 rounded-md border border-amber-200 bg-amber-50 p-3
+          dark:border-amber-800 dark:bg-amber-950/30
+        "
+        >
+          <p className="
+            text-xs font-semibold text-amber-800
+            dark:text-amber-200
+          "
+          >
+            ¿Ya cargaste tus gastos del período?
+          </p>
+          <p className="
+            mt-0.5 text-xs text-amber-700
+            dark:text-amber-300
+          "
+          >
+            Sin gastos operativos la utilidad está sobreestimada.
+          </p>
+          <Link
+            href="/dashboard/expenses"
+            className="
+              mt-2 inline-block rounded-sm bg-amber-600 px-2.5 py-1 text-xs
+              font-medium text-white
+              hover:bg-amber-700
+            "
+          >
+            Cargar gastos
+          </Link>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
   const [data, setData] = useState<DashboardMetrics>(initial);
   const [start, setStart] = useState(initial.range.start);
@@ -243,11 +327,14 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
       </header>
 
       {/* Hero KPIs — the handful you check every morning */}
-      <div className="
-        grid grid-cols-1 gap-3
-        sm:grid-cols-2
-        lg:grid-cols-4
-      "
+      <div className={cn(
+        `
+          grid grid-cols-1 gap-3
+          sm:grid-cols-2
+          lg:grid-cols-3
+        `,
+        data.netProfit !== null ? 'xl:grid-cols-5' : 'xl:grid-cols-4',
+      )}
       >
         <KpiCard
           title="Ingresos netos"
@@ -279,6 +366,9 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
           delta={data.cashFlow.net >= 0 ? 'positivo' : 'negativo'}
           hint={`gastos ${formatMoney(data.cashFlow.expenses)}`}
         />
+        {data.netProfit !== null && (
+          <NetProfitCard netProfit={data.netProfit} />
+        )}
         <KpiCard
           title="Ventas"
           value={String(data.period.count)}
