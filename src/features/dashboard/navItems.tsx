@@ -3,6 +3,7 @@ import {
   BarChart3,
   Bike,
   Boxes,
+  CalendarClock,
   CreditCard,
   HandCoins,
   LayoutDashboard,
@@ -61,6 +62,7 @@ export const navGroups: NavGroup[] = [
       { href: '/dashboard/customers', label: 'Clientes', icon: Users },
       { href: '/dashboard/suppliers', label: 'Proveedores', icon: Truck },
       { href: '/dashboard/employees', label: 'Empleados', icon: UserCog },
+      { href: '/dashboard/turnos', label: 'Turnos', icon: CalendarClock },
     ],
   },
   {
