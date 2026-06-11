@@ -6,6 +6,7 @@ import {
   Check,
   ClipboardList,
   Clock,
+  Megaphone,
   PackageX,
   Wallet,
 } from 'lucide-react';
@@ -19,7 +20,8 @@ type NotificationKind
     | 'low_stock'
     | 'expiring_soon'
     | 'fiado_overdue'
-    | 'sale_alert';
+    | 'sale_alert'
+    | 'platform_announcement';
 
 // Where each alert gets resolved. Clicking a notification takes the owner
 // straight to the screen where they can act on it.
@@ -29,6 +31,7 @@ const KIND_HREF: Record<NotificationKind, string> = {
   expiring_soon: '/dashboard/inventory',
   fiado_overdue: '/dashboard/fiados',
   sale_alert: '/dashboard/sales',
+  platform_announcement: '/dashboard',
 };
 
 type NotificationSeverity = 'low' | 'mid' | 'high';
@@ -51,6 +54,7 @@ const KIND_ICON: Record<NotificationKind, React.ComponentType<{ className?: stri
   expiring_soon: Clock,
   fiado_overdue: AlertTriangle,
   sale_alert: ClipboardList,
+  platform_announcement: Megaphone,
 };
 
 function timeAgo(iso: string): string {

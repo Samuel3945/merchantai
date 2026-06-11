@@ -76,6 +76,15 @@ export default async function PlatformLayout(props: PlatformLayoutProps) {
               Planes
             </Link>
             <Link
+              href="/platform/alerts"
+              className="
+                font-medium
+                hover:underline
+              "
+            >
+              Alertas
+            </Link>
+            <Link
               href="/dashboard"
               className="
                 text-muted-foreground
