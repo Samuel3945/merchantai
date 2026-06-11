@@ -5,9 +5,9 @@ import { useState, useTransition } from 'react';
 import {
   createExpense,
   deleteExpense,
-  EXPENSE_CATEGORIES,
   listExpenses,
 } from '@/actions/expenses';
+import { EXPENSE_CATEGORIES } from '@/features/expenses/categories';
 // ── Formatting helpers ──────────────────────────────────────────────────────
 
 const moneyFmt = new Intl.NumberFormat('es-CO', {
