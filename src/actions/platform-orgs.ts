@@ -10,6 +10,8 @@ import { getPlanEntitlementsBySlug, limitOf } from '@/libs/entitlements';
 import { requirePlatformOperator } from '@/libs/platform/operator';
 import {
   appSettingsSchema,
+  auditLogsSchema,
+  businessProfileSchema,
   planAddonsSchema,
   plansSchema,
   platformOrgMetadataSchema,
@@ -52,6 +54,28 @@ export type PlatformOrgRow = {
   activeCashiers: number;
 };
 
+export type OrgBusinessProfile = {
+  productCount: number;
+  activeProductCount: number;
+  perishableCount: number;
+  wholesaleCount: number;
+  distinctCategories: number;
+  totalStockUnits: number;
+  salesCount30d: number;
+  distinctProductsSold30d: number;
+  topCategories: { name: string; usageCount: number }[];
+  inferredBusinessType: string | null;
+  computedAt: string;
+};
+
+export type OrgActivityEntry = {
+  id: string;
+  action: string;
+  actorType: string;
+  entityType: string;
+  createdAt: string;
+};
+
 export type PlatformOrgDetail = PlatformOrgRow & {
   notes: string | null;
   knownIssues: string | null;
@@ -63,6 +87,8 @@ export type PlatformOrgDetail = PlatformOrgRow & {
     toppedUp: number;
   }[];
   settings: { key: string; value: string }[];
+  profile: OrgBusinessProfile | null;
+  recentActivity: OrgActivityEntry[];
 };
 
 function toIso(date: Date | string | null | undefined): string | null {
@@ -208,37 +234,57 @@ export async function getPlatformOrgDetail(
     return null;
   }
 
-  const [meta, addons, counters, settings] = await Promise.all([
-    db
-      .select()
-      .from(platformOrgMetadataSchema)
-      .where(eq(platformOrgMetadataSchema.organizationId, orgId))
-      .limit(1),
-    db
-      .select({
-        id: planAddonsSchema.id,
-        addon: planAddonsSchema.addon,
-        qty: planAddonsSchema.qty,
-        active: planAddonsSchema.active,
-      })
-      .from(planAddonsSchema)
-      .where(eq(planAddonsSchema.organizationId, orgId))
-      .orderBy(desc(planAddonsSchema.createdAt)),
-    db
-      .select({
-        agentKind: usageCountersSchema.agentKind,
-        used: usageCountersSchema.used,
-        monthlyLimit: usageCountersSchema.monthlyLimit,
-        toppedUp: usageCountersSchema.toppedUp,
-      })
-      .from(usageCountersSchema)
-      .where(eq(usageCountersSchema.organizationId, orgId)),
-    db
-      .select({ key: appSettingsSchema.key, value: appSettingsSchema.value })
-      .from(appSettingsSchema)
-      .where(eq(appSettingsSchema.organizationId, orgId))
-      .orderBy(asc(appSettingsSchema.key)),
-  ]);
+  const [meta, addons, counters, settings, profileRows, activity]
+    = await Promise.all([
+      db
+        .select()
+        .from(platformOrgMetadataSchema)
+        .where(eq(platformOrgMetadataSchema.organizationId, orgId))
+        .limit(1),
+      db
+        .select({
+          id: planAddonsSchema.id,
+          addon: planAddonsSchema.addon,
+          qty: planAddonsSchema.qty,
+          active: planAddonsSchema.active,
+        })
+        .from(planAddonsSchema)
+        .where(eq(planAddonsSchema.organizationId, orgId))
+        .orderBy(desc(planAddonsSchema.createdAt)),
+      db
+        .select({
+          agentKind: usageCountersSchema.agentKind,
+          used: usageCountersSchema.used,
+          monthlyLimit: usageCountersSchema.monthlyLimit,
+          toppedUp: usageCountersSchema.toppedUp,
+        })
+        .from(usageCountersSchema)
+        .where(eq(usageCountersSchema.organizationId, orgId)),
+      db
+        .select({ key: appSettingsSchema.key, value: appSettingsSchema.value })
+        .from(appSettingsSchema)
+        .where(eq(appSettingsSchema.organizationId, orgId))
+        .orderBy(asc(appSettingsSchema.key)),
+      db
+        .select()
+        .from(businessProfileSchema)
+        .where(eq(businessProfileSchema.organizationId, orgId))
+        .limit(1),
+      db
+        .select({
+          id: auditLogsSchema.id,
+          action: auditLogsSchema.action,
+          actorType: auditLogsSchema.actorType,
+          entityType: auditLogsSchema.entityType,
+          createdAt: auditLogsSchema.createdAt,
+        })
+        .from(auditLogsSchema)
+        .where(eq(auditLogsSchema.organizationId, orgId))
+        .orderBy(desc(auditLogsSchema.createdAt))
+        .limit(15),
+    ]);
+
+  const profileRow = profileRows[0];
 
   return {
     ...base,
@@ -247,6 +293,28 @@ export async function getPlatformOrgDetail(
     addons,
     counters,
     settings,
+    profile: profileRow
+      ? {
+          productCount: profileRow.productCount,
+          activeProductCount: profileRow.activeProductCount,
+          perishableCount: profileRow.perishableCount,
+          wholesaleCount: profileRow.wholesaleCount,
+          distinctCategories: profileRow.distinctCategories,
+          totalStockUnits: profileRow.totalStockUnits,
+          salesCount30d: profileRow.salesCount30d,
+          distinctProductsSold30d: profileRow.distinctProductsSold30d,
+          topCategories: profileRow.topCategories,
+          inferredBusinessType: profileRow.inferredBusinessType,
+          computedAt: profileRow.computedAt.toISOString(),
+        }
+      : null,
+    recentActivity: activity.map(a => ({
+      id: a.id,
+      action: a.action,
+      actorType: a.actorType,
+      entityType: a.entityType,
+      createdAt: a.createdAt.toISOString(),
+    })),
   };
 }
 

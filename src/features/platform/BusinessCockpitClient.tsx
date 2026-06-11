@@ -403,6 +403,89 @@ export function BusinessCockpitClient(props: {
             </div>
           </div>
         </Section>
+
+        <Section title="Perfil del negocio">
+          {org.profile === null
+            ? (
+                <p className="text-sm text-muted-foreground">
+                  Todavía no se capturó el perfil (se calcula automáticamente
+                  con la actividad del negocio).
+                </p>
+              )
+            : (
+                <div className="space-y-2 text-sm">
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                    <span className="text-muted-foreground">Productos</span>
+                    <span>
+                      {org.profile.activeProductCount}
+                      {' '}
+                      activos /
+                      {' '}
+                      {org.profile.productCount}
+                    </span>
+                    <span className="text-muted-foreground">Perecederos</span>
+                    <span>{org.profile.perishableCount}</span>
+                    <span className="text-muted-foreground">Por mayor</span>
+                    <span>{org.profile.wholesaleCount}</span>
+                    <span className="text-muted-foreground">Categorías</span>
+                    <span>{org.profile.distinctCategories}</span>
+                    <span className="text-muted-foreground">
+                      Unidades en stock
+                    </span>
+                    <span>{org.profile.totalStockUnits}</span>
+                    <span className="text-muted-foreground">
+                      Productos vendidos (30d)
+                    </span>
+                    <span>{org.profile.distinctProductsSold30d}</span>
+                    <span className="text-muted-foreground">Tipo inferido</span>
+                    <span>{org.profile.inferredBusinessType ?? '—'}</span>
+                  </div>
+                  {org.profile.topCategories.length > 0 && (
+                    <div className="border-t pt-2">
+                      <div className="text-xs text-muted-foreground">
+                        Categorías principales
+                      </div>
+                      <div className="flex flex-wrap gap-1 pt-1">
+                        {org.profile.topCategories.slice(0, 6).map(c => (
+                          <Badge key={c.name} variant="outline">
+                            {c.name}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+        </Section>
+
+        <Section title="Actividad reciente">
+          {org.recentActivity.length === 0
+            ? (
+                <p className="text-sm text-muted-foreground">Sin actividad.</p>
+              )
+            : (
+                <ul className="space-y-1 text-sm">
+                  {org.recentActivity.map(entry => (
+                    <li
+                      key={entry.id}
+                      className="flex items-center justify-between gap-2"
+                    >
+                      <code className="truncate text-xs">{entry.action}</code>
+                      <span className="shrink-0 text-xs text-muted-foreground">
+                        {entry.actorType}
+                        {' · '}
+                        {new Date(entry.createdAt).toLocaleString('es-CO', {
+                          day: '2-digit',
+                          month: 'short',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+        </Section>
       </div>
 
       <Section title="Notas del operador">
