@@ -78,6 +78,7 @@ const OWNER_ONLY_PREFIXES = [
   '/dashboard/plans',
   '/dashboard/settings',
   '/dashboard/ai-agent',
+  '/dashboard/turnos',
 ];
 
 // Dashboard routes any panel user may open regardless of modules.

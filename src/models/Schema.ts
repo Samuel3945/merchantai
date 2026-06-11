@@ -1624,6 +1624,63 @@ export const expensesSchema = pgTable(
   ],
 );
 
+// ── Staff absences and coverage ───────────────────────────────────────────
+// Tracks planned rest days and unplanned absences for pos_users. When an
+// employee can't come (status='open'), the owner finds a replacement using
+// findAvailableReplacements (employees whose schedule marks that day as off or
+// has no fixed schedule for it). The owner assigns coverage (covered_by) and
+// optionally notifies the replacement via WhatsApp.
+//
+// Kinds: 'absence' = no puede venir (unplanned), 'break' = descanso programado
+// Status lifecycle: 'open' → 'covered' (assigned) | 'cancelled'
+export const staffAbsencesSchema = pgTable(
+  'staff_absences',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: text('organization_id').notNull(),
+    // The employee who is off. CASCADE delete: removing the employee removes their absences.
+    employeeId: uuid('employee_id')
+      .notNull()
+      .references(() => posUsersSchema.id, { onDelete: 'cascade' }),
+    // The date the absence applies to (plain calendar date, no time zone in DB).
+    date: date('date').notNull(),
+    // 'absence' | 'break'
+    kind: text('kind').notNull(),
+    reason: text('reason'),
+    // 'open' | 'covered' | 'cancelled'
+    status: text('status').default('open').notNull(),
+    // Set when a replacement is assigned. SET NULL if that employee is deleted.
+    coveredBy: uuid('covered_by').references(() => posUsersSchema.id, {
+      onDelete: 'set null',
+    }),
+    // Set when a WhatsApp notification was successfully sent to the replacement.
+    notifiedAt: timestamp('notified_at', { mode: 'date' }),
+    // Clerk user id of the owner who registered the absence.
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+  },
+  table => [
+    // Roster queries and date-range lookups scan by org + date.
+    index('staff_absences_org_date_idx').on(table.organizationId, table.date),
+  ],
+);
+
+export const staffAbsencesRelations = relations(
+  staffAbsencesSchema,
+  ({ one }) => ({
+    employee: one(posUsersSchema, {
+      fields: [staffAbsencesSchema.employeeId],
+      references: [posUsersSchema.id],
+      relationName: 'absent_employee',
+    }),
+    coveredByEmployee: one(posUsersSchema, {
+      fields: [staffAbsencesSchema.coveredBy],
+      references: [posUsersSchema.id],
+      relationName: 'covering_employee',
+    }),
+  }),
+);
+
 export const deliveryOrdersRelations = relations(
   deliveryOrdersSchema,
   ({ one, many }) => ({
