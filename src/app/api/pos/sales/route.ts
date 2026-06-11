@@ -1,4 +1,5 @@
-import { and, desc, eq, sql } from 'drizzle-orm';
+import type { SQL } from 'drizzle-orm';
+import { and, desc, eq, gte, ilike, lt, lte, or, sql } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { applyInvoiceCustomerUpsert } from '@/features/customers/post-sale-hook';
 import { logAction, resolvePosActor } from '@/libs/audit-log';
@@ -339,11 +340,52 @@ export async function GET(req: Request): Promise<NextResponse> {
     Number.parseInt(url.searchParams.get('offset') ?? '0', 10) || 0,
     0,
   );
-  const cashierId = url.searchParams.get('cashierId')?.trim() || null;
+  // Accept both spellings for backwards compatibility with deployed POS versions.
+  const cashierId
+    = (url.searchParams.get('cashierId') ?? url.searchParams.get('cashier_id'))?.trim() || null;
+  const start = url.searchParams.get('start')?.trim() || null;
+  const end = url.searchParams.get('end')?.trim() || null;
+  const search = url.searchParams.get('search')?.trim() || null;
+  const paymentType = url.searchParams.get('payment_type')?.trim() || null;
 
-  const conds = [eq(salesSchema.organizationId, ctx.organizationId)];
+  const conds: SQL[] = [eq(salesSchema.organizationId, ctx.organizationId)];
   if (cashierId) {
     conds.push(eq(salesSchema.cashierId, cashierId));
+  }
+  if (start) {
+    // Date-only params (YYYY-MM-DD) are parsed as Bogota midnight (UTC-5, no DST).
+    // All other strings keep their existing behavior plus the NaN guard.
+    const startDate = /^\d{4}-\d{2}-\d{2}$/.test(start)
+      ? new Date(`${start}T00:00:00-05:00`)
+      : new Date(start);
+    if (!Number.isNaN(startDate.getTime())) {
+      conds.push(gte(salesSchema.createdAt, startDate));
+    }
+  }
+  if (end) {
+    const endIsDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(end);
+    const endDate = endIsDateOnly ? new Date(`${end}T00:00:00-05:00`) : new Date(end);
+    if (!Number.isNaN(endDate.getTime())) {
+      if (endIsDateOnly) {
+        // Inclusive day filter: advance to the next Bogota day and bound exclusively.
+        endDate.setDate(endDate.getDate() + 1);
+        conds.push(lt(salesSchema.createdAt, endDate));
+      } else {
+        conds.push(lte(salesSchema.createdAt, endDate));
+      }
+    }
+  }
+  if (search) {
+    const pattern = `%${search}%`;
+    conds.push(
+      or(
+        ilike(salesSchema.notes, pattern),
+        sql`${salesSchema.saleNumber}::text ILIKE ${pattern}`,
+      )!,
+    );
+  }
+  if (paymentType) {
+    conds.push(eq(salesSchema.paymentType, paymentType));
   }
   const where = and(...conds);
 
