@@ -9,30 +9,18 @@ import { revalidatePath } from 'next/cache';
 import { ActionValidationError } from '@/libs/action-result';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
+import { getOrgEntitlements, limitOf } from '@/libs/entitlements';
 import { POS_DEVICES_LIMIT_REACHED } from '@/libs/plan-limits';
 import {
-  organizationPlansSchema,
   planAddonsSchema,
   posTokensSchema,
   posUsersSchema,
 } from '@/models/Schema';
 
-type PlanTier = 'free' | 'starter' | 'pro' | 'business';
-
 type PosToken = typeof posTokensSchema.$inferSelect;
 
-// Cajas (POS device tokens) allowed per plan tier. Mirrors PLAN_CASHIER_LIMIT
-// in employees.ts: you need at least one caja per cashier, so device slots
-// track cashier slots. Extra slots are bought as `pos_device` add-ons.
-const PLAN_POS_DEVICE_LIMIT: Record<PlanTier, number> = {
-  free: 1,
-  starter: 2,
-  pro: 5,
-  business: 10,
-};
-
 type PosLimitMeta = {
-  plan: PlanTier;
+  plan: string;
   limit: number;
   used: number;
   base: number;
@@ -51,15 +39,6 @@ function posLimitReached(
     code: POS_DEVICES_LIMIT_REACHED,
     meta,
   };
-}
-
-async function getOrganizationPlan(orgId: string): Promise<PlanTier> {
-  const [row] = await db
-    .select({ plan: organizationPlansSchema.plan })
-    .from(organizationPlansSchema)
-    .where(eq(organizationPlansSchema.organizationId, orgId))
-    .limit(1);
-  return (row?.plan as PlanTier | undefined) ?? 'free';
 }
 
 // Each active `pos_device` add-on row grants `qty` extra caja slots.
@@ -135,12 +114,13 @@ export async function createPosToken(
   }
 
   // Plan quota: cap the number of active cajas (device tokens) per org.
-  const [plan, used, addons] = await Promise.all([
-    getOrganizationPlan(orgId),
+  const [entitlements, used, addons] = await Promise.all([
+    getOrgEntitlements(orgId),
     countActiveTokens(orgId),
     countPosDeviceAddons(orgId),
   ]);
-  const base = PLAN_POS_DEVICE_LIMIT[plan];
+  const plan = entitlements.planSlug;
+  const base = limitOf(entitlements, 'max_pos_devices', 1);
   const limit = base + addons;
   if (used >= limit) {
     return posLimitReached({ plan, limit, used, base, addons });
@@ -221,7 +201,7 @@ export async function createPosToken(
 }
 
 export type PosDeviceQuota = {
-  plan: PlanTier;
+  plan: string;
   used: number;
   base: number;
   addons: number;
@@ -234,12 +214,13 @@ export type PosDeviceQuota = {
 export async function getPosDeviceQuota(): Promise<PosDeviceQuota> {
   const { orgId } = await requireAdminContext();
 
-  const [plan, used, addons] = await Promise.all([
-    getOrganizationPlan(orgId),
+  const [entitlements, used, addons] = await Promise.all([
+    getOrgEntitlements(orgId),
     countActiveTokens(orgId),
     countPosDeviceAddons(orgId),
   ]);
-  const base = PLAN_POS_DEVICE_LIMIT[plan];
+  const plan = entitlements.planSlug;
+  const base = limitOf(entitlements, 'max_pos_devices', 1);
   const limit = base + addons;
 
   return {
@@ -322,12 +303,13 @@ export async function unblockPosToken(
 ): Promise<ActionResult<{ id: string }>> {
   const { userId, orgId } = await requireAdminContext();
 
-  const [plan, used, addons] = await Promise.all([
-    getOrganizationPlan(orgId),
+  const [entitlements, used, addons] = await Promise.all([
+    getOrgEntitlements(orgId),
     countActiveTokens(orgId),
     countPosDeviceAddons(orgId),
   ]);
-  const base = PLAN_POS_DEVICE_LIMIT[plan];
+  const plan = entitlements.planSlug;
+  const base = limitOf(entitlements, 'max_pos_devices', 1);
   const limit = base + addons;
   if (used >= limit) {
     return posLimitReached({ plan, limit, used, base, addons });
