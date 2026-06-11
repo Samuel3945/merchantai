@@ -9,6 +9,7 @@ import { getFraudAlerts } from '@/actions/cash';
 import { ConfirmProvider } from '@/components/ui/confirm-provider';
 import { DashboardHeader } from '@/features/dashboard/DashboardHeader';
 import { DashboardSidebar } from '@/features/dashboard/DashboardSidebar';
+import { ImpersonationBanner } from '@/features/dashboard/ImpersonationBanner';
 import { getPanelUserModules } from '@/libs/panel-session';
 
 type DashboardLayoutProps = {
@@ -96,6 +97,7 @@ export default async function DashboardLayout(props: DashboardLayoutProps) {
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
+        <ImpersonationBanner />
         <header className="
           sticky top-0 z-30 flex h-14 items-center gap-2 border-b border-border
           bg-card px-4
