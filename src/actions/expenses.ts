@@ -8,19 +8,6 @@ import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
 import { expensesSchema } from '@/models/Schema';
 
-// Expense categories suggested by the UI. The column is free-text, so the
-// owner is never blocked from typing a custom category.
-export const EXPENSE_CATEGORIES = [
-  'servicios',
-  'arriendo',
-  'transporte',
-  'marketing',
-  'impuestos',
-  'otros',
-] as const;
-
-export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number];
-
 // Only org:admin (the owner) may read or write expense data. Salaries and
 // operating expenses are sensitive owner information — never expose to employees.
 async function requireOwnerContext() {
