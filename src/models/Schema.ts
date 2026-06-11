@@ -1296,6 +1296,9 @@ export const notificationKindEnum = pgEnum('notification_kind', [
   'expiring_soon',
   'fiado_overdue',
   'sale_alert',
+  // Operator broadcast from the platform console (announcements, maintenance,
+  // incidents). Rendered with a generic icon and no deep link.
+  'platform_announcement',
 ]);
 
 export const notificationSeverityEnum = pgEnum('notification_severity', [

@@ -19,7 +19,8 @@ export type NotificationKind
     | 'low_stock'
     | 'expiring_soon'
     | 'fiado_overdue'
-    | 'sale_alert';
+    | 'sale_alert'
+    | 'platform_announcement';
 
 export type NotificationSeverity = 'low' | 'mid' | 'high';
 

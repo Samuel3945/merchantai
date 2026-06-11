@@ -176,6 +176,13 @@
       "when": 1781140015449,
       "tag": "0024_platform_org_metadata",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1781140581748,
+      "tag": "0025_platform_announcement_kind",
+      "breakpoints": true
     }
   ]
 }
