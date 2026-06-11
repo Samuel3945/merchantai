@@ -169,6 +169,13 @@
       "when": 1781139069728,
       "tag": "0023_seed_plan_catalog",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1781140015449,
+      "tag": "0024_platform_org_metadata",
+      "breakpoints": true
     }
   ]
 }
