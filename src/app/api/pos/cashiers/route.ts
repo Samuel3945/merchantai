@@ -1,7 +1,7 @@
 import { and, asc, eq, sql } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { db } from '@/libs/DB';
-import { resolvePosAuth } from '@/libs/pos-auth';
+import { requirePosAuth } from '@/libs/pos-auth';
 import { posUsersSchema } from '@/models/Schema';
 
 export const runtime = 'nodejs';
@@ -11,12 +11,9 @@ export const dynamic = 'force-dynamic';
 // muestra en el selector tras entrar con el token. Nunca se expone el PIN; solo
 // `hasPin` para saber si pedir el teclado de PIN al seleccionar.
 export async function GET(req: Request): Promise<NextResponse> {
-  const ctx = await resolvePosAuth(req.headers.get('authorization'));
-  if (!ctx) {
-    return NextResponse.json(
-      { error: 'Sesión inválida o expirada' },
-      { status: 401 },
-    );
+  const { ctx, errorResponse } = await requirePosAuth(req);
+  if (errorResponse) {
+    return errorResponse;
   }
 
   const cashiers = await db

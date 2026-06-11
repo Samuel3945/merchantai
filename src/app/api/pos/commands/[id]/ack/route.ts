@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { resolvePosAuth } from '@/libs/pos-auth';
+import { requirePosAuth } from '@/libs/pos-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -13,12 +13,9 @@ export async function POST(
   req: Request,
   _ctx: { params: Promise<{ id: string }> },
 ): Promise<NextResponse> {
-  const auth = await resolvePosAuth(req.headers.get('authorization'));
-  if (!auth) {
-    return NextResponse.json(
-      { error: 'Sesión inválida o expirada' },
-      { status: 401 },
-    );
+  const { errorResponse } = await requirePosAuth(req);
+  if (errorResponse) {
+    return errorResponse;
   }
 
   return NextResponse.json({ ok: true });

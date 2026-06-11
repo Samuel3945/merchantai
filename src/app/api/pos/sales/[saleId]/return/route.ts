@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 import { logAction, resolvePosActor } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
 import { maybeEmitCreditNote } from '@/libs/einvoice/emit';
-import { resolvePosAuth } from '@/libs/pos-auth';
+import { requirePosAuth } from '@/libs/pos-auth';
 import {
   applySaleReturn,
   VALID_RETURN_REASONS,
@@ -24,15 +24,9 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ saleId: string }> },
 ): Promise<NextResponse> {
-  const ctx = await resolvePosAuth(
-    req.headers.get('authorization'),
-    req.headers.get('x-pos-cashier-id'),
-  );
-  if (!ctx) {
-    return NextResponse.json(
-      { error: 'Sesión inválida o expirada' },
-      { status: 401 },
-    );
+  const { ctx, errorResponse } = await requirePosAuth(req);
+  if (errorResponse) {
+    return errorResponse;
   }
 
   const { saleId } = await params;

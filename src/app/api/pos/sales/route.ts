@@ -9,7 +9,7 @@ import { maybeAutoEmitInvoice } from '@/libs/einvoice/emit';
 import { createFiado } from '@/libs/fiados';
 import { fiadoAmountFor } from '@/libs/fiados-math';
 import { consumeFifoExits } from '@/libs/fifo-cogs';
-import { resolvePosAuth } from '@/libs/pos-auth';
+import { requirePosAuth } from '@/libs/pos-auth';
 import { assignNextSaleNumber } from '@/libs/sale-number';
 import {
   productsSchema,
@@ -41,15 +41,9 @@ type CreateSaleBody = {
 };
 
 export async function POST(req: Request): Promise<NextResponse> {
-  const ctx = await resolvePosAuth(
-    req.headers.get('authorization'),
-    req.headers.get('x-pos-cashier-id'),
-  );
-  if (!ctx) {
-    return NextResponse.json(
-      { error: 'Sesión inválida o expirada' },
-      { status: 401 },
-    );
+  const { ctx, errorResponse } = await requirePosAuth(req);
+  if (errorResponse) {
+    return errorResponse;
   }
 
   let body: CreateSaleBody;
@@ -320,15 +314,9 @@ export async function POST(req: Request): Promise<NextResponse> {
 }
 
 export async function GET(req: Request): Promise<NextResponse> {
-  const ctx = await resolvePosAuth(
-    req.headers.get('authorization'),
-    req.headers.get('x-pos-cashier-id'),
-  );
-  if (!ctx) {
-    return NextResponse.json(
-      { error: 'Sesión inválida o expirada' },
-      { status: 401 },
-    );
+  const { ctx, errorResponse } = await requirePosAuth(req);
+  if (errorResponse) {
+    return errorResponse;
   }
 
   const url = new URL(req.url);

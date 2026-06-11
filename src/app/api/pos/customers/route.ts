@@ -1,7 +1,7 @@
 import { and, eq, ilike, or, sql } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { db } from '@/libs/db-context';
-import { resolvePosAuth } from '@/libs/pos-auth';
+import { requirePosAuth } from '@/libs/pos-auth';
 import { customersSchema } from '@/models/Schema';
 
 export const runtime = 'nodejs';
@@ -19,12 +19,9 @@ type CustomerBody = {
 };
 
 export async function GET(req: Request): Promise<NextResponse> {
-  const ctx = await resolvePosAuth(req.headers.get('authorization'));
-  if (!ctx) {
-    return NextResponse.json(
-      { error: 'Sesión inválida o expirada' },
-      { status: 401 },
-    );
+  const { ctx, errorResponse } = await requirePosAuth(req);
+  if (errorResponse) {
+    return errorResponse;
   }
 
   const tdb = db.forPosAuth(ctx);
@@ -63,12 +60,9 @@ export async function GET(req: Request): Promise<NextResponse> {
 }
 
 export async function POST(req: Request): Promise<NextResponse> {
-  const ctx = await resolvePosAuth(req.headers.get('authorization'));
-  if (!ctx) {
-    return NextResponse.json(
-      { error: 'Sesión inválida o expirada' },
-      { status: 401 },
-    );
+  const { ctx, errorResponse } = await requirePosAuth(req);
+  if (errorResponse) {
+    return errorResponse;
   }
 
   let body: CustomerBody;
