@@ -106,8 +106,7 @@ Las marcadas como **ARG de build** deben estar disponibles en el momento de cons
 | `CLERK_SECRET_KEY` | **Si** | No | Clave secreta de Clerk (server-side) |
 | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | **Si** | **Si** | Clave publica de Clerk (client-side) |
 | `NEXT_PUBLIC_APP_URL` | **Si** | **Si** | URL publica de la app (sin trailing slash) |
-| `ANTHROPIC_API_KEY` | Opcional | No | Modelos Claude (agente IA) |
-| `OPENAI_API_KEY` | Opcional | No | Modelos OpenAI |
+| `OPENAI_API_KEY` | Opcional | No | Modelos OpenAI — unica IA del sistema (categorizacion, import, agente de WhatsApp) |
 | `BLOB_READ_WRITE_TOKEN` | Opcional | No | Vercel Blob (subida de archivos) |
 | `RESEND_API_KEY` | Opcional | No | Envio de emails transaccionales |
 | `RESEND_FROM_EMAIL` | Opcional | No | Direccion remitente para Resend |

@@ -1,4 +1,4 @@
-import { anthropic } from '@ai-sdk/anthropic';
+import { createOpenAI } from '@ai-sdk/openai';
 import { generateText, stepCountIs } from 'ai';
 import { createDeliveryOrderTool } from '@/features/delivery/agent-tools';
 import { sendWhatsAppText } from '@/libs/delivery-whatsapp';
@@ -73,7 +73,7 @@ export async function POST(req: Request) {
   if (!orgId) {
     return Response.json({ ok: true, ignored: 'no_org' });
   }
-  if (!Env.ANTHROPIC_API_KEY) {
+  if (!Env.OPENAI_API_KEY) {
     return Response.json({ ok: true, ignored: 'no_model' });
   }
 
@@ -81,8 +81,9 @@ export async function POST(req: Request) {
     // NOTE: single-turn intake (no per-sender conversation memory yet). Good
     // enough to parse a complete order in one message; multi-turn threading is
     // the next refinement.
+    const openai = createOpenAI({ apiKey: Env.OPENAI_API_KEY });
     const result = await generateText({
-      model: anthropic('claude-haiku-4-5-20251001'),
+      model: openai('gpt-4o-mini'),
       system: `Eres el asistente de pedidos a domicilio de un negocio colombiano que atiende por WhatsApp.
 Tu trabajo: conversar con el cliente, tomar su pedido y, cuando tengas la dirección de entrega, crear el pedido con la herramienta create_delivery_order.
 Reglas:

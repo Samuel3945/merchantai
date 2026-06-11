@@ -46,9 +46,16 @@ export default defineConfig({
     ],
     env: {
       ...loadEnv('', process.cwd(), ''), // Expose .env variables to Node.js
+      // Tests must not depend on real secrets. There are no .env files in the
+      // repo; skipping Env validation lets modules that import Env.ts load with
+      // the required keys absent. Tests that need a database use an in-memory one.
+      SKIP_ENV_VALIDATION: 'true',
     },
   },
   define: {
-    'process.env': JSON.stringify(loadEnv('', process.cwd(), 'NEXT_PUBLIC_')), // Expose .env variables to browser
+    'process.env': JSON.stringify({
+      ...loadEnv('', process.cwd(), 'NEXT_PUBLIC_'), // Expose .env variables to browser
+      SKIP_ENV_VALIDATION: 'true', // Browser tests must not depend on real secrets either.
+    }),
   },
 });

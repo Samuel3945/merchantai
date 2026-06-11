@@ -29,7 +29,6 @@
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^2.0.0",
     "@ai-sdk/openai": "^2.0.106",
     "@clerk/localizations": "^4.6.7",
     "@clerk/nextjs": "^7.4.0",

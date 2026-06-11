@@ -28,8 +28,8 @@ COPY . .
 # default here for platforms (e.g. EasyPanel) that don't forward env vars as
 # build args. It can still be overridden with --build-arg. Server secrets are
 # NOT needed here (SKIP_ENV_VALIDATION bypasses validation; read at runtime).
-ARG NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_ZmluZS1yYWNjb29uLTcuY2xlcmsuYWNjb3VudHMuZGV2JA
-ARG NEXT_PUBLIC_APP_URL
+ARG NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_live_Y2xlcmsubXltZXJjaGFudGFpLmNvbSQ
+ARG NEXT_PUBLIC_APP_URL=https://app.mymerchantai.com
 ARG NEXT_PUBLIC_LOGGING_LEVEL=info
 
 ENV NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY} \
