@@ -7,7 +7,7 @@ import {
   toMoney,
 } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
-import { resolvePosAuth } from '@/libs/pos-auth';
+import { requirePosAuth } from '@/libs/pos-auth';
 import { cashMovementsSchema } from '@/models/Schema';
 
 export const runtime = 'nodejs';
@@ -25,15 +25,9 @@ const ALLOWED_TYPES: CashMovementType[] = [
 ];
 
 export async function POST(req: Request): Promise<NextResponse> {
-  const ctx = await resolvePosAuth(
-    req.headers.get('authorization'),
-    req.headers.get('x-pos-cashier-id'),
-  );
-  if (!ctx) {
-    return NextResponse.json(
-      { error: 'Sesión inválida o expirada' },
-      { status: 401 },
-    );
+  const { ctx, errorResponse } = await requirePosAuth(req);
+  if (errorResponse) {
+    return errorResponse;
   }
 
   let body: MovementBody;

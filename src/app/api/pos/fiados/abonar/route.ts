@@ -4,7 +4,7 @@ import {
   recordAbono,
   saleIdsForFiados,
 } from '@/libs/fiados';
-import { resolvePosAuth } from '@/libs/pos-auth';
+import { requirePosAuth } from '@/libs/pos-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -21,15 +21,9 @@ type AbonarBody = {
 // Caja as a "Cobro de fiado". Keeps the legacy { applied, remaining,
 // settledSaleIds } response shape (plus hitCaja).
 export async function POST(req: Request): Promise<NextResponse> {
-  const ctx = await resolvePosAuth(
-    req.headers.get('authorization'),
-    req.headers.get('x-pos-cashier-id'),
-  );
-  if (!ctx) {
-    return NextResponse.json(
-      { error: 'Sesión inválida o expirada' },
-      { status: 401 },
-    );
+  const { ctx, errorResponse } = await requirePosAuth(req);
+  if (errorResponse) {
+    return errorResponse;
   }
 
   let body: AbonarBody;

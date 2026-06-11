@@ -510,9 +510,9 @@ export async function regeneratePosToken(
   return { ok: true, data: updated };
 }
 
-// "Cerrar sesión" de la caja: sube el sessionEpoch. El cajero lo detecta en su
-// próximo /pos/me (≤30 s) y desloguea al empleado activo (vuelve al selector),
-// sin invalidar el token de dispositivo.
+// Force-logout: increments sessionEpoch. Devices sending X-Pos-Session-Epoch
+// get 401 session_revoked on their next /pos/me poll (≤30 s) and must log in
+// again. The device token itself is not revoked.
 export async function forceLogoutPosToken(
   id: string,
 ): Promise<ActionResult<{ id: string }>> {

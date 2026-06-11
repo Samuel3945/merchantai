@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getFiadosHistory } from '@/libs/fiados';
-import { resolvePosAuth } from '@/libs/pos-auth';
+import { requirePosAuth } from '@/libs/pos-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -9,12 +9,9 @@ export const dynamic = 'force-dynamic';
 // (status = 'paid'), newest-settled first, limit 100. Uses the same
 // getFiadosHistory query as the dashboard Historial tab — single source of truth.
 export async function GET(req: Request): Promise<NextResponse> {
-  const ctx = await resolvePosAuth(req.headers.get('authorization'));
-  if (!ctx) {
-    return NextResponse.json(
-      { error: 'Sesión inválida o expirada' },
-      { status: 401 },
-    );
+  const { ctx, errorResponse } = await requirePosAuth(req);
+  if (errorResponse) {
+    return errorResponse;
   }
 
   const history = await getFiadosHistory(ctx.organizationId);

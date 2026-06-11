@@ -504,6 +504,10 @@ export const posUsersSchema = pgTable(
     // all — which views they see once inside is governed by `enabledModules`.
     clerkUserId: text('clerk_user_id'),
     panelAccess: boolean('panel_access').default(false).notNull(),
+    // Incremented on each successful password login. Same single-active-device
+    // mechanism as pos_tokens.session_epoch: if the client's known epoch is lower
+    // than the stored one, the session is considered revoked.
+    sessionEpoch: integer('session_epoch').default(0).notNull(),
     createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { mode: 'date' })
       .defaultNow()

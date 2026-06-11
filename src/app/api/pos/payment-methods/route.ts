@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { db } from '@/libs/DB';
-import { resolvePosAuth } from '@/libs/pos-auth';
+import { requirePosAuth } from '@/libs/pos-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -10,12 +10,9 @@ export const dynamic = 'force-dynamic';
 // Uses the same listActivePaymentMethods logic as /api/pos/me so the cashier
 // can fetch payment methods independently without loading the full /me payload.
 export async function GET(req: Request): Promise<NextResponse> {
-  const ctx = await resolvePosAuth(req.headers.get('authorization'));
-  if (!ctx) {
-    return NextResponse.json(
-      { error: 'Sesión inválida o expirada' },
-      { status: 401 },
-    );
+  const { ctx, errorResponse } = await requirePosAuth(req);
+  if (errorResponse) {
+    return errorResponse;
   }
 
   try {

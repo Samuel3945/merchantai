@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { touchLastSync } from '@/actions/pos-tokens';
-import { resolvePosAuth } from '@/libs/pos-auth';
+import { requirePosAuth } from '@/libs/pos-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -11,19 +11,18 @@ export const dynamic = 'force-dynamic';
  * comandos remotos todavía: solo acusa estar online.
  */
 export async function POST(req: Request): Promise<NextResponse> {
-  const authHeader = req.headers.get('authorization');
-  const ctx = await resolvePosAuth(authHeader);
-  if (!ctx) {
-    return NextResponse.json(
-      { error: 'Sesión inválida o expirada' },
-      { status: 401 },
-    );
+  const { ctx, errorResponse } = await requirePosAuth(req);
+  if (errorResponse) {
+    return errorResponse;
   }
 
   // Solo los tokens de dispositivo tienen fila en pos_tokens; para sesiones de
   // usuario (cajero por PIN) el update no afecta filas y es inocuo.
   if (ctx.source === 'token') {
-    const token = /^Bearer\s+(\S.*)$/i.exec(authHeader ?? '')?.[1]?.trim();
+    const token
+      = /^Bearer\s+(\S.*)$/i
+        .exec(req.headers.get('authorization') ?? '')?.[1]
+        ?.trim();
     if (token) {
       try {
         await touchLastSync(token);

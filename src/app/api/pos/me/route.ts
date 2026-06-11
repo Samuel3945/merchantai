@@ -182,7 +182,7 @@ async function resolveFromUser(jwt: string): Promise<ResolvedContext | null> {
   return {
     organizationId: user.organizationId,
     canConfirmTransfers: user.canConfirmTransfers,
-    sessionEpoch: 0,
+    sessionEpoch: user.sessionEpoch,
     cash: {
       id: user.id,
       displayCode: user.name.slice(0, 12),
@@ -213,6 +213,28 @@ export async function GET(req: Request): Promise<NextResponse> {
   if (!ctx) {
     return NextResponse.json(
       { error: 'Sesión inválida o expirada' },
+      { status: 401 },
+    );
+  }
+
+  // Epoch enforcement for /pos/me:
+  // - The client always sends X-Pos-Session-Epoch on every request.
+  // - If the stored epoch is stale (DB epoch > client epoch), return 401
+  //   session_revoked. This covers both single-active-device (another device
+  //   logged in) and admin force-logout (both bump the epoch).
+  const knownEpochRaw = req.headers.get('x-pos-session-epoch');
+  const knownEpoch
+    = knownEpochRaw != null && knownEpochRaw !== ''
+      ? Number.parseInt(knownEpochRaw, 10)
+      : null;
+
+  if (
+    knownEpoch != null
+    && Number.isFinite(knownEpoch)
+    && ctx.sessionEpoch > knownEpoch
+  ) {
+    return NextResponse.json(
+      { error: 'Sesión revocada', code: 'session_revoked' },
       { status: 401 },
     );
   }
@@ -256,23 +278,9 @@ export async function GET(req: Request): Promise<NextResponse> {
         pm => (pm as { type?: string }).type !== 'credit',
       );
 
-  // "Cerrar sesión" desde el admin: si el cajero conoce un epoch más viejo que
-  // el actual de la caja, el empleado activo quedó deslogueado → el cajero
-  // vuelve al selector/PIN (sin perder el token).
-  const knownEpochRaw = req.headers.get('x-pos-session-epoch');
-  const knownEpoch
-    = knownEpochRaw != null && knownEpochRaw !== ''
-      ? Number.parseInt(knownEpochRaw, 10)
-      : null;
-  const cashierLocked
-    = knownEpoch != null
-      && Number.isFinite(knownEpoch)
-      && ctx.sessionEpoch > knownEpoch;
-
   return NextResponse.json({
     cash: ctx.cash,
     sessionEpoch: ctx.sessionEpoch,
-    cashierLocked,
     store: {
       id: orgId,
       name: businessName || 'Mi Tienda',

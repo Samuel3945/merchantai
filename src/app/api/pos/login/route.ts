@@ -1,5 +1,5 @@
 import bcrypt from 'bcryptjs';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { db } from '@/libs/DB';
 import { posTokensSchema, posUsersSchema } from '@/models/Schema';
@@ -126,10 +126,19 @@ export async function POST(req: Request): Promise<NextResponse> {
         }
       }
 
+      // Bump sessionEpoch to invalidate all previously active sessions for this
+      // device token (single-active-device enforcement).
+      const [bumped] = await db
+        .update(posTokensSchema)
+        .set({ sessionEpoch: sql`${posTokensSchema.sessionEpoch} + 1` })
+        .where(eq(posTokensSchema.id, row.token.id))
+        .returning({ sessionEpoch: posTokensSchema.sessionEpoch });
+
       return NextResponse.json({
         success: true,
         jwt: row.token.token,
         expiresInS: SESSION_TTL_S,
+        sessionEpoch: bumped?.sessionEpoch ?? row.token.sessionEpoch + 1,
         cash: buildCashFromToken(row.token, row.cashierName),
       });
     }
@@ -150,10 +159,19 @@ export async function POST(req: Request): Promise<NextResponse> {
   if (user) {
     const valid = await bcrypt.compare(pin, user.passwordHash);
     if (valid) {
+      // Bump sessionEpoch to invalidate all previously active sessions for this
+      // user (single-active-device enforcement for email/password login path).
+      const [bumped] = await db
+        .update(posUsersSchema)
+        .set({ sessionEpoch: sql`${posUsersSchema.sessionEpoch} + 1` })
+        .where(eq(posUsersSchema.id, user.id))
+        .returning({ sessionEpoch: posUsersSchema.sessionEpoch });
+
       return NextResponse.json({
         success: true,
         jwt: user.id,
         expiresInS: SESSION_TTL_S,
+        sessionEpoch: bumped?.sessionEpoch ?? user.sessionEpoch + 1,
         cash: buildCashFromUser(user),
       });
     }
