@@ -197,6 +197,13 @@
       "when": 1781205908976,
       "tag": "0027_cool_lord_hawal",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1781207407463,
+      "tag": "0028_famous_jocasta",
+      "breakpoints": true
     }
   ]
 }

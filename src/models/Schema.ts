@@ -1588,6 +1588,42 @@ export const deliveryEventsSchema = pgTable(
   ],
 );
 
+// ── Operating expenses (P&L ledger) ───────────────────────────────────────
+// Business expenses the owner registers for net-profit tracking.
+// This is the P&L operating-expense ledger — intentionally SEPARATE from
+// cash_movements, which is the physical cash-drawer ledger (caja). An expense
+// recorded here affects the profit calculation without requiring the cash drawer
+// to be open. The two concepts must never be merged: caja tracks physical money
+// flow; this ledger tracks economic cost allocated to a period.
+//
+// Suggested categories (used by the UI): servicios, arriendo, transporte,
+// marketing, impuestos, otros.
+export const expensesSchema = pgTable(
+  'expenses',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: text('organization_id').notNull(),
+    amount: numeric('amount', { precision: 12, scale: 2 }).notNull(),
+    // Open-ended text so the owner is not forced into our taxonomy. UI suggests:
+    // servicios | arriendo | transporte | marketing | impuestos | otros.
+    category: text('category').notNull(),
+    description: text('description'),
+    // The date the expense APPLIES TO (economic date), not the recording date.
+    // Net-profit queries filter incurred_on within the selected date range.
+    incurredOn: date('incurred_on').notNull(),
+    // Clerk userId of the owner who logged this entry.
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+  },
+  table => [
+    // Net-profit queries scan org + incurred_on; this covers most date-range filters.
+    index('expenses_org_incurred_on_idx').on(
+      table.organizationId,
+      table.incurredOn,
+    ),
+  ],
+);
+
 export const deliveryOrdersRelations = relations(
   deliveryOrdersSchema,
   ({ one, many }) => ({
