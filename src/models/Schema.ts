@@ -508,6 +508,15 @@ export const posUsersSchema = pgTable(
     // mechanism as pos_tokens.session_epoch: if the client's known epoch is lower
     // than the stored one, the session is considered revoked.
     sessionEpoch: integer('session_epoch').default(0).notNull(),
+    // Monthly gross salary in local currency (informational, for payroll views).
+    salary: numeric('salary', { precision: 12, scale: 2 }),
+    // Contact phone — also consumed by the coverage/delivery agent.
+    phone: text('phone'),
+    // Partial weekly work schedule. Keys are weekday codes (mon|tue|wed|thu|fri|sat|sun).
+    // Each entry: { start: "HH:MM", end: "HH:MM", off: boolean }
+    // `off: true` means rest day; start/end are ignored when off is true.
+    // Omitted keys inherit a default schedule defined at the org level.
+    workSchedule: jsonb('work_schedule').default({}).notNull(),
     createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { mode: 'date' })
       .defaultNow()

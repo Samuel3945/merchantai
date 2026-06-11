@@ -4,7 +4,7 @@ import type { ActionResult } from '@/libs/action-result';
 import { randomUUID } from 'node:crypto';
 import { auth, clerkClient } from '@clerk/nextjs/server';
 import bcrypt from 'bcryptjs';
-import { and, count, desc, eq, sql } from 'drizzle-orm';
+import { and, count, desc, eq, or, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
@@ -18,9 +18,14 @@ import {
 } from '@/libs/permissions';
 import { CASHIERS_LIMIT_REACHED } from '@/libs/plan-limits';
 import {
+  cashMovementsSchema,
+  deliveryOrdersSchema,
   employeeInvitationsSchema,
   planAddonsSchema,
+  posReturnsSchema,
+  posTokensSchema,
   posUsersSchema,
+  salesSchema,
 } from '@/models/Schema';
 
 const INVITE_TTL_HOURS = 72;
@@ -399,6 +404,9 @@ export async function listEmployees() {
       permissions: posUsersSchema.permissions,
       canConfirmTransfers: posUsersSchema.canConfirmTransfers,
       hasPin: sql<boolean>`(${posUsersSchema.pin} <> '')`,
+      salary: posUsersSchema.salary,
+      phone: posUsersSchema.phone,
+      workSchedule: posUsersSchema.workSchedule,
       createdAt: posUsersSchema.createdAt,
     })
     .from(posUsersSchema)
@@ -556,10 +564,26 @@ export async function resetCashierPin(
   return { ok: true, data: updated };
 }
 
+export type WorkDaySchedule = {
+  start: string; // "HH:MM"
+  end: string; // "HH:MM"
+  off: boolean; // true = rest day; start/end ignored
+};
+
+export type WorkSchedule = Partial<
+  Record<'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun', WorkDaySchedule>
+>;
+
 export type UpdateEmployeeInput = {
   permissions?: Record<string, unknown>;
   enabledModules?: string[];
   canConfirmTransfers?: boolean;
+  /** Monthly gross salary. Must be >= 0 when provided. */
+  salary?: number | null;
+  /** Contact phone number. */
+  phone?: string | null;
+  /** Partial weekly work schedule keyed by weekday code. */
+  workSchedule?: WorkSchedule | null;
 };
 
 // Permissions are DYNAMIC: the owner can change what a user can see/do at any
@@ -570,6 +594,10 @@ export async function updateEmployee(
 ): Promise<ActionResult<{ id: string }>> {
   const { orgId, userId: actorId } = await requireAdminContext();
 
+  if (input.salary != null && (!Number.isFinite(input.salary) || input.salary < 0)) {
+    return { ok: false, error: 'El salario debe ser 0 o mayor' };
+  }
+
   const [existing] = await db
     .select({
       id: posUsersSchema.id,
@@ -577,6 +605,9 @@ export async function updateEmployee(
       enabledModules: posUsersSchema.enabledModules,
       canConfirmTransfers: posUsersSchema.canConfirmTransfers,
       clerkUserId: posUsersSchema.clerkUserId,
+      salary: posUsersSchema.salary,
+      phone: posUsersSchema.phone,
+      workSchedule: posUsersSchema.workSchedule,
     })
     .from(posUsersSchema)
     .where(
@@ -601,9 +632,42 @@ export async function updateEmployee(
   const canConfirmTransfers
     = input.canConfirmTransfers ?? existing.canConfirmTransfers;
 
+  // salary: explicit null clears it; undefined keeps existing; number sets it.
+  const salary = input.salary !== undefined
+    ? (input.salary != null ? String(input.salary) : null)
+    : existing.salary;
+  const phone = input.phone !== undefined ? input.phone : existing.phone;
+
+  // workSchedule sanitization: must be an object if provided (null clears it).
+  // For each weekday key, coerce to { start, end, off } — drop invalid time
+  // fields (keep `off`) so garbage from clients never reaches the DB.
+  const TIME_RE = /^\d{2}:\d{2}$/;
+  const WEEKDAY_KEYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
+  let workSchedule: WorkSchedule | null | typeof existing.workSchedule;
+  if (input.workSchedule === undefined) {
+    workSchedule = existing.workSchedule;
+  } else if (input.workSchedule === null) {
+    workSchedule = null;
+  } else if (typeof input.workSchedule !== 'object' || Array.isArray(input.workSchedule)) {
+    return { ok: false, error: 'El horario semanal no tiene un formato válido' };
+  } else {
+    const cleaned: WorkSchedule = {};
+    for (const k of WEEKDAY_KEYS) {
+      const raw = (input.workSchedule as WorkSchedule)[k];
+      if (!raw) {
+        continue;
+      }
+      const off = Boolean(raw.off);
+      const start = TIME_RE.test(raw.start ?? '') ? raw.start : undefined;
+      const end = TIME_RE.test(raw.end ?? '') ? raw.end : undefined;
+      cleaned[k] = { off, start: start ?? '08:00', end: end ?? '17:00' };
+    }
+    workSchedule = cleaned;
+  }
+
   const [updated] = await db
     .update(posUsersSchema)
-    .set({ permissions, enabledModules, canConfirmTransfers })
+    .set({ permissions, enabledModules, canConfirmTransfers, salary, phone, workSchedule })
     .where(
       and(
         eq(posUsersSchema.id, userId),
@@ -619,15 +683,17 @@ export async function updateEmployee(
   await logAction({
     organizationId: orgId,
     actor: { type: 'user', id: actorId },
-    action: 'employee.permissions_updated',
+    action: 'employee.updated',
     entityType: 'pos_user',
     entityId: userId,
     before: {
       enabledModules: existing.enabledModules,
       permissions: existing.permissions,
       canConfirmTransfers: existing.canConfirmTransfers,
+      salary: existing.salary,
+      phone: existing.phone,
     },
-    after: { enabledModules, permissions, canConfirmTransfers },
+    after: { enabledModules, permissions, canConfirmTransfers, salary, phone },
   });
 
   // Source of truth is the DB; push the new modules to the Clerk membership
@@ -693,4 +759,210 @@ export async function setEmployeeActive(
 
   revalidatePath('/dashboard/employees');
   return { ok: true, data: updated };
+}
+
+// Permanently removes an employee with NO operational history from the org.
+// Employees with linked records (sales, tokens, returns, deliveries, cash movements)
+// must be deactivated instead — this guard prevents orphaned data integrity issues.
+export async function deleteEmployee(
+  employeeId: string,
+): Promise<ActionResult<{ id: string }>> {
+  const { orgId, userId: actorId } = await requireAdminContext();
+
+  const [target] = await db
+    .select({
+      id: posUsersSchema.id,
+      name: posUsersSchema.name,
+      role: posUsersSchema.role,
+      clerkUserId: posUsersSchema.clerkUserId,
+    })
+    .from(posUsersSchema)
+    .where(
+      and(
+        eq(posUsersSchema.id, employeeId),
+        eq(posUsersSchema.organizationId, orgId),
+      ),
+    )
+    .limit(1);
+
+  if (!target) {
+    return { ok: false, error: 'Empleado no encontrado' };
+  }
+
+  // C1 — Cannot delete yourself. Compare against the Clerk userId, not the
+  // pos_users UUID — actorId comes from Clerk's auth() and target.id is a
+  // pos_users UUID, so the old comparison was always false.
+  if (target.clerkUserId && target.clerkUserId === actorId) {
+    return { ok: false, error: 'No podés eliminar tu propia cuenta', code: 'self_delete' };
+  }
+
+  // History check — refuse hard-delete if the employee has any operational records.
+  //
+  // C3 — sales.cashier_id is TEXT (not UUID FK). POS sales store the pos_users
+  // UUID; web-dashboard (panel) sales store the Clerk userId. Match both so
+  // panel-access employees are not invisible to this guard.
+  //
+  // C2 — cash_movements.created_by and authorized_by are TEXT columns storing
+  // the actor's NAME (e.g. "Juan López", "Cajero"), NOT a UUID. Matching by
+  // UUID always returns 0. Guard by name instead — conservative: if anyone
+  // recorded a movement under this employee's name, block the hard-delete.
+  const [
+    salesCount,
+    tokensCount,
+    returnsCount,
+    deliveriesCount,
+    movementsCount,
+  ] = await Promise.all([
+    db
+      .select({ value: count() })
+      .from(salesSchema)
+      .where(
+        and(
+          eq(salesSchema.organizationId, orgId),
+          target.clerkUserId
+            ? or(
+                eq(salesSchema.cashierId, employeeId),
+                eq(salesSchema.cashierId, target.clerkUserId),
+              )
+            : eq(salesSchema.cashierId, employeeId),
+        ),
+      ),
+    db
+      .select({ value: count() })
+      .from(posTokensSchema)
+      .where(
+        and(
+          eq(posTokensSchema.organizationId, orgId),
+          eq(posTokensSchema.cashierId, employeeId),
+        ),
+      ),
+    db
+      .select({ value: count() })
+      .from(posReturnsSchema)
+      .where(
+        and(
+          eq(posReturnsSchema.organizationId, orgId),
+          eq(posReturnsSchema.cashierId, employeeId),
+        ),
+      ),
+    db
+      .select({ value: count() })
+      .from(deliveryOrdersSchema)
+      .where(
+        and(
+          eq(deliveryOrdersSchema.organizationId, orgId),
+          eq(deliveryOrdersSchema.courierId, employeeId),
+        ),
+      ),
+    // cash_movements.created_by and authorized_by store the actor's display
+    // NAME as plain TEXT, not a UUID — match by name (conservative guard).
+    db
+      .select({ value: count() })
+      .from(cashMovementsSchema)
+      .where(
+        and(
+          eq(cashMovementsSchema.organizationId, orgId),
+          or(
+            eq(cashMovementsSchema.createdBy, target.name),
+            eq(cashMovementsSchema.authorizedBy, target.name),
+          ),
+        ),
+      ),
+  ]);
+
+  const hasHistory
+    = Number(salesCount[0]?.value ?? 0) > 0
+      || Number(tokensCount[0]?.value ?? 0) > 0
+      || Number(returnsCount[0]?.value ?? 0) > 0
+      || Number(deliveriesCount[0]?.value ?? 0) > 0
+      || Number(movementsCount[0]?.value ?? 0) > 0;
+
+  if (hasHistory) {
+    return {
+      ok: false,
+      error:
+        'Este empleado tiene historial operativo (ventas, movimientos o entregas). '
+        + 'Desactivalo en su lugar para conservar los registros.',
+      code: 'has_history',
+    };
+  }
+
+  // W3 + W4 — Delete in a transaction FIRST; Clerk cleanup is best-effort AFTER.
+  // Deleting the pos_users row already revokes access (middleware uses pos_users
+  // as source of truth). The transaction also re-counts active admins if the
+  // target is an admin (last-admin TOCTOU guard).
+  let lastAdminBlocked = false;
+
+  await db.transaction(async (tx) => {
+    // W4 — Re-count active admins inside the transaction to close the TOCTOU
+    // window between the pre-check above and the actual delete.
+    if (target.role === 'admin') {
+      const [adminCount] = await tx
+        .select({ value: count() })
+        .from(posUsersSchema)
+        .where(
+          and(
+            eq(posUsersSchema.organizationId, orgId),
+            eq(posUsersSchema.role, 'admin'),
+            eq(posUsersSchema.active, true),
+          ),
+        );
+      if (Number(adminCount?.value ?? 0) <= 1) {
+        lastAdminBlocked = true;
+        // Throwing rolls back the transaction; we catch and convert below.
+        const err = new Error('No se puede eliminar al último administrador activo de la organización');
+        (err as Error & { code: string }).code = 'last_admin';
+        throw err;
+      }
+    }
+
+    await tx
+      .delete(posUsersSchema)
+      .where(
+        and(
+          eq(posUsersSchema.id, employeeId),
+          eq(posUsersSchema.organizationId, orgId),
+        ),
+      );
+  }).catch((err: unknown) => {
+    // Re-throw everything that isn't our controlled rollback signal.
+    if (!lastAdminBlocked) {
+      throw err;
+    }
+  });
+
+  if (lastAdminBlocked) {
+    return {
+      ok: false,
+      error: 'No se puede eliminar al último administrador activo de la organización',
+      code: 'last_admin',
+    };
+  }
+
+  // W3 — Clerk cleanup is best-effort AFTER the DB delete succeeds. A Clerk
+  // hiccup never desynchronizes or blocks the delete that already committed.
+  if (target.clerkUserId) {
+    try {
+      const client = await clerkClient();
+      await client.organizations.deleteOrganizationMembership({
+        organizationId: orgId,
+        userId: target.clerkUserId,
+      });
+    } catch {
+      // Best-effort: Clerk membership removal; DB delete already committed.
+    }
+  }
+
+  await logAction({
+    organizationId: orgId,
+    actor: { type: 'user', id: actorId },
+    action: 'employee.deleted',
+    entityType: 'pos_user',
+    entityId: employeeId,
+    before: { name: target.name, role: target.role },
+    after: { deleted: true },
+  });
+
+  revalidatePath('/dashboard/employees');
+  return { ok: true, data: { id: employeeId } };
 }

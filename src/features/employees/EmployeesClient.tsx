@@ -1,8 +1,10 @@
 'use client';
 
+import type { WorkSchedule } from '@/actions/employees';
 import type { ActionResult } from '@/libs/action-result';
 import { useCallback, useState, useTransition } from 'react';
 import {
+  deleteEmployee,
   invite,
   listEmployees,
   listPendingInvitations,
@@ -171,6 +173,9 @@ export function EmployeesClient({
   const [lastEmailSent, setLastEmailSent] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [limitError, setLimitError] = useState<LimitErrorPayload | null>(null);
+  // When deleteEmployee returns has_history, stores the employee id so we can
+  // show a "Deactivate instead" fallback prompt.
+  const [deleteHistoryId, setDeleteHistoryId] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
   const refresh = useCallback(() => {
@@ -272,6 +277,35 @@ export function EmployeesClient({
     });
   };
 
+  const handleDelete = async (emp: EmployeeRow) => {
+    const ok = await confirm({
+      title: `¿Eliminar a ${emp.name}?`,
+      description:
+        'Esto elimina al empleado de forma permanente. Solo se pueden eliminar empleados sin historial de ventas, movimientos o entregas.',
+      confirmText: 'Eliminar',
+      tone: 'destructive',
+    });
+    if (!ok) {
+      return;
+    }
+    startTransition(async () => {
+      try {
+        const result = await deleteEmployee(emp.id);
+        if (!result.ok) {
+          if (result.code === 'has_history') {
+            setDeleteHistoryId(emp.id);
+          } else {
+            setError(result.error);
+          }
+          return;
+        }
+        refresh();
+      } catch {
+        setError('No se pudo eliminar al empleado');
+      }
+    });
+  };
+
   return (
     <div className="space-y-8">
       {error && (
@@ -330,6 +364,42 @@ export function EmployeesClient({
           >
             Descartar
           </button>
+        </div>
+      )}
+
+      {deleteHistoryId && (
+        <div className="
+          rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm
+          text-amber-900
+        "
+        >
+          <div className="font-semibold">No se puede eliminar — el empleado tiene historial</div>
+          <div className="mt-1">
+            Este empleado tiene ventas, movimientos de caja o entregas registradas. Para quitarle
+            el acceso sin perder los registros, desactivalo en su lugar.
+          </div>
+          <div className="mt-2 flex gap-3">
+            <button
+              type="button"
+              className="underline"
+              onClick={() => {
+                const emp = employees.find(e => e.id === deleteHistoryId);
+                if (emp) {
+                  handleToggleActive(emp);
+                }
+                setDeleteHistoryId(null);
+              }}
+            >
+              Desactivar en su lugar
+            </button>
+            <button
+              type="button"
+              className="underline"
+              onClick={() => setDeleteHistoryId(null)}
+            >
+              Cerrar
+            </button>
+          </div>
         </div>
       )}
 
@@ -457,6 +527,15 @@ export function EmployeesClient({
                       Resetear PIN
                     </Button>
                   )}
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    onClick={() => handleDelete(emp)}
+                    disabled={pending}
+                    title="Eliminar al empleado de forma permanente (solo si no tiene historial)"
+                  >
+                    Eliminar
+                  </Button>
                 </td>
               </tr>
             ))}
@@ -749,6 +828,26 @@ function InviteModal({
   );
 }
 
+const WEEKDAYS: Array<{ key: keyof WorkSchedule; label: string }> = [
+  { key: 'mon', label: 'Lunes' },
+  { key: 'tue', label: 'Martes' },
+  { key: 'wed', label: 'Miércoles' },
+  { key: 'thu', label: 'Jueves' },
+  { key: 'fri', label: 'Viernes' },
+  { key: 'sat', label: 'Sábado' },
+  { key: 'sun', label: 'Domingo' },
+];
+
+const DEFAULT_START = '08:00';
+const DEFAULT_END = '17:00';
+
+function initSchedule(raw: unknown): WorkSchedule {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    return raw as WorkSchedule;
+  }
+  return {};
+}
+
 function EditModal({
   employee,
   onClose,
@@ -769,7 +868,21 @@ function EditModal({
   const [canConfirmTransfers, setCanConfirmTransfers] = useState(
     employee.canConfirmTransfers,
   );
+  const [salary, setSalary] = useState(
+    employee.salary != null ? String(employee.salary) : '',
+  );
+  const [phone, setPhone] = useState(employee.phone ?? '');
+  const [schedule, setSchedule] = useState<WorkSchedule>(
+    () => initSchedule(employee.workSchedule),
+  );
   const [submitting, setSubmitting] = useState(false);
+
+  const setDay = (key: keyof WorkSchedule, patch: Partial<{ start: string; end: string; off: boolean }>) => {
+    setSchedule((prev) => {
+      const existing = prev[key] ?? { start: DEFAULT_START, end: DEFAULT_END, off: false };
+      return { ...prev, [key]: { ...existing, ...patch } };
+    });
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -781,10 +894,14 @@ function EditModal({
       const permissions = Object.fromEntries(
         Object.entries(actions).filter(([, v]) => v),
       );
+      const salaryValue = salary.trim() !== '' ? Number(salary) : null;
       const result = await updateEmployee(employee.id, {
         permissions,
         enabledModules,
         canConfirmTransfers,
+        salary: salaryValue,
+        phone: phone.trim() || null,
+        workSchedule: schedule,
       });
       if (!result.ok) {
         onFailure(result);
@@ -792,18 +909,96 @@ function EditModal({
       }
       onSuccess();
     } catch {
-      onFailure({ ok: false, error: 'No se pudieron guardar los permisos' });
+      onFailure({ ok: false, error: 'No se pudieron guardar los datos del empleado' });
     } finally {
       setSubmitting(false);
     }
   };
 
   return (
-    <ModalShell title={`Permisos de ${employee.name}`} onClose={onClose}>
+    <ModalShell title={`Editar a ${employee.name}`} onClose={onClose}>
       <form onSubmit={handleSubmit} className="space-y-4">
         <p className="text-xs text-muted-foreground">
           {employee.email}
         </p>
+
+        {/* Salary & phone */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label htmlFor="edit-salary" className={labelCls}>
+              Salario mensual
+            </label>
+            <input
+              id="edit-salary"
+              type="number"
+              min="0"
+              step="0.01"
+              value={salary}
+              onChange={e => setSalary(e.target.value)}
+              placeholder="0.00"
+              className={inputCls}
+            />
+          </div>
+          <div>
+            <label htmlFor="edit-phone" className={labelCls}>
+              Teléfono
+            </label>
+            <input
+              id="edit-phone"
+              type="tel"
+              value={phone}
+              onChange={e => setPhone(e.target.value)}
+              placeholder="+57 300 000 0000"
+              className={inputCls}
+            />
+          </div>
+        </div>
+
+        {/* Weekly schedule */}
+        <div>
+          <div className={labelCls}>Horario semanal</div>
+          <div className="mt-2 space-y-1">
+            {WEEKDAYS.map(({ key, label }) => {
+              const day = schedule[key] ?? { start: DEFAULT_START, end: DEFAULT_END, off: false };
+              return (
+                <div key={key} className="flex items-center gap-2 text-sm">
+                  <span className="w-20 shrink-0 text-xs text-muted-foreground">{label}</span>
+                  <label className="flex items-center gap-1 text-xs">
+                    <input
+                      type="checkbox"
+                      checked={!day.off}
+                      onChange={e => setDay(key, { off: !e.target.checked })}
+                    />
+                    Trabaja
+                  </label>
+                  <input
+                    type="time"
+                    value={day.start}
+                    disabled={day.off}
+                    onChange={e => setDay(key, { start: e.target.value })}
+                    className="
+                      h-7 rounded-sm border border-input bg-transparent px-1
+                      text-xs
+                      disabled:opacity-40
+                    "
+                  />
+                  <span className="text-xs text-muted-foreground">–</span>
+                  <input
+                    type="time"
+                    value={day.end}
+                    disabled={day.off}
+                    onChange={e => setDay(key, { end: e.target.value })}
+                    className="
+                      h-7 rounded-sm border border-input bg-transparent px-1
+                      text-xs
+                      disabled:opacity-40
+                    "
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </div>
 
         <GrantFields
           modules={modules}
@@ -824,7 +1019,7 @@ function EditModal({
             Cancelar
           </Button>
           <Button type="submit" disabled={submitting}>
-            {submitting ? 'Guardando…' : 'Guardar permisos'}
+            {submitting ? 'Guardando…' : 'Guardar'}
           </Button>
         </div>
       </form>
