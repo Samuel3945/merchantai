@@ -686,6 +686,24 @@ export const planEntitlementsSchema = pgTable(
   ],
 );
 
+// Operator-curated metadata about each business, maintained from the platform
+// console: lifecycle status, free-form tags/groups for segmentation, internal
+// notes and known issues. Never visible to the tenant.
+export const platformOrgMetadataSchema = pgTable('platform_org_metadata', {
+  organizationId: text('organization_id').primaryKey(),
+  // Lifecycle bucket: none | trial | vip | at_risk | churned.
+  status: text('status').default('none').notNull(),
+  tags: jsonb('tags').$type<string[]>().default([]).notNull(),
+  groupName: text('group_name'),
+  notes: text('notes'),
+  knownIssues: text('known_issues'),
+  createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { mode: 'date' })
+    .defaultNow()
+    .$onUpdate(() => new Date())
+    .notNull(),
+});
+
 // Per-organization plan tier. Drives quota for cashiers, etc.
 // DEPRECATED: never written by app code (upgrade flows only write
 // `subscriptions`), which silently kept paying orgs on free-tier cashier
