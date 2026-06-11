@@ -308,6 +308,7 @@ export type SaleListRow = Sale & {
   fullyReturned: boolean;
   cashierName: string | null;
   cashierImageUrl: string | null;
+  deviceName: string | null;
 };
 
 const UUID_RE
@@ -360,6 +361,23 @@ async function resolveCashiers(
     }
   }
 
+  return map;
+}
+
+// Resolves posTokenId UUIDs to device names in one batch query.
+async function resolveDeviceNames(ids: string[]): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  const unique = [...new Set(ids.filter(Boolean))];
+  if (unique.length === 0) {
+    return map;
+  }
+  const rows = await db
+    .select({ id: posTokensSchema.id, deviceName: posTokensSchema.deviceName })
+    .from(posTokensSchema)
+    .where(inArray(posTokensSchema.id, unique));
+  for (const r of rows) {
+    map.set(r.id, r.deviceName);
+  }
   return map;
 }
 
@@ -510,6 +528,12 @@ export async function listSales(
       .filter((id): id is string => id != null && id !== ''),
   );
 
+  const deviceMap = await resolveDeviceNames(
+    items
+      .map(it => it.posTokenId)
+      .filter((id): id is string => id != null && id !== ''),
+  );
+
   const enriched: SaleListRow[] = items.map(it => ({
     ...it,
     cashierName: it.cashierId
@@ -518,6 +542,7 @@ export async function listSales(
     cashierImageUrl: it.cashierId
       ? (cashierMap.get(it.cashierId)?.imageUrl ?? null)
       : null,
+    deviceName: it.posTokenId ? (deviceMap.get(it.posTokenId) ?? null) : null,
   }));
 
   return {

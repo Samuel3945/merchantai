@@ -80,13 +80,17 @@ function initials(name: string | null): string {
 
 // Cashier identity for the table: real photo when Clerk provides one, otherwise
 // a tidy initials chip. Always a human name, never a raw user id.
+// When deviceName is provided, shows it as a secondary line beneath the name.
 function CashierCell({
   name,
   imageUrl,
+  deviceName,
 }: {
   name: string | null;
   imageUrl: string | null;
+  deviceName?: string | null;
 }) {
+  const displayName = name ?? (deviceName ?? null);
   return (
     <div className="flex items-center gap-2">
       {imageUrl
@@ -103,10 +107,15 @@ function CashierCell({
               bg-muted text-[10px] font-semibold text-muted-foreground
             "
             >
-              {initials(name)}
+              {initials(displayName)}
             </span>
           )}
-      <span className="truncate">{name ?? '—'}</span>
+      <div className="flex min-w-0 flex-col">
+        <span className="truncate">{displayName ?? '—'}</span>
+        {name && deviceName && (
+          <span className="truncate text-[10px] text-muted-foreground">{deviceName}</span>
+        )}
+      </div>
     </div>
   );
 }
@@ -540,6 +549,7 @@ export function SalesClient({
                           <CashierCell
                             name={s.cashierName}
                             imageUrl={s.cashierImageUrl}
+                            deviceName={s.deviceName}
                           />
                         </td>
                         <td className="px-3 py-2 text-right font-medium">

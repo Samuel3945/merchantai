@@ -167,6 +167,7 @@ export async function POST(req: Request): Promise<NextResponse> {
           status: 'completed',
           notes: body.notes ?? null,
           cashierId: ctx.cashierId,
+          posTokenId: ctx.source === 'token' ? ctx.tokenId : null,
         })
         .returning();
 
@@ -374,6 +375,15 @@ export async function GET(req: Request): Promise<NextResponse> {
   }
   if (paymentType) {
     conds.push(eq(salesSchema.paymentType, paymentType));
+  }
+  // When the requester is a device token, scope to that register (own sales or legacy cashier match)
+  if (ctx.source === 'token' && ctx.tokenId) {
+    conds.push(
+      or(
+        eq(salesSchema.posTokenId, ctx.tokenId),
+        and(sql`${salesSchema.posTokenId} IS NULL`, ctx.cashierId ? eq(salesSchema.cashierId, ctx.cashierId) : sql`false`),
+      )!,
+    );
   }
   const where = and(...conds);
 

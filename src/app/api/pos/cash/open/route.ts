@@ -1,9 +1,10 @@
+import { eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { logAction, resolvePosActor } from '@/libs/audit-log';
 import { findOpenSession, toMoney } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import { requirePosAuth } from '@/libs/pos-auth';
-import { cashSessionsSchema } from '@/models/Schema';
+import { cashSessionsSchema, posTokensSchema } from '@/models/Schema';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -34,6 +35,21 @@ export async function POST(req: Request): Promise<NextResponse> {
     );
   }
 
+  // Build attribution label: "employee (device)" when both are known, otherwise just cashierName
+  let attribution = ctx.cashierName || 'Cajero';
+  if (ctx.source === 'token' && ctx.tokenId) {
+    const [tokenRow] = await db
+      .select({ deviceName: posTokensSchema.deviceName })
+      .from(posTokensSchema)
+      .where(eq(posTokensSchema.id, ctx.tokenId))
+      .limit(1);
+    if (tokenRow && ctx.cashierId) {
+      attribution = `${ctx.cashierName} (${tokenRow.deviceName})`;
+    } else if (tokenRow) {
+      attribution = tokenRow.deviceName;
+    }
+  }
+
   try {
     const session = await db.transaction(async (tx) => {
       const existing = await findOpenSession(tx, ctx.organizationId);
@@ -46,7 +62,7 @@ export async function POST(req: Request): Promise<NextResponse> {
         .values({
           organizationId: ctx.organizationId,
           openingAmount: opening,
-          openedBy: ctx.cashierName || 'Cajero',
+          openedBy: attribution,
           status: 'open',
           notes: body.notes ?? null,
         })

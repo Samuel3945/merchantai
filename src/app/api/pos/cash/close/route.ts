@@ -8,7 +8,7 @@ import {
 } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import { requirePosAuth } from '@/libs/pos-auth';
-import { cashSessionsSchema } from '@/models/Schema';
+import { cashSessionsSchema, posTokensSchema } from '@/models/Schema';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -40,6 +40,21 @@ export async function POST(req: Request): Promise<NextResponse> {
 
   const counted = toMoney(body.countedAmount);
 
+  // Build attribution label: "employee (device)" when both are known, otherwise just cashierName
+  let attribution = ctx.cashierName || 'Cajero';
+  if (ctx.source === 'token' && ctx.tokenId) {
+    const [tokenRow] = await db
+      .select({ deviceName: posTokensSchema.deviceName })
+      .from(posTokensSchema)
+      .where(eq(posTokensSchema.id, ctx.tokenId))
+      .limit(1);
+    if (tokenRow && ctx.cashierId) {
+      attribution = `${ctx.cashierName} (${tokenRow.deviceName})`;
+    } else if (tokenRow) {
+      attribution = tokenRow.deviceName;
+    }
+  }
+
   try {
     const session = await db.transaction(async (tx) => {
       const open = await findOpenSession(tx, ctx.organizationId);
@@ -63,7 +78,7 @@ export async function POST(req: Request): Promise<NextResponse> {
         .set({
           status: 'closed',
           closedAt: new Date(),
-          closedBy: ctx.cashierName || 'Cajero',
+          closedBy: attribution,
           countedAmount: counted,
           expectedAmount: toMoney(expected),
           difference: toMoney(difference),
