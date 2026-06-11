@@ -3,6 +3,8 @@ import { setRequestLocale } from 'next-intl/server';
 import { getPlatformDb } from '@/libs/platform/platform-db';
 import {
   businessProfileSchema,
+  plansSchema,
+  platformOrgMetadataSchema,
   salesSchema,
   subscriptionsSchema,
 } from '@/models/Schema';
@@ -17,7 +19,7 @@ async function getOverview() {
   const db = await getPlatformDb();
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
-  const [businesses, subsByPlan, sales7d] = await Promise.all([
+  const [businesses, subsByPlan, sales7d, mrr, atRisk] = await Promise.all([
     db.select({ total: count() }).from(businessProfileSchema),
     db
       .select({ plan: subscriptionsSchema.plan, total: count() })
@@ -37,11 +39,23 @@ async function getOverview() {
           gte(salesSchema.createdAt, sevenDaysAgo),
         ),
       ),
+    // Contracted MRR: active subscriptions × their plan's monthly price.
+    db
+      .select({ total: sum(plansSchema.priceMonthlyCop) })
+      .from(subscriptionsSchema)
+      .innerJoin(plansSchema, eq(plansSchema.slug, subscriptionsSchema.plan))
+      .where(eq(subscriptionsSchema.active, true)),
+    db
+      .select({ total: count() })
+      .from(platformOrgMetadataSchema)
+      .where(eq(platformOrgMetadataSchema.status, 'at_risk')),
   ]);
 
   return {
     businessCount: businesses[0]?.total ?? 0,
     subsByPlan,
+    mrr: Number(mrr[0]?.total ?? 0),
+    atRiskCount: atRisk[0]?.total ?? 0,
     sales7d: {
       totalSales: sales7d[0]?.totalSales ?? 0,
       revenue: Number(sales7d[0]?.revenue ?? 0),
@@ -84,12 +98,18 @@ export default async function PlatformOverviewPage(props: {
       <div className="
         grid grid-cols-1 gap-4
         sm:grid-cols-3
+        lg:grid-cols-5
       "
       >
         <StatCard
           label="Negocios"
           value={String(overview.businessCount)}
           hint="Con perfil de negocio capturado"
+        />
+        <StatCard
+          label="MRR contratado"
+          value={COP.format(overview.mrr)}
+          hint="Suscripciones activas × precio del plan"
         />
         <StatCard
           label="Ventas (7 días)"
@@ -99,6 +119,11 @@ export default async function PlatformOverviewPage(props: {
         <StatCard
           label="Facturación (7 días)"
           value={COP.format(overview.sales7d.revenue)}
+        />
+        <StatCard
+          label="En riesgo"
+          value={String(overview.atRiskCount)}
+          hint="Marcados en el directorio"
         />
       </div>
 
