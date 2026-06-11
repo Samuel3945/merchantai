@@ -32,8 +32,9 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# local env files
-.env*.local
+# env files — all variants; config lives in the VPS environment (Easypanel)
+.env
+.env.*
 
 # Sentry Config File
 .env.sentry-build-plugin
