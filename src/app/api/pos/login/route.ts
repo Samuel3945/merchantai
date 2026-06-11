@@ -1,6 +1,8 @@
 import bcrypt from 'bcryptjs';
 import { and, eq, sql } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
+import { createNotification } from '@/actions/notifications';
+import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
 import { posTokensSchema, posUsersSchema } from '@/models/Schema';
 
@@ -114,6 +116,22 @@ export async function POST(req: Request): Promise<NextResponse> {
         }
         const valid = await bcrypt.compare(pin, row.token.pin);
         if (!valid) {
+          logAction({
+            organizationId: row.token.organizationId,
+            actor: { type: 'cashier' as const, id: `device:${row.token.deviceName}` },
+            action: 'device.pin_failed',
+            entityType: 'pos_token',
+            entityId: row.token.id,
+            metadata: { deviceName: row.token.deviceName },
+          }).catch(() => null);
+          createNotification({
+            organizationId: row.token.organizationId,
+            kind: 'sale_alert',
+            severity: 'high',
+            title: 'Intento de PIN incorrecto',
+            message: `Intento de PIN incorrecto en la caja "${row.token.deviceName}".`,
+            payload: { tokenId: row.token.id, deviceName: row.token.deviceName },
+          }).catch(() => null);
           return NextResponse.json(
             {
               success: false,

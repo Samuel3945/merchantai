@@ -1,4 +1,5 @@
 import type { ReturnItemInput, ReturnReason } from '@/libs/sale-returns';
+import { and, eq, or, sql } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { logAction, resolvePosActor } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
@@ -8,6 +9,7 @@ import {
   applySaleReturn,
   VALID_RETURN_REASONS,
 } from '@/libs/sale-returns';
+import { salesSchema } from '@/models/Schema';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -32,6 +34,26 @@ export async function POST(
   const { saleId } = await params;
   if (!saleId) {
     return NextResponse.json({ error: 'saleId es requerido' }, { status: 400 });
+  }
+
+  if (ctx.source === 'token' && ctx.tokenId) {
+    const [ownsSale] = await db
+      .select({ id: salesSchema.id })
+      .from(salesSchema)
+      .where(
+        and(
+          eq(salesSchema.id, saleId),
+          eq(salesSchema.organizationId, ctx.organizationId),
+          or(
+            eq(salesSchema.posTokenId, ctx.tokenId),
+            and(sql`${salesSchema.posTokenId} IS NULL`, ctx.cashierId ? eq(salesSchema.cashierId, ctx.cashierId) : sql`false`),
+          )!,
+        ),
+      )
+      .limit(1);
+    if (!ownsSale) {
+      return NextResponse.json({ error: 'Venta no encontrada en esta caja' }, { status: 404 });
+    }
   }
 
   let body: ReturnBody;

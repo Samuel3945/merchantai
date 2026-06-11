@@ -12,6 +12,7 @@ export type PosAuthContext = {
   cashierName: string;
   canConfirmTransfers: boolean;
   source: 'token' | 'user';
+  tokenId: string | null;
 };
 
 /** Returned when the client sends an X-Pos-Session-Epoch that is stale. */
@@ -76,6 +77,7 @@ async function resolveFromToken(
     cashierName: row.cashierName || row.token.deviceName,
     canConfirmTransfers: row.canConfirmTransfers ?? true,
     source: 'token',
+    tokenId: row.token.id,
   };
 }
 
@@ -104,6 +106,7 @@ async function resolveFromUser(
     cashierName: user.name,
     canConfirmTransfers: user.canConfirmTransfers,
     source: 'user',
+    tokenId: null,
   };
 }
 
