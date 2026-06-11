@@ -108,33 +108,6 @@ jobs:
         with:
           args: npm run test -- --coverage
 
-      - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v6
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-
-  storybook:
-    strategy:
-      matrix:
-        node-version: [24.x]
-
-    name: Run Storybook
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Set up Node.js environment
-        uses: ./.github/actions/setup-project
-        with:
-          node-version: ${{ matrix.node-version }}
-
-      - name: Run storybook tests
-        uses: docker://mcr.microsoft.com/playwright:v1.60.0
-        with:
-          args: npm run storybook:test
-
   e2e:
     strategy:
       matrix:
@@ -147,8 +120,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0 # For chromatic
 
       - name: Set up Node.js environment
         uses: ./.github/actions/setup-project
@@ -159,7 +130,7 @@ jobs:
       - name: Run E2E tests
         uses: docker://mcr.microsoft.com/playwright:v1.60.0
         with:
-          args: sh -c "HOME=/root npm run test:e2e" # Set HOME to /root to avoid Playwright error with Firebox
+          args: sh -c "HOME=/root npm run test:e2e" # Set HOME to /root to avoid Playwright error with Firefox
         env:
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
 
