@@ -168,6 +168,18 @@ export const businessProfileSchema = pgTable('business_profile', {
   // Coarse v1 classification from objective ratios (refinable later from the
   // stored signals): 'grocery_fresh' | 'wholesale' | 'retail_general' | null.
   inferredBusinessType: text('inferred_business_type'),
+  // AI-inferred rich business descriptor, e.g. "tienda de suplementos /
+  // gimnasio". Unlike inferredBusinessType (deterministic, 3 coarse buckets),
+  // this is an LLM label that powers context-aware product categorization. It is
+  // recomputed ONLY when the deterministic context SIGNATURE below shifts (see
+  // libs/ai-context.ts), so OpenAI is hit on real business shifts — not on every
+  // daily refresh.
+  aiBusinessContext: text('ai_business_context'),
+  // Hash of the stable catalog signals the context was derived from. A new
+  // signature ≠ stored one is what triggers a fresh inference (and a Layer-3
+  // re-categorization pass). NULL until the first inference runs.
+  aiContextSignature: text('ai_context_signature'),
+  aiContextComputedAt: timestamp('ai_context_computed_at', { mode: 'date' }),
   computedAt: timestamp('computed_at', { mode: 'date' }).defaultNow().notNull(),
   createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
 });

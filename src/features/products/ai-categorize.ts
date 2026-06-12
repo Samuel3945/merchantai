@@ -4,14 +4,16 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { auth } from '@clerk/nextjs/server';
 import { generateObject } from 'ai';
 import { z } from 'zod';
-import { consumeCredit } from '@/actions/plans';
+import { getBusinessContext } from '@/libs/ai-context';
 import { Env } from '@/libs/Env';
+import { logger } from '@/libs/Logger';
 import { resolveOrgOpenAiKey } from '@/libs/openai-key';
 
-// Categorization runs on OpenAI. The key is resolved per-request with BYOK
-// precedence: if the org saved its own key in Settings › Integrations
-// (`openai_api_key`), we use it and DON'T spend a platform credit. Otherwise we
-// fall back to the platform key (OPENAI_API_KEY env) and consume one credit.
+// Categorization is an AI-OWNED, always-on base feature: it never consumes an
+// inteligentes credit. The key is resolved per-request with BYOK precedence — the
+// org's own key (Settings › Integrations) if present, else the platform key
+// (OPENAI_API_KEY). Either way the model assigns the category; the shop never
+// types one by hand.
 const CATEGORIZE_MODEL = 'gpt-4o-mini';
 
 export type CategorizeResult
@@ -19,9 +21,8 @@ export type CategorizeResult
     ok: true;
     category: string;
     attributes: { key: string; value: string }[];
-    remaining: number;
   }
-  | { ok: false; reason: 'no_credits' | 'too_short' };
+  | { ok: false; reason: 'unavailable' | 'too_short' };
 
 const suggestionSchema = z.object({
   category: z
@@ -38,11 +39,13 @@ const suggestionSchema = z.object({
     .describe('Características típicas para este tipo de producto.'),
 });
 
-// AI suggestion for a product's category + typical attributes, mirroring
-// Tiendademo's "la IA categorizará este producto" behavior. Consumes one
-// credit. NOTE: reuses the 'sales_manager' credit kind as an interim — a
-// dedicated 'product_categorization' kind needs a usage_counters enum
-// migration, tracked as a follow-up.
+// AI suggestion for a product's category + typical attributes. The category is
+// biased by TWO stored signals so it fits THIS business:
+//   1. the org's existing taxonomy (knownCategories) — reuse verbatim if one fits;
+//   2. the inferred business context (libs/ai-context.ts) — the same energy drink
+//      lands in a different category in a gym vs. a general store.
+// No credit is consumed. Returns { ok: false, reason: 'unavailable' } when no key
+// is configured or the model call fails — the caller leaves the field empty.
 export async function categorizeProduct(
   name: string,
   knownCategories: string[] = [],
@@ -60,17 +63,7 @@ export async function categorizeProduct(
   const byokKey = await resolveOrgOpenAiKey(orgId);
   const apiKey = byokKey ?? Env.OPENAI_API_KEY;
   if (!apiKey) {
-    return { ok: false, reason: 'no_credits' };
-  }
-
-  // Platform key spends a credit; the org's own key (BYOK) bills their account.
-  let remaining = Number.POSITIVE_INFINITY;
-  if (!byokKey) {
-    const credit = await consumeCredit('sales_manager');
-    if (!credit.success) {
-      return { ok: false, reason: 'no_credits' };
-    }
-    remaining = credit.remaining;
+    return { ok: false, reason: 'unavailable' };
   }
 
   // Bias toward the business's own taxonomy: if one of its existing categories
@@ -86,17 +79,30 @@ export async function categorizeProduct(
       ? ` El negocio ya usa estas categorías: ${existing.join(', ')}. Si alguna encaja con el producto, devuelve EXACTAMENTE esa (mismas mayúsculas y tildes); si ninguna encaja, propone una nueva.`
       : '';
 
-  const openai = createOpenAI({ apiKey });
-  const { object } = await generateObject({
-    model: openai(CATEGORIZE_MODEL),
-    schema: suggestionSchema,
-    prompt: `Eres un asistente de catálogo para un negocio colombiano. Para el producto llamado "${trimmed}", sugiere una categoría comercial corta y hasta 6 características típicas (marca, tamaño, sabor, etc.). Responde en español. Si no puedes inferir un valor concreto para una característica, déjalo vacío.${taxonomyHint}`,
-  });
+  // Inject the inferred business context so categories fit the kind of store.
+  const businessContext = await getBusinessContext(orgId);
+  const contextHint = businessContext
+    ? ` El negocio es: ${businessContext}. Categoriza pensando en ese tipo de negocio.`
+    : '';
 
-  return {
-    ok: true,
-    category: object.category,
-    attributes: object.attributes,
-    remaining,
-  };
+  try {
+    const openai = createOpenAI({ apiKey });
+    const { object } = await generateObject({
+      model: openai(CATEGORIZE_MODEL),
+      schema: suggestionSchema,
+      prompt: `Eres un asistente de catálogo para un negocio colombiano. Para el producto llamado "${trimmed}", sugiere una categoría comercial corta y hasta 6 características típicas (marca, tamaño, sabor, etc.). Responde en español. Si no puedes inferir un valor concreto para una característica, déjalo vacío.${contextHint}${taxonomyHint}`,
+    });
+
+    return {
+      ok: true,
+      category: object.category,
+      attributes: object.attributes,
+    };
+  } catch (err) {
+    logger.error('ai_categorize_failed', {
+      organizationId: orgId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return { ok: false, reason: 'unavailable' };
+  }
 }
