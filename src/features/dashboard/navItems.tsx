@@ -86,6 +86,10 @@ export const navGroups: NavGroup[] = [
 export type NavModuleFlags = {
   fiado: boolean;
   employees: boolean;
+  turnos: boolean;
+  delivery: boolean;
+  facturas: boolean;
+  suppliers: boolean;
 };
 
 // Maps a nav href to the module flag that controls its visibility. Items not
@@ -93,6 +97,10 @@ export type NavModuleFlags = {
 const GATED_HREF: Record<string, keyof NavModuleFlags> = {
   '/dashboard/fiados': 'fiado',
   '/dashboard/employees': 'employees',
+  '/dashboard/turnos': 'turnos',
+  '/dashboard/delivery': 'delivery',
+  '/dashboard/facturas': 'facturas',
+  '/dashboard/suppliers': 'suppliers',
 };
 
 // Returns the nav groups with hidden items removed. Two filters apply:
