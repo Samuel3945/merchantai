@@ -13,6 +13,8 @@ import {
   getTableColumns,
   ilike,
   inArray,
+  isNotNull,
+  isNull,
   or,
   sql,
 } from 'drizzle-orm';
@@ -391,7 +393,73 @@ export type ListSalesFilters = {
   payment?: string | null;
   search?: string | null;
   cashierId?: string | null;
+  /** Filter by the POS register (pos_tokens.id) the sale was made on. */
+  posTokenId?: string | null;
+  /** Filter sales containing a specific product. */
+  productId?: string | null;
+  /** Where the sale was made: a POS device or the web panel. */
+  origin?: 'all' | 'pos' | 'panel' | null;
+  /** Return state, by quantity (same rule as the listing badges). */
+  returnState?: 'all' | 'clean' | 'partial' | 'returned' | null;
 };
+
+// Quantity-based return predicates shared by the WHERE filters and the listing
+// columns. Literal table refs on purpose — see the note inside listSales.
+const HAS_RETURN_SQL = `EXISTS (SELECT 1 FROM pos_returns pr WHERE pr.sale_id = sales.id)`;
+const FULLY_RETURNED_SQL = `(
+  ${HAS_RETURN_SQL}
+  AND COALESCE((
+    SELECT SUM(pri.qty)
+    FROM pos_return_items pri
+    JOIN sale_items si ON si.id = pri.sale_item_id
+    WHERE si.sale_id = sales.id
+  ), 0) >= COALESCE((
+    SELECT SUM(si2.qty) FROM sale_items si2 WHERE si2.sale_id = sales.id
+  ), 0)
+)`;
+
+// Lightweight, org-scoped option lists for the sales filter bar: every POS
+// register, every active employee, and the product catalog. One round trip.
+export type SalesFilterOptions = {
+  registers: { id: string; name: string }[];
+  employees: { id: string; name: string }[];
+  products: { id: string; name: string }[];
+};
+
+export async function getSalesFilterOptions(): Promise<SalesFilterOptions> {
+  const { userId, orgId } = await auth();
+  if (!userId) {
+    throw new Error('Not authenticated');
+  }
+  if (!orgId) {
+    throw new Error('No active organization');
+  }
+
+  const [registers, employees, products] = await Promise.all([
+    db
+      .select({ id: posTokensSchema.id, name: posTokensSchema.deviceName })
+      .from(posTokensSchema)
+      .where(eq(posTokensSchema.organizationId, orgId))
+      .orderBy(posTokensSchema.deviceName),
+    db
+      .select({ id: posUsersSchema.id, name: posUsersSchema.name })
+      .from(posUsersSchema)
+      .where(
+        and(
+          eq(posUsersSchema.organizationId, orgId),
+          eq(posUsersSchema.active, true),
+        ),
+      )
+      .orderBy(posUsersSchema.name),
+    db
+      .select({ id: productsSchema.id, name: productsSchema.name })
+      .from(productsSchema)
+      .where(eq(productsSchema.organizationId, orgId))
+      .orderBy(productsSchema.name),
+  ]);
+
+  return { registers, employees, products };
+}
 
 export type ListSalesResult = {
   items: SaleListRow[];
@@ -460,6 +528,40 @@ export async function listSales(
 
   if (filters.cashierId && filters.cashierId.trim() !== '') {
     conds.push(eq(salesSchema.cashierId, filters.cashierId.trim()));
+  }
+
+  if (filters.posTokenId && filters.posTokenId.trim() !== '') {
+    conds.push(eq(salesSchema.posTokenId, filters.posTokenId.trim()));
+  }
+
+  if (filters.productId && filters.productId.trim() !== '') {
+    conds.push(
+      exists(
+        db
+          .select({ one: sql`1` })
+          .from(saleItemsSchema)
+          .where(
+            and(
+              eq(saleItemsSchema.saleId, salesSchema.id),
+              eq(saleItemsSchema.productId, filters.productId.trim()),
+            ),
+          ),
+      ),
+    );
+  }
+
+  if (filters.origin === 'pos') {
+    conds.push(isNotNull(salesSchema.posTokenId));
+  } else if (filters.origin === 'panel') {
+    conds.push(isNull(salesSchema.posTokenId));
+  }
+
+  if (filters.returnState === 'clean') {
+    conds.push(sql.raw(`NOT ${HAS_RETURN_SQL}`));
+  } else if (filters.returnState === 'partial') {
+    conds.push(sql.raw(`(${HAS_RETURN_SQL} AND NOT ${FULLY_RETURNED_SQL})`));
+  } else if (filters.returnState === 'returned') {
+    conds.push(sql.raw(FULLY_RETURNED_SQL));
   }
 
   const search = filters.search?.trim();
