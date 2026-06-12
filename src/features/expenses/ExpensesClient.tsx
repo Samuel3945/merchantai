@@ -1,14 +1,26 @@
 'use client';
 
 import type { ExpenseRow } from '@/actions/expenses';
-import { useState, useTransition } from 'react';
+import { useMemo, useState, useTransition } from 'react';
 import {
   createExpense,
   deleteExpense,
   listExpenses,
 } from '@/actions/expenses';
-import { EXPENSE_CATEGORIES } from '@/features/expenses/categories';
+import { DateRangePicker } from '@/components/DateRangePicker';
+import { Button } from '@/components/ui/button';
+import { Select } from '@/components/ui/select';
+import {
+  EXPENSE_CATEGORIES,
+  EXPENSE_CATEGORY_LABELS,
+} from '@/features/expenses/categories';
+import { buildPresetOptions, todayBogota } from '@/utils/DateRange';
+
 // ── Formatting helpers ──────────────────────────────────────────────────────
+
+const inputCls
+  = 'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50';
+const labelCls = 'text-xs font-medium text-muted-foreground';
 
 const moneyFmt = new Intl.NumberFormat('es-CO', {
   style: 'currency',
@@ -35,23 +47,8 @@ function formatDate(iso: string) {
   return dateFmt.format(new Date(Date.UTC(y, m - 1, d)));
 }
 
-function todayIso() {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Bogota' }).format(new Date());
-}
-
-// ── Category label map ──────────────────────────────────────────────────────
-
-const CATEGORY_LABELS: Record<string, string> = {
-  servicios: 'Servicios',
-  arriendo: 'Arriendo',
-  transporte: 'Transporte',
-  marketing: 'Marketing',
-  impuestos: 'Impuestos',
-  otros: 'Otros',
-};
-
 function categoryLabel(cat: string) {
-  return CATEGORY_LABELS[cat] ?? cat;
+  return EXPENSE_CATEGORY_LABELS[cat] ?? cat;
 }
 
 // ── Add expense form ────────────────────────────────────────────────────────
@@ -60,9 +57,11 @@ function AddExpenseForm({ onSuccess }: { onSuccess: () => void }) {
   const [amount, setAmount] = useState('');
   const [category, setCategory] = useState<string>(EXPENSE_CATEGORIES[0]);
   const [description, setDescription] = useState('');
-  const [date, setDate] = useState(todayIso());
+  const [date, setDate] = useState(todayBogota());
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+
+  const isOtros = category === 'otros';
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -70,7 +69,11 @@ function AddExpenseForm({ onSuccess }: { onSuccess: () => void }) {
 
     const parsed = Number.parseFloat(amount.replace(/\s/g, '').replace(',', '.'));
     if (!Number.isFinite(parsed) || parsed <= 0) {
-      setError('Ingresá un monto mayor a cero');
+      setError('Ingresa un monto mayor a cero');
+      return;
+    }
+    if (isOtros && !description.trim()) {
+      setError('Para la categoría "Otros" debes escribir el motivo del gasto');
       return;
     }
 
@@ -87,7 +90,7 @@ function AddExpenseForm({ onSuccess }: { onSuccess: () => void }) {
       }
       setAmount('');
       setDescription('');
-      setDate(todayIso());
+      setDate(todayBogota());
       onSuccess();
     });
   }
@@ -105,9 +108,8 @@ function AddExpenseForm({ onSuccess }: { onSuccess: () => void }) {
         lg:grid-cols-4
       "
       >
-        {/* Amount */}
         <div className="flex flex-col gap-1">
-          <label className="text-xs font-medium text-muted-foreground" htmlFor="expense-amount">
+          <label className={labelCls} htmlFor="expense-amount">
             Monto
           </label>
           <input
@@ -118,38 +120,24 @@ function AddExpenseForm({ onSuccess }: { onSuccess: () => void }) {
             value={amount}
             onChange={e => setAmount(e.target.value)}
             required
-            className="
-              rounded-md border bg-background px-3 py-1.5 text-sm
-              focus:ring-2 focus:ring-ring focus:outline-none
-            "
+            className={inputCls}
           />
         </div>
 
-        {/* Category */}
         <div className="flex flex-col gap-1">
-          <label className="text-xs font-medium text-muted-foreground" htmlFor="expense-category">
-            Categoría
-          </label>
-          <select
-            id="expense-category"
+          <span className={labelCls}>Categoría</span>
+          <Select
             value={category}
-            onChange={e => setCategory(e.target.value)}
-            className="
-              rounded-md border bg-background px-3 py-1.5 text-sm
-              focus:ring-2 focus:ring-ring focus:outline-none
-            "
-          >
-            {EXPENSE_CATEGORIES.map(cat => (
-              <option key={cat} value={cat}>
-                {categoryLabel(cat)}
-              </option>
-            ))}
-          </select>
+            onValueChange={setCategory}
+            options={EXPENSE_CATEGORIES.map(cat => ({
+              value: cat,
+              label: categoryLabel(cat),
+            }))}
+          />
         </div>
 
-        {/* Date */}
         <div className="flex flex-col gap-1">
-          <label className="text-xs font-medium text-muted-foreground" htmlFor="expense-date">
+          <label className={labelCls} htmlFor="expense-date">
             Fecha
           </label>
           <input
@@ -158,49 +146,40 @@ function AddExpenseForm({ onSuccess }: { onSuccess: () => void }) {
             value={date}
             onChange={e => setDate(e.target.value)}
             required
-            className="
-              rounded-md border bg-background px-3 py-1.5 text-sm
-              focus:ring-2 focus:ring-ring focus:outline-none
-            "
+            className={inputCls}
           />
         </div>
 
-        {/* Description */}
         <div className="flex flex-col gap-1">
-          <label className="text-xs font-medium text-muted-foreground" htmlFor="expense-description">
-            Descripción (opcional)
+          <label className={labelCls} htmlFor="expense-description">
+            {isOtros ? 'Motivo (obligatorio)' : 'Descripción (opcional)'}
           </label>
           <input
             id="expense-description"
             type="text"
-            placeholder="Detalle del gasto"
+            placeholder={isOtros ? '¿En qué se gastó?' : 'Detalle del gasto'}
             value={description}
             onChange={e => setDescription(e.target.value)}
-            className="
-              rounded-md border bg-background px-3 py-1.5 text-sm
-              focus:ring-2 focus:ring-ring focus:outline-none
-            "
+            required={isOtros}
+            className={inputCls}
           />
         </div>
       </div>
 
       {error && (
-        <p className="mt-2 text-xs text-red-600">{error}</p>
+        <p className="
+          mt-3 rounded-md border border-destructive/40 bg-destructive/10 px-3
+          py-2 text-sm text-destructive
+        "
+        >
+          {error}
+        </p>
       )}
 
       <div className="mt-4 flex justify-end">
-        <button
-          type="submit"
-          disabled={pending}
-          className="
-            rounded-md bg-primary px-4 py-1.5 text-sm font-medium
-            text-primary-foreground
-            hover:bg-primary/90
-            disabled:opacity-50
-          "
-        >
+        <Button type="submit" disabled={pending}>
           {pending ? 'Guardando…' : 'Guardar gasto'}
-        </button>
+        </Button>
       </div>
     </form>
   );
@@ -257,7 +236,7 @@ function ExpensesTable({
   return (
     <div className="space-y-2">
       {deleteError && (
-        <p className="text-xs text-red-600">{deleteError}</p>
+        <p className="text-xs text-destructive">{deleteError}</p>
       )}
       <div className="overflow-hidden rounded-lg border bg-background shadow-xs">
         <div className="overflow-x-auto">
@@ -369,72 +348,6 @@ function ExpensesTable({
   );
 }
 
-// ── Period picker ───────────────────────────────────────────────────────────
-
-function PeriodPicker({
-  start,
-  end,
-  onApply,
-}: {
-  start: string;
-  end: string;
-  onApply: (start: string, end: string) => void;
-}) {
-  const [s, setS] = useState(start);
-  const [e, setE] = useState(end);
-
-  function handleApply(ev: React.FormEvent) {
-    ev.preventDefault();
-    onApply(s, e);
-  }
-
-  return (
-    <form onSubmit={handleApply} className="flex flex-wrap items-end gap-2">
-      <div className="flex flex-col gap-1">
-        <label className="text-xs font-medium text-muted-foreground" htmlFor="period-start">
-          Desde
-        </label>
-        <input
-          id="period-start"
-          type="date"
-          value={s}
-          max={e}
-          onChange={ev => setS(ev.target.value)}
-          className="
-            rounded-md border bg-background px-3 py-1.5 text-sm
-            focus:ring-2 focus:ring-ring focus:outline-none
-          "
-        />
-      </div>
-      <div className="flex flex-col gap-1">
-        <label className="text-xs font-medium text-muted-foreground" htmlFor="period-end">
-          Hasta
-        </label>
-        <input
-          id="period-end"
-          type="date"
-          value={e}
-          min={s}
-          onChange={ev => setE(ev.target.value)}
-          className="
-            rounded-md border bg-background px-3 py-1.5 text-sm
-            focus:ring-2 focus:ring-ring focus:outline-none
-          "
-        />
-      </div>
-      <button
-        type="submit"
-        className="
-          rounded-md border px-3 py-1.5 text-sm font-medium
-          hover:bg-muted/50
-        "
-      >
-        Filtrar
-      </button>
-    </form>
-  );
-}
-
 // ── Root component ──────────────────────────────────────────────────────────
 
 export function ExpensesClient({
@@ -449,19 +362,20 @@ export function ExpensesClient({
   const [expenses, setExpenses] = useState<ExpenseRow[]>(initialExpenses);
   const [start, setStart] = useState(defaultStart);
   const [end, setEnd] = useState(defaultEnd);
+  const [activePreset, setActivePreset] = useState<string | null>(null);
+  const [categoryFilter, setCategoryFilter] = useState('');
   const [loading, startTransition] = useTransition();
+
+  const presetOptions = useMemo(
+    () => buildPresetOptions(['today', 'yesterday', '7d', '30d', 'mtd', 'lastMonth']),
+    [],
+  );
 
   function reload(s: string, e: string) {
     startTransition(async () => {
       const rows = await listExpenses({ start: s, end: e });
       setExpenses(rows);
     });
-  }
-
-  function handlePeriodChange(s: string, e: string) {
-    setStart(s);
-    setEnd(e);
-    reload(s, e);
   }
 
   function handleAddSuccess() {
@@ -472,19 +386,65 @@ export function ExpensesClient({
     setExpenses(prev => prev.filter(r => r.id !== id));
   }
 
+  // Category filter applies in memory: the period query already returns the
+  // full window and expense volumes are small.
+  const visibleExpenses = categoryFilter
+    ? expenses.filter(e => e.category === categoryFilter)
+    : expenses;
+
   return (
     <div className="space-y-6">
       <AddExpenseForm onSuccess={handleAddSuccess} />
 
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <PeriodPicker start={start} end={end} onApply={handlePeriodChange} />
+      {/* Filter bar — same pattern as Ventas and the report details */}
+      <div className="space-y-3 rounded-md border bg-muted/30 p-4">
+        <div className="
+          grid grid-cols-1 gap-3
+          sm:grid-cols-2
+          lg:grid-cols-4
+        "
+        >
+          <div className="flex flex-col gap-1">
+            <span className={labelCls}>Periodo</span>
+            <DateRangePicker
+              start={start}
+              end={end}
+              compare={false}
+              showCompare={false}
+              activePreset={activePreset}
+              presets={presetOptions}
+              maxDate={todayBogota()}
+              onApply={(next) => {
+                setStart(next.start);
+                setEnd(next.end);
+                setActivePreset(next.preset);
+                reload(next.start, next.end);
+              }}
+              triggerClassName="w-full"
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className={labelCls}>Categoría</span>
+            <Select
+              value={categoryFilter}
+              onValueChange={setCategoryFilter}
+              options={[
+                { value: '', label: 'Todas las categorías' },
+                ...EXPENSE_CATEGORIES.map(cat => ({
+                  value: cat,
+                  label: categoryLabel(cat),
+                })),
+              ]}
+            />
+          </div>
+        </div>
         {loading && (
-          <p className="self-end text-xs text-muted-foreground">Actualizando…</p>
+          <p className="text-xs text-muted-foreground">Actualizando…</p>
         )}
       </div>
 
       <ExpensesTable
-        expenses={expenses}
+        expenses={visibleExpenses}
         onDelete={handleDelete}
       />
     </div>

@@ -49,6 +49,14 @@ export async function createExpense(
   if (!input.category?.trim()) {
     return { ok: false, error: 'La categoría es obligatoria' };
   }
+  // "Otros" is a catch-all: without a written reason the expense is
+  // unauditable, so the description becomes mandatory for that category.
+  if (input.category.trim() === 'otros' && !input.description?.trim()) {
+    return {
+      ok: false,
+      error: 'Para la categoría "Otros" debes escribir el motivo del gasto',
+    };
+  }
   if (!isValidDate(input.incurredOn)) {
     return { ok: false, error: 'La fecha no es válida (use YYYY-MM-DD)' };
   }
