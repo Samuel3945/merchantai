@@ -2,24 +2,10 @@
 
 import type { ReactNode } from 'react';
 import Link from 'next/link';
-import { useState, useTransition } from 'react';
+import { useMemo, useState, useTransition } from 'react';
+import { DateRangePicker } from '@/components/DateRangePicker';
 import { Button } from '@/components/ui/button';
-
-const inputCls
-  = 'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50';
-
-function todayBogota(): string {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/Bogota',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(new Date());
-  const y = parts.find(p => p.type === 'year')?.value ?? '1970';
-  const m = parts.find(p => p.type === 'month')?.value ?? '01';
-  const d = parts.find(p => p.type === 'day')?.value ?? '01';
-  return `${y}-${m}-${d}`;
-}
+import { buildPresetOptions, todayBogota } from '@/utils/DateRange';
 
 function addDays(iso: string, days: number): string {
   const [y, m, d] = iso.split('-').map(Number);
@@ -33,6 +19,11 @@ export type ReportShellProps = {
   showDateRange?: boolean;
   onExportCSV?: () => void;
   onExportPDF?: () => void;
+  /**
+   * Report-specific filters rendered inside the same filter bar, next to the
+   * period picker — pass labeled fields (see the sales page filter bar).
+   */
+  extraFilters?: ReactNode;
   children: (ctx: {
     start: string;
     end: string;
@@ -47,12 +38,19 @@ export function ReportShell({
   showDateRange = true,
   onExportCSV,
   onExportPDF,
+  extraFilters,
   children,
 }: ReportShellProps) {
   const today = todayBogota();
   const [start, setStart] = useState(addDays(today, -29));
   const [end, setEnd] = useState(today);
+  const [activePreset, setActivePreset] = useState<string | null>('30d');
   const [pending, startTransition] = useTransition();
+
+  const presetOptions = useMemo(
+    () => buildPresetOptions(['today', 'yesterday', '7d', '30d', '90d', 'mtd', 'lastMonth']),
+    [],
+  );
 
   function reload(s: string, e: string) {
     startTransition(() => {
@@ -91,53 +89,36 @@ export function ReportShell({
       </div>
 
       {showDateRange && (
-        <div className="flex flex-wrap items-end gap-3">
-          <div>
-            <label className="text-xs font-medium text-muted-foreground">Desde</label>
-            <input
-              type="date"
-              value={start}
-              max={end}
-              onChange={e => reload(e.target.value, end)}
-              className={inputCls}
-            />
-          </div>
-          <div>
-            <label className="text-xs font-medium text-muted-foreground">Hasta</label>
-            <input
-              type="date"
-              value={end}
-              min={start}
-              max={today}
-              onChange={e => reload(start, e.target.value)}
-              className={inputCls}
-            />
-          </div>
-          <div className="flex gap-2">
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => reload(addDays(today, -6), today)}
-            >
-              7d
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => reload(addDays(today, -29), today)}
-            >
-              30d
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => reload(addDays(today, -89), today)}
-            >
-              90d
-            </Button>
+        <div className="space-y-3 rounded-md border bg-muted/30 p-4">
+          <div className="
+            grid grid-cols-1 gap-3
+            sm:grid-cols-2
+            lg:grid-cols-4
+          "
+          >
+            <div className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-muted-foreground">
+                Periodo
+              </span>
+              <DateRangePicker
+                start={start}
+                end={end}
+                compare={false}
+                showCompare={false}
+                activePreset={activePreset}
+                presets={presetOptions}
+                maxDate={today}
+                onApply={(next) => {
+                  setActivePreset(next.preset);
+                  reload(next.start, next.end);
+                }}
+                triggerClassName="w-full"
+              />
+            </div>
+            {extraFilters}
           </div>
           {pending && (
-            <span className="text-xs text-muted-foreground">Cargando...</span>
+            <span className="text-xs text-muted-foreground">Cargando…</span>
           )}
         </div>
       )}
