@@ -18,7 +18,6 @@ import { Button } from '@/components/ui/button';
 import { useConfirm } from '@/components/ui/confirm';
 import {
   ACTION_PERMISSIONS,
-  CAJERO_TEMPLATE_MODULES,
   MODULE_PERMISSIONS,
 } from '@/libs/permissions';
 import { CASHIERS_LIMIT_REACHED } from '@/libs/plan-limits';
@@ -84,6 +83,30 @@ function permsToMap(
     map[k] = Boolean(v);
   }
   return map;
+}
+
+/**
+ * Toggles one module. Granting "Caja registradora (POS)" pre-ticks every other
+ * module as a convenience (a cashier operates the whole counter); the owner can
+ * untick any of them afterwards. Other modules toggle independently — POS access
+ * is never implied.
+ */
+function toggleModuleCascade(
+  prev: Record<string, boolean>,
+  key: string,
+): Record<string, boolean> {
+  const next = { ...prev, [key]: !prev[key] };
+  if (key === 'pos' && next.pos) {
+    for (const m of MODULE_PERMISSIONS) {
+      next[m.key] = true;
+    }
+  }
+  return next;
+}
+
+/** Same cascade for sensitive actions when POS is being granted. */
+function allActionsGranted(): Record<string, boolean> {
+  return Object.fromEntries(ACTION_PERMISSIONS.map(p => [p.key, true]));
 }
 
 // Shared grant checkboxes used by both the invite and edit dialogs. There are no
@@ -692,22 +715,16 @@ function InviteModal({
 }) {
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
-  const [modules, setModules] = useState<Record<string, boolean>>({ pos: true });
+  const [modules, setModules] = useState<Record<string, boolean>>({});
   const [actions, setActions] = useState<Record<string, boolean>>({});
   const [canConfirmTransfers, setCanConfirmTransfers] = useState(true);
-  const [panelAccess, setPanelAccess] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  // The "Cajero" template just preloads the POS-operational modules; from there
-  // the owner adds or removes individual modules. It is NOT a stored role.
-  const applyCajeroTemplate = () => {
-    setModules((prev) => {
-      const next = { ...prev };
-      for (const key of CAJERO_TEMPLATE_MODULES) {
-        next[key] = true;
-      }
-      return next;
-    });
+  const handleToggleModule = (key: string) => {
+    if (key === 'pos' && !modules.pos) {
+      setActions(allActionsGranted());
+    }
+    setModules(prev => toggleModuleCascade(prev, key));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -726,7 +743,6 @@ function InviteModal({
         permissions,
         enabledModules,
         canConfirmTransfers,
-        panelAccess,
       });
       if (!result.ok) {
         onFailure(result);
@@ -770,45 +786,23 @@ function InviteModal({
           />
         </div>
 
-        <div className="flex items-center justify-between">
-          <span className={labelCls}>Plantilla rápida</span>
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            onClick={applyCajeroTemplate}
-          >
-            Precargar Cajero (POS)
-          </Button>
-        </div>
-
         <GrantFields
           modules={modules}
           actions={actions}
           canConfirmTransfers={canConfirmTransfers}
-          onToggleModule={k => setModules(p => ({ ...p, [k]: !p[k] }))}
+          onToggleModule={handleToggleModule}
           onToggleAction={k => setActions(p => ({ ...p, [k]: !p[k] }))}
           onToggleTransfers={() => setCanConfirmTransfers(v => !v)}
         />
 
-        <label className="
-          flex items-start gap-2 rounded-md border border-input p-3 text-sm
+        <p className="
+          rounded-md border border-input bg-muted/30 p-3 text-xs
+          text-muted-foreground
         "
         >
-          <input
-            type="checkbox"
-            className="mt-0.5"
-            checked={panelAccess}
-            onChange={() => setPanelAccess(v => !v)}
-          />
-          <span>
-            Puede entrar al panel web
-            <span className="block text-xs text-muted-foreground">
-              Crea su acceso web con la misma contraseña. Solo verá los módulos
-              que le habilites arriba.
-            </span>
-          </span>
-        </label>
+          Todo usuario puede entrar al panel web con la misma contraseña; allí
+          solo verá los módulos que le habilites arriba.
+        </p>
 
         <div className="flex justify-end gap-2 pt-2">
           <Button
@@ -1004,7 +998,12 @@ function EditModal({
           modules={modules}
           actions={actions}
           canConfirmTransfers={canConfirmTransfers}
-          onToggleModule={k => setModules(p => ({ ...p, [k]: !p[k] }))}
+          onToggleModule={(k) => {
+            if (k === 'pos' && !modules.pos) {
+              setActions(allActionsGranted());
+            }
+            setModules(p => toggleModuleCascade(p, k));
+          }}
           onToggleAction={k => setActions(p => ({ ...p, [k]: !p[k] }))}
           onToggleTransfers={() => setCanConfirmTransfers(v => !v)}
         />

@@ -5,8 +5,10 @@
  * USERS, and the owner grants each one whatever permissions they want. A
  * permission either unlocks a VIEW/MODULE or allows a sensitive ACTION. The same
  * grants govern every surface (POS and web panel), so this catalog is the one
- * place the whole app reads from. The only convenience is the optional CAJERO
- * template, which simply preloads the POS-operational modules at creation time.
+ * place the whole app reads from. Granting "Caja registradora (POS)" pre-ticks
+ * every other grant as a convenience (the owner can untick); any other module
+ * can be granted alone without POS access. Every user gets web panel access —
+ * what they SEE there is still limited to their granted modules.
  *
  * Source of truth = the database: `panel_access` + `enabled_modules` +
  * `permissions`. Clerk membership metadata is only a cached copy for fast
@@ -37,7 +39,7 @@ type PermissionItem = {
  * the same English-key convention.
  */
 export const MODULE_PERMISSIONS: PermissionItem[] = [
-  { key: 'pos', label: 'Caja registradora (POS)', hint: 'Operar la app de caja' },
+  { key: 'pos', label: 'Caja registradora (POS)', hint: 'Operar la app de caja. Al activarlo se marcan todos los demás permisos (puedes desmarcar).' },
   { key: 'cash', label: 'Caja', hint: 'Arqueo y movimientos de caja', dashboardPath: '/dashboard/cash' },
   { key: 'sales', label: 'Ventas', hint: 'Historial de ventas', dashboardPath: '/dashboard/sales' },
   { key: 'fiados', label: 'Fiados', hint: 'Cuentas por cobrar', dashboardPath: '/dashboard/fiados' },
@@ -58,13 +60,6 @@ export const ACTION_PERMISSIONS: PermissionItem[] = [
   { key: 'inventory.edit', label: 'Editar inventario' },
   { key: 'reports.view', label: 'Ver reportes' },
 ];
-
-/**
- * Optional "Cajero" template: preloads the POS-operational modules at creation.
- * It is NOT a stored role — just a convenience that ticks these boxes; the owner
- * adds or removes modules individually from there.
- */
-export const CAJERO_TEMPLATE_MODULES = ['pos', 'cash', 'sales', 'fiados'];
 
 const MODULE_KEYS = MODULE_PERMISSIONS.map(p => p.key);
 const ACTION_KEYS = ACTION_PERMISSIONS.map(p => p.key);
