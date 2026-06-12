@@ -603,6 +603,14 @@ export const posTokensSchema = pgTable(
     cashierId: uuid('cashier_id').references(() => posUsersSchema.id, {
       onDelete: 'set null',
     }),
+    // Who is currently operating this caja. Stamped on profile change
+    // (/api/pos/cashiers/verify-pin) for BOTH PIN and no-PIN employees, so the
+    // admin sees the live operator. Distinct from cashierId (auth default).
+    currentCashierId: uuid('current_cashier_id').references(
+      () => posUsersSchema.id,
+      { onDelete: 'set null' },
+    ),
+    currentCashierAt: timestamp('current_cashier_at', { mode: 'date' }),
     // active=false => caja bloqueada (no puede loguear ni sincronizar, pero la
     // fila persiste y libera cupo del plan). El borrado real elimina la fila.
     active: boolean('active').default(true).notNull(),

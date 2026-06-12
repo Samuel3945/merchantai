@@ -121,8 +121,6 @@ async function requireAdminContext() {
 
 export type CreatePosTokenInput = {
   deviceName: string;
-  cashierId?: string;
-  expiresAt?: Date | string | null;
   pin?: string;
   /** Branch address for this caja (org_addresses.id). */
   addressId?: string | null;
@@ -178,16 +176,6 @@ export async function createPosToken(
     return posLimitReached({ plan, limit, used, base, addons });
   }
 
-  const cashierId = input.cashierId?.trim() || null;
-  const expiresAt
-    = input.expiresAt == null || input.expiresAt === ''
-      ? null
-      : new Date(input.expiresAt);
-
-  if (expiresAt && Number.isNaN(expiresAt.getTime())) {
-    return { ok: false, error: 'La fecha de expiración no es válida' };
-  }
-
   // El PIN de la caja es obligatorio al crear (toda caja nace protegida).
   const rawPin = input.pin?.trim() ?? '';
   if (!rawPin) {
@@ -203,33 +191,17 @@ export async function createPosToken(
     throw error;
   }
 
-  if (cashierId) {
-    const [cashier] = await db
-      .select({ id: posUsersSchema.id })
-      .from(posUsersSchema)
-      .where(
-        and(
-          eq(posUsersSchema.id, cashierId),
-          eq(posUsersSchema.organizationId, orgId),
-        ),
-      )
-      .limit(1);
-    if (!cashier) {
-      return { ok: false, error: 'El cajero no existe en esta organización' };
-    }
-  }
-
   const addressId = await resolveOrgAddressId(orgId, input.addressId);
 
+  // A caja is born with no operator and no assignment: the operator is stamped
+  // live when an employee changes profile on the device.
   const [row] = await db
     .insert(posTokensSchema)
     .values({
       organizationId: orgId,
       deviceName,
       createdBy: userId,
-      cashierId,
       addressId,
-      expiresAt,
       pin: pinHash,
     })
     .returning();
@@ -246,8 +218,7 @@ export async function createPosToken(
     entityId: row.id,
     after: {
       deviceName: row.deviceName,
-      cashierId: row.cashierId,
-      expiresAt: row.expiresAt,
+      addressId: row.addressId,
     },
   });
 
@@ -298,20 +269,23 @@ export async function listPosTokens() {
       storeId: posTokensSchema.storeId,
       deviceName: posTokensSchema.deviceName,
       createdBy: posTokensSchema.createdBy,
-      cashierId: posTokensSchema.cashierId,
-      cashierName: posUsersSchema.name,
+      // Live operator (stamped on profile change), not a static assignment.
+      currentCashierId: posTokensSchema.currentCashierId,
+      currentCashierName: posUsersSchema.name,
+      currentCashierAt: posTokensSchema.currentCashierAt,
       addressId: posTokensSchema.addressId,
       addressName: orgAddressesSchema.name,
       address: orgAddressesSchema.address,
       addressCity: orgAddressesSchema.city,
       active: posTokensSchema.active,
       hasPin: sql<boolean>`(${posTokensSchema.pin} <> '')`,
-      lastSyncAt: posTokensSchema.lastSyncAt,
-      expiresAt: posTokensSchema.expiresAt,
       createdAt: posTokensSchema.createdAt,
     })
     .from(posTokensSchema)
-    .leftJoin(posUsersSchema, eq(posUsersSchema.id, posTokensSchema.cashierId))
+    .leftJoin(
+      posUsersSchema,
+      eq(posUsersSchema.id, posTokensSchema.currentCashierId),
+    )
     .leftJoin(
       orgAddressesSchema,
       eq(orgAddressesSchema.id, posTokensSchema.addressId),
@@ -674,9 +648,7 @@ export async function validatePosToken(token: string) {
   if (!row) {
     throw new Error('Token inválido o revocado');
   }
-  if (row.expiresAt && row.expiresAt.getTime() < Date.now()) {
-    throw new Error('Token expirado');
-  }
+  // Cajas never expire — a register is blocked explicitly, never by a date.
   return row;
 }
 
