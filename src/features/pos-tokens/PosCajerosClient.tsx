@@ -90,6 +90,13 @@ function qrUrl(text: string, size = 220) {
   return `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(text)}`;
 }
 
+// The QR encodes a deep link into the POS app, not the raw token. Scanned from
+// the POS's built-in scanner it prefills the access code (only the PIN is left);
+// scanned with a regular phone camera it opens the POS web app directly.
+function accessLink(token: string) {
+  return `${TIENDA_CAJERO_URL}/?code=${encodeURIComponent(token)}`;
+}
+
 type LimitErrorPayload = {
   code: 'pos_devices_limit_reached';
   plan: string;
@@ -829,13 +836,16 @@ function QrModal({
         "
         >
           <li>
-            Abre
+            Escanea el QR con la cámara del dispositivo de la caja: abre
             {' '}
             <span className="font-medium text-foreground">{TIENDA_CAJERO_URL.replace('https://', '')}</span>
             {' '}
-            en el dispositivo de la caja.
+            con el código ya cargado.
           </li>
-          <li>Escanea el código QR o pega el código de acceso.</li>
+          <li>
+            También puedes abrir el POS y usar su botón «Escanear QR», o pegar
+            el código de acceso a mano.
+          </li>
           {token.hasPin && <li>Ingresa el PIN de la caja cuando lo pida.</li>}
           <li>La caja queda vinculada y empieza a sincronizar.</li>
         </ol>
@@ -843,7 +853,7 @@ function QrModal({
         <div className="flex flex-col items-center gap-4">
           {/* eslint-disable-next-line next/no-img-element */}
           <img
-            src={qrUrl(token.token)}
+            src={qrUrl(accessLink(token.token))}
             alt={`Código de acceso de ${token.deviceName}`}
             width={220}
             height={220}
