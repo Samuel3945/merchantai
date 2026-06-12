@@ -31,6 +31,7 @@ import {
   cashMovementsSchema,
   cashSecurityThresholdCacheSchema,
   cashSessionsSchema,
+  posTokensSchema,
   suppliersSchema,
 } from '@/models/Schema';
 import { notifyCashDifference } from './notifications';
@@ -75,10 +76,10 @@ export async function openCashSession(
   let session: CashSession;
   try {
     session = await db.transaction(async (tx) => {
-      const existing = await findOpenSession(tx, orgId);
+      const existing = await findOpenSession(tx, orgId, null);
       if (existing) {
         throw new ActionValidationError(
-          'Ya hay una caja abierta en esta organización',
+          'Ya tienes una caja abierta en el panel',
         );
       }
 
@@ -143,7 +144,7 @@ export async function closeCashSession(
   let session: CashSession;
   try {
     session = await db.transaction(async (tx) => {
-      const open = await findOpenSession(tx, orgId);
+      const open = await findOpenSession(tx, orgId, null);
       if (!open) {
         throw new ActionValidationError('No hay caja abierta para cerrar');
       }
@@ -283,7 +284,7 @@ export async function addCashMovement(
   let movement: CashMovement;
   try {
     movement = await db.transaction(async (tx) => {
-      const open = await findOpenSession(tx, orgId);
+      const open = await findOpenSession(tx, orgId, null);
       if (!open) {
         throw new ActionValidationError(
           'No hay caja abierta. Abre la caja primero.',
@@ -341,7 +342,7 @@ export type GetCurrentCashResult = {
 export async function getCurrentCash(): Promise<GetCurrentCashResult> {
   const { orgId } = await requireOrg();
 
-  const session = await findOpenSession(db, orgId);
+  const session = await findOpenSession(db, orgId, null);
   if (!session) {
     return {
       session: null,
@@ -369,6 +370,72 @@ export async function getCurrentCash(): Promise<GetCurrentCashResult> {
     breakdown,
     collections,
   };
+}
+
+export type OpenCaja = {
+  id: string;
+  posTokenId: string | null;
+  deviceName: string | null;
+  openedBy: string;
+  openedAt: string;
+  openingAmount: number;
+  expected: number;
+  movementCount: number;
+};
+
+/**
+ * Every currently-open till: one per POS device (caja) plus the dashboard/admin
+ * session. Read-only overview so the owner can watch each cashier's caja without
+ * touching it — the open/close/movement actions stay scoped to the admin session.
+ */
+export async function listOpenCajas(): Promise<OpenCaja[]> {
+  const { orgId } = await requireOrg();
+  const rows = await db
+    .select({
+      id: cashSessionsSchema.id,
+      posTokenId: cashSessionsSchema.posTokenId,
+      openedBy: cashSessionsSchema.openedBy,
+      openedAt: cashSessionsSchema.openedAt,
+      openingAmount: cashSessionsSchema.openingAmount,
+      deviceName: posTokensSchema.deviceName,
+    })
+    .from(cashSessionsSchema)
+    .leftJoin(
+      posTokensSchema,
+      eq(posTokensSchema.id, cashSessionsSchema.posTokenId),
+    )
+    .where(
+      and(
+        eq(cashSessionsSchema.organizationId, orgId),
+        eq(cashSessionsSchema.status, 'open'),
+      ),
+    )
+    .orderBy(desc(cashSessionsSchema.openedAt));
+
+  return Promise.all(
+    rows.map(async (r) => {
+      const [expected, countRows] = await Promise.all([
+        computeExpectedAmount(db, {
+          id: r.id,
+          openingAmount: r.openingAmount,
+        }),
+        db
+          .select({ c: sql<number>`count(*)::int` })
+          .from(cashMovementsSchema)
+          .where(eq(cashMovementsSchema.sessionId, r.id)),
+      ]);
+      return {
+        id: r.id,
+        posTokenId: r.posTokenId,
+        deviceName: r.deviceName,
+        openedBy: r.openedBy,
+        openedAt: r.openedAt.toISOString(),
+        openingAmount: Number(r.openingAmount),
+        expected,
+        movementCount: countRows[0]?.c ?? 0,
+      };
+    }),
+  );
 }
 
 export async function listCashSessions(limit = 30): Promise<CashSession[]> {
