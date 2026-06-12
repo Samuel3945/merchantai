@@ -2,11 +2,8 @@ import { auth } from '@clerk/nextjs/server';
 import { setRequestLocale } from 'next-intl/server';
 import { getAppSetting } from '@/actions/app-settings';
 import { listPaymentMethods } from '@/actions/payment-methods';
-import { listWhatsAppChannels } from '@/actions/whatsapp-channels';
 import { TitleBar } from '@/features/dashboard/TitleBar';
 import { SettingsClient } from '@/features/settings/SettingsClient';
-import { Env } from '@/libs/Env';
-import { evolutionConfigured } from '@/libs/evolution';
 
 const KEYS = [
   // Business
@@ -60,9 +57,6 @@ export default async function DashboardSettingsPage(props: {
 
   const isAdmin = !orgRole || orgRole === 'org:admin';
 
-  // WhatsApp channels are admin-only (the action enforces it too).
-  const whatsappChannels = isAdmin ? await listWhatsAppChannels() : [];
-
   const map = Object.fromEntries(
     settings.map((s, i) => [KEYS[i] as SettingKey, s.value]),
   ) as Record<SettingKey, string>;
@@ -109,9 +103,6 @@ export default async function DashboardSettingsPage(props: {
           returns_require_admin: asBool(map.returns_require_admin),
         }}
         isAdmin={isAdmin}
-        whatsappChannels={whatsappChannels}
-        evolutionConfigured={evolutionConfigured()}
-        whatsappWebhookConfigured={Boolean(Env.WHATSAPP_N8N_WEBHOOK_URL)}
       />
     </>
   );

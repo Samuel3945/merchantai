@@ -27,7 +27,10 @@ function qrSrc(qr: string): string {
   return qr.startsWith('data:') ? qr : `data:image/png;base64,${qr}`;
 }
 
-export function WhatsAppTab({
+// Real WhatsApp connection panel: lists persisted channels, connects a new
+// number via QR (Evolution instance), and removes channels. Shared between the
+// AI agent "Canales" section and anywhere else WhatsApp connection is offered.
+export function WhatsAppChannelsPanel({
   initialChannels,
   configured,
   webhookConfigured,
@@ -92,9 +95,9 @@ export function WhatsAppTab({
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-lg font-semibold">Canales de WhatsApp</h2>
+          <h2 className="text-lg font-semibold">Conexión de WhatsApp</h2>
           <p className="text-sm text-muted-foreground">
-            Conectá un número escaneando un QR. Cada canal levanta su propia
+            Conectá un número escaneando un QR. Cada número levanta su propia
             instancia y los mensajes entrantes se procesan automáticamente.
           </p>
         </div>
