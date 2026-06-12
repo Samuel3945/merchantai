@@ -89,6 +89,69 @@ describe('productCreateSchema', () => {
     expect(r.success).toBe(false);
     expect(r.error?.issues.some(i => i.path.includes('publishAt'))).toBe(true);
   });
+
+  it('accepts a digital product without a limit (unlimited)', () => {
+    const r = productCreateSchema.safeParse({ ...base, isDigital: true });
+
+    expect(r.success).toBe(true);
+    expect(r.data?.digitalLimit).toBeUndefined();
+  });
+
+  it('accepts a digital product with a sales limit', () => {
+    const r = productCreateSchema.safeParse({
+      ...base,
+      isDigital: true,
+      digitalLimit: 50,
+    });
+
+    expect(r.success).toBe(true);
+    expect(r.data?.digitalLimit).toBe(50);
+  });
+
+  it('keeps an explicit null digitalLimit as null (unlimited)', () => {
+    const r = productCreateSchema.safeParse({
+      ...base,
+      isDigital: true,
+      digitalLimit: null,
+    });
+
+    expect(r.success).toBe(true);
+    expect(r.data?.digitalLimit).toBeNull();
+  });
+
+  it('rejects a digital product sold by weight', () => {
+    const r = productCreateSchema.safeParse({
+      ...base,
+      isDigital: true,
+      unitType: 'kg',
+    });
+
+    expect(r.success).toBe(false);
+    expect(r.error?.issues.some(i => i.path.includes('unitType'))).toBe(true);
+  });
+
+  it('rejects a digital perishable product', () => {
+    const r = productCreateSchema.safeParse({
+      ...base,
+      isDigital: true,
+      isPerishable: true,
+    });
+
+    expect(r.success).toBe(false);
+    expect(r.error?.issues.some(i => i.path.includes('isPerishable'))).toBe(true);
+  });
+
+  it('rejects opening stock on a digital product', () => {
+    const r = productCreateSchema.safeParse({
+      ...base,
+      isDigital: true,
+      initialQty: 5,
+      initialCost: '500',
+    });
+
+    expect(r.success).toBe(false);
+    expect(r.error?.issues.some(i => i.path.includes('initialQty'))).toBe(true);
+  });
 });
 
 describe('productUpdateSchema', () => {

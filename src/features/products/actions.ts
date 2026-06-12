@@ -198,7 +198,9 @@ export async function createProduct(input: ProductCreateInput) {
     }
   }
 
-  const initialQty = data.initialQty ?? 0;
+  // Digital products never receive an opening batch — they have no physical
+  // inventory; availability lives in digitalLimit (NULL = unlimited).
+  const initialQty = data.isDigital ? 0 : (data.initialQty ?? 0);
 
   // The form captures the unit cost as the opening-batch cost (initialCost);
   // there is no separate base-cost input, so products.cost — the cost basis
@@ -234,6 +236,8 @@ export async function createProduct(input: ProductCreateInput) {
         unitType: data.unitType,
         isPerishable: data.isPerishable,
         isWholesale: data.isWholesale,
+        isDigital: data.isDigital,
+        digitalLimit: data.isDigital ? (data.digitalLimit ?? null) : null,
         wholesaleTiers: data.wholesaleTiers ?? null,
         attributes: data.attributes,
         status: data.status,
@@ -316,6 +320,7 @@ export async function updateProduct(id: string, input: ProductUpdateInput) {
         name: productsSchema.name,
         unitType: productsSchema.unitType,
         isPerishable: productsSchema.isPerishable,
+        isDigital: productsSchema.isDigital,
         categoryId: productsSchema.categoryId,
         hasSales: hasSalesSql,
         hasMovements: hasMovementsSql,
@@ -348,6 +353,19 @@ export async function updateProduct(id: string, input: ProductUpdateInput) {
     ) {
       throw new Error(
         'No se puede cambiar la unidad de medida: el producto ya tiene inventario o ventas. Cambiarla dañaría el cálculo de stock.',
+      );
+    }
+
+    // Guard: a physical product with inventory history can't become digital —
+    // its stock and FIFO lots would be orphaned (digital products never touch
+    // the ledger). Exhaust or adjust the stock first.
+    if (
+      data.isDigital === true
+      && !prev.isDigital
+      && (prev.stock > 0 || prev.hasMovements)
+    ) {
+      throw new Error(
+        'No se puede convertir a producto digital: el producto ya tiene inventario o movimientos. Agota o ajusta su stock primero.',
       );
     }
 
@@ -394,6 +412,14 @@ export async function updateProduct(id: string, input: ProductUpdateInput) {
           isPerishable: data.isPerishable,
         }),
         ...(data.isWholesale !== undefined && { isWholesale: data.isWholesale }),
+        // Turning digital OFF clears the limit — a physical product's
+        // availability is its stock, never a leftover digital cap.
+        ...(data.isDigital !== undefined && {
+          isDigital: data.isDigital,
+          ...(data.isDigital === false && { digitalLimit: null }),
+        }),
+        ...(data.digitalLimit !== undefined
+          && data.isDigital !== false && { digitalLimit: data.digitalLimit }),
         ...(data.wholesaleTiers !== undefined && {
           wholesaleTiers: data.wholesaleTiers,
         }),

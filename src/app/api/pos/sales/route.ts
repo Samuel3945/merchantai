@@ -100,6 +100,9 @@ export async function POST(req: Request): Promise<NextResponse> {
       }[] = [];
       // products.cost per line, aligned by index, for FIFO fallback valuation.
       const lineFallbackCost: string[] = [];
+      // Digital products skip the stock decrement; availability is governed by
+      // the optional digitalLimit counter (NULL = unlimited).
+      const digitalById = new Map<string, { digitalLimit: number | null }>();
 
       for (const item of items) {
         if (!item.productId) {
@@ -130,7 +133,14 @@ export async function POST(req: Request): Promise<NextResponse> {
         if (product.status !== 'published') {
           throw new Error(`"${product.name}" no está disponible para la venta`);
         }
-        if (product.stock < qty) {
+        if (product.isDigital) {
+          digitalById.set(product.id, { digitalLimit: product.digitalLimit });
+          if (product.digitalLimit !== null && product.digitalLimit < qty) {
+            throw new Error(
+              `Límite de ventas alcanzado: ${product.name} (disp: ${product.digitalLimit})`,
+            );
+          }
+        } else if (product.stock < qty) {
           throw new Error(
             `Stock insuficiente: ${product.name} (disp: ${product.stock})`,
           );
@@ -189,6 +199,23 @@ export async function POST(req: Request): Promise<NextResponse> {
         .returning();
 
       for (const it of itemsToInsert) {
+        const digital = digitalById.get(it.productId);
+        if (digital) {
+          if (digital.digitalLimit !== null) {
+            await tx
+              .update(productsSchema)
+              .set({
+                digitalLimit: sql`GREATEST(0, ${productsSchema.digitalLimit} - ${it.qty})`,
+              })
+              .where(
+                and(
+                  eq(productsSchema.id, it.productId),
+                  eq(productsSchema.organizationId, ctx.organizationId),
+                ),
+              );
+          }
+          continue;
+        }
         await tx
           .update(productsSchema)
           .set({

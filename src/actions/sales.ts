@@ -110,6 +110,9 @@ export async function createSale(input: CreateSaleInput) {
     // ledger doesn't fully cover the sold quantity (e.g. legacy stock with no
     // entry batches). Aligned by index with itemsToInsert.
     const lineFallbackCost: string[] = [];
+    // Digital products skip the stock decrement below; their availability is
+    // the optional digitalLimit counter instead of physical stock.
+    const digitalById = new Map<string, { digitalLimit: number | null }>();
 
     for (const item of input.items) {
       const [product] = await tx
@@ -137,7 +140,14 @@ export async function createSale(input: CreateSaleInput) {
         );
       }
 
-      if (product.stock < item.qty) {
+      if (product.isDigital) {
+        digitalById.set(product.id, { digitalLimit: product.digitalLimit });
+        if (product.digitalLimit !== null && product.digitalLimit < item.qty) {
+          throw new Error(
+            `Límite de ventas alcanzado para "${product.name}" (disponible: ${product.digitalLimit}, solicitado: ${item.qty})`,
+          );
+        }
+      } else if (product.stock < item.qty) {
         throw new Error(
           `Insufficient stock for "${product.name}" (available: ${product.stock}, requested: ${item.qty})`,
         );
@@ -209,8 +219,26 @@ export async function createSale(input: CreateSaleInput) {
     );
 
     // Stock on hand stays the authoritative quantity; the FIFO ledger above
-    // mirrors it batch by batch.
+    // mirrors it batch by batch. Digital products keep stock at 0 and consume
+    // their sales-limit counter instead (no-op when unlimited).
     for (const item of input.items) {
+      const digital = digitalById.get(item.productId);
+      if (digital) {
+        if (digital.digitalLimit !== null) {
+          await tx
+            .update(productsSchema)
+            .set({
+              digitalLimit: sql`GREATEST(0, ${productsSchema.digitalLimit} - ${item.qty})`,
+            })
+            .where(
+              and(
+                eq(productsSchema.id, item.productId),
+                eq(productsSchema.organizationId, orgId),
+              ),
+            );
+        }
+        continue;
+      }
       await tx
         .update(productsSchema)
         .set({

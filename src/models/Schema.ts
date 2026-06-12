@@ -114,6 +114,13 @@ export const productsSchema = pgTable(
     unitType: productUnitTypeEnum('unit_type').default('unit').notNull(),
     isPerishable: boolean('is_perishable').default(false).notNull(),
     isWholesale: boolean('is_wholesale').default(false).notNull(),
+    // Digital products (recharges, pins, licenses) sell without physical
+    // inventory and never touch the FIFO ledger: stock stays 0 and availability
+    // is governed by digitalLimit — NULL means unlimited, an integer is the
+    // remaining sellable count (decremented by sales, restored by restocking
+    // returns, editable by the admin).
+    isDigital: boolean('is_digital').default(false).notNull(),
+    digitalLimit: integer('digital_limit'),
     wholesaleTiers: jsonb('wholesale_tiers'),
     attributes: jsonb('attributes').default({}).notNull(),
     status: productStatusEnum('status').default('published').notNull(),

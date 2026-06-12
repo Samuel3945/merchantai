@@ -282,11 +282,15 @@ export async function GET(req: Request): Promise<NextResponse> {
     barcode: p.barcode,
     price: p.price,
     cost: p.cost,
-    stock: p.stock,
+    // Digital products report a virtual stock: the remaining sales limit, or an
+    // effectively-infinite count when unlimited — so the POS cart caps work
+    // unchanged. The sale endpoints stay authoritative.
+    stock: p.isDigital ? (p.digitalLimit ?? 999999) : p.stock,
     category: p.category,
     unit_type: p.unitType,
     attributes: p.attributes,
     is_wholesale: p.isWholesale,
+    is_digital: p.isDigital,
     wholesale_tiers: parseWholesaleTiers(p.wholesaleTiers).map(t => ({
       min_qty: t.minQty,
       price: t.price,

@@ -8,12 +8,6 @@ import { SelectField, TextField, ToggleRow } from './fields';
 import { useSettingSave } from './useSettingSave';
 import { useSettingsToast } from './useSettingsToast';
 
-const OFFERING_OPTIONS = [
-  { value: 'productos', label: 'Productos' },
-  { value: 'digitales', label: 'Productos digitales' },
-  { value: 'ambos', label: 'Ambos' },
-] as const;
-
 const CURRENCY_OPTIONS = [
   { value: 'COP', label: 'Peso colombiano (COP)' },
   { value: 'USD', label: 'Dólar (USD)' },
@@ -38,10 +32,10 @@ export type BusinessTabValues = {
   'business_logo': string;
   'business_currency': string;
   'business_timezone': string;
-  'business_offering': string;
   'features.sell_by_weight': boolean;
   'features.wholesale': boolean;
   'features.perishable': boolean;
+  'features.digital': boolean;
 };
 
 export function BusinessTab({ initial }: { initial: BusinessTabValues }) {
@@ -53,22 +47,15 @@ export function BusinessTab({ initial }: { initial: BusinessTabValues }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [logoUrl, setLogoUrl] = useState(initial.business_logo);
   const [uploading, setUploading] = useState(false);
-  const [offering, setOffering] = useState(
-    initial.business_offering || 'productos',
-  );
 
   const persistFeature = (
     key:
       | 'features.sell_by_weight'
       | 'features.wholesale'
-      | 'features.perishable',
+      | 'features.perishable'
+      | 'features.digital',
     value: boolean,
   ) => save(key, value ? 'true' : 'false', { notifyConfigChange: true });
-
-  const handleOffering = (value: string) => {
-    setOffering(value);
-    save('business_offering', value, { notifyConfigChange: true });
-  };
 
   // Locale is per-browser (next-intl cookie + URL prefix), not an app setting.
   const handleLocale = (newLocale: string) => {
@@ -258,34 +245,6 @@ export function BusinessTab({ initial }: { initial: BusinessTabValues }) {
           </p>
         </div>
 
-        <div className="space-y-1">
-          <div className="text-xs font-medium text-muted-foreground">
-            ¿Qué vendes?
-          </div>
-          <div className="grid grid-cols-3 gap-2">
-            {OFFERING_OPTIONS.map(opt => (
-              <button
-                key={opt.value}
-                type="button"
-                onClick={() => handleOffering(opt.value)}
-                className={`
-                  h-10 rounded-md border text-sm font-medium transition-colors
-                  ${
-              offering === opt.value
-                ? 'border-primary bg-primary/10 text-primary'
-                : `
-                  border-input text-muted-foreground
-                  hover:bg-accent
-                `
-              }
-                `}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
         <div className="space-y-3">
           <ToggleRow
             label="Venta por peso (Kg)"
@@ -298,6 +257,12 @@ export function BusinessTab({ initial }: { initial: BusinessTabValues }) {
             description="Activa precios escalonados por cantidad (tiers de mayoreo)."
             initial={initial['features.wholesale']}
             onCommit={v => persistFeature('features.wholesale', v)}
+          />
+          <ToggleRow
+            label="Productos digitales"
+            description="Habilita productos sin inventario físico (recargas, pines, licencias). Stock ilimitado, con límite opcional por producto."
+            initial={initial['features.digital']}
+            onCommit={v => persistFeature('features.digital', v)}
           />
         </div>
       </div>
