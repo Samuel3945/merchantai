@@ -1,5 +1,5 @@
 import { auth } from '@clerk/nextjs/server';
-import { and, desc, eq, gte, lte, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, isNull, lte, sql } from 'drizzle-orm';
 import { db } from '@/libs/DB';
 import { formatSaleNumber } from '@/libs/sale-number';
 import {
@@ -57,19 +57,30 @@ export function toMoney(value: number | string): string {
   return n.toFixed(2);
 }
 
+// `posTokenId` scopes the lookup to a single POS device (caja):
+//   - a UUID  → that device's own open session
+//   - null    → the admin/legacy session (no device token)
+//   - omitted → any open session for the org (legacy/admin callers, unchanged)
 export async function findOpenSession(
   executor: Executor,
   organizationId: string,
+  posTokenId?: string | null,
 ): Promise<CashSession | undefined> {
+  const conds = [
+    eq(cashSessionsSchema.organizationId, organizationId),
+    eq(cashSessionsSchema.status, 'open'),
+  ];
+  if (posTokenId !== undefined) {
+    conds.push(
+      posTokenId === null
+        ? isNull(cashSessionsSchema.posTokenId)
+        : eq(cashSessionsSchema.posTokenId, posTokenId),
+    );
+  }
   const [session] = await executor
     .select()
     .from(cashSessionsSchema)
-    .where(
-      and(
-        eq(cashSessionsSchema.organizationId, organizationId),
-        eq(cashSessionsSchema.status, 'open'),
-      ),
-    )
+    .where(and(...conds))
     .orderBy(desc(cashSessionsSchema.openedAt))
     .limit(1);
   return session;
@@ -139,10 +150,12 @@ export async function computeExpectedAmount(
 export async function recordCashMovement(
   saleId: string,
   total: number | string,
-  ctx?: { organizationId: string; userId: string },
+  ctx?: { organizationId: string; userId: string; posTokenId?: string | null },
 ): Promise<CashMovement | null> {
   let userId: string | undefined;
   let orgId: string | undefined;
+  // Scope the till to the device that made the sale (null/omitted = admin/org).
+  const posTokenId = ctx?.posTokenId;
 
   if (ctx) {
     userId = ctx.userId;
@@ -160,12 +173,13 @@ export async function recordCashMovement(
   // Auto-create a minimal session when cash enters the drawer so the cash is
   // always accounted for. No silent gaps that surface as unexplained surpluses
   // at closing time.
-  let open = await findOpenSession(db, orgId);
+  let open = await findOpenSession(db, orgId, posTokenId);
   if (!open) {
     const [autoSession] = await db
       .insert(cashSessionsSchema)
       .values({
         organizationId: orgId,
+        posTokenId: posTokenId ?? null,
         openedBy: userId,
         openingAmount: '0',
         status: 'open',

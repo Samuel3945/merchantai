@@ -75,7 +75,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     m.toLowerCase().includes('fiado'),
   );
   if (requiresOpenCash) {
-    const openSession = await findOpenSession(db, ctx.organizationId);
+    const openSession = await findOpenSession(db, ctx.organizationId, ctx.tokenId);
     if (!openSession) {
       return NextResponse.json(
         {
@@ -295,6 +295,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     await recordCashMovement(result.id, result.total, {
       organizationId: ctx.organizationId,
       userId: ctx.cashierId ?? ctx.cashierName,
+      posTokenId: ctx.tokenId,
     }).catch(() => null);
 
     await applyInvoiceCustomerUpsert({

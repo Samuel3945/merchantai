@@ -293,6 +293,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       await recordCashMovement(saleId, saleTotal, {
         organizationId: orgId,
         userId: cashierId ?? deviceName,
+        posTokenId: posToken.id,
       }).catch(() => null);
 
       await applyInvoiceCustomerUpsert({

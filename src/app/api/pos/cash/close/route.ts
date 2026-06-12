@@ -57,7 +57,7 @@ export async function POST(req: Request): Promise<NextResponse> {
 
   try {
     const session = await db.transaction(async (tx) => {
-      const open = await findOpenSession(tx, ctx.organizationId);
+      const open = await findOpenSession(tx, ctx.organizationId, ctx.tokenId);
       if (!open) {
         throw new Error('No hay caja abierta para cerrar.');
       }

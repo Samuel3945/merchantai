@@ -52,7 +52,7 @@ export async function POST(req: Request): Promise<NextResponse> {
 
   try {
     const session = await db.transaction(async (tx) => {
-      const existing = await findOpenSession(tx, ctx.organizationId);
+      const existing = await findOpenSession(tx, ctx.organizationId, ctx.tokenId);
       if (existing) {
         throw new Error('Ya hay una caja abierta. Ciérrala primero.');
       }
@@ -61,6 +61,7 @@ export async function POST(req: Request): Promise<NextResponse> {
         .insert(cashSessionsSchema)
         .values({
           organizationId: ctx.organizationId,
+          posTokenId: ctx.tokenId,
           openingAmount: opening,
           openedBy: attribution,
           status: 'open',

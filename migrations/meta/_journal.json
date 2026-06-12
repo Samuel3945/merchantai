@@ -239,6 +239,13 @@
       "when": 1781281379610,
       "tag": "0033_caja_current_cashier",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1781290850039,
+      "tag": "0034_shiny_war_machine",
+      "breakpoints": true
     }
   ]
 }
