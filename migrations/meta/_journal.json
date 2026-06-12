@@ -253,6 +253,13 @@
       "when": 1781300385889,
       "tag": "0035_jittery_madame_hydra",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1781302561008,
+      "tag": "0036_yielding_whiplash",
+      "breakpoints": true
     }
   ]
 }

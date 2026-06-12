@@ -615,6 +615,14 @@ export const whatsappChannelsSchema = pgTable(
     instanceName: text('instance_name').notNull(),
     // Friendly name the admin gives the channel (e.g. "Ventas", "Soporte").
     label: text('label'),
+    // What this channel is for, in the admin's words (e.g. "Atención clientes").
+    purpose: text('purpose'),
+    // What the agent is allowed to do on this channel: { [capabilityKey]: bool }.
+    // Enforcement lives in the agent/n8n; the app owns the per-channel config.
+    capabilities: jsonb('capabilities')
+      .$type<Record<string, boolean>>()
+      .default({})
+      .notNull(),
     status: whatsappChannelStatusEnum('status').default('connecting').notNull(),
     // The connected number (E.164 digits), filled once the QR is scanned.
     phoneNumber: text('phone_number'),

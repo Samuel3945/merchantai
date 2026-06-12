@@ -13,12 +13,10 @@ export function ChannelsSection({
   isAdmin,
   whatsappChannels,
   evolutionConfigured,
-  whatsappWebhookConfigured,
 }: {
   isAdmin: boolean;
   whatsappChannels: WhatsAppChannelRow[];
   evolutionConfigured: boolean;
-  whatsappWebhookConfigured: boolean;
 }) {
   return (
     <section className="space-y-4">
@@ -37,7 +35,6 @@ export function ChannelsSection({
             <WhatsAppChannelsPanel
               initialChannels={whatsappChannels}
               configured={evolutionConfigured}
-              webhookConfigured={whatsappWebhookConfigured}
             />
           )
         : (
