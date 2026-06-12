@@ -143,6 +143,110 @@ function ReportCard({
   );
 }
 
+/**
+ * Net-profit breakdown card (owner only). Unlike ReportCard, it is not a
+ * single <Link> because it nests its own "Cargar gastos" link, so the
+ * "Ver detalle" affordance is an explicit link in the header instead.
+ */
+function NetProfitBreakdownCard({
+  breakdown,
+}: {
+  breakdown: NonNullable<ReportsOverview['netProfitBreakdown']>;
+}) {
+  const { grossMargin, salaries, expenses, net } = breakdown;
+  const hasExpenses = expenses > 0;
+  const netClass = net >= 0 ? 'text-emerald-600' : 'text-red-600';
+
+  return (
+    <div className="flex flex-col rounded-lg border bg-background p-5 shadow-xs">
+      <div className="flex items-start justify-between gap-2">
+        <div className="text-xs font-medium text-muted-foreground">
+          Utilidad neta
+        </div>
+        <Link
+          href="/dashboard/reports/flujo-caja"
+          className="
+            text-xs text-muted-foreground
+            hover:text-primary hover:underline
+          "
+        >
+          Ver detalle →
+        </Link>
+      </div>
+
+      <div className={cn(
+        'mt-2 font-display text-2xl font-medium tracking-tight tabular-nums',
+        netClass,
+      )}
+      >
+        {money(net)}
+      </div>
+
+      <div className="mt-3 space-y-1 text-xs">
+        <div className="flex items-center justify-between text-muted-foreground">
+          <span>Margen bruto</span>
+          <span className="tabular-nums">{money(grossMargin)}</span>
+        </div>
+        <div className="flex items-center justify-between text-muted-foreground">
+          <span>− Salarios</span>
+          <span className="text-red-500 tabular-nums">{money(salaries)}</span>
+        </div>
+        <div className="flex items-center justify-between text-muted-foreground">
+          <span>− Gastos</span>
+          <span className="text-red-500 tabular-nums">{money(expenses)}</span>
+        </div>
+        <div className={cn(`
+          flex items-center justify-between border-t pt-1 font-semibold
+        `, netClass)}
+        >
+          <span>= Utilidad neta</span>
+          <span className="tabular-nums">{money(net)}</span>
+        </div>
+      </div>
+
+      {hasExpenses
+        ? (
+            <p className="mt-3 text-xs/relaxed text-muted-foreground">
+              La ganancia real: lo que queda después de restar sueldos y gastos
+              del negocio. Es la plata que de verdad ganaste.
+            </p>
+          )
+        : (
+            <div className="
+              mt-3 rounded-md border border-amber-200 bg-amber-50 p-3
+              dark:border-amber-800 dark:bg-amber-950/30
+            "
+            >
+              <p className="
+                text-xs font-semibold text-amber-800
+                dark:text-amber-200
+              "
+              >
+                ¿Ya cargaste tus gastos del período?
+              </p>
+              <p className="
+                mt-0.5 text-xs text-amber-700
+                dark:text-amber-300
+              "
+              >
+                Sin gastos operativos la utilidad está sobreestimada.
+              </p>
+              <Link
+                href="/dashboard/expenses"
+                className="
+                  mt-2 inline-block rounded-sm bg-amber-600 px-2.5 py-1 text-xs
+                  font-medium text-white
+                  hover:bg-amber-700
+                "
+              >
+                Cargar gastos
+              </Link>
+            </div>
+          )}
+    </div>
+  );
+}
+
 function Sparkline({ data }: { data: { day: string; total: number }[] }) {
   if (data.length < 2) {
     return null;
@@ -242,14 +346,20 @@ export function ReportsOverviewClient({ initial }: { initial: ReportsOverview })
           href="/dashboard/reports/ventas-periodo"
         />
 
-        <ReportCard
-          title="Utilidad neta"
-          value={money(data.finance.netProfit)}
-          secondary={`gastos operativos ${money(data.finance.operatingExpenses)}`}
-          explanation="La ganancia real: lo que queda después de restar también los gastos del negocio (sueldos, servicios, compras). Es la plata que de verdad ganaste."
-          tone={data.finance.netProfit < 0 ? 'danger' : 'default'}
-          href="/dashboard/reports/flujo-caja"
-        />
+        {data.netProfitBreakdown
+          ? (
+              <NetProfitBreakdownCard breakdown={data.netProfitBreakdown} />
+            )
+          : (
+              <ReportCard
+                title="Utilidad neta"
+                value={money(data.finance.netProfit)}
+                secondary={`gastos operativos ${money(data.finance.operatingExpenses)}`}
+                explanation="La ganancia real: lo que queda después de restar también los gastos del negocio (sueldos, servicios, compras). Es la plata que de verdad ganaste."
+                tone={data.finance.netProfit < 0 ? 'danger' : 'default'}
+                href="/dashboard/reports/flujo-caja"
+              />
+            )}
 
         <ReportCard
           title="Pagos a proveedores"
