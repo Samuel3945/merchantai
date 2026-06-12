@@ -1,4 +1,4 @@
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { db } from '@/libs/DB';
 import { getDefaultTermDays } from '@/libs/fiados';
@@ -89,6 +89,7 @@ async function listCashiers(organizationId: string) {
 
 async function getOpenSession(
   organizationId: string,
+  posTokenId: string | null,
 ): Promise<CashPayload['session']> {
   const [row] = await db
     .select({
@@ -102,6 +103,10 @@ async function getOpenSession(
       and(
         eq(cashSessionsSchema.organizationId, organizationId),
         eq(cashSessionsSchema.status, 'open'),
+        // Scope to this device's own till so each caja sees only its session.
+        posTokenId === null
+          ? isNull(cashSessionsSchema.posTokenId)
+          : eq(cashSessionsSchema.posTokenId, posTokenId),
       ),
     )
     .limit(1);
@@ -144,7 +149,7 @@ async function resolveFromToken(jwt: string): Promise<ResolvedContext | null> {
   }
 
   const orgId = row.token.organizationId;
-  const session = await getOpenSession(orgId);
+  const session = await getOpenSession(orgId, row.token.id);
 
   return {
     organizationId: orgId,
@@ -179,7 +184,7 @@ async function resolveFromUser(jwt: string): Promise<ResolvedContext | null> {
     return null;
   }
 
-  const session = await getOpenSession(user.organizationId);
+  const session = await getOpenSession(user.organizationId, null);
 
   return {
     organizationId: user.organizationId,

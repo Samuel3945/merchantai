@@ -14,7 +14,7 @@ export async function GET(req: Request): Promise<NextResponse> {
     return errorResponse;
   }
 
-  const session = await findOpenSession(db, ctx.organizationId);
+  const session = await findOpenSession(db, ctx.organizationId, ctx.tokenId);
   if (!session) {
     return NextResponse.json({ session: null, movements: [], expected: 0 });
   }

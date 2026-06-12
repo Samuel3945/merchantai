@@ -343,6 +343,10 @@ export const cashSessionsSchema = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     organizationId: text('organization_id').notNull(),
+    // The POS device (caja) that owns this session. Each register operates its
+    // own till; they no longer share a single org-wide session. NULL = a session
+    // opened outside a device (owner dashboard / legacy data).
+    posTokenId: uuid('pos_token_id'),
     openedAt: timestamp('opened_at', { mode: 'date' }).defaultNow().notNull(),
     openedBy: text('opened_by').notNull(),
     openingAmount: numeric('opening_amount', { precision: 12, scale: 2 })
@@ -357,9 +361,15 @@ export const cashSessionsSchema = pgTable(
     notes: text('notes'),
   },
   table => [
-    uniqueIndex('cash_sessions_one_open_per_org_idx')
+    // One open session per POS device (caja). Each register operates its own till.
+    uniqueIndex('cash_sessions_one_open_per_token_idx')
+      .on(table.organizationId, table.posTokenId)
+      .where(sql`${table.status} = 'open' AND ${table.posTokenId} IS NOT NULL`),
+    // One open admin/legacy session per org (sessions with no device token, e.g.
+    // opened from the owner dashboard).
+    uniqueIndex('cash_sessions_one_open_admin_idx')
       .on(table.organizationId)
-      .where(sql`${table.status} = 'open'`),
+      .where(sql`${table.status} = 'open' AND ${table.posTokenId} IS NULL`),
   ],
 );
 
