@@ -5,6 +5,7 @@ import type { MovementSubmit } from './MovementModal';
 import type {
   CashSecurityStatus,
   GetCurrentCashResult,
+  OpenCaja,
   TodayCashKpis,
 } from '@/actions/cash';
 import type { ActionResult } from '@/libs/action-result';
@@ -98,6 +99,7 @@ export function CashClient(props: {
   kpis: TodayCashKpis;
   security: CashSecurityStatus;
   history: CashMovement[];
+  openCajas: OpenCaja[];
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -110,6 +112,10 @@ export function CashClient(props: {
 
   const { session, movements, breakdown, collections } = props.current;
   const expected = breakdown.expected;
+
+  // Device tills (one per cashier). Shown read-only — each cashier does its own
+  // arqueo from its POS; the dashboard caja below is the owner's own session.
+  const deviceCajas = props.openCajas.filter(c => c.posTokenId);
 
   const countedNum = Number.parseFloat(counted);
   const previewDiff = useMemo(() => {
@@ -216,6 +222,63 @@ export function CashClient(props: {
           />
         </div>
       </div>
+
+      {deviceCajas.length > 0 && (
+        <div className="space-y-3">
+          <div>
+            <div className="text-lg font-semibold">Cajas de los cajeros</div>
+            <p className="text-sm text-muted-foreground">
+              Cada caja opera por separado. Esto es solo lectura: el arqueo y el
+              cierre los hace cada cajero en su propio POS.
+            </p>
+          </div>
+          <div className="
+            grid gap-3
+            sm:grid-cols-2
+            lg:grid-cols-3
+          "
+          >
+            {deviceCajas.map(c => (
+              <Card key={c.id} className="p-4">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="truncate font-semibold">
+                      {c.deviceName || c.openedBy}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      Abierta
+                      {' '}
+                      {relativeTime(c.openedAt)}
+                    </div>
+                  </div>
+                  <span className="
+                    shrink-0 rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs
+                    font-medium text-emerald-600
+                  "
+                  >
+                    Abierta
+                  </span>
+                </div>
+                <div className="mt-3 flex items-end justify-between gap-2">
+                  <div>
+                    <div className="text-xs text-muted-foreground">
+                      Efectivo esperado
+                    </div>
+                    <div className="text-lg font-bold tabular-nums">
+                      {money(c.expected)}
+                    </div>
+                  </div>
+                  <div className="text-right text-xs text-muted-foreground">
+                    {c.movementCount}
+                    {' '}
+                    mov.
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
 
       {!session
         ? (
