@@ -3,7 +3,6 @@ import {
   BarChart3,
   Bike,
   Boxes,
-  CalendarClock,
   CreditCard,
   HandCoins,
   LayoutDashboard,
@@ -16,6 +15,7 @@ import {
   TrendingDown,
   Truck,
   UserCog,
+  UserRound,
   Users,
   Wallet,
 } from 'lucide-react';
@@ -62,7 +62,6 @@ export const navGroups: NavGroup[] = [
       { href: '/dashboard/customers', label: 'Clientes', icon: Users },
       { href: '/dashboard/suppliers', label: 'Proveedores', icon: Truck },
       { href: '/dashboard/employees', label: 'Empleados', icon: UserCog },
-      { href: '/dashboard/turnos', label: 'Turnos', icon: CalendarClock },
     ],
   },
   {
@@ -81,12 +80,17 @@ export const navGroups: NavGroup[] = [
       { href: '/dashboard/ai-agent', label: 'Agente IA', icon: Sparkles },
     ],
   },
+  {
+    title: 'Cuenta',
+    items: [
+      { href: '/dashboard/mi-perfil', label: 'Mi perfil', icon: UserRound },
+    ],
+  },
 ];
 
 export type NavModuleFlags = {
   fiado: boolean;
   employees: boolean;
-  turnos: boolean;
   delivery: boolean;
   facturas: boolean;
   suppliers: boolean;
@@ -97,7 +101,6 @@ export type NavModuleFlags = {
 const GATED_HREF: Record<string, keyof NavModuleFlags> = {
   '/dashboard/fiados': 'fiado',
   '/dashboard/employees': 'employees',
-  '/dashboard/turnos': 'turnos',
   '/dashboard/delivery': 'delivery',
   '/dashboard/facturas': 'facturas',
   '/dashboard/suppliers': 'suppliers',

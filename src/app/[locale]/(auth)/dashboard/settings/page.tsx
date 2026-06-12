@@ -20,7 +20,6 @@ const KEYS = [
   'features.digital',
   // Modules (all default ON)
   'modules.employees',
-  'modules.turnos',
   'modules.delivery',
   'modules.suppliers',
   'modules.facturas',
@@ -86,7 +85,6 @@ export default async function DashboardSettingsPage(props: {
         }}
         modules={{
           'modules.employees': asBool(map['modules.employees'], true),
-          'modules.turnos': asBool(map['modules.turnos'], true),
           'modules.delivery': asBool(map['modules.delivery'], true),
           'modules.suppliers': asBool(map['modules.suppliers'], true),
           'modules.facturas': asBool(map['modules.facturas'], true),
