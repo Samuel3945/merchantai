@@ -186,6 +186,7 @@ export function SalesClient({
     registers: [],
     employees: [],
     products: [],
+    returnPolicy: { enabled: true, maxDays: 7, requireAdmin: false },
   });
 
   const [pending, startTransition] = useTransition();
@@ -683,6 +684,19 @@ export function SalesClient({
                   rows.map((s) => {
                     const status = returnStatus(s);
                     const fullyReturned = s.fullyReturned;
+                    // Return rules from Ajustes: outside the window (or with
+                    // returns disabled) the action is off before any request.
+                    const policy = filterOptions.returnPolicy;
+                    const daysSince = Math.floor(
+                      (Date.now() - new Date(s.createdAt).getTime()) / 86400000,
+                    );
+                    const outOfWindow = daysSince > policy.maxDays;
+                    const returnBlocked = !policy.enabled || outOfWindow;
+                    const returnHint = !policy.enabled
+                      ? 'Las devoluciones están desactivadas en Ajustes'
+                      : outOfWindow
+                        ? `Supera el plazo de devolución (${policy.maxDays} días)`
+                        : undefined;
                     return (
                       <tr
                         key={s.id}
@@ -718,7 +732,8 @@ export function SalesClient({
                           <Button
                             variant="outline"
                             size="sm"
-                            disabled={detailLoading || fullyReturned}
+                            disabled={detailLoading || fullyReturned || returnBlocked}
+                            title={returnHint}
                             onClick={(e) => {
                               e.stopPropagation();
                               openReturn(s.id);
@@ -726,9 +741,13 @@ export function SalesClient({
                           >
                             {fullyReturned
                               ? 'Devuelta'
-                              : s.hasReturn
-                                ? 'Devolver más'
-                                : 'Devolver'}
+                              : !policy.enabled
+                                  ? 'Desactivada'
+                                  : outOfWindow
+                                    ? 'Fuera de plazo'
+                                    : s.hasReturn
+                                      ? 'Devolver más'
+                                      : 'Devolver'}
                           </Button>
                         </td>
                       </tr>
