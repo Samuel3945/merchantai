@@ -22,6 +22,9 @@ export const Env = createEnv({
     EVOLUTION_INSTANCE: z.string().optional(),
     WHATSAPP_WEBHOOK_TOKEN: z.string().optional(),
     WHATSAPP_DEFAULT_ORG_ID: z.string().optional(),
+    // Shared n8n webhook every WhatsApp channel forwards inbound messages to.
+    // One URL for all instances; n8n maps to an org from the payload `instance`.
+    WHATSAPP_N8N_WEBHOOK_URL: z.string().optional(),
   },
   client: {
     NEXT_PUBLIC_APP_URL: z.string().optional(),
@@ -49,6 +52,7 @@ export const Env = createEnv({
     EVOLUTION_INSTANCE: process.env.EVOLUTION_INSTANCE,
     WHATSAPP_WEBHOOK_TOKEN: process.env.WHATSAPP_WEBHOOK_TOKEN,
     WHATSAPP_DEFAULT_ORG_ID: process.env.WHATSAPP_DEFAULT_ORG_ID,
+    WHATSAPP_N8N_WEBHOOK_URL: process.env.WHATSAPP_N8N_WEBHOOK_URL,
     NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
     NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:
       process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,

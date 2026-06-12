@@ -5,6 +5,7 @@ import type { FiscalTabValues } from './FiscalTab';
 import type { ModulesTabValues } from './ModulesTab';
 import type { ReturnsTabValues } from './ReturnsTab';
 import type { PaymentMethodRow } from '@/actions/payment-methods';
+import type { WhatsAppChannelRow } from '@/actions/whatsapp-channels';
 import { useState } from 'react';
 import { AuditTab } from './AuditTab';
 import { BusinessTab } from './BusinessTab';
@@ -13,6 +14,7 @@ import { ModulesTab } from './ModulesTab';
 import { PaymentMethodsClient } from './PaymentMethodsClient';
 import { ReturnsTab } from './ReturnsTab';
 import { SettingsToastProvider } from './useSettingsToast';
+import { WhatsAppTab } from './WhatsAppTab';
 
 type Tab = {
   key: string;
@@ -27,6 +29,7 @@ const BASE_TABS: ReadonlyArray<Tab> = [
   { key: 'returns', label: 'Devoluciones' },
 ];
 
+const WHATSAPP_TAB: Tab = { key: 'whatsapp', label: 'WhatsApp' };
 const AUDIT_TAB: Tab = { key: 'audit', label: 'Auditoría' };
 
 export type SettingsClientProps = {
@@ -37,6 +40,9 @@ export type SettingsClientProps = {
   fiscal: FiscalTabValues;
   returns: ReturnsTabValues;
   isAdmin: boolean;
+  whatsappChannels: WhatsAppChannelRow[];
+  evolutionConfigured: boolean;
+  whatsappWebhookConfigured: boolean;
 };
 
 export function SettingsClient({
@@ -47,8 +53,13 @@ export function SettingsClient({
   fiscal,
   returns: returnsValues,
   isAdmin,
+  whatsappChannels,
+  evolutionConfigured,
+  whatsappWebhookConfigured,
 }: SettingsClientProps) {
-  const tabs = isAdmin ? [...BASE_TABS, AUDIT_TAB] : BASE_TABS;
+  const tabs = isAdmin
+    ? [...BASE_TABS, WHATSAPP_TAB, AUDIT_TAB]
+    : BASE_TABS;
   const [activeTab, setActiveTab] = useState<string>(tabs[0]!.key);
 
   return (
@@ -88,6 +99,13 @@ export function SettingsClient({
         {activeTab === 'modules' && <ModulesTab initial={modules} />}
         {activeTab === 'fiscal' && <FiscalTab initial={fiscal} />}
         {activeTab === 'returns' && <ReturnsTab initial={returnsValues} />}
+        {activeTab === 'whatsapp' && isAdmin && (
+          <WhatsAppTab
+            initialChannels={whatsappChannels}
+            configured={evolutionConfigured}
+            webhookConfigured={whatsappWebhookConfigured}
+          />
+        )}
         {activeTab === 'audit' && isAdmin && <AuditTab />}
       </div>
     </SettingsToastProvider>
