@@ -6,15 +6,22 @@ import type {
   ReturnableItem,
   SaleListRow,
   SaleReturnDetail,
+  SalesFilterOptions,
 } from '@/actions/sales';
 import type { ReturnDisposition, ReturnReason } from '@/libs/sale-returns';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { listPaymentMethods } from '@/actions/payment-methods';
-import { getSaleForReturn, listSales, processReturn } from '@/actions/sales';
+import {
+  getSaleForReturn,
+  getSalesFilterOptions,
+  listSales,
+  processReturn,
+} from '@/actions/sales';
 import { DateRangePicker } from '@/components/DateRangePicker';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Combobox } from '@/components/ui/combobox';
 import { Select } from '@/components/ui/select';
 import { formatSaleNumber } from '@/libs/sale-number';
 import { buildPresetOptions, todayBogota } from '@/utils/DateRange';
@@ -169,6 +176,17 @@ export function SalesClient({
   const [payment, setPayment] = useState('all');
   const [search, setSearch] = useState('');
   const [cashierId, setCashierId] = useState('');
+  const [posTokenId, setPosTokenId] = useState('');
+  const [productId, setProductId] = useState('');
+  const [origin, setOrigin] = useState<'all' | 'pos' | 'panel'>('all');
+  const [returnState, setReturnState]
+    = useState<'all' | 'clean' | 'partial' | 'returned'>('all');
+  const [showMore, setShowMore] = useState(false);
+  const [filterOptions, setFilterOptions] = useState<SalesFilterOptions>({
+    registers: [],
+    employees: [],
+    products: [],
+  });
 
   const [pending, startTransition] = useTransition();
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -204,6 +222,9 @@ export function SalesClient({
     listPaymentMethods({ activeOnly: true })
       .then(setActiveMethods)
       .catch(() => setActiveMethods([]));
+    getSalesFilterOptions()
+      .then(setFilterOptions)
+      .catch(() => {});
   }, []);
 
   const paymentOptions = useMemo(
@@ -235,6 +256,10 @@ export function SalesClient({
       payment,
       search: search || null,
       cashierId: cashierId || null,
+      posTokenId: posTokenId || null,
+      productId: productId || null,
+      origin,
+      returnState,
     });
     setRows(data.items);
     setTotal(data.total);
@@ -257,7 +282,19 @@ export function SalesClient({
       }
     };
     // eslint-disable-next-line react/exhaustive-deps
-  }, [pageSize, page, start, end, payment, search, cashierId]);
+  }, [
+    pageSize,
+    page,
+    start,
+    end,
+    payment,
+    search,
+    cashierId,
+    posTokenId,
+    productId,
+    origin,
+    returnState,
+  ]);
 
   function resetToFirstPage() {
     setPage(0);
@@ -284,6 +321,10 @@ export function SalesClient({
     setPayment('all');
     setSearch('');
     setCashierId('');
+    setPosTokenId('');
+    setProductId('');
+    setOrigin('all');
+    setReturnState('all');
     setPage(0);
   }
 
@@ -405,6 +446,18 @@ export function SalesClient({
   const from = total === 0 ? 0 : page * pageSize + 1;
   const to = Math.min(total, (page + 1) * pageSize);
 
+  // Badge on the "Más filtros" toggle so hidden-but-active filters stay visible.
+  const advancedCount = [
+    productId,
+    payment !== 'all' ? payment : '',
+    origin !== 'all' ? origin : '',
+    returnState !== 'all' ? returnState : '',
+  ].filter(Boolean).length;
+
+  const hasActiveFilters
+    = Boolean(start || end || search || cashierId || posTokenId)
+      || advancedCount > 0;
+
   return (
     <div className="space-y-4">
       {submitSuccess && (
@@ -418,15 +471,17 @@ export function SalesClient({
         </div>
       )}
 
-      <div className="
-        grid grid-cols-1 gap-3
-        sm:grid-cols-2
-        lg:grid-cols-4
-      "
-      >
-        <div>
-          <label className={labelCls}>Periodo</label>
-          <div className="mt-1">
+      {/* Filter bar — main filters always visible, advanced ones behind
+          "Más filtros". Same pattern as the inventory movement history. */}
+      <div className="space-y-3 rounded-md border bg-muted/30 p-4">
+        <div className="
+          grid grid-cols-1 gap-3
+          sm:grid-cols-2
+          lg:grid-cols-4
+        "
+        >
+          <div className="flex flex-col gap-1">
+            <span className={labelCls}>Periodo</span>
             <DateRangePicker
               start={start}
               end={end}
@@ -440,67 +495,162 @@ export function SalesClient({
               triggerClassName="w-full"
             />
           </div>
+          <div className="flex flex-col gap-1">
+            <span className={labelCls}>Caja</span>
+            <Select
+              value={posTokenId}
+              onValueChange={(v) => {
+                setPosTokenId(v);
+                resetToFirstPage();
+              }}
+              options={[
+                { value: '', label: 'Todas las cajas' },
+                ...filterOptions.registers.map(r => ({
+                  value: r.id,
+                  label: r.name,
+                })),
+              ]}
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className={labelCls}>Empleado</span>
+            <Select
+              value={cashierId}
+              onValueChange={(v) => {
+                setCashierId(v);
+                resetToFirstPage();
+              }}
+              options={[
+                { value: '', label: 'Todos los empleados' },
+                ...filterOptions.employees.map(e => ({
+                  value: e.id,
+                  label: e.name,
+                })),
+              ]}
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className={labelCls}>Buscar</span>
+            <input
+              type="search"
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                resetToFirstPage();
+              }}
+              placeholder="N.º de venta o producto"
+              className={inputCls}
+            />
+          </div>
         </div>
-        <div>
-          <label className={labelCls}>Pago</label>
-          <Select
-            value={payment}
-            onValueChange={(v) => {
-              setPayment(v);
-              resetToFirstPage();
-            }}
-            options={paymentOptions.map(opt => ({
-              value: opt.value,
-              label: opt.label,
-            }))}
-          />
-        </div>
-        <div>
-          <label className={labelCls}>ID de cajero</label>
-          <input
-            type="text"
-            value={cashierId}
-            onChange={(e) => {
-              setCashierId(e.target.value);
-              resetToFirstPage();
-            }}
-            placeholder="user_..."
-            className={cn(inputCls, 'font-mono text-xs')}
-          />
-        </div>
-        <div>
-          <label className={labelCls}>Buscar</label>
-          <input
-            type="search"
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              resetToFirstPage();
-            }}
-            placeholder="N.º de venta o nombre de producto"
-            className={inputCls}
-          />
-        </div>
-      </div>
 
-      <div className="flex flex-wrap items-center gap-3">
-        <Button variant="secondary" size="sm" onClick={clearFilters}>
-          Limpiar filtros
-        </Button>
-        <div className="ml-auto text-sm text-muted-foreground">
-          {pending
-            ? 'Cargando…'
-            : (
-                <>
-                  {from}
-                  –
-                  {to}
-                  {' '}
-                  de
-                  {' '}
-                  {total}
-                </>
-              )}
+        {showMore && (
+          <div className="
+            grid grid-cols-1 gap-3 border-t pt-3
+            sm:grid-cols-2
+            lg:grid-cols-4
+          "
+          >
+            <div className="flex flex-col gap-1">
+              <span className={labelCls}>Producto</span>
+              <Combobox
+                value={productId}
+                onValueChange={(v) => {
+                  setProductId(v);
+                  resetToFirstPage();
+                }}
+                placeholder="Todos los productos"
+                searchPlaceholder="Buscar producto..."
+                emptyText="Sin productos"
+                options={[
+                  { value: '', label: 'Todos los productos' },
+                  ...filterOptions.products.map(p => ({
+                    value: p.id,
+                    label: p.name,
+                  })),
+                ]}
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className={labelCls}>Método de pago</span>
+              <Select
+                value={payment}
+                onValueChange={(v) => {
+                  setPayment(v);
+                  resetToFirstPage();
+                }}
+                options={paymentOptions.map(opt => ({
+                  value: opt.value,
+                  label: opt.label,
+                }))}
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className={labelCls}>Canal</span>
+              <Select
+                value={origin}
+                onValueChange={(v) => {
+                  setOrigin(v as typeof origin);
+                  resetToFirstPage();
+                }}
+                options={[
+                  { value: 'all', label: 'Todos los canales' },
+                  { value: 'pos', label: 'Punto de venta (POS)' },
+                  { value: 'panel', label: 'Panel web' },
+                ]}
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className={labelCls}>Devoluciones</span>
+              <Select
+                value={returnState}
+                onValueChange={(v) => {
+                  setReturnState(v as typeof returnState);
+                  resetToFirstPage();
+                }}
+                options={[
+                  { value: 'all', label: 'Todas las ventas' },
+                  { value: 'clean', label: 'Sin devoluciones' },
+                  { value: 'partial', label: 'Parcialmente devueltas' },
+                  { value: 'returned', label: 'Devueltas totalmente' },
+                ]}
+              />
+            </div>
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setShowMore(v => !v)}
+          >
+            {showMore
+              ? 'Menos filtros'
+              : `Más filtros${advancedCount > 0 ? ` (${advancedCount})` : ''}`}
+          </Button>
+          <div className="flex items-center gap-3">
+            {hasActiveFilters && (
+              <Button size="sm" variant="ghost" onClick={clearFilters}>
+                Limpiar
+              </Button>
+            )}
+            <span className="text-sm text-muted-foreground">
+              {pending
+                ? 'Cargando…'
+                : (
+                    <>
+                      {from}
+                      –
+                      {to}
+                      {' '}
+                      de
+                      {' '}
+                      {total}
+                    </>
+                  )}
+            </span>
+          </div>
         </div>
       </div>
 
