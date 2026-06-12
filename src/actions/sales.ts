@@ -30,6 +30,8 @@ import { consumeFifoExits } from '@/libs/fifo-cogs';
 import { assignNextSaleNumber } from '@/libs/sale-number';
 import { applySaleReturn } from '@/libs/sale-returns';
 import {
+  posReturnItemsSchema,
+  posReturnsSchema,
   posTokensSchema,
   posUsersSchema,
   productsSchema,
@@ -548,6 +550,196 @@ export async function listSales(
   return {
     items: enriched,
     total: totalRow[0]?.count ?? 0,
+  };
+}
+
+// --- Sale detail --------------------------------------------------------------
+
+export type SaleDetailItem = {
+  id: string;
+  productName: string;
+  qty: number;
+  price: string;
+  subtotal: string;
+  unitType: string;
+  /** Units already returned across all returns of this line. */
+  returnedQty: number;
+};
+
+export type SaleDetailPayment = {
+  id: string;
+  method: string;
+  amount: string;
+  changeGiven: string;
+  reference: string | null;
+};
+
+export type SaleDetailReturn = {
+  id: string;
+  reason: string;
+  refundMethod: string;
+  totalRefunded: string;
+  partial: boolean;
+  createdAt: Date;
+  cashierName: string | null;
+  items: {
+    productName: string;
+    qty: number;
+    refundAmount: string;
+    disposition: string;
+  }[];
+};
+
+export type SaleDetail = {
+  id: string;
+  saleNumber: number | null;
+  status: string;
+  createdAt: Date;
+  total: string;
+  paymentType: string;
+  notes: string | null;
+  einvoiceStatus: string;
+  einvoiceNumber: string | null;
+  /** Where the sale was made: a POS device or the web panel. */
+  origin: 'pos' | 'panel';
+  deviceName: string | null;
+  cashierName: string | null;
+  cashierImageUrl: string | null;
+  items: SaleDetailItem[];
+  payments: SaleDetailPayment[];
+  returns: SaleDetailReturn[];
+};
+
+// Full audit view of one sale: who sold it, when, from which device, how it was
+// paid, every line item with its returned units, and the complete returns trail.
+export async function getSaleDetail(saleId: string): Promise<SaleDetail | null> {
+  const { userId, orgId } = await auth();
+  if (!userId) {
+    throw new Error('Not authenticated');
+  }
+  if (!orgId) {
+    throw new Error('No active organization');
+  }
+  if (!UUID_RE.test(saleId)) {
+    return null;
+  }
+
+  const [sale] = await db
+    .select()
+    .from(salesSchema)
+    .where(
+      and(eq(salesSchema.id, saleId), eq(salesSchema.organizationId, orgId)),
+    )
+    .limit(1);
+
+  if (!sale) {
+    return null;
+  }
+
+  const [items, payments, returns] = await Promise.all([
+    db
+      .select({
+        id: saleItemsSchema.id,
+        productName: saleItemsSchema.productName,
+        qty: saleItemsSchema.qty,
+        price: saleItemsSchema.price,
+        subtotal: saleItemsSchema.subtotal,
+        unitType: saleItemsSchema.unitType,
+        // Literal table refs — see the note on getSaleForReturn's identical query.
+        returnedQty: sql<number>`COALESCE((
+          SELECT SUM(pri.qty)
+          FROM pos_return_items pri
+          WHERE pri.sale_item_id = sale_items.id
+        ), 0)::int`,
+      })
+      .from(saleItemsSchema)
+      .where(eq(saleItemsSchema.saleId, saleId)),
+    db
+      .select({
+        id: salePaymentsSchema.id,
+        method: salePaymentsSchema.method,
+        amount: salePaymentsSchema.amount,
+        changeGiven: salePaymentsSchema.changeGiven,
+        reference: salePaymentsSchema.reference,
+      })
+      .from(salePaymentsSchema)
+      .where(eq(salePaymentsSchema.saleId, saleId)),
+    db
+      .select()
+      .from(posReturnsSchema)
+      .where(eq(posReturnsSchema.saleId, saleId))
+      .orderBy(desc(posReturnsSchema.createdAt)),
+  ]);
+
+  const returnItems
+    = returns.length > 0
+      ? await db
+          .select({
+            returnId: posReturnItemsSchema.returnId,
+            productName: posReturnItemsSchema.productName,
+            qty: posReturnItemsSchema.qty,
+            refundAmount: posReturnItemsSchema.refundAmount,
+            disposition: posReturnItemsSchema.disposition,
+          })
+          .from(posReturnItemsSchema)
+          .where(
+            inArray(
+              posReturnItemsSchema.returnId,
+              returns.map(r => r.id),
+            ),
+          )
+      : [];
+
+  const cashierMap = await resolveCashiers(
+    [sale.cashierId, ...returns.map(r => r.cashierId)].filter(
+      (id): id is string => id != null && id !== '',
+    ),
+  );
+  const deviceMap = await resolveDeviceNames(
+    sale.posTokenId ? [sale.posTokenId] : [],
+  );
+
+  return {
+    id: sale.id,
+    saleNumber: sale.saleNumber,
+    status: sale.status,
+    createdAt: sale.createdAt,
+    total: sale.total,
+    paymentType: sale.paymentType,
+    notes: sale.notes,
+    einvoiceStatus: sale.einvoiceStatus,
+    einvoiceNumber: sale.einvoiceNumber,
+    origin: sale.posTokenId ? 'pos' : 'panel',
+    deviceName: sale.posTokenId
+      ? (deviceMap.get(sale.posTokenId) ?? null)
+      : null,
+    cashierName: sale.cashierId
+      ? (cashierMap.get(sale.cashierId)?.name ?? null)
+      : null,
+    cashierImageUrl: sale.cashierId
+      ? (cashierMap.get(sale.cashierId)?.imageUrl ?? null)
+      : null,
+    items,
+    payments,
+    returns: returns.map(r => ({
+      id: r.id,
+      reason: r.reason,
+      refundMethod: r.refundMethod,
+      totalRefunded: r.totalRefunded,
+      partial: r.partial,
+      createdAt: r.createdAt,
+      cashierName: r.cashierId
+        ? (cashierMap.get(r.cashierId)?.name ?? null)
+        : null,
+      items: returnItems
+        .filter(ri => ri.returnId === r.id)
+        .map(ri => ({
+          productName: ri.productName,
+          qty: ri.qty,
+          refundAmount: ri.refundAmount,
+          disposition: ri.disposition,
+        })),
+    })),
   };
 }
 

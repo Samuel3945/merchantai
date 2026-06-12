@@ -8,6 +8,7 @@ import type {
   SaleReturnDetail,
 } from '@/actions/sales';
 import type { ReturnDisposition, ReturnReason } from '@/libs/sale-returns';
+import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { listPaymentMethods } from '@/actions/payment-methods';
 import { getSaleForReturn, listSales, processReturn } from '@/actions/sales';
@@ -157,6 +158,7 @@ export function SalesClient({
   initial: ListSalesResult;
   pageSize: number;
 }) {
+  const router = useRouter();
   const [rows, setRows] = useState<SaleListRow[]>(initial.items);
   const [total, setTotal] = useState<number>(initial.total);
   const [page, setPage] = useState(0);
@@ -532,7 +534,14 @@ export function SalesClient({
                     const status = returnStatus(s);
                     const fullyReturned = s.fullyReturned;
                     return (
-                      <tr key={s.id} className="border-t">
+                      <tr
+                        key={s.id}
+                        onClick={() => router.push(`/dashboard/sales/${s.id}`)}
+                        className="
+                          cursor-pointer border-t transition-colors
+                          hover:bg-accent/40
+                        "
+                      >
                         <td className="px-3 py-2 whitespace-nowrap">
                           {dateFmt.format(new Date(s.createdAt))}
                         </td>
@@ -560,7 +569,10 @@ export function SalesClient({
                             variant="outline"
                             size="sm"
                             disabled={detailLoading || fullyReturned}
-                            onClick={() => openReturn(s.id)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openReturn(s.id);
+                            }}
                           >
                             {fullyReturned
                               ? 'Devuelta'
