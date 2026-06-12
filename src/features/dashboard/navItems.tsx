@@ -106,6 +106,11 @@ const GATED_HREF: Record<string, keyof NavModuleFlags> = {
   '/dashboard/suppliers': 'suppliers',
 };
 
+// Personal views that only make sense for non-owner members. The owner is a
+// Clerk member with no posUsers row, so "Mi perfil" (their WhatsApp) does not
+// apply to them — their business number lives in Ajustes → Negocio instead.
+const MEMBER_ONLY_HREFS = new Set<string>(['/dashboard/mi-perfil']);
+
 // Returns the nav groups with hidden items removed. Two filters apply:
 //   1. Module toggles (NavModuleFlags) — business-level on/off (Fiados/Empleados).
 //   2. Per-user panel permissions — when `panelModules` is provided (a non-owner
@@ -126,7 +131,8 @@ export function buildNavGroups(
           return false;
         }
         if (panelModules == null) {
-          return true;
+          // Owner sees everything the toggles allow, except member-only views.
+          return !MEMBER_ONLY_HREFS.has(item.href);
         }
         const need = requiredModuleForPath(item.href);
         if (need.kind === 'public') {
