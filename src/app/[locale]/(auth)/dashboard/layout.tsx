@@ -73,13 +73,29 @@ export default async function DashboardLayout(props: DashboardLayoutProps) {
   // booleans (not the built groups) because the nav groups carry Lucide icon
   // components, which cannot cross the Server→Client boundary as props. The
   // client nav components filter locally via buildNavGroups.
-  const [fiadoSetting, employeesSetting] = await Promise.all([
+  const [
+    fiadoSetting,
+    employeesSetting,
+    turnosSetting,
+    deliverySetting,
+    facturasSetting,
+    suppliersSetting,
+  ] = await Promise.all([
     getAppSetting('fiado-enabled'),
     getAppSetting('modules.employees'),
+    getAppSetting('modules.turnos'),
+    getAppSetting('modules.delivery'),
+    getAppSetting('modules.facturas'),
+    getAppSetting('modules.suppliers'),
   ]);
+  // Every module defaults to ENABLED; the owner opts out in Ajustes → Módulos.
   const navFlags: NavModuleFlags = {
-    fiado: fiadoSetting.value !== 'false', // defaults to enabled
-    employees: employeesSetting.value === 'true',
+    fiado: fiadoSetting.value !== 'false',
+    employees: employeesSetting.value !== 'false',
+    turnos: turnosSetting.value !== 'false',
+    delivery: deliverySetting.value !== 'false',
+    facturas: facturasSetting.value !== 'false',
+    suppliers: suppliersSetting.value !== 'false',
   };
 
   // Sidebar collapsed/expanded preference, resolved server-side so the first

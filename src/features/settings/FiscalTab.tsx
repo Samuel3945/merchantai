@@ -1,21 +1,25 @@
 'use client';
 
-import { CheckCircle2, Loader2, XCircle } from 'lucide-react';
+import { CheckCircle2, FileX2, Loader2, ReceiptText, XCircle } from 'lucide-react';
 import { useState } from 'react';
 import { testEInvoiceConnection } from '@/actions/einvoice';
-import { MaskedField, SelectField, TextAreaField, TextField } from './fields';
+import { cn } from '@/utils/Helpers';
+import { MaskedField, SelectField, TextField } from './fields';
 import { useSettingSave } from './useSettingSave';
 
-const REGIME_OPTIONS = [
-  { value: 'simplificado', label: 'Régimen Simplificado' },
-  { value: 'comun', label: 'Régimen Común' },
-  { value: 'simple', label: 'Régimen Simple de Tributación' },
-  { value: 'no_responsable', label: 'No responsable de IVA' },
-] as const;
-
 const EINVOICE_PROVIDERS = [
-  { value: 'none', label: 'No usar facturación electrónica' },
-  { value: 'factus', label: 'Factus (DIAN)' },
+  {
+    value: 'none',
+    label: 'Sin facturación electrónica',
+    description: 'Las ventas no emiten factura ante la DIAN.',
+    icon: FileX2,
+  },
+  {
+    value: 'factus',
+    label: 'Factus (DIAN)',
+    description: 'Emite facturas electrónicas automáticamente con tu cuenta Factus.',
+    icon: ReceiptText,
+  },
 ] as const;
 
 const FACTUS_ENVS = [
@@ -25,9 +29,6 @@ const FACTUS_ENVS = [
 
 export type FiscalTabValues = {
   fiscal_nit: string;
-  fiscal_regime: string;
-  fiscal_invoice_prefix: string;
-  fiscal_dian_resolution: string;
   fiscal_einvoice_provider: string;
   einvoice_factus_email: string;
   einvoice_factus_password: string;
@@ -46,76 +47,92 @@ export function FiscalTab({ initial }: { initial: FiscalTabValues }) {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-lg font-semibold">Información fiscal</h2>
+        <h2 className="text-lg font-semibold">Facturación electrónica</h2>
         <p className="text-sm text-muted-foreground">
-          Datos de identificación tributaria y facturación electrónica DIAN.
+          Conecta tu proveedor para emitir facturas electrónicas ante la DIAN.
         </p>
       </div>
 
+      {/* Provider chooser — two cards, not a bare dropdown */}
       <div className="
-        grid gap-4
-        md:grid-cols-2
+        grid gap-3
+        sm:grid-cols-2
       "
       >
-        <TextField
-          id="fiscal_nit"
-          label="NIT / Identificación tributaria"
-          initial={initial.fiscal_nit}
-          placeholder="900123456-7"
-          onCommit={v => save('fiscal_nit', v.trim())}
-        />
-        <SelectField
-          id="fiscal_regime"
-          label="Régimen fiscal"
-          initial={initial.fiscal_regime || 'simplificado'}
-          options={REGIME_OPTIONS}
-          onCommit={v => save('fiscal_regime', v)}
-        />
-        <TextField
-          id="fiscal_invoice_prefix"
-          label="Prefijo de facturación"
-          initial={initial.fiscal_invoice_prefix}
-          placeholder="FE"
-          hint="Se antepone al consecutivo (ej: FE-000123)."
-          onCommit={v => save('fiscal_invoice_prefix', v.trim().toUpperCase())}
-        />
-        <div className="md:col-span-2">
-          <TextAreaField
-            id="fiscal_dian_resolution"
-            label="Resolución DIAN"
-            initial={initial.fiscal_dian_resolution}
-            placeholder="Número, fecha, rango autorizado…"
-            rows={3}
-            onCommit={v => save('fiscal_dian_resolution', v.trim())}
-          />
-        </div>
+        {EINVOICE_PROVIDERS.map((opt) => {
+          const Icon = opt.icon;
+          const selected = provider === opt.value;
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => {
+                setProvider(opt.value);
+                save('fiscal_einvoice_provider', opt.value);
+              }}
+              className={cn(
+                `
+                  flex items-start gap-3 rounded-lg border p-4 text-left
+                  transition-colors
+                `,
+                selected
+                  ? 'border-primary bg-primary/5'
+                  : `
+                    border-input bg-background
+                    hover:bg-accent/40
+                  `,
+              )}
+            >
+              <span className={cn(
+                `
+                  flex size-9 shrink-0 items-center justify-center rounded-md
+                  border
+                `,
+                selected
+                  ? 'border-primary/40 bg-primary/10 text-primary'
+                  : 'text-muted-foreground',
+              )}
+              >
+                <Icon className="size-5" />
+              </span>
+              <span>
+                <span className={cn(
+                  'block text-sm font-semibold',
+                  selected && 'text-primary',
+                )}
+                >
+                  {opt.label}
+                </span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  {opt.description}
+                </span>
+              </span>
+            </button>
+          );
+        })}
       </div>
 
-      <div className="space-y-4 rounded-md border border-border p-4">
-        <div>
-          <h3 className="text-sm font-semibold">Facturación electrónica</h3>
-          <p className="text-xs text-muted-foreground">
-            Conectá tu proveedor para emitir facturas electrónicas ante la DIAN.
-          </p>
-        </div>
+      {provider === 'factus' && (
+        <div className="space-y-4 rounded-md border border-border p-4">
+          <div>
+            <h3 className="text-sm font-semibold">Cuenta Factus</h3>
+            <p className="text-xs text-muted-foreground">
+              Credenciales de tu cuenta Factus y NIT con el que se emite.
+            </p>
+          </div>
 
-        <SelectField
-          id="fiscal_einvoice_provider"
-          label="Proveedor"
-          initial={provider}
-          options={EINVOICE_PROVIDERS}
-          onCommit={(v) => {
-            setProvider(v);
-            save('fiscal_einvoice_provider', v);
-          }}
-        />
-
-        {provider === 'factus' && (
           <div className="
             grid gap-4
             md:grid-cols-2
           "
           >
+            <TextField
+              id="fiscal_nit"
+              label="NIT del emisor"
+              initial={initial.fiscal_nit}
+              placeholder="900123456-7"
+              onCommit={v => save('fiscal_nit', v.trim())}
+            />
             <TextField
               id="einvoice_factus_email"
               label="Email de la cuenta Factus"
@@ -156,15 +173,15 @@ export function FiscalTab({ initial }: { initial: FiscalTabValues }) {
               label="URL base (opcional)"
               initial={initial.einvoice_factus_base_url}
               placeholder="https://api.factus.com.co"
-              hint="Sólo si necesitás sobrescribir la URL por defecto del entorno."
+              hint="Solo si necesitas sobrescribir la URL por defecto del entorno."
               onCommit={v => save('einvoice_factus_base_url', v.trim())}
             />
             <div className="md:col-span-2">
               <FactusConnectionTest />
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

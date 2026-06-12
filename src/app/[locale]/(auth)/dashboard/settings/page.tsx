@@ -18,28 +18,22 @@ const KEYS = [
   'features.sell_by_weight',
   'features.wholesale',
   'features.perishable',
-  // Modules
+  // Modules (all default ON)
   'modules.employees',
+  'modules.turnos',
+  'modules.delivery',
+  'modules.suppliers',
+  'modules.facturas',
   'fiado-enabled',
-  // Fiscal
+  // E-invoicing (Factus/DIAN)
   'fiscal_nit',
-  'fiscal_regime',
-  'fiscal_invoice_prefix',
-  'fiscal_dian_resolution',
   'fiscal_einvoice_provider',
-  // Factus (DIAN e-invoicing) credentials
   'einvoice_factus_email',
   'einvoice_factus_password',
   'einvoice_factus_client_id',
   'einvoice_factus_client_secret',
   'einvoice_factus_env',
   'einvoice_factus_base_url',
-  // Integrations
-  'whatsapp_business_token',
-  'whatsapp_phone_number_id',
-  'wompi_public_key',
-  'wompi_private_key',
-  'openai_api_key',
   // Returns
   'returns_enabled',
   'returns_max_days',
@@ -91,13 +85,14 @@ export default async function DashboardSettingsPage(props: {
           'features.perishable': asBool(map['features.perishable']),
         }}
         modules={{
-          'modules.employees': asBool(map['modules.employees']),
+          'modules.employees': asBool(map['modules.employees'], true),
+          'modules.turnos': asBool(map['modules.turnos'], true),
+          'modules.delivery': asBool(map['modules.delivery'], true),
+          'modules.suppliers': asBool(map['modules.suppliers'], true),
+          'modules.facturas': asBool(map['modules.facturas'], true),
         }}
         fiscal={{
           fiscal_nit: map.fiscal_nit,
-          fiscal_regime: map.fiscal_regime,
-          fiscal_invoice_prefix: map.fiscal_invoice_prefix,
-          fiscal_dian_resolution: map.fiscal_dian_resolution,
           fiscal_einvoice_provider: map.fiscal_einvoice_provider,
           einvoice_factus_email: map.einvoice_factus_email,
           einvoice_factus_password: map.einvoice_factus_password,
@@ -105,13 +100,6 @@ export default async function DashboardSettingsPage(props: {
           einvoice_factus_client_secret: map.einvoice_factus_client_secret,
           einvoice_factus_env: map.einvoice_factus_env,
           einvoice_factus_base_url: map.einvoice_factus_base_url,
-        }}
-        integrations={{
-          whatsapp_business_token: map.whatsapp_business_token,
-          whatsapp_phone_number_id: map.whatsapp_phone_number_id,
-          wompi_public_key: map.wompi_public_key,
-          wompi_private_key: map.wompi_private_key,
-          openai_api_key: map.openai_api_key,
         }}
         returns={{
           returns_enabled: asBool(map.returns_enabled, true),

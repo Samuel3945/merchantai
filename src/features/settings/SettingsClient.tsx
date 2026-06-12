@@ -2,7 +2,6 @@
 
 import type { BusinessTabValues } from './BusinessTab';
 import type { FiscalTabValues } from './FiscalTab';
-import type { IntegrationsTabValues } from './IntegrationsTab';
 import type { ModulesTabValues } from './ModulesTab';
 import type { ReturnsTabValues } from './ReturnsTab';
 import type { PaymentMethodRow } from '@/actions/payment-methods';
@@ -10,7 +9,6 @@ import { useState } from 'react';
 import { AuditTab } from './AuditTab';
 import { BusinessTab } from './BusinessTab';
 import { FiscalTab } from './FiscalTab';
-import { IntegrationsTab } from './IntegrationsTab';
 import { ModulesTab } from './ModulesTab';
 import { PaymentMethodsClient } from './PaymentMethodsClient';
 import { ReturnsTab } from './ReturnsTab';
@@ -25,8 +23,7 @@ const BASE_TABS: ReadonlyArray<Tab> = [
   { key: 'business', label: 'Negocio' },
   { key: 'payment-methods', label: 'Métodos de pago' },
   { key: 'modules', label: 'Módulos' },
-  { key: 'fiscal', label: 'Fiscal' },
-  { key: 'integrations', label: 'Integraciones' },
+  { key: 'fiscal', label: 'Facturación' },
   { key: 'returns', label: 'Devoluciones' },
 ];
 
@@ -38,7 +35,6 @@ export type SettingsClientProps = {
   business: BusinessTabValues;
   modules: ModulesTabValues;
   fiscal: FiscalTabValues;
-  integrations: IntegrationsTabValues;
   returns: ReturnsTabValues;
   isAdmin: boolean;
 };
@@ -49,7 +45,6 @@ export function SettingsClient({
   business,
   modules,
   fiscal,
-  integrations,
   returns: returnsValues,
   isAdmin,
 }: SettingsClientProps) {
@@ -92,9 +87,6 @@ export function SettingsClient({
         )}
         {activeTab === 'modules' && <ModulesTab initial={modules} />}
         {activeTab === 'fiscal' && <FiscalTab initial={fiscal} />}
-        {activeTab === 'integrations' && (
-          <IntegrationsTab initial={integrations} />
-        )}
         {activeTab === 'returns' && <ReturnsTab initial={returnsValues} />}
         {activeTab === 'audit' && isAdmin && <AuditTab />}
       </div>
