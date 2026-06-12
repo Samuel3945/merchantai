@@ -232,6 +232,13 @@
       "when": 1781278193181,
       "tag": "0032_org_addresses_per_caja",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1781281379610,
+      "tag": "0033_caja_current_cashier",
+      "breakpoints": true
     }
   ]
 }

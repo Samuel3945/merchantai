@@ -94,13 +94,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       .limit(1);
 
     if (row) {
-      if (row.token.expiresAt && row.token.expiresAt.getTime() < Date.now()) {
-        return NextResponse.json(
-          { success: false, error: 'Token expirado' },
-          { status: 401 },
-        );
-      }
-
+      // Cajas never expire — access is gated only by the token, PIN and block.
       // PIN de acceso de la caja: si está configurado, se exige junto al token.
       if (row.token.pin) {
         if (!pin) {

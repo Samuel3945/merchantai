@@ -1,10 +1,7 @@
 'use client';
 
 import type { OrgAddress } from '@/actions/org-addresses';
-import type {
-  listOrgCashiers,
-  PosDeviceQuota,
-} from '@/actions/pos-tokens';
+import type { PosDeviceQuota } from '@/actions/pos-tokens';
 import type { ActionResult } from '@/libs/action-result';
 import {
   ArrowUpRight,
@@ -46,7 +43,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Select } from '@/components/ui/select';
 import { Link } from '@/libs/I18nNavigation';
 import { POS_DEVICES_LIMIT_REACHED } from '@/libs/plan-limits';
 import { AddressPicker } from './AddressPicker';
@@ -59,7 +55,6 @@ import { AddressPicker } from './AddressPicker';
 const TIENDA_CAJERO_URL = 'https://app.pos.mymerchantai.com';
 
 type TokenRow = Awaited<ReturnType<typeof listPosTokens>>[number];
-type CashierRow = Awaited<ReturnType<typeof listOrgCashiers>>[number];
 type CreatedToken = Extract<
   Awaited<ReturnType<typeof createPosToken>>,
   { ok: true }
@@ -129,18 +124,15 @@ function limitPayload(failure: ActionFailure): LimitErrorPayload | null {
 
 export function PosCajerosClient({
   initialTokens,
-  initialCashiers,
   initialQuota,
   initialAddresses,
 }: {
   initialTokens: TokenRow[];
-  initialCashiers: CashierRow[];
   initialQuota: PosDeviceQuota;
   initialAddresses: OrgAddress[];
 }) {
   const confirm = useConfirm();
   const [tokens, setTokens] = useState(initialTokens);
-  const [cashiers] = useState(initialCashiers);
   const [quota, setQuota] = useState(initialQuota);
   const [addresses, setAddresses] = useState(initialAddresses);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -346,8 +338,6 @@ export function PosCajerosClient({
               <th className="px-3 py-2">Caja / dispositivo</th>
               <th className="px-3 py-2">Cajero</th>
               <th className="px-3 py-2">Estado</th>
-              <th className="px-3 py-2">Último sync</th>
-              <th className="px-3 py-2">Expira</th>
               <th className="px-3 py-2">Creada</th>
               <th className="px-3 py-2">Acciones</th>
             </tr>
@@ -357,7 +347,7 @@ export function PosCajerosClient({
               <tr>
                 <td
                   className="px-3 py-8 text-center text-muted-foreground"
-                  colSpan={7}
+                  colSpan={5}
                 >
                   Aún no tienes cajas. Agrega una para registrar tu primer
                   dispositivo POS.
@@ -383,7 +373,24 @@ export function PosCajerosClient({
                     </div>
                   )}
                 </td>
-                <td className="px-3 py-2">{t.cashierName ?? '—'}</td>
+                <td className="px-3 py-2">
+                  {t.currentCashierName
+                    ? (
+                        <div className="flex flex-col items-start">
+                          <span>{t.currentCashierName}</span>
+                          {t.currentCashierAt && (
+                            <span className="text-xs text-muted-foreground">
+                              desde
+                              {' '}
+                              {formatDate(t.currentCashierAt)}
+                            </span>
+                          )}
+                        </div>
+                      )
+                    : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                </td>
                 <td className="px-3 py-2">
                   <div className="flex flex-col items-start gap-1">
                     {t.active
@@ -419,8 +426,6 @@ export function PosCajerosClient({
                     </span>
                   </div>
                 </td>
-                <td className="px-3 py-2 text-xs">{formatDate(t.lastSyncAt)}</td>
-                <td className="px-3 py-2 text-xs">{formatDate(t.expiresAt)}</td>
                 <td className="px-3 py-2 text-xs">{formatDate(t.createdAt)}</td>
                 <td className="px-3 py-2">
                   <div className="flex items-center justify-end gap-1">
@@ -517,7 +522,6 @@ export function PosCajerosClient({
 
       {showCreateModal && (
         <CreateTokenModal
-          cashiers={cashiers}
           addresses={addresses}
           onAddressesChange={setAddresses}
           onClose={() => setShowCreateModal(false)}
@@ -529,17 +533,15 @@ export function PosCajerosClient({
               storeId: created.storeId,
               deviceName: created.deviceName,
               createdBy: created.createdBy,
-              cashierId: created.cashierId,
-              cashierName:
-                cashiers.find(c => c.id === created.cashierId)?.name ?? null,
+              currentCashierId: created.currentCashierId,
+              currentCashierName: null,
+              currentCashierAt: created.currentCashierAt,
               addressId: created.addressId,
               addressName: addresses.find(a => a.id === created.addressId)?.name ?? null,
               address: addresses.find(a => a.id === created.addressId)?.address ?? null,
               addressCity: addresses.find(a => a.id === created.addressId)?.city ?? null,
               active: created.active,
               hasPin: created.pin !== '',
-              lastSyncAt: created.lastSyncAt,
-              expiresAt: created.expiresAt,
               createdAt: created.createdAt,
             });
             refresh();
@@ -679,14 +681,12 @@ function LimitBanner({
 }
 
 function CreateTokenModal({
-  cashiers,
   addresses,
   onAddressesChange,
   onClose,
   onSuccess,
   onFailure,
 }: {
-  cashiers: CashierRow[];
   addresses: OrgAddress[];
   onAddressesChange: (next: OrgAddress[]) => void;
   onClose: () => void;
@@ -694,9 +694,7 @@ function CreateTokenModal({
   onFailure: (failure: ActionFailure) => void;
 }) {
   const [deviceName, setDeviceName] = useState('');
-  const [cashierId, setCashierId] = useState('');
   const [addressId, setAddressId] = useState<string | null>(null);
-  const [expiresAt, setExpiresAt] = useState('');
   const [pin, setPin] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -712,9 +710,7 @@ function CreateTokenModal({
     try {
       const result = await createPosToken({
         deviceName,
-        cashierId: cashierId || undefined,
         addressId,
-        expiresAt: expiresAt || undefined,
         pin,
       });
       if (!result.ok) {
@@ -765,23 +761,6 @@ function CreateTokenModal({
             />
           </div>
           <div>
-            <label htmlFor="pt-cashier" className={labelCls}>
-              Cajero asignado (opcional)
-            </label>
-            <Select
-              id="pt-cashier"
-              value={cashierId}
-              onValueChange={setCashierId}
-              options={[
-                { value: '', label: '— Sin asignar —' },
-                ...cashiers.map(c => ({
-                  value: c.id,
-                  label: `${c.name} (${c.email})`,
-                })),
-              ]}
-            />
-          </div>
-          <div>
             <span className={labelCls}>Dirección / sucursal (opcional)</span>
             <div className="mt-1">
               <AddressPicker
@@ -791,18 +770,6 @@ function CreateTokenModal({
                 onAddressesChange={onAddressesChange}
               />
             </div>
-          </div>
-          <div>
-            <label htmlFor="pt-expires" className={labelCls}>
-              Expira (opcional)
-            </label>
-            <input
-              id="pt-expires"
-              type="datetime-local"
-              value={expiresAt}
-              onChange={e => setExpiresAt(e.target.value)}
-              className={inputCls}
-            />
           </div>
           <div>
             <label htmlFor="pt-pin" className={labelCls}>

@@ -62,8 +62,26 @@ export async function POST(req: Request): Promise<NextResponse> {
 
   const cashier = { id: emp.id, name: emp.name, role: emp.role };
 
+  // Stamp who is now operating this caja so the admin panel shows the live
+  // operator. Runs for BOTH PIN and no-PIN employees (this endpoint is the
+  // profile-change gate). Best-effort — never block the login on this write.
+  const markOperating = async () => {
+    if (!ctx.tokenId) {
+      return;
+    }
+    try {
+      await db
+        .update(posTokensSchema)
+        .set({ currentCashierId: emp.id, currentCashierAt: new Date() })
+        .where(eq(posTokensSchema.id, ctx.tokenId));
+    } catch {
+      // best-effort
+    }
+  };
+
   // Sin PIN configurado → acceso directo.
   if (!emp.pin) {
+    await markOperating();
     return NextResponse.json({ ok: true, cashier });
   }
 
@@ -102,5 +120,6 @@ export async function POST(req: Request): Promise<NextResponse> {
     );
   }
 
+  await markOperating();
   return NextResponse.json({ ok: true, cashier });
 }
