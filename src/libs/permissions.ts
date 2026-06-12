@@ -5,10 +5,14 @@
  * USERS, and the owner grants each one whatever permissions they want. A
  * permission either unlocks a VIEW/MODULE or allows a sensitive ACTION. The same
  * grants govern every surface (POS and web panel), so this catalog is the one
- * place the whole app reads from. Granting "Caja registradora (POS)" pre-ticks
- * every other grant as a convenience (the owner can untick); any other module
- * can be granted alone without POS access. Every user gets web panel access —
- * what they SEE there is still limited to their granted modules.
+ * place the whole app reads from. Every user gets web panel access — what they
+ * SEE there is still limited to their granted modules.
+ *
+ * Granting "Caja registradora (POS)" pre-ticks the cashier core bundle
+ * ({@link POS_CORE_MODULES}: caja, ventas, fiados, clientes) as a convenience —
+ * the owner can untick. Conversely, unticking any core module drops the POS
+ * grant, because a cashier needs the full bundle to operate the counter. Any
+ * other module can still be granted alone without POS access.
  *
  * Source of truth = the database: `panel_access` + `enabled_modules` +
  * `permissions`. Clerk membership metadata is only a cached copy for fast
@@ -39,7 +43,7 @@ type PermissionItem = {
  * the same English-key convention.
  */
 export const MODULE_PERMISSIONS: PermissionItem[] = [
-  { key: 'pos', label: 'Caja registradora (POS)', hint: 'Operar la app de caja. Al activarlo se marcan todos los demás permisos (puedes desmarcar).' },
+  { key: 'pos', label: 'Caja registradora (POS)', hint: 'Operar la app de caja. Activa el combo de cajero: Caja, Ventas, Fiados y Clientes (puedes desmarcar).' },
   { key: 'cash', label: 'Caja', hint: 'Arqueo y movimientos de caja', dashboardPath: '/dashboard/cash' },
   { key: 'sales', label: 'Ventas', hint: 'Historial de ventas', dashboardPath: '/dashboard/sales' },
   { key: 'fiados', label: 'Fiados', hint: 'Cuentas por cobrar', dashboardPath: '/dashboard/fiados' },
@@ -63,6 +67,13 @@ export const ACTION_PERMISSIONS: PermissionItem[] = [
 
 const MODULE_KEYS = MODULE_PERMISSIONS.map(p => p.key);
 const ACTION_KEYS = ACTION_PERMISSIONS.map(p => p.key);
+
+/**
+ * The cashier "core" bundle. Granting `pos` pre-ticks exactly these modules, and
+ * unticking any of them drops the `pos` grant — a cashier needs the full set to
+ * operate the counter. Keys must exist in {@link MODULE_PERMISSIONS}.
+ */
+export const POS_CORE_MODULES: string[] = ['cash', 'sales', 'fiados', 'customers'];
 
 // Dashboard routes reserved for the owner (Clerk org admin). Members are never
 // granted these; deny-by-default also covers any unmapped dashboard route.
