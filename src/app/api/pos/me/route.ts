@@ -1,6 +1,7 @@
 import { and, asc, eq, sql } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { db } from '@/libs/DB';
+import { getDefaultTermDays } from '@/libs/fiados';
 import { parseWholesaleTiers } from '@/libs/wholesale';
 import {
   cashSessionsSchema,
@@ -246,6 +247,7 @@ export async function GET(req: Request): Promise<NextResponse> {
     businessName,
     businessPhone,
     fiadoEnabledRaw,
+    fiadoTermDays,
     paymentMethods,
     cashiers,
     products,
@@ -253,6 +255,7 @@ export async function GET(req: Request): Promise<NextResponse> {
     getSetting(orgId, 'business_name'),
     getSetting(orgId, 'business_phone'),
     getSetting(orgId, 'fiado-enabled'),
+    getDefaultTermDays(db, orgId),
     listActivePaymentMethods(orgId),
     listCashiers(orgId),
     db
@@ -309,6 +312,9 @@ export async function GET(req: Request): Promise<NextResponse> {
       name: businessName || 'Mi Tienda',
       phone: businessPhone || '',
       fiadoEnabled,
+      // Org default payment term: new fiados fall due this many days after
+      // the sale unless an explicit due date is provided.
+      fiadoTermDays,
     },
     features: {
       fiadoEnabled,
