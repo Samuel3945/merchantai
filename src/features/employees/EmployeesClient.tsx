@@ -1,6 +1,26 @@
 'use client';
 
 import type { ActionResult } from '@/libs/action-result';
+import {
+  ArrowLeftRightIcon,
+  BanknoteIcon,
+  BarChart3Icon,
+  BikeIcon,
+  BoxesIcon,
+  EyeIcon,
+  FileTextIcon,
+  HandCoinsIcon,
+  MonitorIcon,
+  PackageIcon,
+  PencilIcon,
+  RotateCcwIcon,
+  ShoppingCartIcon,
+  SlidersHorizontalIcon,
+  SparklesIcon,
+  TruckIcon,
+  UsersIcon,
+  WalletIcon,
+} from 'lucide-react';
 import { useCallback, useState, useTransition } from 'react';
 import {
   deleteEmployee,
@@ -13,13 +33,17 @@ import {
   setEmployeeActive,
   updateEmployee,
 } from '@/actions/employees';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useConfirm } from '@/components/ui/confirm';
+import { Switch } from '@/components/ui/switch';
 import {
   ACTION_PERMISSIONS,
   MODULE_PERMISSIONS,
+  POS_CORE_MODULES,
 } from '@/libs/permissions';
 import { CASHIERS_LIMIT_REACHED } from '@/libs/plan-limits';
+import { cn } from '@/utils/Helpers';
 
 type EmployeeRow = Awaited<ReturnType<typeof listEmployees>>[number];
 type InvitationRow = Awaited<ReturnType<typeof listPendingInvitations>>[number];
@@ -85,31 +109,112 @@ function permsToMap(
 }
 
 /**
- * Toggles one module. Granting "Caja registradora (POS)" pre-ticks every other
- * module as a convenience (a cashier operates the whole counter); the owner can
- * untick any of them afterwards. Other modules toggle independently — POS access
- * is never implied.
+ * Toggles one module with the cashier-bundle cascade. Granting "Caja registradora
+ * (POS)" pre-ticks the cashier core bundle ({@link POS_CORE_MODULES}: caja,
+ * ventas, fiados, clientes) as a convenience — the owner can untick. Unticking any
+ * core module drops the POS grant, because a cashier needs the full bundle to
+ * operate the counter. Non-core modules toggle independently — POS is never
+ * implied by them.
  */
 function toggleModuleCascade(
   prev: Record<string, boolean>,
   key: string,
 ): Record<string, boolean> {
   const next = { ...prev, [key]: !prev[key] };
-  if (key === 'pos' && next.pos) {
-    for (const m of MODULE_PERMISSIONS) {
-      next[m.key] = true;
+  if (key === 'pos') {
+    if (next.pos) {
+      for (const m of POS_CORE_MODULES) {
+        next[m] = true;
+      }
     }
+    return next;
+  }
+  if (POS_CORE_MODULES.includes(key) && !next[key]) {
+    next.pos = false;
   }
   return next;
 }
 
-/** Same cascade for sensitive actions when POS is being granted. */
-function allActionsGranted(): Record<string, boolean> {
-  return Object.fromEntries(ACTION_PERMISSIONS.map(p => [p.key, true]));
+// Lucide icon per grantable module/action. Keeps `permissions.ts` free of React
+// deps (it runs on the server too); the visual layer maps keys to icons here.
+const MODULE_ICONS: Record<string, typeof MonitorIcon> = {
+  pos: MonitorIcon,
+  cash: WalletIcon,
+  sales: ShoppingCartIcon,
+  fiados: HandCoinsIcon,
+  products: PackageIcon,
+  inventory: BoxesIcon,
+  customers: UsersIcon,
+  suppliers: TruckIcon,
+  reports: BarChart3Icon,
+  delivery: BikeIcon,
+  facturas: FileTextIcon,
+};
+
+const ACTION_ICONS: Record<string, typeof MonitorIcon> = {
+  'sales.refund': RotateCcwIcon,
+  'cash.withdraw': BanknoteIcon,
+  'cash.adjust': SlidersHorizontalIcon,
+  'inventory.edit': PencilIcon,
+  'reports.view': EyeIcon,
+};
+
+// One permission row: icon + label + optional hint on the left, a Switch on the
+// right. Mirrors the Agente IA "Modelos Inteligentes" cards.
+function ToggleCard({
+  icon: Icon,
+  label,
+  hint,
+  checked,
+  onToggle,
+  badge,
+  highlighted,
+}: {
+  icon: typeof MonitorIcon;
+  label: string;
+  hint?: string;
+  checked: boolean;
+  onToggle: () => void;
+  badge?: React.ReactNode;
+  highlighted?: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        `
+          flex items-start justify-between gap-3 rounded-md border bg-background
+          p-3 transition-colors
+        `,
+        highlighted
+          ? 'border-primary/50 bg-primary/5'
+          : checked && 'border-primary/40',
+      )}
+    >
+      <div className="flex items-start gap-2.5 pr-1">
+        <Icon
+          className={cn(
+            'mt-0.5 size-4 shrink-0 text-muted-foreground',
+            (checked || highlighted) && 'text-primary',
+          )}
+        />
+        <div className="space-y-0.5">
+          <div className="flex items-center gap-2 text-sm/tight font-medium">
+            {label}
+            {badge}
+          </div>
+          {hint && (
+            <p className="text-xs/snug text-muted-foreground">{hint}</p>
+          )}
+        </div>
+      </div>
+      <Switch checked={checked} onCheckedChange={onToggle} aria-label={label} />
+    </div>
+  );
 }
 
-// Shared grant checkboxes used by both the invite and edit dialogs. There are no
-// role tiers: the owner ticks exactly what this user can see and do.
+// Shared grant controls used by both the invite and edit dialogs. There are no
+// role tiers: the owner ticks exactly what this user can see and do. The POS
+// "Cajero" card is the master of the cashier bundle (see toggleModuleCascade).
 function GrantFields({
   modules,
   actions,
@@ -125,57 +230,85 @@ function GrantFields({
   onToggleAction: (key: string) => void;
   onToggleTransfers: () => void;
 }) {
+  const otherModules = MODULE_PERMISSIONS.filter(m => m.key !== 'pos');
   return (
-    <>
-      <div>
+    <div className="space-y-5">
+      <ToggleCard
+        icon={MonitorIcon}
+        label="Caja registradora (POS)"
+        hint="Combo de cajero: activa Caja, Ventas, Fiados y Clientes. Si desmarcás cualquiera de esos, el cajero se apaga."
+        checked={!!modules.pos}
+        onToggle={() => onToggleModule('pos')}
+        highlighted
+        badge={(
+          <Badge variant="secondary" className="gap-1">
+            <SparklesIcon className="size-3" />
+            Cajero
+          </Badge>
+        )}
+      />
+
+      <div className="space-y-2">
         <div className={labelCls}>Vistas / Módulos</div>
-        <div className="mt-2 grid grid-cols-2 gap-2">
-          {MODULE_PERMISSIONS.map(m => (
-            <label key={m.key} className="flex items-start gap-2 text-sm">
-              <input
-                type="checkbox"
-                className="mt-0.5"
+        <div className="
+          grid gap-2
+          sm:grid-cols-2
+        "
+        >
+          {otherModules.map((m) => {
+            const Icon = MODULE_ICONS[m.key] ?? PackageIcon;
+            const isCore = POS_CORE_MODULES.includes(m.key);
+            return (
+              <ToggleCard
+                key={m.key}
+                icon={Icon}
+                label={m.label}
+                hint={m.hint}
                 checked={!!modules[m.key]}
-                onChange={() => onToggleModule(m.key)}
+                onToggle={() => onToggleModule(m.key)}
+                badge={isCore
+                  ? (
+                      <Badge variant="outline" className="text-[10px]">
+                        Cajero
+                      </Badge>
+                    )
+                  : undefined}
               />
-              <span>
-                {m.label}
-                {m.hint && (
-                  <span className="block text-xs text-muted-foreground">
-                    {m.hint}
-                  </span>
-                )}
-              </span>
-            </label>
-          ))}
+            );
+          })}
         </div>
       </div>
 
-      <div>
+      <div className="space-y-2">
         <div className={labelCls}>Acciones sensibles</div>
-        <div className="mt-2 grid grid-cols-2 gap-2">
-          {ACTION_PERMISSIONS.map(p => (
-            <label key={p.key} className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
+        <div className="
+          grid gap-2
+          sm:grid-cols-2
+        "
+        >
+          {ACTION_PERMISSIONS.map((p) => {
+            const Icon = ACTION_ICONS[p.key] ?? SlidersHorizontalIcon;
+            return (
+              <ToggleCard
+                key={p.key}
+                icon={Icon}
+                label={p.label}
                 checked={!!actions[p.key]}
-                onChange={() => onToggleAction(p.key)}
+                onToggle={() => onToggleAction(p.key)}
               />
-              {p.label}
-            </label>
-          ))}
+            );
+          })}
         </div>
       </div>
 
-      <label className="flex items-center gap-2 text-sm">
-        <input
-          type="checkbox"
-          checked={canConfirmTransfers}
-          onChange={onToggleTransfers}
-        />
-        Puede confirmar transferencias
-      </label>
-    </>
+      <ToggleCard
+        icon={ArrowLeftRightIcon}
+        label="Puede confirmar transferencias"
+        hint="Permite marcar como recibidas las transferencias desde la caja."
+        checked={canConfirmTransfers}
+        onToggle={onToggleTransfers}
+      />
+    </div>
   );
 }
 
@@ -721,9 +854,6 @@ function InviteModal({
   const [submitting, setSubmitting] = useState(false);
 
   const handleToggleModule = (key: string) => {
-    if (key === 'pos' && !modules.pos) {
-      setActions(allActionsGranted());
-    }
     setModules(prev => toggleModuleCascade(prev, key));
   };
 
@@ -940,12 +1070,7 @@ function EditModal({
           modules={modules}
           actions={actions}
           canConfirmTransfers={canConfirmTransfers}
-          onToggleModule={(k) => {
-            if (k === 'pos' && !modules.pos) {
-              setActions(allActionsGranted());
-            }
-            setModules(p => toggleModuleCascade(p, k));
-          }}
+          onToggleModule={k => setModules(p => toggleModuleCascade(p, k))}
           onToggleAction={k => setActions(p => ({ ...p, [k]: !p[k] }))}
           onToggleTransfers={() => setCanConfirmTransfers(v => !v)}
         />
