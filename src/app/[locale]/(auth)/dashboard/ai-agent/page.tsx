@@ -6,7 +6,6 @@ import { AgentPersonaSection } from '@/features/ai-agent/AgentPersonaSection';
 import { ChannelsSection } from '@/features/ai-agent/ChannelsSection';
 import { SmartModelsSection } from '@/features/ai-agent/SmartModelsSection';
 import { TitleBar } from '@/features/dashboard/TitleBar';
-import { Env } from '@/libs/Env';
 import { evolutionConfigured } from '@/libs/evolution';
 
 export default async function DashboardAiAgentPage(props: {
@@ -41,7 +40,6 @@ export default async function DashboardAiAgentPage(props: {
           isAdmin={isAdmin}
           whatsappChannels={whatsappChannels}
           evolutionConfigured={evolutionConfigured()}
-          whatsappWebhookConfigured={Boolean(Env.WHATSAPP_N8N_WEBHOOK_URL)}
         />
       </div>
     </>

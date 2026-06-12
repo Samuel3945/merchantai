@@ -7,9 +7,32 @@ import {
   deleteWhatsAppChannel,
   getWhatsAppChannelStatus,
   refreshWhatsAppChannelQr,
+  updateWhatsAppChannel,
 } from '@/actions/whatsapp-channels';
 import { Button } from '@/components/ui/button';
 import { useConfirm } from '@/components/ui/confirm';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Switch } from '@/components/ui/switch';
+
+// What the agent may do on a channel. The admin picks per channel; the agent
+// (n8n) enforces it. Persisted in whatsapp_channels.capabilities.
+const CAPABILITIES: { key: string; label: string; sub: string }[] = [
+  { key: 'products_lookup', label: 'Consultar productos', sub: 'Precios y disponibilidad' },
+  { key: 'sales_query', label: 'Consultar ventas', sub: 'Lectura de reportes' },
+  { key: 'orders', label: 'Tomar pedidos', sub: 'Crea ventas en POS' },
+  { key: 'fiados', label: 'Gestionar fiados', sub: 'Registrar y consultar' },
+  { key: 'inventory_query', label: 'Consultar inventario', sub: 'Stock y alertas' },
+  { key: 'cash_query', label: 'Consultar caja', sub: 'Solo lectura' },
+  { key: 'price_changes', label: 'Cambiar precios', sub: 'Confirmación en chat' },
+  { key: 'alerts', label: 'Enviar alertas', sub: 'Stock bajo, fiados, caja' },
+];
 
 const STATUS_LABEL: Record<WhatsAppChannelRow['status'], string> = {
   connecting: 'Conectando…',
@@ -23,42 +46,45 @@ const STATUS_CLASS: Record<WhatsAppChannelRow['status'], string> = {
   disconnected: 'bg-destructive/10 text-destructive',
 };
 
+const inputCls
+  = 'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50';
+
 function qrSrc(qr: string): string {
   return qr.startsWith('data:') ? qr : `data:image/png;base64,${qr}`;
 }
 
+function countCapabilities(caps: Record<string, boolean>): number {
+  return Object.values(caps).filter(Boolean).length;
+}
+
 // Real WhatsApp connection panel: lists persisted channels, connects a new
-// number via QR (Evolution instance), and removes channels. Shared between the
-// AI agent "Canales" section and anywhere else WhatsApp connection is offered.
+// number via QR (Evolution instance) with a purpose + agent permissions, edits
+// them, and removes channels.
 export function WhatsAppChannelsPanel({
   initialChannels,
   configured,
-  webhookConfigured,
 }: {
   initialChannels: WhatsAppChannelRow[];
   configured: boolean;
-  webhookConfigured: boolean;
 }) {
   const confirm = useConfirm();
   const [channels, setChannels] = useState(initialChannels);
   const [error, setError] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
+  // `editing` drives the form dialog: 'new' to create, a row to edit, null closed.
+  const [editing, setEditing] = useState<WhatsAppChannelRow | 'new' | null>(null);
   const [active, setActive] = useState<{ channel: WhatsAppChannelRow; qr: string | null } | null>(
     null,
   );
 
-  const handleConnect = async () => {
-    setError(null);
-    setCreating(true);
-    try {
-      const { channel, qrBase64 } = await createWhatsAppChannel();
-      setChannels(prev => [channel, ...prev]);
-      setActive({ channel, qr: qrBase64 });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'No se pudo crear el canal');
-    } finally {
-      setCreating(false);
-    }
+  const handleCreated = (channel: WhatsAppChannelRow, qrBase64: string | null) => {
+    setChannels(prev => [channel, ...prev]);
+    setEditing(null);
+    setActive({ channel, qr: qrBase64 });
+  };
+
+  const handleUpdated = (channel: WhatsAppChannelRow) => {
+    setChannels(prev => prev.map(c => (c.id === channel.id ? channel : c)));
+    setEditing(null);
   };
 
   const handleConnected = (id: string, phoneNumber: string | null) => {
@@ -97,12 +123,12 @@ export function WhatsAppChannelsPanel({
         <div>
           <h2 className="text-lg font-semibold">Conexión de WhatsApp</h2>
           <p className="text-sm text-muted-foreground">
-            Conectá un número escaneando un QR. Cada número levanta su propia
-            instancia y los mensajes entrantes se procesan automáticamente.
+            Conectá un número por QR, dale un propósito y elegí qué puede hacer la
+            IA en ese canal. Cada número es su propia instancia.
           </p>
         </div>
-        <Button onClick={handleConnect} disabled={!configured || creating}>
-          {creating ? 'Creando…' : 'Conectar WhatsApp'}
+        <Button onClick={() => setEditing('new')} disabled={!configured}>
+          Conectar WhatsApp
         </Button>
       </div>
 
@@ -124,21 +150,6 @@ export function WhatsAppChannelsPanel({
         </div>
       )}
 
-      {configured && !webhookConfigured && (
-        <div className="
-          rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3
-          text-sm text-amber-700
-        "
-        >
-          Los canales se conectan, pero los mensajes entrantes no se reenviarán
-          hasta definir
-          {' '}
-          <code className="font-mono">WHATSAPP_N8N_WEBHOOK_URL</code>
-          {' '}
-          en el entorno.
-        </div>
-      )}
-
       {error && (
         <div className="
           rounded-md border border-destructive/40 bg-destructive/10 px-4 py-2
@@ -154,11 +165,12 @@ export function WhatsAppChannelsPanel({
 
       <div className="overflow-hidden rounded-md border bg-background">
         <div className="
-          grid grid-cols-[1fr_140px_120px] gap-2 border-b bg-muted/50 px-3 py-2
-          text-xs font-medium text-muted-foreground uppercase
+          grid grid-cols-[1fr_120px_120px_120px] gap-2 border-b bg-muted/50 px-3
+          py-2 text-xs font-medium text-muted-foreground uppercase
         "
         >
           <div>Canal</div>
+          <div>Permisos</div>
           <div>Estado</div>
           <div className="text-right">Acciones</div>
         </div>
@@ -173,8 +185,8 @@ export function WhatsAppChannelsPanel({
           <div
             key={row.id}
             className="
-              grid grid-cols-[1fr_140px_120px] items-center gap-2 border-b px-3
-              py-2 text-sm
+              grid grid-cols-[1fr_120px_120px_120px] items-center gap-2 border-b
+              px-3 py-2 text-sm
               last:border-b-0
             "
           >
@@ -182,9 +194,16 @@ export function WhatsAppChannelsPanel({
               <div className="font-medium">
                 {row.phoneNumber ?? row.label ?? 'Canal nuevo'}
               </div>
-              {row.phoneNumber && row.label && (
-                <div className="truncate text-xs text-muted-foreground">{row.label}</div>
+              {(row.purpose || row.label) && (
+                <div className="truncate text-xs text-muted-foreground">
+                  {row.purpose || row.label}
+                </div>
               )}
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {countCapabilities(row.capabilities)}
+              {' '}
+              activos
             </div>
             <div>
               <span className={`
@@ -205,6 +224,9 @@ export function WhatsAppChannelsPanel({
                   Ver QR
                 </Button>
               )}
+              <Button size="sm" variant="secondary" onClick={() => setEditing(row)}>
+                Editar
+              </Button>
               <Button size="sm" variant="destructive" onClick={() => handleDelete(row)}>
                 Eliminar
               </Button>
@@ -212,6 +234,16 @@ export function WhatsAppChannelsPanel({
           </div>
         ))}
       </div>
+
+      {editing && (
+        <ChannelFormDialog
+          channel={editing === 'new' ? null : editing}
+          onClose={() => setEditing(null)}
+          onCreated={handleCreated}
+          onUpdated={handleUpdated}
+          onError={msg => setError(msg)}
+        />
+      )}
 
       {active && (
         <QrModal
@@ -222,6 +254,151 @@ export function WhatsAppChannelsPanel({
         />
       )}
     </div>
+  );
+}
+
+function ChannelFormDialog({
+  channel,
+  onClose,
+  onCreated,
+  onUpdated,
+  onError,
+}: {
+  channel: WhatsAppChannelRow | null;
+  onClose: () => void;
+  onCreated: (channel: WhatsAppChannelRow, qrBase64: string | null) => void;
+  onUpdated: (channel: WhatsAppChannelRow) => void;
+  onError: (msg: string) => void;
+}) {
+  const isEdit = channel !== null;
+  const [label, setLabel] = useState(channel?.label ?? '');
+  const [purpose, setPurpose] = useState(channel?.purpose ?? '');
+  const [capabilities, setCapabilities] = useState<Record<string, boolean>>(
+    channel?.capabilities ?? {},
+  );
+  const [submitting, setSubmitting] = useState(false);
+
+  const toggle = (key: string, next: boolean) =>
+    setCapabilities(prev => ({ ...prev, [key]: next }));
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmitting(true);
+    try {
+      const input = { label, purpose, capabilities };
+      if (isEdit) {
+        onUpdated(await updateWhatsAppChannel(channel.id, input));
+      } else {
+        const { channel: created, qrBase64 } = await createWhatsAppChannel(input);
+        onCreated(created, qrBase64);
+      }
+    } catch (err) {
+      onError(err instanceof Error ? err.message : 'No se pudo guardar el canal');
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={next => !next && onClose()}>
+      <DialogContent className="max-h-[90dvh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>{isEdit ? 'Editar canal' : 'Nuevo canal de WhatsApp'}</DialogTitle>
+          <DialogDescription>
+            Definí para qué sirve este canal y qué puede hacer la IA en él.
+          </DialogDescription>
+        </DialogHeader>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label
+              htmlFor="wa-label"
+              className="text-xs font-medium text-muted-foreground"
+            >
+              Etiqueta
+            </label>
+            <input
+              id="wa-label"
+              type="text"
+              value={label}
+              placeholder="WhatsApp principal"
+              onChange={e => setLabel(e.target.value)}
+              className={inputCls}
+            />
+          </div>
+
+          <div>
+            <label
+              htmlFor="wa-purpose"
+              className="text-xs font-medium text-muted-foreground"
+            >
+              Propósito
+            </label>
+            <input
+              id="wa-purpose"
+              type="text"
+              value={purpose}
+              placeholder="Atención clientes / Confirmación de pedidos / Alertas"
+              onChange={e => setPurpose(e.target.value)}
+              className={inputCls}
+            />
+          </div>
+
+          <div>
+            <p className="
+              mb-2 text-xs font-semibold tracking-wider text-muted-foreground
+              uppercase
+            "
+            >
+              Permisos del bot en este canal
+            </p>
+            <div className="
+              grid gap-2
+              sm:grid-cols-2
+            "
+            >
+              {CAPABILITIES.map((c) => {
+                const on = capabilities[c.key] === true;
+                return (
+                  <label
+                    key={c.key}
+                    htmlFor={`wa-cap-${c.key}`}
+                    className={`
+                      flex cursor-pointer items-center gap-3 rounded-md border
+                      p-2.5
+                      ${on
+                    ? 'border-brand/40 bg-brand-soft/40'
+                    : `bg-background`}
+                    `}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-semibold">{c.label}</p>
+                      <p className="text-[10px] text-muted-foreground">{c.sub}</p>
+                    </div>
+                    <Switch
+                      id={`wa-cap-${c.key}`}
+                      checked={on}
+                      aria-label={c.label}
+                      onCheckedChange={next => toggle(c.key, next)}
+                    />
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button type="button" variant="ghost" onClick={onClose} disabled={submitting}>
+              Cancelar
+            </Button>
+            <Button type="submit" disabled={submitting}>
+              {submitting
+                ? (isEdit ? 'Guardando…' : 'Creando…')
+                : (isEdit ? 'Guardar' : 'Conectar')}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 

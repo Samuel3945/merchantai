@@ -18,9 +18,17 @@ import { whatsappChannelsSchema } from '@/models/Schema';
 
 export type WhatsAppChannelStatus = 'connecting' | 'connected' | 'disconnected';
 
+export type WhatsAppChannelInput = {
+  label?: string;
+  purpose?: string;
+  capabilities?: Record<string, boolean>;
+};
+
 export type WhatsAppChannelRow = {
   id: string;
   label: string | null;
+  purpose: string | null;
+  capabilities: Record<string, boolean>;
   status: WhatsAppChannelStatus;
   phoneNumber: string | null;
   createdAt: string;
@@ -44,10 +52,25 @@ function toRow(r: typeof whatsappChannelsSchema.$inferSelect): WhatsAppChannelRo
   return {
     id: r.id,
     label: r.label,
+    purpose: r.purpose,
+    capabilities: r.capabilities ?? {},
     status: r.status,
     phoneNumber: r.phoneNumber,
     createdAt: r.createdAt.toISOString(),
   };
+}
+
+// Keeps only the boolean capability flags that are `true`, so the stored object
+// stays small and explicit.
+function cleanCapabilities(
+  capabilities: Record<string, boolean> | undefined,
+): Record<string, boolean> {
+  if (!capabilities) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(capabilities).filter(([, v]) => v === true),
+  );
 }
 
 export async function listWhatsAppChannels(): Promise<WhatsAppChannelRow[]> {
@@ -61,7 +84,7 @@ export async function listWhatsAppChannels(): Promise<WhatsAppChannelRow[]> {
 }
 
 export async function createWhatsAppChannel(
-  label?: string,
+  input: WhatsAppChannelInput = {},
 ): Promise<{ channel: WhatsAppChannelRow; qrBase64: string | null }> {
   const { userId, orgId } = await requireAdminOrg();
 
@@ -72,13 +95,15 @@ export async function createWhatsAppChannel(
   }
 
   const instanceName = buildInstanceName(orgId);
-
-  // Create the Evolution instance first so we never persist an orphan row.
-  const { qrBase64: createdQr } = await createInstance(instanceName);
-
-  // Route inbound messages to n8n. Best-effort: a webhook hiccup must not block
-  // the QR/connection the admin is waiting on — they can reconnect later.
   const webhookUrl = Env.WHATSAPP_N8N_WEBHOOK_URL;
+
+  // Create the Evolution instance first so we never persist an orphan row. The
+  // webhook + events are set atomically in the create call when a URL exists.
+  const { qrBase64: createdQr } = await createInstance(instanceName, webhookUrl);
+
+  // Belt-and-suspenders: re-assert the webhook (idempotent) in case a given
+  // Evolution build ignores webhook-in-create. Best-effort — must not block the
+  // QR the admin is waiting on.
   if (webhookUrl) {
     try {
       await setWebhook(instanceName, webhookUrl);
@@ -100,7 +125,9 @@ export async function createWhatsAppChannel(
       .values({
         organizationId: orgId,
         instanceName,
-        label: label?.trim() || null,
+        label: input.label?.trim() || null,
+        purpose: input.purpose?.trim() || null,
+        capabilities: cleanCapabilities(input.capabilities),
         status: 'connecting',
         createdBy: userId,
       })
@@ -122,6 +149,33 @@ export async function createWhatsAppChannel(
   }
 
   return { channel: toRow(row), qrBase64 };
+}
+
+export async function updateWhatsAppChannel(
+  id: string,
+  input: WhatsAppChannelInput,
+): Promise<WhatsAppChannelRow> {
+  const { orgId } = await requireAdminOrg();
+
+  const [updated] = await db
+    .update(whatsappChannelsSchema)
+    .set({
+      label: input.label?.trim() || null,
+      purpose: input.purpose?.trim() || null,
+      capabilities: cleanCapabilities(input.capabilities),
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(whatsappChannelsSchema.id, id),
+        eq(whatsappChannelsSchema.organizationId, orgId),
+      ),
+    )
+    .returning();
+  if (!updated) {
+    throw new Error('Channel not found');
+  }
+  return toRow(updated);
 }
 
 export async function getWhatsAppChannelStatus(

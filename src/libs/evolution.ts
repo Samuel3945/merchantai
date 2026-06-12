@@ -65,10 +65,13 @@ function readQr(payload: unknown): string | null {
   return qr.qrcode?.base64 ?? qr.base64 ?? null;
 }
 
-// Creates the instance with QR auth. Returns the QR data URL when Evolution
-// includes it in the create response (it usually does with qrcode: true).
+// Creates the instance with QR auth and, atomically, its webhook + events when
+// a URL is given — so the instance is never live without inbound routing (key
+// for high volume). Returns the QR data URL when Evolution includes it in the
+// create response (it usually does with qrcode: true).
 export async function createInstance(
   instanceName: string,
+  webhookUrl?: string,
 ): Promise<{ qrBase64: string | null }> {
   const payload = await evoFetch('/instance/create', {
     method: 'POST',
@@ -76,6 +79,16 @@ export async function createInstance(
       instanceName,
       integration: 'WHATSAPP-BAILEYS',
       qrcode: true,
+      ...(webhookUrl
+        ? {
+            webhook: {
+              url: webhookUrl,
+              byEvents: false,
+              base64: false,
+              events: [...WEBHOOK_EVENTS],
+            },
+          }
+        : {}),
     },
   });
   return { qrBase64: readQr(payload) };
