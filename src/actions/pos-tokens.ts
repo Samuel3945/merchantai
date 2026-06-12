@@ -12,10 +12,33 @@ import { db } from '@/libs/DB';
 import { getOrgEntitlements, limitOf } from '@/libs/entitlements';
 import { POS_DEVICES_LIMIT_REACHED } from '@/libs/plan-limits';
 import {
+  orgAddressesSchema,
   planAddonsSchema,
   posTokensSchema,
   posUsersSchema,
 } from '@/models/Schema';
+
+/** Validates an address id belongs to the org. Returns the id or null. */
+async function resolveOrgAddressId(
+  orgId: string,
+  addressId: string | null | undefined,
+): Promise<string | null> {
+  const id = addressId?.trim() || null;
+  if (!id) {
+    return null;
+  }
+  const [row] = await db
+    .select({ id: orgAddressesSchema.id })
+    .from(orgAddressesSchema)
+    .where(
+      and(
+        eq(orgAddressesSchema.id, id),
+        eq(orgAddressesSchema.organizationId, orgId),
+      ),
+    )
+    .limit(1);
+  return row ? row.id : null;
+}
 
 type PosToken = typeof posTokensSchema.$inferSelect;
 
@@ -101,6 +124,8 @@ export type CreatePosTokenInput = {
   cashierId?: string;
   expiresAt?: Date | string | null;
   pin?: string;
+  /** Branch address for this caja (org_addresses.id). */
+  addressId?: string | null;
 };
 
 // Register names must be unique per org (case-insensitive): audit trails and
@@ -194,6 +219,8 @@ export async function createPosToken(
     }
   }
 
+  const addressId = await resolveOrgAddressId(orgId, input.addressId);
+
   const [row] = await db
     .insert(posTokensSchema)
     .values({
@@ -201,6 +228,7 @@ export async function createPosToken(
       deviceName,
       createdBy: userId,
       cashierId,
+      addressId,
       expiresAt,
       pin: pinHash,
     })
@@ -272,6 +300,10 @@ export async function listPosTokens() {
       createdBy: posTokensSchema.createdBy,
       cashierId: posTokensSchema.cashierId,
       cashierName: posUsersSchema.name,
+      addressId: posTokensSchema.addressId,
+      addressName: orgAddressesSchema.name,
+      address: orgAddressesSchema.address,
+      addressCity: orgAddressesSchema.city,
       active: posTokensSchema.active,
       hasPin: sql<boolean>`(${posTokensSchema.pin} <> '')`,
       lastSyncAt: posTokensSchema.lastSyncAt,
@@ -280,6 +312,10 @@ export async function listPosTokens() {
     })
     .from(posTokensSchema)
     .leftJoin(posUsersSchema, eq(posUsersSchema.id, posTokensSchema.cashierId))
+    .leftJoin(
+      orgAddressesSchema,
+      eq(orgAddressesSchema.id, posTokensSchema.addressId),
+    )
     .where(eq(posTokensSchema.organizationId, orgId))
     .orderBy(desc(posTokensSchema.createdAt));
 
@@ -463,6 +499,57 @@ export async function renamePosToken(
     entityId: id,
     before: { deviceName: current.deviceName },
     after: { deviceName: updated.deviceName },
+  });
+
+  revalidatePath('/dashboard/pos-cajeros');
+  return { ok: true, data: updated };
+}
+
+// Assigns (or clears) the branch address of a caja. addressId='' / null clears
+// it, falling back to the legacy business_address in pos/connect.
+export async function setPosTokenAddress(
+  id: string,
+  addressId: string | null,
+): Promise<ActionResult<{ id: string; addressId: string | null }>> {
+  const { userId, orgId } = await requireAdminContext();
+
+  const [current] = await db
+    .select({ addressId: posTokensSchema.addressId })
+    .from(posTokensSchema)
+    .where(
+      and(eq(posTokensSchema.id, id), eq(posTokensSchema.organizationId, orgId)),
+    )
+    .limit(1);
+
+  if (!current) {
+    return { ok: false, error: 'Caja no encontrada' };
+  }
+
+  const resolved = await resolveOrgAddressId(orgId, addressId);
+
+  const [updated] = await db
+    .update(posTokensSchema)
+    .set({ addressId: resolved })
+    .where(
+      and(eq(posTokensSchema.id, id), eq(posTokensSchema.organizationId, orgId)),
+    )
+    .returning({
+      id: posTokensSchema.id,
+      addressId: posTokensSchema.addressId,
+    });
+
+  if (!updated) {
+    return { ok: false, error: 'Caja no encontrada' };
+  }
+
+  await logAction({
+    organizationId: orgId,
+    actor: { type: 'user', id: userId },
+    action: 'pos_token.address_changed',
+    entityType: 'pos_token',
+    entityId: id,
+    before: { addressId: current.addressId },
+    after: { addressId: updated.addressId },
   });
 
   revalidatePath('/dashboard/pos-cajeros');
