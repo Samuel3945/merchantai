@@ -77,11 +77,12 @@ export async function POST(req: Request): Promise<NextResponse> {
       .where(eq(employeeInvitationsSchema.id, invitation.id));
   });
 
-  // If this single user was granted web panel access, provision their Clerk web
-  // identity with the SAME password and link it back to the pos_users row. The
-  // employee stays one entity; Clerk is only the web sign-in provider. This is
-  // best-effort: a failure must not block the POS account they just activated.
-  if (invitation.panelAccess) {
+  // Every user gets a web panel identity: provision their Clerk account with
+  // the SAME password and link it back to the pos_users row. The employee stays
+  // one entity; Clerk is only the web sign-in provider. This is best-effort: a
+  // failure must not block the POS account they just activated. (Old invites
+  // created before the panel-access switch was removed provision too.)
+  {
     const provision = await provisionPanelUser({
       email: invitation.email,
       password,

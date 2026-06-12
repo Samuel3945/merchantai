@@ -162,9 +162,6 @@ export type InviteEmployeeInput = {
   permissions?: Record<string, unknown>;
   enabledModules?: string[];
   canConfirmTransfers?: boolean;
-  // Whether this single user may sign into the web panel. Independent from the
-  // module grants above (a panel user can still see only Inventario, etc.).
-  panelAccess?: boolean;
 };
 
 export type InviteEmployeeResult = {
@@ -187,7 +184,9 @@ export async function invite(
   const permissions = cleanActionPermissions(
     data.permissions as Record<string, unknown> | undefined,
   );
-  const panelAccess = data.panelAccess ?? false;
+  // Every user gets web panel access; what they SEE there is limited to their
+  // granted modules. There is no separate panel-access switch anymore.
+  const panelAccess = true;
 
   if (!email || !/^\S[^\s@]*@\S[^\s.]*\.\S+$/.test(email)) {
     return { ok: false, error: 'Ingresá un email válido' };
