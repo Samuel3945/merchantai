@@ -9,6 +9,7 @@ import {
   Boxes,
   CalendarClock,
   Copy,
+  MonitorSmartphone,
   MoreVertical,
   Pencil,
   Trash2,
@@ -91,6 +92,9 @@ type ProductFormState = {
   unitType: 'unit' | 'kg';
   isPerishable: boolean;
   isWholesale: boolean;
+  isDigital: boolean;
+  // Remaining sellable units for a digital product; empty = unlimited.
+  digitalLimit: string;
   tiers: UITier[];
   attributes: AttrRow[];
   // Opening inventory — create-only.
@@ -108,6 +112,8 @@ const emptyForm: ProductFormState = {
   unitType: 'unit',
   isPerishable: false,
   isWholesale: false,
+  isDigital: false,
+  digitalLimit: '',
   tiers: [],
   attributes: [],
   initialQty: '',
@@ -127,6 +133,8 @@ function toFormState(p: ProductRow): ProductFormState {
     unitType: p.unitType,
     isPerishable: p.isPerishable,
     isWholesale: p.isWholesale,
+    isDigital: p.isDigital,
+    digitalLimit: p.digitalLimit != null ? String(p.digitalLimit) : '',
     tiers: tiers.map(t => ({ minQty: String(t.minQty), price: String(t.price) })),
     attributes: Object.entries(attrs).map(([key, value]) => ({
       key,
@@ -163,6 +171,7 @@ export type ProductFeatureFlags = {
   sellByWeight: boolean;
   wholesale: boolean;
   perishable: boolean;
+  digital: boolean;
 };
 
 export function ProductsClient({
@@ -230,8 +239,10 @@ export function ProductsClient({
     fetchCategories();
   }, [fetchCategories]);
 
+  // Digital products are excluded: their availability is a sales cap (or
+  // unlimited), not physical units on hand.
   const totalStock = useMemo(
-    () => rows.reduce((acc, r) => acc + r.stock, 0),
+    () => rows.reduce((acc, r) => acc + (r.isDigital ? 0 : r.stock), 0),
     [rows],
   );
 
@@ -388,9 +399,14 @@ export function ProductsClient({
           price: form.price,
           cost: form.cost || '0',
           category: category === '' ? null : category,
-          unitType: form.unitType,
-          isPerishable: form.isPerishable,
+          unitType: form.isDigital ? ('unit' as const) : form.unitType,
+          isPerishable: form.isDigital ? false : form.isPerishable,
           isWholesale: form.isWholesale,
+          isDigital: form.isDigital,
+          digitalLimit:
+            form.isDigital && form.digitalLimit.trim() !== ''
+              ? Number.parseInt(form.digitalLimit, 10)
+              : null,
           wholesaleTiers,
           attributes,
         };
@@ -402,7 +418,7 @@ export function ProductsClient({
           // sell. Draft is reserved for future agent workflows, not the UI.
           await createProduct({
             ...common,
-            initialQty: initialQtyNum,
+            initialQty: form.isDigital ? 0 : initialQtyNum,
             initialCost: form.initialCost.trim() === '' ? null : form.initialCost.trim(),
             initialExpiresAt:
               form.initialExpiresAt.trim() === '' ? null : form.initialExpiresAt.trim(),
@@ -708,8 +724,12 @@ export function ProductsClient({
                         </td>
                         <td className="px-3 py-2">{p.category ?? '—'}</td>
                         <td className="px-3 py-2 text-right">{p.price}</td>
-                        <td className="px-3 py-2 text-right">{p.stock}</td>
-                        <td className="px-3 py-2">{p.unitType}</td>
+                        <td className="px-3 py-2 text-right">
+                          {p.isDigital ? (p.digitalLimit ?? '∞') : p.stock}
+                        </td>
+                        <td className="px-3 py-2">
+                          {p.isDigital ? 'digital' : p.unitType}
+                        </td>
                         <td className="px-3 py-2">
                           <Badge
                             variant="outline"
@@ -871,7 +891,7 @@ export function ProductsClient({
                 </p>
               </div>
 
-              {features.sellByWeight && (
+              {features.sellByWeight && !form.isDigital && (
                 <div>
                   <label className={labelCls}>Se vende por</label>
                   <div className="mt-1 grid grid-cols-2 gap-2">
@@ -910,6 +930,31 @@ export function ProductsClient({
 
               <ProductTypeToggles
                 rows={[
+                  ...(features.digital
+                    ? [{
+                        id: 'product-digital',
+                        icon: MonitorSmartphone,
+                        label: 'Producto digital',
+                        description: 'Sin inventario físico: stock ilimitado o con límite de ventas',
+                        checked: form.isDigital,
+                        // Digital is unit-based and lot-free: turning it on
+                        // resets the physical-inventory flags it replaces.
+                        onCheckedChange: (v: boolean) =>
+                          setForm(f => ({
+                            ...f,
+                            isDigital: v,
+                            ...(v
+                              ? {
+                                  unitType: 'unit' as const,
+                                  isPerishable: false,
+                                  initialQty: '',
+                                  initialCost: '',
+                                  initialExpiresAt: '',
+                                }
+                              : { digitalLimit: '' }),
+                          })),
+                      }]
+                    : []),
                   ...(features.wholesale
                     ? [{
                         id: 'product-wholesale',
@@ -921,7 +966,7 @@ export function ProductsClient({
                           setForm(f => ({ ...f, isWholesale: v })),
                       }]
                     : []),
-                  ...(features.perishable && !editing
+                  ...(features.perishable && !editing && !form.isDigital
                     ? [{
                         id: 'product-perishable',
                         icon: CalendarClock,
@@ -934,6 +979,29 @@ export function ProductsClient({
                     : []),
                 ]}
               />
+
+              {form.isDigital && (
+                <div>
+                  <label className={labelCls}>
+                    Límite de ventas (opcional)
+                  </label>
+                  <input
+                    inputMode="numeric"
+                    value={form.digitalLimit}
+                    onChange={e => setForm({
+                      ...form,
+                      digitalLimit: e.target.value.replace(/\D/g, ''),
+                    })}
+                    placeholder="Sin límite"
+                    className={cn(inputCls, 'mt-1')}
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Déjalo vacío para vender sin límite. Si lo defines, cada
+                    venta lo descuenta y al llegar a 0 el producto deja de
+                    venderse.
+                  </p>
+                </div>
+              )}
 
               <div>
                 <label className={labelCls}>
@@ -956,7 +1024,7 @@ export function ProductsClient({
                 />
               )}
 
-              {!editing && (
+              {!editing && !form.isDigital && (
                 <div className="space-y-2 rounded-md border bg-muted/30 p-3">
                   <p className="
                     text-xs font-semibold tracking-wider text-muted-foreground

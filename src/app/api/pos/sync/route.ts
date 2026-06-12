@@ -105,6 +105,9 @@ export async function POST(req: Request): Promise<NextResponse> {
         }[] = [];
         // products.cost per line, aligned by index, for FIFO fallback valuation.
         const lineFallbackCost: string[] = [];
+        // Digital products skip the stock decrement; availability is governed
+        // by the optional digitalLimit counter (NULL = unlimited).
+        const digitalById = new Map<string, { digitalLimit: number | null }>();
 
         for (const item of queuedSale.items) {
           if (!item.productId) {
@@ -133,7 +136,14 @@ export async function POST(req: Request): Promise<NextResponse> {
               `Producto no encontrado: ${item.productName || item.productId}`,
             );
           }
-          if (product.stock < qty) {
+          if (product.isDigital) {
+            digitalById.set(product.id, { digitalLimit: product.digitalLimit });
+            if (product.digitalLimit !== null && product.digitalLimit < qty) {
+              throw new Error(
+                `Límite de ventas alcanzado: ${product.name} (disp: ${product.digitalLimit})`,
+              );
+            }
+          } else if (product.stock < qty) {
             throw new Error(
               `Stock insuficiente: ${product.name} (disp: ${product.stock})`,
             );
@@ -184,6 +194,23 @@ export async function POST(req: Request): Promise<NextResponse> {
           .values(itemsToInsert.map(it => ({ saleId: sale.id, ...it })));
 
         for (const it of itemsToInsert) {
+          const digital = digitalById.get(it.productId);
+          if (digital) {
+            if (digital.digitalLimit !== null) {
+              await tx
+                .update(productsSchema)
+                .set({
+                  digitalLimit: sql`GREATEST(0, ${productsSchema.digitalLimit} - ${it.qty})`,
+                })
+                .where(
+                  and(
+                    eq(productsSchema.id, it.productId),
+                    eq(productsSchema.organizationId, orgId),
+                  ),
+                );
+            }
+            continue;
+          }
           await tx
             .update(productsSchema)
             .set({
@@ -296,5 +323,14 @@ export async function POST(req: Request): Promise<NextResponse> {
     )
     .orderBy(asc(productsSchema.name));
 
-  return NextResponse.json({ results, products });
+  // Digital products report a virtual stock to the cashier: the remaining
+  // sales limit, or an effectively-infinite count when unlimited — so the POS
+  // cart caps work unchanged. The server-side checks above stay authoritative.
+  const wireProducts = products.map(p => ({
+    ...p,
+    stock: p.isDigital ? (p.digitalLimit ?? 999999) : p.stock,
+    is_digital: p.isDigital,
+  }));
+
+  return NextResponse.json({ results, products: wireProducts });
 }

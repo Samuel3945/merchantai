@@ -13,11 +13,11 @@ const KEYS = [
   'business_logo',
   'business_currency',
   'business_timezone',
-  'business_offering',
   // Sale modalities (shape the product form)
   'features.sell_by_weight',
   'features.wholesale',
   'features.perishable',
+  'features.digital',
   // Modules (all default ON)
   'modules.employees',
   'modules.turnos',
@@ -79,10 +79,10 @@ export default async function DashboardSettingsPage(props: {
           'business_logo': map.business_logo,
           'business_currency': map.business_currency,
           'business_timezone': map.business_timezone,
-          'business_offering': map.business_offering || 'productos',
           'features.sell_by_weight': asBool(map['features.sell_by_weight']),
           'features.wholesale': asBool(map['features.wholesale']),
           'features.perishable': asBool(map['features.perishable']),
+          'features.digital': asBool(map['features.digital']),
         }}
         modules={{
           'modules.employees': asBool(map['modules.employees'], true),

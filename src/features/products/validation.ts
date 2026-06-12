@@ -45,6 +45,9 @@ const productBaseSchema = z.object({
   unitType: productUnitType.optional().default('unit'),
   isPerishable: z.coerce.boolean().optional().default(false),
   isWholesale: z.coerce.boolean().optional().default(false),
+  isDigital: z.coerce.boolean().optional().default(false),
+  // Remaining sellable units for a digital product. NULL = unlimited.
+  digitalLimit: z.coerce.number().int().min(0).nullable().optional(),
   wholesaleTiers: z.array(wholesaleTierSchema).nullable().optional(),
   attributes: z.record(z.string(), z.unknown()).optional().default({}),
   status: productStatus.optional().default('published'),
@@ -61,6 +64,8 @@ function refineProduct(
     status?: string;
     publishAt?: Date | null;
     isPerishable?: boolean;
+    isDigital?: boolean;
+    unitType?: string;
     initialQty?: number;
     initialCost?: string | null;
     initialExpiresAt?: string | null;
@@ -68,6 +73,20 @@ function refineProduct(
   ctx: z.RefinementCtx,
 ) {
   const basePrice = data.price !== undefined ? Number(data.price) : Number.NaN;
+
+  // Digital products have no physical inventory: they can't be weighed, can't
+  // expire by lot, and never receive an opening stock batch.
+  if (data.isDigital) {
+    if (data.unitType === 'kg') {
+      ctx.addIssue({ code: 'custom', path: ['unitType'], message: 'Un producto digital no se vende por peso' });
+    }
+    if (data.isPerishable) {
+      ctx.addIssue({ code: 'custom', path: ['isPerishable'], message: 'Un producto digital no maneja vencimiento por lote' });
+    }
+    if ((data.initialQty ?? 0) > 0) {
+      ctx.addIssue({ code: 'custom', path: ['initialQty'], message: 'Un producto digital no lleva inventario inicial' });
+    }
+  }
 
   if (data.isWholesale && data.wholesaleTiers && data.wholesaleTiers.length > 0) {
     const tiers = data.wholesaleTiers.map(t => ({

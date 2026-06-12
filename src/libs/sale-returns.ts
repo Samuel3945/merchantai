@@ -362,6 +362,40 @@ export async function applySaleReturn(
 
   for (const r of resolved) {
     if (r.restock) {
+      // Digital products have no physical stock to restock: returning one
+      // gives back its sales-limit unit (when a limit exists) and never
+      // touches the FIFO ledger.
+      const [returnedProduct] = await tx
+        .select({
+          isDigital: productsSchema.isDigital,
+          digitalLimit: productsSchema.digitalLimit,
+        })
+        .from(productsSchema)
+        .where(
+          and(
+            eq(productsSchema.id, r.productId),
+            eq(productsSchema.organizationId, organizationId),
+          ),
+        )
+        .limit(1);
+
+      if (returnedProduct?.isDigital) {
+        if (returnedProduct.digitalLimit !== null) {
+          await tx
+            .update(productsSchema)
+            .set({
+              digitalLimit: sql`${productsSchema.digitalLimit} + ${r.qty}`,
+            })
+            .where(
+              and(
+                eq(productsSchema.id, r.productId),
+                eq(productsSchema.organizationId, organizationId),
+              ),
+            );
+        }
+        continue;
+      }
+
       // Customer changed their mind: the goods go back to sellable stock.
       await tx
         .update(productsSchema)

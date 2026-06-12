@@ -29,12 +29,13 @@ export default async function DashboardProductsPage(props: {
     }
   }
 
-  const [initial, sellByWeight, wholesale, perishable]
+  const [initial, sellByWeight, wholesale, perishable, digital]
     = await Promise.all([
       listProducts(),
       getAppSetting('features.sell_by_weight'),
       getAppSetting('features.wholesale'),
       getAppSetting('features.perishable'),
+      getAppSetting('features.digital'),
     ]);
 
   return (
@@ -49,6 +50,7 @@ export default async function DashboardProductsPage(props: {
           sellByWeight: sellByWeight.value === 'true',
           wholesale: wholesale.value === 'true',
           perishable: perishable.value === 'true',
+          digital: digital.value === 'true',
         }}
       />
     </>
