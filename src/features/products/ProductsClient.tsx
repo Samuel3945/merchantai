@@ -156,8 +156,8 @@ const labelCls = 'text-sm font-medium';
 type AiState
   = | { status: 'idle' }
     | { status: 'loading' }
-    | { status: 'done'; remaining: number }
-    | { status: 'no_credits' };
+    | { status: 'done' }
+    | { status: 'unavailable' };
 
 export type ProductFeatureFlags = {
   sellByWeight: boolean;
@@ -290,7 +290,9 @@ export function ProductsClient({
     setError(null);
     setAi({ status: 'idle' });
     setAiSuggestions([]);
-    lastCategorizedRef.current = '';
+    // Seed with the saved name so re-opening an edit doesn't re-categorize a
+    // product whose name hasn't changed — the AI only re-runs on a real rename.
+    lastCategorizedRef.current = p.name;
     setOpen(true);
   }
 
@@ -310,12 +312,13 @@ export function ProductsClient({
     setError(null);
   }
 
-  // AI categorization — fires when the user finishes typing the name (create
-  // mode only). Consumes one credit, so it's gated on a meaningful name and
-  // never re-runs for the same value.
+  // AI categorization — the category is AI-OWNED (the shop never types one), so
+  // this fires on the name in BOTH create and edit and always overwrites the
+  // category with the model's answer. It costs no inteligentes credit. Gated on
+  // a meaningful name and never re-runs for an unchanged value.
   function runCategorize() {
     const name = form.name.trim();
-    if (editing || name.length < 3 || name === lastCategorizedRef.current) {
+    if (name.length < 3 || name === lastCategorizedRef.current) {
       return;
     }
     lastCategorizedRef.current = name;
@@ -324,19 +327,19 @@ export function ProductsClient({
       try {
         const res = await categorizeProduct(name, categories.map(c => c.name));
         if (!res.ok) {
-          setAi(res.reason === 'no_credits' ? { status: 'no_credits' } : { status: 'idle' });
+          setAi(res.reason === 'unavailable' ? { status: 'unavailable' } : { status: 'idle' });
           return;
         }
         setAiSuggestions(res.attributes.map(a => a.key).filter(Boolean));
         setForm(f => ({
           ...f,
-          category: f.category.trim() === '' ? res.category : f.category,
+          category: res.category,
           attributes:
             f.attributes.length === 0
               ? res.attributes.filter(a => a.key.trim() !== '')
               : f.attributes,
         }));
-        setAi({ status: 'done', remaining: res.remaining });
+        setAi({ status: 'done' });
       } catch {
         setAi({ status: 'idle' });
       }
@@ -359,21 +362,35 @@ export function ProductsClient({
           .filter(t => Number.isFinite(t.minQty) && t.minQty >= 2 && t.price !== '')
       : null;
 
-    const common = {
-      name: form.name,
-      barcode: form.barcode.trim() === '' ? null : form.barcode.trim(),
-      price: form.price,
-      cost: form.cost || '0',
-      category: form.category.trim() === '' ? null : form.category.trim(),
-      unitType: form.unitType,
-      isPerishable: form.isPerishable,
-      isWholesale: form.isWholesale,
-      wholesaleTiers,
-      attributes,
-    };
-
     startTransition(async () => {
       try {
+        // Category is AI-OWNED — the shop never types one. If the on-blur pass
+        // hasn't resolved it yet (fast submit), ask the model now and WAIT, so a
+        // product is never saved without the AI's category.
+        let category = form.category.trim();
+        if (category === '' && form.name.trim().length >= 3) {
+          const res = await categorizeProduct(
+            form.name.trim(),
+            categories.map(c => c.name),
+          );
+          if (res.ok) {
+            category = res.category;
+          }
+        }
+
+        const common = {
+          name: form.name,
+          barcode: form.barcode.trim() === '' ? null : form.barcode.trim(),
+          price: form.price,
+          cost: form.cost || '0',
+          category: category === '' ? null : category,
+          unitType: form.unitType,
+          isPerishable: form.isPerishable,
+          isWholesale: form.isWholesale,
+          wholesaleTiers,
+          attributes,
+        };
+
         if (editing) {
           await updateProduct(editing.id, common);
         } else {
@@ -826,23 +843,28 @@ export function ProductsClient({
 
               <div>
                 <label className={labelCls}>Categoría</label>
-                <input
-                  list="product-categories"
-                  value={form.category}
-                  onChange={e => setForm({ ...form, category: e.target.value })}
-                  placeholder="Bebidas, Aseo, Lácteos…"
-                  className={cn(inputCls, 'mt-1')}
-                />
-                <datalist id="product-categories">
-                  {categories.map(c => (
-                    <option key={c.id} value={c.name} />
-                  ))}
-                </datalist>
-                {categories.length > 0 && (
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Elegí una existente o escribí una nueva.
-                  </p>
-                )}
+                <div
+                  className={cn(inputCls, 'mt-1 items-center')}
+                  aria-readonly="true"
+                >
+                  {ai.status === 'loading'
+                    ? (
+                        <span className="text-muted-foreground">
+                          Categorizando…
+                        </span>
+                      )
+                    : form.category.trim() !== ''
+                      ? <span>{form.category}</span>
+                      : (
+                          <span className="text-muted-foreground">
+                            La asigna la IA según el nombre.
+                          </span>
+                        )}
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  La categoría la asigna la IA según el tipo de tu negocio. No se
+                  edita a mano.
+                </p>
               </div>
 
               {features.sellByWeight && (
@@ -1021,21 +1043,19 @@ export function ProductsClient({
                 onChange={attributes => setForm(f => ({ ...f, attributes }))}
               />
 
-              {!editing && (
-                <div className="
-                  rounded-md border bg-muted/30 px-3 py-2 text-xs
-                  text-muted-foreground
-                "
-                >
-                  {ai.status === 'loading'
-                    ? 'La IA está categorizando este producto…'
-                    : ai.status === 'done'
-                      ? `Categoría sugerida por IA aplicada · ${ai.remaining} créditos restantes.`
-                      : ai.status === 'no_credits'
-                        ? 'Sin créditos de IA: completa la categoría manualmente.'
-                        : 'La IA categorizará este producto al crearlo (consume 1 crédito).'}
-                </div>
-              )}
+              <div className="
+                rounded-md border bg-muted/30 px-3 py-2 text-xs
+                text-muted-foreground
+              "
+              >
+                {ai.status === 'loading'
+                  ? 'La IA está categorizando este producto…'
+                  : ai.status === 'done'
+                    ? 'Categoría asignada por la IA.'
+                    : ai.status === 'unavailable'
+                      ? 'La IA no está disponible ahora; la categoría se asignará automáticamente cuando vuelva.'
+                      : 'La categoría la gestiona la IA automáticamente según el tipo de tu negocio.'}
+              </div>
 
               {error && (
                 <div className="
