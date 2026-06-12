@@ -103,6 +103,26 @@ export type CreatePosTokenInput = {
   pin?: string;
 };
 
+// Register names must be unique per org (case-insensitive): audit trails and
+// per-register sale attribution become ambiguous with two "Caja 1".
+async function deviceNameTaken(
+  orgId: string,
+  name: string,
+  excludeId?: string,
+): Promise<boolean> {
+  const rows = await db
+    .select({ id: posTokensSchema.id })
+    .from(posTokensSchema)
+    .where(
+      and(
+        eq(posTokensSchema.organizationId, orgId),
+        sql`LOWER(${posTokensSchema.deviceName}) = LOWER(${name})`,
+      ),
+    )
+    .limit(2);
+  return rows.some(r => r.id !== excludeId);
+}
+
 export async function createPosToken(
   input: CreatePosTokenInput,
 ): Promise<ActionResult<PosToken>> {
@@ -111,6 +131,13 @@ export async function createPosToken(
   const deviceName = input.deviceName?.trim();
   if (!deviceName) {
     return { ok: false, error: 'El nombre de la caja es obligatorio' };
+  }
+
+  if (await deviceNameTaken(orgId, deviceName)) {
+    return {
+      ok: false,
+      error: 'Ya existe una caja con ese nombre. Usa un nombre distinto para no confundir la auditoría.',
+    };
   }
 
   // Plan quota: cap the number of active cajas (device tokens) per org.
@@ -404,6 +431,13 @@ export async function renamePosToken(
 
   if (!current) {
     return { ok: false, error: 'Caja no encontrada' };
+  }
+
+  if (await deviceNameTaken(orgId, deviceName, id)) {
+    return {
+      ok: false,
+      error: 'Ya existe una caja con ese nombre. Usa un nombre distinto para no confundir la auditoría.',
+    };
   }
 
   const [updated] = await db
