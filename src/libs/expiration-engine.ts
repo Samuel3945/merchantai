@@ -30,7 +30,8 @@ import {
 export type ExpirationTier = 'atencion' | 'urgente' | 'critico';
 
 export type ExpirationRiskPayload = {
-  tier: ExpirationTier;
+  /** null = batch has an expiry date but no actionable risk yet. */
+  tier: ExpirationTier | null;
   riskRatio: number | null;
   daysToExpire: number;
   daysToSell: number | null;
@@ -62,14 +63,46 @@ const SALES_WINDOW_DAYS = 30;
 const REJECT_COOLDOWN_DAYS = 3;
 const MAX_REOPEN_COUNT = 3;
 
-function classifyTier(riskRatio: number): ExpirationTier {
-  if (riskRatio < 0.6) {
-    return 'atencion';
+// Beyond this horizon nothing is flagged: the engine recomputes daily, so a
+// far-out batch will be caught when it actually approaches risk. Prevents a
+// product expiring in 15 months from showing orange "Por vencer" today.
+const RISK_HORIZON_DAYS = 120;
+
+// A LOW riskRatio (daysToSell / daysToExpire) means the lot sells out long
+// before expiry — that's NO risk. Risk starts when the sell-out time eats into
+// the time left (>= 0.5) and is critical when it won't sell out at all (>= 1).
+// With no sales velocity the ratio is meaningless, so fall back to plain
+// date proximity.
+export function classifyTier(
+  riskRatio: number | null,
+  daysToExpire: number,
+): ExpirationTier | null {
+  if (daysToExpire > RISK_HORIZON_DAYS) {
+    return null;
   }
-  if (riskRatio < 0.9) {
+  if (riskRatio === null) {
+    if (daysToExpire <= 7) {
+      return 'critico';
+    }
+    if (daysToExpire <= 15) {
+      return 'urgente';
+    }
+    if (daysToExpire <= 30) {
+      return 'atencion';
+    }
+    return null;
+  }
+  if (riskRatio >= 1) {
+    return 'critico';
+  }
+  if (riskRatio >= 0.75) {
     return 'urgente';
   }
-  return 'critico';
+  if (riskRatio >= 0.5) {
+    return 'atencion';
+  }
+  // Selling fast enough — but a batch in its final week always deserves a look.
+  return daysToExpire <= 7 ? 'atencion' : null;
 }
 
 function round2(n: number): number {
@@ -101,16 +134,13 @@ function buildPayload(input: RecomputeBatchInput): ExpirationRiskPayload {
   const riskRatio
     = daysToSell !== null && daysToExpire > 0
       ? daysToSell / daysToExpire
-      : daysToSell === null
-        ? 0
-        : Infinity;
+      : null;
 
-  const tier: ExpirationTier
-    = riskRatio === Infinity ? 'critico' : classifyTier(riskRatio);
+  const tier = classifyTier(riskRatio, daysToExpire);
 
   const maxSafePct
     = salePrice > 0 ? Math.max(0, (1 - unitCost / salePrice) * 100) : 0;
-  const escalation = TIER_PCT[tier];
+  const escalation = tier ? TIER_PCT[tier] : 0;
   const suggestedPct = Math.min(escalation, maxSafePct);
   const suggestedPrice = round2(salePrice * (1 - suggestedPct / 100));
 
@@ -119,11 +149,16 @@ function buildPayload(input: RecomputeBatchInput): ExpirationRiskPayload {
       ? `Quedan ${daysToExpire}d para vencer y se venden ~${avgDaily.toFixed(1)}/día (≈${daysToSell?.toFixed(1) ?? '∞'}d para liquidar). Descuento ${suggestedPct.toFixed(0)}% para no perder el lote.`
       : tier === 'urgente'
         ? `Ritmo de venta no alcanza: ${daysToSell?.toFixed(1) ?? '∞'}d necesarios vs ${daysToExpire}d disponibles. Aplica ${suggestedPct.toFixed(0)}% de descuento.`
-        : `Margen aún cómodo, pero conviene empujar: ${suggestedPct.toFixed(0)}% acelera salida sin perder dinero (tope seguro ${maxSafePct.toFixed(0)}%).`;
+        : tier === 'atencion'
+          ? `Margen aún cómodo, pero conviene empujar: ${suggestedPct.toFixed(0)}% acelera salida sin perder dinero (tope seguro ${maxSafePct.toFixed(0)}%).`
+          : `Sin riesgo: vence en ${daysToExpire}d y el ritmo de venta lo cubre de sobra.`;
 
   return {
     tier,
-    riskRatio: Number.isFinite(riskRatio) ? round2(riskRatio) : null,
+    riskRatio:
+      riskRatio !== null && Number.isFinite(riskRatio)
+        ? round2(riskRatio)
+        : null,
     daysToExpire,
     daysToSell: daysToSell !== null ? round2(daysToSell) : null,
     remainingQty,
@@ -226,7 +261,7 @@ async function processBatch(
   },
   product: { price: string },
   now: Date,
-): Promise<{ tier: ExpirationTier; opened: boolean } | null> {
+): Promise<{ tier: ExpirationTier | null; opened: boolean } | null> {
   const remainingQty = movement.remainingQty ?? 0;
   if (remainingQty <= 0) {
     return null;
@@ -285,15 +320,34 @@ async function processBatch(
       },
     });
 
+  // No actionable risk: keep the cache row fresh (so the UI shows nothing) and
+  // resolve any pending suggestion that no longer applies.
+  if (payload.tier === null) {
+    await db
+      .update(expirationSuggestionsSchema)
+      .set({ status: 'superseded', resolvedAt: now })
+      .where(
+        and(
+          eq(expirationSuggestionsSchema.organizationId, organizationId),
+          eq(expirationSuggestionsSchema.movementId, movement.id),
+          eq(expirationSuggestionsSchema.status, 'pending'),
+        ),
+      );
+    return { tier: null, opened: false };
+  }
+
+  // Narrowed copy: TS can't carry payload.tier's null check into the closure.
+  const activeTier = payload.tier;
+
   const decision = await shouldOpenSuggestion(
     organizationId,
     movement.id,
-    payload.tier,
+    activeTier,
     now,
   );
 
   if (!decision) {
-    return { tier: payload.tier, opened: false };
+    return { tier: activeTier, opened: false };
   }
 
   await db.transaction(async (tx) => {
@@ -313,7 +367,7 @@ async function processBatch(
       organizationId,
       movementId: movement.id,
       productId: movement.productId,
-      tier: payload.tier,
+      tier: activeTier,
       suggestedPct: payload.suggestedPct.toFixed(2),
       maxSafePct: payload.maxSafePct.toFixed(2),
       suggestedPrice: payload.suggestedPrice.toFixed(2),
@@ -326,7 +380,7 @@ async function processBatch(
     });
   });
 
-  return { tier: payload.tier, opened: true };
+  return { tier: activeTier, opened: true };
 }
 
 export type RecomputeResult = {
