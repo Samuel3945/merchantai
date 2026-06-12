@@ -162,6 +162,8 @@ export type InviteEmployeeInput = {
   permissions?: Record<string, unknown>;
   enabledModules?: string[];
   canConfirmTransfers?: boolean;
+  /** WhatsApp number for internal bot ↔ employee communication. */
+  phone?: string | null;
 };
 
 export type InviteEmployeeResult = {
@@ -177,6 +179,7 @@ export async function invite(
 
   const email = data.email?.trim().toLowerCase();
   const name = data.name?.trim();
+  const phone = data.phone?.trim() || null;
   // Role tiers are retired: every invited person is a plain business user whose
   // access is defined entirely by the granted permissions/modules.
   const role = data.role ?? 'employee';
@@ -234,6 +237,7 @@ export async function invite(
         organizationId: orgId,
         name,
         email,
+        phone,
         passwordHash,
         role,
         active: false,
@@ -964,4 +968,96 @@ export async function deleteEmployee(
 
   revalidatePath('/dashboard/employees');
   return { ok: true, data: { id: employeeId } };
+}
+
+// ---------------------------------------------------------------------------
+// Self-service contact (WhatsApp)
+// ---------------------------------------------------------------------------
+// Any panel user may edit their OWN WhatsApp number — this is their data, not an
+// admin action, so it does NOT go through requireAdminContext. The row is scoped
+// by (clerkUserId + active orgId): the same person can be an employee in several
+// organizations, so the edit only ever touches the row for the org they are
+// currently acting in. The owner is a Clerk member with no posUsers row, so for
+// them `hasProfile` is false and their number lives in business settings instead.
+
+export type MyContact = {
+  phone: string | null;
+  hasProfile: boolean;
+};
+
+/** Reads the current panel user's own WhatsApp for the active organization. */
+export async function getMyContact(): Promise<MyContact> {
+  const { userId, orgId } = await auth();
+  if (!userId || !orgId) {
+    return { phone: null, hasProfile: false };
+  }
+
+  const [row] = await db
+    .select({ phone: posUsersSchema.phone })
+    .from(posUsersSchema)
+    .where(
+      and(
+        eq(posUsersSchema.clerkUserId, userId),
+        eq(posUsersSchema.organizationId, orgId),
+      ),
+    )
+    .limit(1);
+
+  return { phone: row?.phone ?? null, hasProfile: Boolean(row) };
+}
+
+/** Updates the current panel user's own WhatsApp for the active organization. */
+export async function updateMyContact(
+  input: { phone: string | null },
+): Promise<ActionResult<{ phone: string | null }>> {
+  const { userId, orgId } = await auth();
+  if (!userId) {
+    return { ok: false, error: 'No autenticado' };
+  }
+  if (!orgId) {
+    return { ok: false, error: 'Sin organización activa' };
+  }
+
+  const phone = input.phone?.trim() || null;
+
+  const [existing] = await db
+    .select({ id: posUsersSchema.id, phone: posUsersSchema.phone })
+    .from(posUsersSchema)
+    .where(
+      and(
+        eq(posUsersSchema.clerkUserId, userId),
+        eq(posUsersSchema.organizationId, orgId),
+      ),
+    )
+    .limit(1);
+
+  if (!existing) {
+    return {
+      ok: false,
+      error: 'Tu usuario no tiene un perfil editable en esta organización.',
+    };
+  }
+
+  await db
+    .update(posUsersSchema)
+    .set({ phone })
+    .where(
+      and(
+        eq(posUsersSchema.id, existing.id),
+        eq(posUsersSchema.organizationId, orgId),
+      ),
+    );
+
+  await logAction({
+    organizationId: orgId,
+    actor: { type: 'user', id: userId },
+    action: 'employee.contact_updated',
+    entityType: 'pos_user',
+    entityId: existing.id,
+    before: { phone: existing.phone },
+    after: { phone },
+  });
+
+  revalidatePath('/dashboard/mi-perfil');
+  return { ok: true, data: { phone } };
 }

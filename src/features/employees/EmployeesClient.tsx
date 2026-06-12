@@ -1,6 +1,5 @@
 'use client';
 
-import type { WorkSchedule } from '@/actions/employees';
 import type { ActionResult } from '@/libs/action-result';
 import { useCallback, useState, useTransition } from 'react';
 import {
@@ -715,6 +714,7 @@ function InviteModal({
 }) {
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
+  const [phone, setPhone] = useState('');
   const [modules, setModules] = useState<Record<string, boolean>>({});
   const [actions, setActions] = useState<Record<string, boolean>>({});
   const [canConfirmTransfers, setCanConfirmTransfers] = useState(true);
@@ -740,6 +740,7 @@ function InviteModal({
       const result = await invite({
         email,
         name,
+        phone: phone.trim() || null,
         permissions,
         enabledModules,
         canConfirmTransfers,
@@ -785,6 +786,24 @@ function InviteModal({
             className={inputCls}
           />
         </div>
+        <div>
+          <label htmlFor="emp-phone" className={labelCls}>
+            WhatsApp
+          </label>
+          <input
+            id="emp-phone"
+            type="tel"
+            value={phone}
+            onChange={e => setPhone(e.target.value)}
+            placeholder="+57 300 000 0000"
+            className={inputCls}
+          />
+          <p className="mt-1 text-xs text-muted-foreground">
+            Opcional. Lo usa el asistente para escribirle al empleado (cambios de
+            precio, ofertas, cobertura de turnos). El empleado puede actualizarlo
+            desde su propio panel.
+          </p>
+        </div>
 
         <GrantFields
           modules={modules}
@@ -822,26 +841,6 @@ function InviteModal({
   );
 }
 
-const WEEKDAYS: Array<{ key: keyof WorkSchedule; label: string }> = [
-  { key: 'mon', label: 'Lunes' },
-  { key: 'tue', label: 'Martes' },
-  { key: 'wed', label: 'Miércoles' },
-  { key: 'thu', label: 'Jueves' },
-  { key: 'fri', label: 'Viernes' },
-  { key: 'sat', label: 'Sábado' },
-  { key: 'sun', label: 'Domingo' },
-];
-
-const DEFAULT_START = '08:00';
-const DEFAULT_END = '17:00';
-
-function initSchedule(raw: unknown): WorkSchedule {
-  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-    return raw as WorkSchedule;
-  }
-  return {};
-}
-
 function EditModal({
   employee,
   onClose,
@@ -866,17 +865,7 @@ function EditModal({
     employee.salary != null ? String(employee.salary) : '',
   );
   const [phone, setPhone] = useState(employee.phone ?? '');
-  const [schedule, setSchedule] = useState<WorkSchedule>(
-    () => initSchedule(employee.workSchedule),
-  );
   const [submitting, setSubmitting] = useState(false);
-
-  const setDay = (key: keyof WorkSchedule, patch: Partial<{ start: string; end: string; off: boolean }>) => {
-    setSchedule((prev) => {
-      const existing = prev[key] ?? { start: DEFAULT_START, end: DEFAULT_END, off: false };
-      return { ...prev, [key]: { ...existing, ...patch } };
-    });
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -895,7 +884,6 @@ function EditModal({
         canConfirmTransfers,
         salary: salaryValue,
         phone: phone.trim() || null,
-        workSchedule: schedule,
       });
       if (!result.ok) {
         onFailure(result);
@@ -935,7 +923,7 @@ function EditModal({
           </div>
           <div>
             <label htmlFor="edit-phone" className={labelCls}>
-              Teléfono
+              WhatsApp
             </label>
             <input
               id="edit-phone"
@@ -945,52 +933,6 @@ function EditModal({
               placeholder="+57 300 000 0000"
               className={inputCls}
             />
-          </div>
-        </div>
-
-        {/* Weekly schedule */}
-        <div>
-          <div className={labelCls}>Horario semanal</div>
-          <div className="mt-2 space-y-1">
-            {WEEKDAYS.map(({ key, label }) => {
-              const day = schedule[key] ?? { start: DEFAULT_START, end: DEFAULT_END, off: false };
-              return (
-                <div key={key} className="flex items-center gap-2 text-sm">
-                  <span className="w-20 shrink-0 text-xs text-muted-foreground">{label}</span>
-                  <label className="flex items-center gap-1 text-xs">
-                    <input
-                      type="checkbox"
-                      checked={!day.off}
-                      onChange={e => setDay(key, { off: !e.target.checked })}
-                    />
-                    Trabaja
-                  </label>
-                  <input
-                    type="time"
-                    value={day.start}
-                    disabled={day.off}
-                    onChange={e => setDay(key, { start: e.target.value })}
-                    className="
-                      h-7 rounded-sm border border-input bg-transparent px-1
-                      text-xs
-                      disabled:opacity-40
-                    "
-                  />
-                  <span className="text-xs text-muted-foreground">–</span>
-                  <input
-                    type="time"
-                    value={day.end}
-                    disabled={day.off}
-                    onChange={e => setDay(key, { end: e.target.value })}
-                    className="
-                      h-7 rounded-sm border border-input bg-transparent px-1
-                      text-xs
-                      disabled:opacity-40
-                    "
-                  />
-                </div>
-              );
-            })}
           </div>
         </div>
 

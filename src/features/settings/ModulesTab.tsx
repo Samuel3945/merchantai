@@ -5,7 +5,6 @@ import { useSettingSave } from './useSettingSave';
 
 export type ModulesTabValues = {
   'modules.employees': boolean;
-  'modules.turnos': boolean;
   'modules.delivery': boolean;
   'modules.suppliers': boolean;
   'modules.facturas': boolean;
@@ -22,11 +21,6 @@ const MODULE_TOGGLES: Array<{
     key: 'modules.employees',
     label: 'Empleados',
     description: 'Permite múltiples cajeros, permisos por usuario y PINs.',
-  },
-  {
-    key: 'modules.turnos',
-    label: 'Turnos y cobertura',
-    description: 'Ausencias, descansos y reemplazos del personal.',
   },
   {
     key: 'modules.delivery',

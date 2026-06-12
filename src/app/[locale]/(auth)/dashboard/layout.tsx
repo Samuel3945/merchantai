@@ -76,14 +76,12 @@ export default async function DashboardLayout(props: DashboardLayoutProps) {
   const [
     fiadoSetting,
     employeesSetting,
-    turnosSetting,
     deliverySetting,
     facturasSetting,
     suppliersSetting,
   ] = await Promise.all([
     getAppSetting('fiado-enabled'),
     getAppSetting('modules.employees'),
-    getAppSetting('modules.turnos'),
     getAppSetting('modules.delivery'),
     getAppSetting('modules.facturas'),
     getAppSetting('modules.suppliers'),
@@ -92,7 +90,6 @@ export default async function DashboardLayout(props: DashboardLayoutProps) {
   const navFlags: NavModuleFlags = {
     fiado: fiadoSetting.value !== 'false',
     employees: employeesSetting.value !== 'false',
-    turnos: turnosSetting.value !== 'false',
     delivery: deliverySetting.value !== 'false',
     facturas: facturasSetting.value !== 'false',
     suppliers: suppliersSetting.value !== 'false',
