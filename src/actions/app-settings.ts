@@ -1,8 +1,9 @@
 'use server';
 
-import { auth } from '@clerk/nextjs/server';
+import { auth, clerkClient } from '@clerk/nextjs/server';
 import { and, eq, sql } from 'drizzle-orm';
 import { db } from '@/libs/DB';
+import { logger } from '@/libs/Logger';
 import { appSettingsSchema } from '@/models/Schema';
 
 export type AppSetting = {
@@ -96,6 +97,23 @@ export async function setAppSetting(
       );
     }
   });
+
+  // The business name IS the organization name: renaming one renames the
+  // other so the org switcher, invoices and tickets never disagree.
+  // Best-effort — a Clerk hiccup must not fail the settings save.
+  if (key === 'business_name' && value.trim()) {
+    try {
+      const client = await clerkClient();
+      await client.organizations.updateOrganization(orgId, {
+        name: value.trim(),
+      });
+    } catch (err) {
+      logger.error('business_name_org_sync_failed', {
+        organizationId: orgId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
 
   return { key, value };
 }

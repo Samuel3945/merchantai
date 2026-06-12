@@ -10,7 +10,7 @@ import { useSettingsToast } from './useSettingsToast';
 
 const OFFERING_OPTIONS = [
   { value: 'productos', label: 'Productos' },
-  { value: 'servicios', label: 'Servicios' },
+  { value: 'digitales', label: 'Productos digitales' },
   { value: 'ambos', label: 'Ambos' },
 ] as const;
 
