@@ -1,6 +1,9 @@
 'use server';
 
 import type {
+  ReturnPolicy,
+} from '@/libs/return-policy';
+import type {
   ReturnDisposition,
   ReturnReason,
 } from '@/libs/sale-returns';
@@ -29,6 +32,7 @@ import {
 import { createFiado } from '@/libs/fiados';
 import { fiadoAmountFor } from '@/libs/fiados-math';
 import { consumeFifoExits } from '@/libs/fifo-cogs';
+import { loadReturnPolicy } from '@/libs/return-policy';
 import { assignNextSaleNumber } from '@/libs/sale-number';
 import { applySaleReturn } from '@/libs/sale-returns';
 import { wholesaleUnitPrice } from '@/libs/wholesale';
@@ -432,6 +436,8 @@ export type SalesFilterOptions = {
   registers: { id: string; name: string }[];
   employees: { id: string; name: string }[];
   products: { id: string; name: string }[];
+  /** Return rules so the listing can disable "Devolver" up front. */
+  returnPolicy: ReturnPolicy;
 };
 
 export async function getSalesFilterOptions(): Promise<SalesFilterOptions> {
@@ -442,6 +448,8 @@ export async function getSalesFilterOptions(): Promise<SalesFilterOptions> {
   if (!orgId) {
     throw new Error('No active organization');
   }
+
+  const returnPolicy = await loadReturnPolicy(db, orgId);
 
   const [registers, employees, products] = await Promise.all([
     db
@@ -466,7 +474,7 @@ export async function getSalesFilterOptions(): Promise<SalesFilterOptions> {
       .orderBy(productsSchema.name),
   ]);
 
-  return { registers, employees, products };
+  return { registers, employees, products, returnPolicy };
 }
 
 export type ListSalesResult = {
@@ -962,7 +970,7 @@ async function resolveAdminName(fallback: string): Promise<string> {
 // money/stock/cash core with the POS route via applySaleReturn; the admin is
 // not a pos_user, so cashierId is null and the audit trail carries the actor.
 export async function processReturn(saleId: string, input: ProcessReturnInput) {
-  const { userId, orgId } = await auth();
+  const { userId, orgId, orgRole } = await auth();
   if (!userId) {
     throw new Error('Not authenticated');
   }
@@ -978,6 +986,7 @@ export async function processReturn(saleId: string, input: ProcessReturnInput) {
       organizationId: orgId,
       cashierId: null,
       actorName,
+      authorizedByAdmin: orgRole === 'org:admin',
       reason: input.reason,
       refundMethod: input.refundMethod,
       items: input.items,

@@ -2,6 +2,7 @@ import type { db } from '@/libs/DB';
 import { and, eq, gt, isNotNull, sql } from 'drizzle-orm';
 import { findOpenSession, toMoney } from '@/libs/cash-helpers';
 import { fifoBatchOrder } from '@/libs/fifo-cogs';
+import { assertReturnAllowed, loadReturnPolicy } from '@/libs/return-policy';
 import { formatSaleNumber } from '@/libs/sale-number';
 import {
   cashMovementsSchema,
@@ -61,6 +62,11 @@ export type ApplySaleReturnParams = {
   items: ReturnItemInput[];
   notes?: string | null;
   partial: boolean;
+  /**
+   * True when an org admin is processing from the web panel. Drives the
+   * "requiere autorización de administrador" rule; POS cashiers pass false.
+   */
+  authorizedByAdmin?: boolean;
 };
 
 export type ApplySaleReturnResult = {
@@ -205,6 +211,7 @@ export async function applySaleReturn(
       id: salesSchema.id,
       status: salesSchema.status,
       saleNumber: salesSchema.saleNumber,
+      createdAt: salesSchema.createdAt,
     })
     .from(salesSchema)
     .where(
@@ -219,6 +226,14 @@ export async function applySaleReturn(
   if (!sale) {
     throw new Error('Venta no encontrada');
   }
+
+  // Business rules from Ajustes → Devoluciones: enabled, max days since the
+  // sale, and admin-only authorization. Enforced here so the POS route and the
+  // dashboard action can never drift apart.
+  const policy = await loadReturnPolicy(tx, organizationId);
+  assertReturnAllowed(policy, sale.createdAt, {
+    isAdmin: params.authorizedByAdmin === true,
+  });
   if (sale.status === 'cancelled') {
     throw new Error('La venta ya fue cancelada');
   }
