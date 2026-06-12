@@ -3,8 +3,8 @@ import { setRequestLocale } from 'next-intl/server';
 import { redirect } from 'next/navigation';
 import { getTodayRoster, listAbsences } from '@/actions/coverage';
 import { listEmployees } from '@/actions/employees';
-import { CoverageClient } from '@/features/coverage/CoverageClient';
 import { TitleBar } from '@/features/dashboard/TitleBar';
+import { CoverageClient } from '@/features/turnos/CoverageClient';
 
 export default async function DashboardTurnosPage(props: {
   params: Promise<{ locale: string }>;

@@ -15,7 +15,15 @@ import {
   notifyReplacement,
   registerAbsence,
 } from '@/actions/coverage';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { useConfirm } from '@/components/ui/confirm';
+import { Select } from '@/components/ui/select';
+import { cn } from '@/utils/Helpers';
+
+const inputCls
+  = 'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50';
+const labelCls = 'text-xs font-medium text-muted-foreground';
 
 // ── Date helpers ────────────────────────────────────────────────────────────
 
@@ -43,76 +51,81 @@ type Props = {
 
 // ── Roster section ──────────────────────────────────────────────────────────
 
+function RosterGroup({
+  title,
+  dotCls,
+  entries,
+  trailing,
+}: {
+  title: string;
+  dotCls: string;
+  entries: RosterEntry[];
+  trailing?: (e: RosterEntry) => React.ReactNode;
+}) {
+  if (entries.length === 0) {
+    return null;
+  }
+  return (
+    <div>
+      <h3 className="mb-2 text-sm font-semibold">{title}</h3>
+      <ul className="space-y-1">
+        {entries.map(e => (
+          <li
+            key={e.id}
+            className="
+              flex items-center gap-2 rounded-md border bg-background px-3 py-2
+              text-sm shadow-xs
+            "
+          >
+            <span className={cn('size-2 shrink-0 rounded-full', dotCls)} />
+            <span className="min-w-0 truncate font-medium">{e.name}</span>
+            <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+              {trailing?.(e)}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function RosterSection({ roster }: { roster: RosterEntry[] }) {
   if (roster.length === 0) {
     return (
-      <p className="py-4 text-center text-sm text-gray-500">
+      <p className="
+        rounded-md border border-dashed py-6 text-center text-sm
+        text-muted-foreground
+      "
+      >
         No hay empleados activos registrados.
       </p>
     );
   }
 
-  const working = roster.filter(e => e.status === 'working');
-  const off = roster.filter(e => e.status === 'off');
-  const absent = roster.filter(e => e.status === 'absent');
-
   return (
-    <div className="space-y-4">
-      {working.length > 0 && (
-        <div>
-          <h3 className="mb-2 text-sm font-semibold text-gray-700">Trabajando hoy</h3>
-          <ul className="space-y-1">
-            {working.map(e => (
-              <li key={e.id} className="flex items-center gap-2 rounded border border-green-100 bg-green-50 px-3 py-2 text-sm">
-                <span className="size-2 rounded-full bg-green-500" />
-                <span className="font-medium">{e.name}</span>
-                {e.start && e.end && (
-                  <span className="ml-auto text-xs text-gray-500">
-                    {e.start}
-                    {' '}
-                    –
-                    {' '}
-                    {e.end}
-                  </span>
-                )}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {off.length > 0 && (
-        <div>
-          <h3 className="mb-2 text-sm font-semibold text-gray-700">Descanso programado</h3>
-          <ul className="space-y-1">
-            {off.map(e => (
-              <li key={e.id} className="flex items-center gap-2 rounded border border-blue-100 bg-blue-50 px-3 py-2 text-sm">
-                <span className="size-2 rounded-full bg-blue-400" />
-                <span>{e.name}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {absent.length > 0 && (
-        <div>
-          <h3 className="mb-2 text-sm font-semibold text-gray-700">Ausentes hoy</h3>
-          <ul className="space-y-1">
-            {absent.map(e => (
-              <li key={e.id} className="flex items-center gap-2 rounded border border-red-100 bg-red-50 px-3 py-2 text-sm">
-                <span className="size-2 rounded-full bg-red-400" />
-                <span>{e.name}</span>
-                <span className="ml-auto text-xs text-gray-500">
-                  {e.coveredByName
-                    ? `Cubierto por ${e.coveredByName}`
-                    : 'Sin cubrir'}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+    <div className="
+      grid grid-cols-1 gap-4
+      lg:grid-cols-3
+    "
+    >
+      <RosterGroup
+        title="Trabajando hoy"
+        dotCls="bg-emerald-500"
+        entries={roster.filter(e => e.status === 'working')}
+        trailing={e => (e.start && e.end ? `${e.start} – ${e.end}` : null)}
+      />
+      <RosterGroup
+        title="Descanso programado"
+        dotCls="bg-blue-400"
+        entries={roster.filter(e => e.status === 'off')}
+      />
+      <RosterGroup
+        title="Ausentes hoy"
+        dotCls="bg-red-400"
+        entries={roster.filter(e => e.status === 'absent')}
+        trailing={e =>
+          e.coveredByName ? `Cubierto por ${e.coveredByName}` : 'Sin cubrir'}
+      />
     </div>
   );
 }
@@ -139,7 +152,7 @@ function RegisterForm({
     e.preventDefault();
     setError(null);
     if (!employeeId) {
-      setError('Seleccioná un empleado');
+      setError('Selecciona un empleado');
       return;
     }
     startTransition(async () => {
@@ -157,86 +170,102 @@ function RegisterForm({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-3">
-      <div>
-        <label className="mb-1 block text-sm font-medium text-gray-700">
-          Empleado
-        </label>
-        <select
+      <div className="space-y-1">
+        <span className={labelCls}>Empleado</span>
+        <Select
           value={employeeId}
-          onChange={e => setEmployeeId(e.target.value)}
-          className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          onValueChange={setEmployeeId}
           disabled={pending}
-        >
-          <option value="">— Seleccioná un empleado —</option>
-          {employees.map(emp => (
-            <option key={emp.id} value={emp.id}>
-              {emp.name}
-            </option>
-          ))}
-        </select>
+          options={[
+            { value: '', label: '— Selecciona un empleado —' },
+            ...employees.map(emp => ({ value: emp.id, label: emp.name })),
+          ]}
+        />
+        {employees.length === 0 && (
+          <p className="text-xs text-muted-foreground">
+            No tienes empleados activos. Créalos en la sección Empleados.
+          </p>
+        )}
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">
+        <div className="space-y-1">
+          <label htmlFor="absence-date" className={labelCls}>
             Fecha
           </label>
           <input
+            id="absence-date"
             type="date"
             value={date}
             onChange={e => setDate(e.target.value)}
-            className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className={inputCls}
             disabled={pending}
           />
         </div>
-        <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">
-            Tipo
-          </label>
-          <select
+        <div className="space-y-1">
+          <span className={labelCls}>Tipo</span>
+          <Select
             value={kind}
-            onChange={e => setKind(e.target.value as 'absence' | 'break')}
-            className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            onValueChange={v => setKind(v as 'absence' | 'break')}
             disabled={pending}
-          >
-            <option value="absence">Ausencia</option>
-            <option value="break">Descanso</option>
-          </select>
+            options={[
+              { value: 'absence', label: 'Ausencia' },
+              { value: 'break', label: 'Descanso' },
+            ]}
+          />
         </div>
       </div>
 
-      <div>
-        <label className="mb-1 block text-sm font-medium text-gray-700">
+      <div className="space-y-1">
+        <label htmlFor="absence-reason" className={labelCls}>
           Motivo
           {' '}
-          <span className="text-gray-400">(opcional)</span>
+          <span className="text-muted-foreground/60">(opcional)</span>
         </label>
         <input
+          id="absence-reason"
           type="text"
           value={reason}
           onChange={e => setReason(e.target.value)}
           placeholder="Ej: enfermedad, cita médica…"
-          className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className={inputCls}
           disabled={pending}
         />
       </div>
 
       {error && (
-        <p className="rounded bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>
+        <p className="
+          rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2
+          text-sm text-destructive
+        "
+        >
+          {error}
+        </p>
       )}
 
-      <button
-        type="submit"
-        disabled={pending}
-        className="w-full rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-      >
+      <Button type="submit" disabled={pending} className="w-full">
         {pending ? 'Registrando…' : 'Registrar'}
-      </button>
+      </Button>
     </form>
   );
 }
 
 // ── Absence card ────────────────────────────────────────────────────────────
+
+const STATUS_BADGE = {
+  covered: {
+    label: 'Cubierto',
+    cls: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+  },
+  cancelled: {
+    label: 'Cancelado',
+    cls: 'border-border bg-muted text-muted-foreground',
+  },
+  open: {
+    label: 'Pendiente',
+    cls: 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400',
+  },
+} as const;
 
 function AbsenceCard({
   absence,
@@ -257,6 +286,8 @@ function AbsenceCard({
 
   const isCovered = absence.status === 'covered';
   const isCancelled = absence.status === 'cancelled';
+  const badge
+    = STATUS_BADGE[isCovered ? 'covered' : isCancelled ? 'cancelled' : 'open'];
 
   function loadSuggestions() {
     setError(null);
@@ -337,20 +368,27 @@ function AbsenceCard({
   const kindLabel = absence.kind === 'absence' ? 'Ausencia' : 'Descanso';
 
   return (
-    <div className={`rounded border p-4 ${isCancelled ? 'border-gray-200 bg-gray-50 opacity-60' : 'border-gray-200 bg-white'}`}>
+    <div
+      className={cn(
+        'rounded-lg border bg-background p-4 shadow-xs',
+        isCancelled && 'opacity-60',
+      )}
+    >
       <div className="flex items-start justify-between gap-2">
         <div>
-          <p className="font-medium text-gray-900">{absence.employeeName}</p>
-          <p className="text-sm text-gray-500">
+          <p className="font-medium">{absence.employeeName}</p>
+          <p className="text-sm text-muted-foreground">
             {formatDate(absence.date)}
-            {' '}
-            ·
-            {' '}
+            {' · '}
             {kindLabel}
             {absence.reason && ` · ${absence.reason}`}
           </p>
           {isCovered && absence.coveredByName && (
-            <p className="mt-1 text-sm text-green-700">
+            <p className="
+              mt-1 text-sm text-emerald-600
+              dark:text-emerald-400
+            "
+            >
               Cubierto por
               {' '}
               {absence.coveredByName}
@@ -358,76 +396,93 @@ function AbsenceCard({
             </p>
           )}
         </div>
-        <div className="flex flex-col items-end gap-1">
-          <span
-            className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-              isCovered
-                ? 'bg-green-100 text-green-700'
-                : isCancelled
-                  ? 'bg-gray-100 text-gray-500'
-                  : 'bg-yellow-100 text-yellow-700'
-            }`}
-          >
-            {isCovered ? 'Cubierto' : isCancelled ? 'Cancelado' : 'Pendiente'}
-          </span>
-        </div>
+        <Badge variant="outline" className={badge.cls}>
+          {badge.label}
+        </Badge>
       </div>
 
       {!isCancelled && !isCovered && (
         <div className="mt-3 space-y-2">
           {!suggestions && (
-            <button
-              type="button"
+            <Button
+              variant="outline"
+              size="sm"
               onClick={loadSuggestions}
               disabled={pending || loadingSugg}
-              className="w-full rounded border border-blue-300 px-3 py-1.5 text-sm text-blue-700 hover:bg-blue-50 disabled:opacity-50"
+              className="w-full"
             >
               {loadingSugg ? 'Buscando reemplazos…' : 'Ver reemplazos disponibles'}
-            </button>
+            </Button>
           )}
 
           {suggestions !== null && suggestions.length === 0 && (
-            <p className="text-sm text-gray-500">No hay reemplazos disponibles para este día.</p>
+            <p className="text-sm text-muted-foreground">
+              No hay reemplazos disponibles para este día.
+            </p>
           )}
 
           {suggestions !== null && suggestions.length > 0 && (
             <div className="space-y-2">
-              <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Reemplazos sugeridos</p>
+              <p className={labelCls}>Reemplazos sugeridos</p>
               {suggestions.map(s => (
-                <div key={s.id} className="flex items-center gap-2 rounded border border-gray-100 bg-gray-50 px-3 py-2 text-sm">
-                  <div className="flex-1">
+                <div
+                  key={s.id}
+                  className="
+                    flex items-center gap-2 rounded-md border bg-muted/30 px-3
+                    py-2 text-sm
+                  "
+                >
+                  <div className="min-w-0 flex-1">
                     <span className="font-medium">{s.name}</span>
-                    {s.phone && <span className="ml-2 text-xs text-gray-500">{s.phone}</span>}
-                    {s.scheduledOff && (
-                      <span className="ml-2 rounded-full bg-blue-100 px-1.5 py-0.5 text-xs text-blue-700">
-                        Día libre
+                    {s.phone && (
+                      <span className="ml-2 text-xs text-muted-foreground">
+                        {s.phone}
                       </span>
                     )}
+                    {s.scheduledOff && (
+                      <Badge
+                        variant="outline"
+                        className="
+                          ml-2 border-blue-500/30 bg-blue-500/10 text-blue-600
+                          dark:text-blue-400
+                        "
+                      >
+                        Día libre
+                      </Badge>
+                    )}
                   </div>
-                  <button
-                    type="button"
+                  <Button
+                    variant="outline"
+                    size="sm"
                     onClick={() => handleAssign(s.id)}
                     disabled={pending}
-                    className="rounded border border-gray-300 px-2 py-1 text-xs hover:bg-white disabled:opacity-50"
                   >
                     Asignar
-                  </button>
-                  <button
-                    type="button"
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
                     onClick={() => handleNotify(s.id)}
                     disabled={pending || !s.phone}
-                    className="rounded border border-green-300 px-2 py-1 text-xs text-green-700 hover:bg-green-50 disabled:opacity-50"
-                    title={!s.phone ? 'Este empleado no tiene teléfono registrado' : 'Enviar WhatsApp'}
+                    title={
+                      !s.phone
+                        ? 'Este empleado no tiene teléfono registrado'
+                        : 'Enviar WhatsApp'
+                    }
+                    className="
+                      text-emerald-600
+                      dark:text-emerald-400
+                    "
                   >
                     Avisar
-                  </button>
+                  </Button>
                 </div>
               ))}
             </div>
           )}
 
           {notifyResult && (
-            <div className="rounded bg-gray-50 px-3 py-2 text-sm text-gray-700">
+            <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
               {notifyResult.message}
               {notifyResult.waLink && (
                 <>
@@ -436,7 +491,10 @@ function AbsenceCard({
                     href={notifyResult.waLink}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="font-medium text-green-700 underline"
+                    className="
+                      font-medium text-emerald-600 underline
+                      dark:text-emerald-400
+                    "
                   >
                     Abrir WhatsApp
                   </a>
@@ -445,32 +503,40 @@ function AbsenceCard({
             </div>
           )}
 
-          <button
-            type="button"
+          <Button
+            variant="outline"
+            size="sm"
             onClick={handleCancel}
             disabled={pending}
-            className="w-full rounded border border-red-200 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 disabled:opacity-50"
+            className="w-full text-destructive"
           >
             Cancelar ausencia
-          </button>
+          </Button>
         </div>
       )}
 
       {isCovered && !isCancelled && (
         <div className="mt-2">
-          <button
-            type="button"
+          <Button
+            variant="outline"
+            size="sm"
             onClick={handleCancel}
             disabled={pending}
-            className="w-full rounded border border-red-200 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 disabled:opacity-50"
+            className="w-full text-destructive"
           >
             Cancelar
-          </button>
+          </Button>
         </div>
       )}
 
       {error && (
-        <p className="mt-2 rounded bg-red-50 px-3 py-1.5 text-sm text-red-600">{error}</p>
+        <p className="
+          mt-2 rounded-md border border-destructive/40 bg-destructive/10 px-3
+          py-1.5 text-sm text-destructive
+        "
+        >
+          {error}
+        </p>
       )}
     </div>
   );
@@ -507,69 +573,85 @@ export function CoverageClient({ initialRoster, initialAbsences, employees, defa
   const coveredAbsences = absences.filter(a => a.status === 'covered');
 
   return (
-    <div className="space-y-8">
-      {/* ── Hoy ── */}
-      <section>
-        <h2 className="mb-4 text-lg font-semibold text-gray-900">Hoy</h2>
-        <RosterSection roster={initialRoster} />
-      </section>
+    <div className="
+      grid grid-cols-1 items-start gap-6
+      lg:grid-cols-3
+    "
+    >
+      {/* Left: today roster + absence lists */}
+      <div className="
+        space-y-6
+        lg:col-span-2
+      "
+      >
+        <section className="rounded-lg border bg-background p-4 shadow-xs">
+          <h2 className="mb-4 text-base font-semibold">Hoy</h2>
+          <RosterSection roster={initialRoster} />
+        </section>
 
-      {/* ── Registrar ausencia ── */}
-      <section>
-        <h2 className="mb-4 text-lg font-semibold text-gray-900">
+        {openAbsences.length > 0 && (
+          <section>
+            <h2 className="mb-3 flex items-center gap-2 text-base font-semibold">
+              Ausencias pendientes de cobertura
+              <Badge
+                variant="outline"
+                className="
+                  border-amber-500/40 bg-amber-500/10 text-amber-700
+                  dark:text-amber-400
+                "
+              >
+                {openAbsences.length}
+              </Badge>
+            </h2>
+            <div className="space-y-3">
+              {openAbsences.map(a => (
+                <AbsenceCard key={a.id} absence={a} onUpdate={refresh} />
+              ))}
+            </div>
+          </section>
+        )}
+
+        {coveredAbsences.length > 0 && (
+          <section>
+            <h2 className="mb-3 text-base font-semibold">Ausencias cubiertas</h2>
+            <div className="space-y-3">
+              {coveredAbsences.map(a => (
+                <AbsenceCard key={a.id} absence={a} onUpdate={refresh} />
+              ))}
+            </div>
+          </section>
+        )}
+
+        {openAbsences.length === 0 && coveredAbsences.length === 0 && (
+          <p className="
+            rounded-md border border-dashed py-6 text-center text-sm
+            text-muted-foreground
+          "
+          >
+            No hay ausencias registradas para los próximos 30 días.
+          </p>
+        )}
+
+        {pending && (
+          <p className="text-xs text-muted-foreground">Actualizando…</p>
+        )}
+      </div>
+
+      {/* Right: register form, always at hand */}
+      <section className="
+        rounded-lg border bg-background p-4 shadow-xs
+        lg:sticky lg:top-4
+      "
+      >
+        <h2 className="mb-4 text-base font-semibold">
           Registrar ausencia o descanso
         </h2>
-        <div className="max-w-md rounded border border-gray-200 bg-white p-4">
-          <RegisterForm
-            employees={employees}
-            defaultDate={defaultDate}
-            onRegistered={() => {
-              refresh();
-            }}
-          />
-        </div>
+        <RegisterForm
+          employees={employees}
+          defaultDate={defaultDate}
+          onRegistered={refresh}
+        />
       </section>
-
-      {/* ── Ausencias abiertas ── */}
-      {openAbsences.length > 0 && (
-        <section>
-          <h2 className="mb-4 text-lg font-semibold text-gray-900">
-            Ausencias pendientes de cobertura
-            <span className="ml-2 inline-flex size-5 items-center justify-center rounded-full bg-yellow-100 text-xs font-bold text-yellow-700">
-              {openAbsences.length}
-            </span>
-          </h2>
-          <div className="space-y-3">
-            {openAbsences.map(a => (
-              <AbsenceCard key={a.id} absence={a} onUpdate={refresh} />
-            ))}
-          </div>
-        </section>
-      )}
-
-      {/* ── Ausencias cubiertas ── */}
-      {coveredAbsences.length > 0 && (
-        <section>
-          <h2 className="mb-4 text-lg font-semibold text-gray-900">
-            Ausencias cubiertas
-          </h2>
-          <div className="space-y-3">
-            {coveredAbsences.map(a => (
-              <AbsenceCard key={a.id} absence={a} onUpdate={refresh} />
-            ))}
-          </div>
-        </section>
-      )}
-
-      {openAbsences.length === 0 && coveredAbsences.length === 0 && (
-        <p className="text-sm text-gray-500">
-          No hay ausencias registradas para los próximos 30 días.
-        </p>
-      )}
-
-      {pending && (
-        <p className="text-xs text-gray-400">Actualizando…</p>
-      )}
     </div>
   );
 }
