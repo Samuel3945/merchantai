@@ -5,24 +5,27 @@ export type AttrRow = { key: string; value: string };
 const attrInputCls
   = 'h-8 rounded-md border border-input bg-transparent px-2 text-sm shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50';
 
-// Port of Tiendademo's AttributesEditor. `suggestions` are attribute names the
-// AI proposed for the product (chips that add a row when clicked).
+// `suggestions` are attributes the AI (or the category template) proposed for
+// the product. They render as tappable chips — nothing is added to the form
+// until the user selects one; tapping prefills both the name and any value the
+// AI inferred.
 export function AttributesEditor({
   suggestions,
   attributes,
   onChange,
 }: {
-  suggestions: string[];
+  suggestions: AttrRow[];
   attributes: AttrRow[];
   onChange: (attrs: AttrRow[]) => void;
 }) {
   const update = (i: number, patch: Partial<AttrRow>) =>
     onChange(attributes.map((a, j) => (j === i ? { ...a, ...patch } : a)));
-  const addRow = (key = '') => onChange([...attributes, { key, value: '' }]);
+  const addRow = (key = '', value = '') =>
+    onChange([...attributes, { key, value }]);
   const removeRow = (i: number) => onChange(attributes.filter((_, j) => j !== i));
 
   const openSuggestions = suggestions.filter(
-    s => !attributes.some(a => a.key.toLowerCase() === s.toLowerCase()),
+    s => !attributes.some(a => a.key.toLowerCase() === s.key.toLowerCase()),
   );
 
   return (
@@ -47,23 +50,28 @@ export function AttributesEditor({
       </div>
 
       {openSuggestions.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {openSuggestions.map(s => (
-            <button
-              key={s}
-              type="button"
-              onClick={() => addRow(s)}
-              className="
-                rounded-full bg-secondary px-2 py-0.5 text-[10px]
-                text-secondary-foreground
-                hover:bg-secondary/70
-              "
-            >
-              +
-              {' '}
-              {s}
-            </button>
-          ))}
+        <div className="space-y-1">
+          <p className="text-[10px] text-muted-foreground">
+            Sugerencias — toca una para agregarla:
+          </p>
+          <div className="flex flex-wrap gap-1">
+            {openSuggestions.map(s => (
+              <button
+                key={s.key}
+                type="button"
+                onClick={() => addRow(s.key, s.value)}
+                className="
+                  rounded-full bg-secondary px-2 py-0.5 text-[10px]
+                  text-secondary-foreground
+                  hover:bg-secondary/70
+                "
+              >
+                +
+                {' '}
+                {s.value ? `${s.key}: ${s.value}` : s.key}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
