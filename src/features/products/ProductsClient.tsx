@@ -182,7 +182,7 @@ export function ProductsClient({
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const [ai, setAi] = useState<AiState>({ status: 'idle' });
-  const [aiSuggestions, setAiSuggestions] = useState<string[]>([]);
+  const [aiSuggestions, setAiSuggestions] = useState<AttrRow[]>([]);
   // Bulk-edit selection (set of product ids) and the raise-price dialog.
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [priceDialogOpen, setPriceDialogOpen] = useState(false);
@@ -257,15 +257,24 @@ export function ProductsClient({
   const initialCostNum = Number.parseFloat(form.initialCost) || 0;
 
   // Characteristic suggestions learned for the typed category (matched by
-  // normalized name), merged with any AI suggestions and deduped. This makes the
-  // attribute_template useful even when the AI categorizer is unavailable.
+  // normalized name), merged with any AI suggestions and deduped by name. AI
+  // suggestions go first because they may carry an inferred value the chip can
+  // prefill; learned template keys fill in the rest.
   const attributeSuggestions = useMemo(() => {
     const slug = form.category.trim().toLowerCase();
     const match = slug
       ? categories.find(c => c.name.trim().toLowerCase() === slug)
       : undefined;
-    const learned = match ? match.attributeTemplate.map(t => t.key) : [];
-    return [...new Set([...learned, ...aiSuggestions])];
+    const learned: AttrRow[] = match
+      ? match.attributeTemplate.map(t => ({ key: t.key, value: '' }))
+      : [];
+    const merged: AttrRow[] = [];
+    for (const s of [...aiSuggestions, ...learned]) {
+      if (!merged.some(m => m.key.toLowerCase() === s.key.toLowerCase())) {
+        merged.push(s);
+      }
+    }
+    return merged;
   }, [form.category, categories, aiSuggestions]);
 
   // Edit guards — derived from the product being edited. The server enforces
@@ -330,15 +339,10 @@ export function ProductsClient({
           setAi(res.reason === 'unavailable' ? { status: 'unavailable' } : { status: 'idle' });
           return;
         }
-        setAiSuggestions(res.attributes.map(a => a.key).filter(Boolean));
-        setForm(f => ({
-          ...f,
-          category: res.category,
-          attributes:
-            f.attributes.length === 0
-              ? res.attributes.filter(a => a.key.trim() !== '')
-              : f.attributes,
-        }));
+        // Suggestions stay as tappable chips — the AI never injects rows into
+        // the form. Tapping a chip adds the row with the inferred value ready.
+        setAiSuggestions(res.attributes.filter(a => a.key.trim() !== ''));
+        setForm(f => ({ ...f, category: res.category }));
         setAi({ status: 'done' });
       } catch {
         setAi({ status: 'idle' });

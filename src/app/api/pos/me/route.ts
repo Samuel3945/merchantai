@@ -1,6 +1,7 @@
 import { and, asc, eq, sql } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { db } from '@/libs/DB';
+import { parseWholesaleTiers } from '@/libs/wholesale';
 import {
   cashSessionsSchema,
   posTokensSchema,
@@ -269,6 +270,28 @@ export async function GET(req: Request): Promise<NextResponse> {
 
   const fiadoEnabled = fiadoEnabledRaw === 'true';
 
+  // Wire contract: the POS reads snake_case fields (unit_type, is_wholesale,
+  // wholesale_tiers with min_qty). Map explicitly instead of dumping raw drizzle
+  // rows — the camelCase keys silently broke kg products and wholesale pricing.
+  const wireProducts = products.map(p => ({
+    id: p.id,
+    name: p.name,
+    barcode: p.barcode,
+    price: p.price,
+    cost: p.cost,
+    stock: p.stock,
+    category: p.category,
+    unit_type: p.unitType,
+    attributes: p.attributes,
+    is_wholesale: p.isWholesale,
+    wholesale_tiers: parseWholesaleTiers(p.wholesaleTiers).map(t => ({
+      min_qty: t.minQty,
+      price: t.price,
+    })),
+    status: p.status,
+    publish_at: p.publishAt,
+  }));
+
   // El método "Fiado" (type credit) se controla por el toggle fiado-enabled, no
   // por su columna active. Si el toggle está apagado, no debe llegar al cajero
   // como opción de pago aunque la fila siga active = true.
@@ -296,7 +319,7 @@ export async function GET(req: Request): Promise<NextResponse> {
     },
     paymentMethods: visiblePaymentMethods,
     cashiers,
-    products,
+    products: wireProducts,
     serverTime: new Date().toISOString(),
   });
 }

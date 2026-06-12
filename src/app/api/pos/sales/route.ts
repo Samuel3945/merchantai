@@ -11,6 +11,7 @@ import { fiadoAmountFor } from '@/libs/fiados-math';
 import { consumeFifoExits } from '@/libs/fifo-cogs';
 import { requirePosAuth } from '@/libs/pos-auth';
 import { assignNextSaleNumber } from '@/libs/sale-number';
+import { wholesaleUnitPrice } from '@/libs/wholesale';
 import {
   productsSchema,
   saleItemsSchema,
@@ -135,10 +136,17 @@ export async function POST(req: Request): Promise<NextResponse> {
           );
         }
 
-        const unitPrice = Number.parseFloat(product.price);
-        if (!Number.isFinite(unitPrice)) {
+        const basePrice = Number.parseFloat(product.price);
+        if (!Number.isFinite(basePrice)) {
           throw new TypeError(`Precio inválido para producto ${product.id}`);
         }
+        // Wholesale: qty-based tier pricing, same rule the POS shows in the cart.
+        const unitPrice = wholesaleUnitPrice(
+          basePrice,
+          product.isWholesale,
+          product.wholesaleTiers,
+          qty,
+        );
         const subtotal = unitPrice * qty;
         total += subtotal;
 
