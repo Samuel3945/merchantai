@@ -596,6 +596,38 @@ export const orgAddressesSchema = pgTable(
   table => [index('org_addresses_org_idx').on(table.organizationId)],
 );
 
+export const whatsappChannelStatusEnum = pgEnum('whatsapp_channel_status', [
+  'connecting',
+  'connected',
+  'disconnected',
+]);
+
+// A WhatsApp channel = one Evolution API instance owned by an organization.
+// An org can have several channels (each is its own connected number).
+export const whatsappChannelsSchema = pgTable(
+  'whatsapp_channels',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: text('organization_id').notNull(),
+    // Evolution instance name. Encodes the orgId so n8n maps an inbound message
+    // to its org from the payload's `instance` field alone, with no callback:
+    // `org_<clerkOrgId>__<short>` (see libs/evolution.ts buildInstanceName).
+    instanceName: text('instance_name').notNull(),
+    // Friendly name the admin gives the channel (e.g. "Ventas", "Soporte").
+    label: text('label'),
+    status: whatsappChannelStatusEnum('status').default('connecting').notNull(),
+    // The connected number (E.164 digits), filled once the QR is scanned.
+    phoneNumber: text('phone_number'),
+    createdBy: text('created_by').notNull(),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
+  },
+  table => [
+    index('whatsapp_channels_org_idx').on(table.organizationId),
+    uniqueIndex('whatsapp_channels_instance_unique_idx').on(table.instanceName),
+  ],
+);
+
 export const posTokensSchema = pgTable(
   'pos_tokens',
   {

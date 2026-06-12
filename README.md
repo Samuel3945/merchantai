@@ -115,6 +115,7 @@ Las marcadas como **ARG de build** deben estar disponibles en el momento de cons
 | `EVOLUTION_INSTANCE` | Opcional | No | Nombre de la instancia WhatsApp |
 | `WHATSAPP_WEBHOOK_TOKEN` | Opcional | No | Token de verificacion del webhook de WhatsApp |
 | `WHATSAPP_DEFAULT_ORG_ID` | Opcional | No | Org Clerk por defecto para mensajes WhatsApp entrantes sin org |
+| `WHATSAPP_N8N_WEBHOOK_URL` | Opcional | No | Webhook n8n compartido al que cada canal de WhatsApp reenvia los mensajes entrantes (Ajustes -> WhatsApp). n8n mapea a la org desde el campo `instance` |
 | `CRON_SECRET` | Opcional | No | Token para autenticar llamadas de cron jobs |
 | `PLATFORM_OPERATOR_EMAILS` | Opcional | No | Emails del operador de plataforma (CSV) |
 | `PLATFORM_OPERATOR_USER_IDS` | Opcional | No | Clerk user IDs del operador de plataforma (CSV) |
