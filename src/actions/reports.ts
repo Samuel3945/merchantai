@@ -1,5 +1,6 @@
 'use server';
 
+import type { NetProfitStats } from '@/libs/net-profit';
 import { auth } from '@clerk/nextjs/server';
 import { sql } from 'drizzle-orm';
 import {
@@ -9,10 +10,11 @@ import {
   getReturnsAnalysis,
 } from '@/actions/analytics';
 import { db } from '@/libs/DB';
+import { computeNetProfit } from '@/libs/net-profit';
 import { requirePanelModule } from '@/libs/panel-session';
 
 async function requireOrg() {
-  const { userId, orgId } = await auth();
+  const { userId, orgId, orgRole } = await auth();
   if (!userId) {
     throw new Error('Not authenticated');
   }
@@ -21,7 +23,7 @@ async function requireOrg() {
   }
   // Backend enforcement: the owner passes; a member needs the Reports module.
   await requirePanelModule('reports');
-  return { userId, orgId };
+  return { userId, orgId, orgRole };
 }
 
 function validateDate(value: string, field: string): string {
@@ -572,6 +574,11 @@ export type ReportsOverview = {
     /** Gastos operativos del mes en curso (ventana fija). */
     expensesMonth: number;
   };
+  /**
+   * Desglose de utilidad neta (margen bruto − salarios prorrateados − gastos
+   * registrados). Solo para el dueño (org:admin); null para empleados.
+   */
+  netProfitBreakdown: NetProfitStats | null;
 };
 
 export type FinanceBreakdown = {
@@ -638,6 +645,7 @@ export async function getReportsOverview(
   start: string,
   end: string,
 ): Promise<ReportsOverview> {
+  const { orgId, orgRole } = await requireOrg();
   const s = validateDate(start, 'start');
   const e = validateDate(end, 'end');
   const prev = previousRange(s, e);
@@ -683,6 +691,12 @@ export async function getReportsOverview(
   const topPayment = payments[0];
   const topCashier = cashiers[0];
   const topProduct = top[0];
+
+  // Salary + expense data is owner-only — never expose to employees.
+  const netProfitBreakdown
+    = orgRole === 'org:admin'
+      ? await computeNetProfit(orgId, s, e, profit)
+      : null;
 
   return {
     range: { start: s, end: e },
@@ -750,5 +764,6 @@ export async function getReportsOverview(
       expensesToday: finance.expensesToday,
       expensesMonth: finance.expensesMonth,
     },
+    netProfitBreakdown,
   };
 }
