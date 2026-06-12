@@ -2,7 +2,7 @@ import { and, asc, eq, sql } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { validatePosToken } from '@/actions/pos-tokens';
 import { db } from '@/libs/DB';
-import { posUsersSchema, productsSchema } from '@/models/Schema';
+import { orgAddressesSchema, posUsersSchema, productsSchema } from '@/models/Schema';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -71,7 +71,7 @@ export async function POST(req: Request): Promise<NextResponse> {
 
   const orgId = posToken.organizationId;
 
-  const [businessName, businessAddress, fiadoEnabledRaw, paymentMethods, products, cashierRow]
+  const [businessName, businessAddress, fiadoEnabledRaw, paymentMethods, products, cashierRow, branchRows]
     = await Promise.all([
       getSetting(orgId, 'business_name'),
       getSetting(orgId, 'business_address'),
@@ -95,9 +95,26 @@ export async function POST(req: Request): Promise<NextResponse> {
             .limit(1)
             .then(rows => rows[0] ?? null)
         : Promise.resolve(null),
+      // Branch address for THIS caja. Multi-branch is per posToken.
+      posToken.addressId
+        ? db
+            .select({
+              address: orgAddressesSchema.address,
+              city: orgAddressesSchema.city,
+            })
+            .from(orgAddressesSchema)
+            .where(eq(orgAddressesSchema.id, posToken.addressId))
+            .limit(1)
+        : Promise.resolve([]),
     ]);
 
   const fiadoEnabled = fiadoEnabledRaw === 'true';
+
+  // Caja branch address if assigned, else the legacy global business_address.
+  const branch = branchRows[0];
+  const storeAddress = branch
+    ? [branch.address, branch.city].filter(Boolean).join(', ')
+    : businessAddress || '';
 
   // El método "Fiado" (type credit) se controla por el toggle fiado-enabled, no
   // por su columna active. Si el toggle está apagado, no debe llegar al cajero
@@ -113,7 +130,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     store: {
       id: posToken.storeId,
       name: businessName || 'Mi Tienda',
-      address: businessAddress || '',
+      address: storeAddress,
       fiadoEnabled,
     },
     cashier: cashierRow ? { id: cashierRow.id, name: cashierRow.name } : null,

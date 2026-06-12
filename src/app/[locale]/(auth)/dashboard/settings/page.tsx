@@ -9,7 +9,6 @@ const KEYS = [
   // Business
   'business_name',
   'business_phone',
-  'business_address',
   'business_logo',
   'business_currency',
   'business_timezone',
@@ -74,7 +73,6 @@ export default async function DashboardSettingsPage(props: {
         business={{
           'business_name': map.business_name,
           'business_phone': map.business_phone,
-          'business_address': map.business_address,
           'business_logo': map.business_logo,
           'business_currency': map.business_currency,
           'business_timezone': map.business_timezone,

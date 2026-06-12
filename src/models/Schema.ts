@@ -567,6 +567,25 @@ export const posSessionsRelations = relations(posSessionsSchema, ({ one }) => ({
 
 // Device tokens used by POS terminals to authenticate sync requests.
 // Each token is a UUID printed/generated as QR and bound to a device + optional cashier.
+// Reusable branch addresses per org. Multi-branch ("multisucursal") is modeled
+// PER CAJA: each posToken points at one of these. The selector in Cajas POS lets
+// the admin pick an existing address or create a new one, and edit them. The
+// global business_address setting is retired in favor of these.
+export const orgAddressesSchema = pgTable(
+  'org_addresses',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: text('organization_id').notNull(),
+    // Optional branch label (e.g. "Centro", "Norte") to tell branches apart.
+    name: text('name'),
+    address: text('address').notNull(),
+    city: text('city'),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
+  },
+  table => [index('org_addresses_org_idx').on(table.organizationId)],
+);
+
 export const posTokensSchema = pgTable(
   'pos_tokens',
   {
@@ -575,6 +594,11 @@ export const posTokensSchema = pgTable(
     token: uuid('token').notNull().defaultRandom(),
     storeId: text('store_id').default('main').notNull(),
     deviceName: text('device_name').notNull(),
+    // Branch address for this caja. Null => pos/connect falls back to the legacy
+    // business_address setting during migration.
+    addressId: uuid('address_id').references(() => orgAddressesSchema.id, {
+      onDelete: 'set null',
+    }),
     createdBy: text('created_by').notNull(),
     cashierId: uuid('cashier_id').references(() => posUsersSchema.id, {
       onDelete: 'set null',

@@ -1,5 +1,6 @@
 'use client';
 
+import type { OrgAddress } from '@/actions/org-addresses';
 import type {
   listOrgCashiers,
   PosDeviceQuota,
@@ -12,6 +13,7 @@ import {
   ExternalLink,
   KeyRound,
   Lock,
+  MapPin,
   Monitor,
   MoreVertical,
   Pencil,
@@ -31,6 +33,7 @@ import {
   listPosTokens,
   regeneratePosToken,
   renamePosToken,
+  setPosTokenAddress,
   setPosTokenPin,
   unblockPosToken,
 } from '@/actions/pos-tokens';
@@ -46,6 +49,7 @@ import {
 import { Select } from '@/components/ui/select';
 import { Link } from '@/libs/I18nNavigation';
 import { POS_DEVICES_LIMIT_REACHED } from '@/libs/plan-limits';
+import { AddressPicker } from './AddressPicker';
 
 /**
  * App de cajero en producción (repo `pos-merchatai`, dominio propio).
@@ -127,20 +131,24 @@ export function PosCajerosClient({
   initialTokens,
   initialCashiers,
   initialQuota,
+  initialAddresses,
 }: {
   initialTokens: TokenRow[];
   initialCashiers: CashierRow[];
   initialQuota: PosDeviceQuota;
+  initialAddresses: OrgAddress[];
 }) {
   const confirm = useConfirm();
   const [tokens, setTokens] = useState(initialTokens);
   const [cashiers] = useState(initialCashiers);
   const [quota, setQuota] = useState(initialQuota);
+  const [addresses, setAddresses] = useState(initialAddresses);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [activeToken, setActiveToken] = useState<TokenRow | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<TokenRow | null>(null);
   const [pinTarget, setPinTarget] = useState<TokenRow | null>(null);
   const [renameTarget, setRenameTarget] = useState<TokenRow | null>(null);
+  const [addressTarget, setAddressTarget] = useState<TokenRow | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [limitError, setLimitError] = useState<LimitErrorPayload | null>(null);
   const [pending, startTransition] = useTransition();
@@ -363,6 +371,17 @@ export function PosCajerosClient({
                     <Monitor className="size-4 text-muted-foreground" />
                     {t.deviceName}
                   </div>
+                  {t.address && (
+                    <div className="
+                      mt-1 flex items-center gap-1 text-xs text-muted-foreground
+                    "
+                    >
+                      <MapPin className="size-3" />
+                      {[t.addressName, t.address, t.addressCity]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </div>
+                  )}
                 </td>
                 <td className="px-3 py-2">{t.cashierName ?? '—'}</td>
                 <td className="px-3 py-2">
@@ -458,6 +477,10 @@ export function PosCajerosClient({
                           <KeyRound className="size-4" />
                           Cambiar PIN
                         </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setAddressTarget(t)}>
+                          <MapPin className="size-4" />
+                          Dirección / sucursal
+                        </DropdownMenuItem>
                         {t.active && (
                           <>
                             <DropdownMenuItem
@@ -495,6 +518,8 @@ export function PosCajerosClient({
       {showCreateModal && (
         <CreateTokenModal
           cashiers={cashiers}
+          addresses={addresses}
+          onAddressesChange={setAddresses}
           onClose={() => setShowCreateModal(false)}
           onSuccess={(created) => {
             setShowCreateModal(false);
@@ -507,6 +532,10 @@ export function PosCajerosClient({
               cashierId: created.cashierId,
               cashierName:
                 cashiers.find(c => c.id === created.cashierId)?.name ?? null,
+              addressId: created.addressId,
+              addressName: addresses.find(a => a.id === created.addressId)?.name ?? null,
+              address: addresses.find(a => a.id === created.addressId)?.address ?? null,
+              addressCity: addresses.find(a => a.id === created.addressId)?.city ?? null,
               active: created.active,
               hasPin: created.pin !== '',
               lastSyncAt: created.lastSyncAt,
@@ -549,6 +578,20 @@ export function PosCajerosClient({
           onClose={() => setPinTarget(null)}
           onSaved={() => {
             setPinTarget(null);
+            refresh();
+          }}
+          onError={msg => setError(msg)}
+        />
+      )}
+
+      {addressTarget && (
+        <AddressModal
+          token={addressTarget}
+          addresses={addresses}
+          onAddressesChange={setAddresses}
+          onClose={() => setAddressTarget(null)}
+          onSaved={() => {
+            setAddressTarget(null);
             refresh();
           }}
           onError={msg => setError(msg)}
@@ -637,17 +680,22 @@ function LimitBanner({
 
 function CreateTokenModal({
   cashiers,
+  addresses,
+  onAddressesChange,
   onClose,
   onSuccess,
   onFailure,
 }: {
   cashiers: CashierRow[];
+  addresses: OrgAddress[];
+  onAddressesChange: (next: OrgAddress[]) => void;
   onClose: () => void;
   onSuccess: (token: CreatedToken) => void;
   onFailure: (failure: ActionFailure) => void;
 }) {
   const [deviceName, setDeviceName] = useState('');
   const [cashierId, setCashierId] = useState('');
+  const [addressId, setAddressId] = useState<string | null>(null);
   const [expiresAt, setExpiresAt] = useState('');
   const [pin, setPin] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -665,6 +713,7 @@ function CreateTokenModal({
       const result = await createPosToken({
         deviceName,
         cashierId: cashierId || undefined,
+        addressId,
         expiresAt: expiresAt || undefined,
         pin,
       });
@@ -733,6 +782,17 @@ function CreateTokenModal({
             />
           </div>
           <div>
+            <span className={labelCls}>Dirección / sucursal (opcional)</span>
+            <div className="mt-1">
+              <AddressPicker
+                addresses={addresses}
+                selectedId={addressId}
+                onSelect={setAddressId}
+                onAddressesChange={onAddressesChange}
+              />
+            </div>
+          </div>
+          <div>
             <label htmlFor="pt-expires" className={labelCls}>
               Expira (opcional)
             </label>
@@ -786,6 +846,96 @@ function CreateTokenModal({
             </Button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+}
+
+function AddressModal({
+  token,
+  addresses,
+  onAddressesChange,
+  onClose,
+  onSaved,
+  onError,
+}: {
+  token: TokenRow;
+  addresses: OrgAddress[];
+  onAddressesChange: (next: OrgAddress[]) => void;
+  onClose: () => void;
+  onSaved: () => void;
+  onError: (msg: string) => void;
+}) {
+  const [selectedId, setSelectedId] = useState<string | null>(token.addressId);
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSave = async () => {
+    setSubmitting(true);
+    try {
+      const result = await setPosTokenAddress(token.id, selectedId);
+      if (!result.ok) {
+        onError(result.error);
+        return;
+      }
+      onSaved();
+    } catch {
+      onError('No se pudo asignar la dirección');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="
+      fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4
+    "
+    >
+      <div className="w-full max-w-md rounded-lg bg-background p-6 shadow-lg">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="flex items-center gap-2 text-lg font-semibold">
+            <MapPin className="size-5" />
+            Dirección de
+            {' '}
+            {token.deviceName}
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="
+              text-muted-foreground
+              hover:text-foreground
+            "
+          >
+            ✕
+          </button>
+        </div>
+
+        <p className="mb-3 text-sm text-muted-foreground">
+          La sucursal de esta caja. Es la dirección que sale en el ticket. Podés
+          elegir una existente, crear una nueva o editar la seleccionada.
+        </p>
+
+        <AddressPicker
+          addresses={addresses}
+          selectedId={selectedId}
+          onSelect={setSelectedId}
+          onAddressesChange={onAddressesChange}
+          allowEdit
+        />
+
+        <div className="flex justify-end gap-2 pt-4">
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={onClose}
+            disabled={submitting}
+          >
+            Cancelar
+          </Button>
+          <Button type="button" onClick={handleSave} disabled={submitting}>
+            {submitting ? 'Guardando…' : 'Asignar a la caja'}
+          </Button>
+        </div>
       </div>
     </div>
   );

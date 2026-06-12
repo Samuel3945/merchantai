@@ -119,7 +119,6 @@ export function OnboardingStepper() {
   const [businessName, setBusinessName] = useState('');
   const [logoFile, setLogoFile] = useState<File | null>(null);
   const [logoPreview, setLogoPreview] = useState<string>('');
-  const [businessAddress, setBusinessAddress] = useState('');
   const [businessPhone, setBusinessPhone] = useState('');
 
   // Step 1 — sale modalities (the adaptive logic; replaces "tipo de negocio").
@@ -224,7 +223,6 @@ export function OnboardingStepper() {
           if (logoUrl) {
             await setAppSetting('business_logo', logoUrl);
           }
-          await setAppSetting('business_address', businessAddress.trim());
           await setAppSetting('business_phone', businessPhone.trim());
           setStep(1);
         } catch (err) {
@@ -419,16 +417,6 @@ export function OnboardingStepper() {
             </span>
           </div>
 
-          <label className="block">
-            <span className="text-sm font-medium">Dirección</span>
-            <input
-              type="text"
-              className={inputCls}
-              value={businessAddress}
-              onChange={e => setBusinessAddress(e.target.value)}
-              placeholder="Calle 10 #20-30, Medellín"
-            />
-          </label>
           <label className="block">
             <span className="text-sm font-medium">Teléfono</span>
             <input
