@@ -1,10 +1,10 @@
 'use server';
 
 import type { AuditActorType } from '@/libs/audit-log';
-import { auth } from '@clerk/nextjs/server';
-import { and, desc, eq, gte, ilike, lte, sql } from 'drizzle-orm';
+import { auth, clerkClient } from '@clerk/nextjs/server';
+import { and, desc, eq, gte, ilike, inArray, lte, sql } from 'drizzle-orm';
 import { db } from '@/libs/DB';
-import { auditLogsSchema } from '@/models/Schema';
+import { auditLogsSchema, posUsersSchema } from '@/models/Schema';
 
 export type AuditLogRow = {
   id: string;
@@ -26,6 +26,7 @@ export type ListAuditLogsParams = {
   end?: string | null;
   action?: string | null;
   actorId?: string | null;
+  actorType?: AuditActorType | null;
   entityType?: string | null;
   page?: number;
   pageSize?: number;
@@ -72,6 +73,9 @@ function buildFilters(orgId: string, params: ListAuditLogsParams) {
   }
   if (params.actorId) {
     conds.push(ilike(auditLogsSchema.actorId, `%${params.actorId.trim()}%`));
+  }
+  if (params.actorType) {
+    conds.push(eq(auditLogsSchema.actorType, params.actorType));
   }
   if (params.entityType) {
     conds.push(eq(auditLogsSchema.entityType, params.entityType));
@@ -127,14 +131,72 @@ export async function listAuditLogs(
 export type AuditFacets = {
   actions: string[];
   entityTypes: string[];
+  /** Distinct actors that appear in the log, resolved to readable names. */
+  actors: { id: string; label: string }[];
 };
 
-// Distinct action/entityType lists, scoped to the org, so the filter dropdowns
-// stay accurate as new event kinds get instrumented.
+const MAX_ACTOR_FACETS = 100;
+const UUID_RE
+  = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Resolves distinct audit actor ids to human names: POS cashiers from
+// pos_users, panel admins from Clerk (best-effort), anything else as-is.
+async function resolveActorFacets(
+  orgId: string,
+): Promise<{ id: string; label: string }[]> {
+  const rows = await db
+    .selectDistinct({ id: auditLogsSchema.actorId })
+    .from(auditLogsSchema)
+    .where(eq(auditLogsSchema.organizationId, orgId))
+    .limit(MAX_ACTOR_FACETS);
+
+  const ids = rows.map(r => r.id).filter(Boolean);
+  const uuidIds = ids.filter(id => UUID_RE.test(id));
+  const clerkIds = ids.filter(id => id.startsWith('user_'));
+
+  const names = new Map<string, string>();
+
+  if (uuidIds.length > 0) {
+    const users = await db
+      .select({ id: posUsersSchema.id, name: posUsersSchema.name })
+      .from(posUsersSchema)
+      .where(inArray(posUsersSchema.id, uuidIds));
+    for (const u of users) {
+      names.set(u.id, u.name);
+    }
+  }
+
+  if (clerkIds.length > 0) {
+    try {
+      const client = await clerkClient();
+      const { data } = await client.users.getUserList({
+        userId: clerkIds,
+        limit: clerkIds.length,
+      });
+      for (const u of data) {
+        const name
+          = u.fullName
+            || [u.firstName, u.lastName].filter(Boolean).join(' ').trim()
+            || u.primaryEmailAddress?.emailAddress
+            || u.id;
+        names.set(u.id, name);
+      }
+    } catch {
+      // Clerk unavailable → those actors fall back to their raw id.
+    }
+  }
+
+  return ids
+    .map(id => ({ id, label: names.get(id) ?? id }))
+    .sort((a, b) => a.label.localeCompare(b.label, 'es'));
+}
+
+// Distinct action/entityType/actor lists, scoped to the org, so the filter
+// dropdowns stay accurate as new event kinds get instrumented.
 export async function getAuditFacets(): Promise<AuditFacets> {
   const { orgId } = await requireAdminOrg();
 
-  const [actions, entityTypes] = await Promise.all([
+  const [actions, entityTypes, actors] = await Promise.all([
     db
       .selectDistinct({ value: auditLogsSchema.action })
       .from(auditLogsSchema)
@@ -145,10 +207,12 @@ export async function getAuditFacets(): Promise<AuditFacets> {
       .from(auditLogsSchema)
       .where(eq(auditLogsSchema.organizationId, orgId))
       .orderBy(auditLogsSchema.entityType),
+    resolveActorFacets(orgId),
   ]);
 
   return {
     actions: actions.map(a => a.value),
     entityTypes: entityTypes.map(e => e.value),
+    actors,
   };
 }

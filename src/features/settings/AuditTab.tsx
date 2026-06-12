@@ -5,10 +5,13 @@ import type {
   AuditLogRow,
   ListAuditLogsResult,
 } from '@/actions/audit-log';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getAuditFacets, listAuditLogs } from '@/actions/audit-log';
+import { DateRangePicker } from '@/components/DateRangePicker';
+import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
 import { exportToCSV } from '@/libs/exports';
+import { buildPresetOptions, todayBogota } from '@/utils/DateRange';
 
 const PAGE_SIZE = 50;
 
@@ -18,6 +21,14 @@ const ACTOR_LABEL: Record<AuditLogRow['actorType'], string> = {
   system: 'Sistema',
   api: 'API',
 };
+
+const ACTOR_TYPE_OPTIONS = [
+  { value: '', label: 'Todos los tipos' },
+  { value: 'user', label: 'Admin' },
+  { value: 'cashier', label: 'Cajero' },
+  { value: 'system', label: 'Sistema' },
+  { value: 'api', label: 'API' },
+] as const;
 
 const dateFmt = new Intl.DateTimeFormat('es-CO', {
   dateStyle: 'short',
@@ -30,6 +41,7 @@ type Filters = {
   end: string;
   action: string;
   actorId: string;
+  actorType: string;
   entityType: string;
 };
 
@@ -38,6 +50,7 @@ const EMPTY_FILTERS: Filters = {
   end: '',
   action: '',
   actorId: '',
+  actorType: '',
   entityType: '',
 };
 
@@ -47,6 +60,7 @@ function filtersToParams(f: Filters, page: number) {
     end: f.end || null,
     action: f.action || null,
     actorId: f.actorId.trim() || null,
+    actorType: (f.actorType || null) as AuditLogRow['actorType'] | null,
     entityType: f.entityType || null,
     page,
     pageSize: PAGE_SIZE,
@@ -55,14 +69,22 @@ function filtersToParams(f: Filters, page: number) {
 
 export function AuditTab() {
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
+  const [activePreset, setActivePreset] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [data, setData] = useState<ListAuditLogsResult | null>(null);
   const [facets, setFacets] = useState<AuditFacets>({
     actions: [],
     entityTypes: [],
+    actors: [],
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const isFirstRunRef = useRef(true);
+
+  const presetOptions = useMemo(
+    () => buildPresetOptions(['today', 'yesterday', '7d', '30d', 'mtd', 'lastMonth']),
+    [],
+  );
 
   const load = useCallback(
     async (nextPage = page, nextFilters = filters) => {
@@ -88,17 +110,22 @@ export function AuditTab() {
     // eslint-disable-next-line react/exhaustive-deps
   }, []);
 
-  const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
-
-  const applyFilters = () => {
+  // Filters auto-apply: any change reloads page 1 — no "apply" button.
+  useEffect(() => {
+    if (isFirstRunRef.current) {
+      isFirstRunRef.current = false;
+      return;
+    }
     setPage(1);
     load(1, filters);
-  };
+    // eslint-disable-next-line react/exhaustive-deps
+  }, [filters]);
+
+  const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
 
   const resetFilters = () => {
+    setActivePreset(null);
     setFilters(EMPTY_FILTERS);
-    setPage(1);
-    load(1, EMPTY_FILTERS);
   };
 
   const goPage = (next: number) => {
@@ -106,6 +133,8 @@ export function AuditTab() {
     setPage(safe);
     load(safe, filters);
   };
+
+  const hasActiveFilters = Object.values(filters).some(Boolean);
 
   const handleExport = async () => {
     try {
@@ -142,110 +171,113 @@ export function AuditTab() {
         </p>
       </div>
 
-      <div className="
-        grid gap-3 rounded-md border bg-muted/30 p-3
-        md:grid-cols-5
-      "
-      >
-        <label className="text-xs">
-          <span className="mb-1 block text-muted-foreground">Desde</span>
-          <input
-            type="date"
-            value={filters.start}
-            onChange={e => setFilters({ ...filters, start: e.target.value })}
-            className="
-              h-9 w-full rounded-md border border-input bg-background px-2
-              text-sm
-            "
-          />
-        </label>
-        <label className="text-xs">
-          <span className="mb-1 block text-muted-foreground">Hasta</span>
-          <input
-            type="date"
-            value={filters.end}
-            onChange={e => setFilters({ ...filters, end: e.target.value })}
-            className="
-              h-9 w-full rounded-md border border-input bg-background px-2
-              text-sm
-            "
-          />
-        </label>
-        <label className="text-xs">
-          <span className="mb-1 block text-muted-foreground">Acción</span>
-          <Select
-            value={filters.action}
-            onValueChange={v => setFilters({ ...filters, action: v })}
-            options={[
-              { value: '', label: 'Todas' },
-              ...facets.actions.map(a => ({ value: a, label: a })),
-            ]}
-          />
-        </label>
-        <label className="text-xs">
-          <span className="mb-1 block text-muted-foreground">Entidad</span>
-          <Select
-            value={filters.entityType}
-            onValueChange={v => setFilters({ ...filters, entityType: v })}
-            options={[
-              { value: '', label: 'Todas' },
-              ...facets.entityTypes.map(t => ({ value: t, label: t })),
-            ]}
-          />
-        </label>
-        <label className="text-xs">
-          <span className="mb-1 block text-muted-foreground">Actor (id)</span>
-          <input
-            type="text"
-            value={filters.actorId}
-            onChange={e => setFilters({ ...filters, actorId: e.target.value })}
-            placeholder="user_…, uuid…"
-            className="
-              h-9 w-full rounded-md border border-input bg-background px-2
-              text-sm
-            "
-          />
-        </label>
-      </div>
+      {/* Filter bar — same pattern as Ventas/Reportes; filters auto-apply */}
+      <div className="space-y-3 rounded-md border bg-muted/30 p-4">
+        <div className="
+          grid grid-cols-1 gap-3
+          sm:grid-cols-2
+          lg:grid-cols-5
+        "
+        >
+          <div className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-muted-foreground">
+              Periodo
+            </span>
+            <DateRangePicker
+              start={filters.start}
+              end={filters.end}
+              compare={false}
+              showCompare={false}
+              activePreset={activePreset}
+              presets={presetOptions}
+              maxDate={todayBogota()}
+              onApply={(next) => {
+                setActivePreset(next.preset);
+                setFilters(f => ({ ...f, start: next.start, end: next.end }));
+              }}
+              onClear={() => {
+                setActivePreset(null);
+                setFilters(f => ({ ...f, start: '', end: '' }));
+              }}
+              triggerClassName="w-full"
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-muted-foreground">
+              Acción
+            </span>
+            <Select
+              value={filters.action}
+              onValueChange={v => setFilters(f => ({ ...f, action: v }))}
+              options={[
+                { value: '', label: 'Todas las acciones' },
+                ...facets.actions.map(a => ({ value: a, label: a })),
+              ]}
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-muted-foreground">
+              Entidad
+            </span>
+            <Select
+              value={filters.entityType}
+              onValueChange={v => setFilters(f => ({ ...f, entityType: v }))}
+              options={[
+                { value: '', label: 'Todas las entidades' },
+                ...facets.entityTypes.map(t => ({ value: t, label: t })),
+              ]}
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-muted-foreground">
+              Quién
+            </span>
+            <Select
+              value={filters.actorId}
+              onValueChange={v => setFilters(f => ({ ...f, actorId: v }))}
+              options={[
+                { value: '', label: 'Todos los usuarios' },
+                ...facets.actors.map(a => ({ value: a.id, label: a.label })),
+              ]}
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-muted-foreground">
+              Tipo de actor
+            </span>
+            <Select
+              value={filters.actorType}
+              onValueChange={v => setFilters(f => ({ ...f, actorType: v }))}
+              options={[...ACTOR_TYPE_OPTIONS]}
+            />
+          </div>
+        </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={applyFilters}
-          disabled={loading}
-          className="
-            h-9 rounded-md bg-foreground px-3 text-sm font-medium
-            text-background
-            disabled:opacity-50
-          "
-        >
-          Aplicar filtros
-        </button>
-        <button
-          type="button"
-          onClick={resetFilters}
-          disabled={loading}
-          className="
-            h-9 rounded-md border border-input bg-background px-3 text-sm
-            hover:bg-muted
-            disabled:opacity-50
-          "
-        >
-          Limpiar
-        </button>
-        <div className="grow" />
-        <button
-          type="button"
-          onClick={handleExport}
-          disabled={loading || !data || data.items.length === 0}
-          className="
-            h-9 rounded-md border border-input bg-background px-3 text-sm
-            hover:bg-muted
-            disabled:opacity-50
-          "
-        >
-          Exportar CSV
-        </button>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            {hasActiveFilters && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={resetFilters}
+                disabled={loading}
+              >
+                Limpiar
+              </Button>
+            )}
+            {loading && (
+              <span className="text-xs text-muted-foreground">Cargando…</span>
+            )}
+          </div>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={handleExport}
+            disabled={loading || !data || data.items.length === 0}
+          >
+            Exportar CSV
+          </Button>
+        </div>
       </div>
 
       {error && (
