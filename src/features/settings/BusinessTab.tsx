@@ -1,6 +1,9 @@
 'use client';
 
+import { useLocale } from 'next-intl';
 import { useRef, useState } from 'react';
+import { usePathname, useRouter } from '@/libs/I18nNavigation';
+import { AppConfig } from '@/utils/AppConfig';
 import { SelectField, TextField, ToggleRow } from './fields';
 import { useSettingSave } from './useSettingSave';
 import { useSettingsToast } from './useSettingsToast';
@@ -44,6 +47,9 @@ export type BusinessTabValues = {
 export function BusinessTab({ initial }: { initial: BusinessTabValues }) {
   const { save } = useSettingSave();
   const toast = useSettingsToast();
+  const locale = useLocale();
+  const router = useRouter();
+  const pathname = usePathname();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [logoUrl, setLogoUrl] = useState(initial.business_logo);
   const [uploading, setUploading] = useState(false);
@@ -62,6 +68,15 @@ export function BusinessTab({ initial }: { initial: BusinessTabValues }) {
   const handleOffering = (value: string) => {
     setOffering(value);
     save('business_offering', value, { notifyConfigChange: true });
+  };
+
+  // Locale is per-browser (next-intl cookie + URL prefix), not an app setting.
+  const handleLocale = (newLocale: string) => {
+    if (newLocale === locale) {
+      return;
+    }
+    const { search } = window.location;
+    router.push(`${pathname}${search}`, { locale: newLocale, scroll: false });
   };
 
   const handleFile = async (file: File | undefined) => {
@@ -152,6 +167,17 @@ export function BusinessTab({ initial }: { initial: BusinessTabValues }) {
           initial={initial.business_timezone || 'America/Bogota'}
           options={TIMEZONE_OPTIONS}
           onCommit={v => save('business_timezone', v)}
+        />
+        <SelectField
+          id="app_language"
+          label="Idioma"
+          hint="Cambia el idioma del panel para este navegador."
+          initial={locale}
+          options={AppConfig.i18n.locales.map(l => ({
+            value: l.id,
+            label: l.name,
+          }))}
+          onCommit={handleLocale}
         />
       </div>
 

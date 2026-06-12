@@ -3,7 +3,6 @@ import { UserButton } from '@clerk/nextjs';
 import { useLocale } from 'next-intl';
 import Link from 'next/link';
 import { BusinessSwitcher } from '@/components/BusinessSwitcher';
-import { LocaleSwitcher } from '@/components/LocaleSwitcher';
 import { NotificationBell } from '@/components/NotificationBell';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { Separator } from '@/components/ui/separator';
@@ -46,8 +45,6 @@ export const DashboardHeader = (props: {
         <NotificationBell />
 
         <ThemeToggle />
-
-        <LocaleSwitcher />
 
         <Separator orientation="vertical" className="h-4" />
 
