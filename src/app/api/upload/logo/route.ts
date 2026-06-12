@@ -1,7 +1,8 @@
-import { auth } from '@clerk/nextjs/server';
+import { auth, clerkClient } from '@clerk/nextjs/server';
 import { put } from '@vercel/blob';
 import { NextResponse } from 'next/server';
 import { Env } from '@/libs/Env';
+import { logger } from '@/libs/Logger';
 
 export const runtime = 'nodejs';
 
@@ -61,6 +62,22 @@ export async function POST(request: Request) {
     token: Env.BLOB_READ_WRITE_TOKEN,
     addRandomSuffix: true,
   });
+
+  // The business logo IS the organization logo: push it to Clerk so the org
+  // switcher and panel avatar match. Best-effort — a Clerk failure must not
+  // break the upload the settings page depends on.
+  try {
+    const client = await clerkClient();
+    await client.organizations.updateOrganizationLogo(orgId, {
+      file,
+      uploaderUserId: userId,
+    });
+  } catch (err) {
+    logger.error('business_logo_org_sync_failed', {
+      organizationId: orgId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   return NextResponse.json({ url: blob.url, pathname: blob.pathname });
 }
