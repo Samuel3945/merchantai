@@ -102,9 +102,20 @@ export const productsSchema = pgTable(
     cost: numeric('cost', { precision: 10, scale: 2 })
       .default('0')
       .notNull(),
-    stock: integer('stock').default(0).notNull(),
-    minStock: integer('min_stock').default(0).notNull(),
-    stockMaxRecommended: integer('stock_max_recommended'),
+    // Quantities are numeric (3 decimals) so products sold by weight/volume
+    // (unit_type='kg') hold fractional stock. mode:'number' keeps the TS type a
+    // plain number — the codebase treats stock/qty as numbers everywhere.
+    stock: numeric('stock', { precision: 12, scale: 3, mode: 'number' })
+      .default(0)
+      .notNull(),
+    minStock: numeric('min_stock', { precision: 12, scale: 3, mode: 'number' })
+      .default(0)
+      .notNull(),
+    stockMaxRecommended: numeric('stock_max_recommended', {
+      precision: 12,
+      scale: 3,
+      mode: 'number',
+    }),
     // Denormalized category name (cache for cheap reads) + normalized FK. Both
     // are kept in sync by createProduct/updateProduct via upsertCategory.
     category: text('category'),
@@ -263,7 +274,8 @@ export const saleItemsSchema = pgTable(
       .notNull()
       .references(() => productsSchema.id, { onDelete: 'restrict' }),
     productName: text('product_name').notNull(),
-    qty: integer('qty').notNull(),
+    // Numeric (3 decimals) for weight/volume sales (e.g. 2.2 kg).
+    qty: numeric('qty', { precision: 12, scale: 3, mode: 'number' }).notNull(),
     price: numeric('price', { precision: 10, scale: 2 }).notNull(),
     subtotal: numeric('subtotal', { precision: 10, scale: 2 }).notNull(),
     unitType: text('unit_type').default('unit').notNull(),
@@ -1156,7 +1168,7 @@ export const posReturnItemsSchema = pgTable('pos_return_items', {
     .references(() => saleItemsSchema.id, { onDelete: 'restrict' }),
   productId: uuid('product_id').notNull(),
   productName: text('product_name').notNull(),
-  qty: integer('qty').notNull(),
+  qty: numeric('qty', { precision: 12, scale: 3, mode: 'number' }).notNull(),
   refundAmount: numeric('refund_amount', { precision: 12, scale: 2 })
     .default('0')
     .notNull(),
@@ -1218,10 +1230,15 @@ export const stockMovementsSchema = pgTable(
       .references(() => productsSchema.id, { onDelete: 'restrict' }),
     productName: text('product_name'),
     type: stockMovementTypeEnum('type').notNull(),
-    qty: integer('qty').notNull(),
+    // Numeric (3 decimals) so the FIFO ledger tracks fractional weight/volume.
+    qty: numeric('qty', { precision: 12, scale: 3, mode: 'number' }).notNull(),
     // For 'entry' rows: units of this batch still in stock (decremented by FIFO
     // on each exit). NULL means "not tracked per batch" (legacy or non-perishable).
-    remainingQty: integer('remaining_qty'),
+    remainingQty: numeric('remaining_qty', {
+      precision: 12,
+      scale: 3,
+      mode: 'number',
+    }),
     unitCost: numeric('unit_cost', { precision: 12, scale: 2 }),
     // Only set when type='entry' and the product is perishable. The engine
     // sources daysToExpire from this column.
