@@ -1,8 +1,6 @@
 import bcrypt from 'bcryptjs';
 import { and, eq, sql } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
-import { createNotification } from '@/actions/notifications';
-import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
 import { posTokensSchema, posUsersSchema } from '@/models/Schema';
 
@@ -94,49 +92,10 @@ export async function POST(req: Request): Promise<NextResponse> {
       .limit(1);
 
     if (row) {
-      // Cajas never expire — access is gated only by the token, PIN and block.
-      // PIN de acceso de la caja: si está configurado, se exige junto al token.
-      if (row.token.pin) {
-        if (!pin) {
-          // Falta el PIN: 200 + pinRequired para que el cliente muestre el campo
-          // y pida el PIN, sin pintar un 4xx en consola.
-          return NextResponse.json({
-            success: false,
-            pinRequired: true,
-            needsPin: true,
-            message: 'Esta caja requiere un PIN',
-            error: 'Esta caja requiere un PIN',
-          });
-        }
-        const valid = await bcrypt.compare(pin, row.token.pin);
-        if (!valid) {
-          logAction({
-            organizationId: row.token.organizationId,
-            actor: { type: 'cashier' as const, id: `device:${row.token.deviceName}` },
-            action: 'device.pin_failed',
-            entityType: 'pos_token',
-            entityId: row.token.id,
-            metadata: { deviceName: row.token.deviceName },
-          }).catch(() => null);
-          createNotification({
-            organizationId: row.token.organizationId,
-            kind: 'sale_alert',
-            severity: 'high',
-            title: 'Intento de PIN incorrecto',
-            message: `Intento de PIN incorrecto en la caja "${row.token.deviceName}".`,
-            payload: { tokenId: row.token.id, deviceName: row.token.deviceName },
-          }).catch(() => null);
-          return NextResponse.json(
-            {
-              success: false,
-              needsPin: true,
-              message: 'PIN de la caja incorrecto',
-              error: 'PIN de la caja incorrecto',
-            },
-            { status: 401 },
-          );
-        }
-      }
+      // Cajas open with the token only (typed or scanned) — there is no device
+      // PIN. Access is gated by the token and the active/block flag. Per-operator
+      // accountability lives in the employee's personal PIN (cashiers/verify-pin),
+      // stamped as currentCashier on profile change at the device.
 
       // Bump sessionEpoch to invalidate all previously active sessions for this
       // device token (single-active-device enforcement).

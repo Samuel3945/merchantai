@@ -18,7 +18,7 @@ export default async function DashboardMiPerfilPage(props: {
     redirect('/dashboard');
   }
 
-  const { phone, hasProfile } = await getMyContact();
+  const { phone, hasProfile, canCashier, hasPin } = await getMyContact();
 
   return (
     <>
@@ -26,7 +26,12 @@ export default async function DashboardMiPerfilPage(props: {
         title="Mi perfil"
         description="Tus datos de contacto para la comunicación interna con el asistente."
       />
-      <MyProfileClient initialPhone={phone} hasProfile={hasProfile} />
+      <MyProfileClient
+        initialPhone={phone}
+        hasProfile={hasProfile}
+        canCashier={canCashier}
+        initialHasPin={hasPin}
+      />
     </>
   );
 }
