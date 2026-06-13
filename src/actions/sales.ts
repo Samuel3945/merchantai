@@ -32,6 +32,7 @@ import {
 import { createFiado } from '@/libs/fiados';
 import { fiadoAmountFor } from '@/libs/fiados-math';
 import { consumeFifoExits } from '@/libs/fifo-cogs';
+import { getCurrentPanelUser } from '@/libs/panel-session';
 import { loadReturnPolicy } from '@/libs/return-policy';
 import { assignNextSaleNumber } from '@/libs/sale-number';
 import { applySaleReturn } from '@/libs/sale-returns';
@@ -469,7 +470,7 @@ export type SalesFilterOptions = {
 };
 
 export async function getSalesFilterOptions(): Promise<SalesFilterOptions> {
-  const { userId, orgId } = await auth();
+  const { userId, orgId, orgRole } = await auth();
   if (!userId) {
     throw new Error('Not authenticated');
   }
@@ -478,6 +479,16 @@ export async function getSalesFilterOptions(): Promise<SalesFilterOptions> {
   }
 
   const returnPolicy = await loadReturnPolicy(db, orgId);
+
+  // A non-owner employee only ever sees their own sales, so the cashier filter
+  // must list just themselves — never their colleagues' names.
+  const employeeConds = [
+    eq(posUsersSchema.organizationId, orgId),
+    eq(posUsersSchema.active, true),
+  ];
+  if (orgRole !== 'org:admin') {
+    employeeConds.push(eq(posUsersSchema.clerkUserId, userId));
+  }
 
   const [registers, employees, products] = await Promise.all([
     db
@@ -488,12 +499,7 @@ export async function getSalesFilterOptions(): Promise<SalesFilterOptions> {
     db
       .select({ id: posUsersSchema.id, name: posUsersSchema.name })
       .from(posUsersSchema)
-      .where(
-        and(
-          eq(posUsersSchema.organizationId, orgId),
-          eq(posUsersSchema.active, true),
-        ),
-      )
+      .where(and(...employeeConds))
       .orderBy(posUsersSchema.name),
     db
       .select({ id: productsSchema.id, name: productsSchema.name })
@@ -513,12 +519,24 @@ export type ListSalesResult = {
 export async function listSales(
   filters: ListSalesFilters = {},
 ): Promise<ListSalesResult> {
-  const { userId, orgId } = await auth();
+  const { userId, orgId, orgRole } = await auth();
   if (!userId) {
     throw new Error('Not authenticated');
   }
   if (!orgId) {
     throw new Error('No active organization');
+  }
+
+  // Non-owner employees are scoped to their OWN sales: we force the cashier
+  // filter to their linked pos_users id and ignore any incoming cashierId so it
+  // cannot be spoofed. An employee with no active linked user sees nothing.
+  let scopedCashierId: string | null = null;
+  if (orgRole !== 'org:admin') {
+    const me = await getCurrentPanelUser(userId, orgId);
+    if (!me) {
+      return { items: [], total: 0 };
+    }
+    scopedCashierId = me.id;
   }
 
   const limit = Math.min(Math.max(filters.limit ?? 25, 1), 200);
@@ -570,8 +588,11 @@ export async function listSales(
     }
   }
 
-  if (filters.cashierId && filters.cashierId.trim() !== '') {
-    conds.push(eq(salesSchema.cashierId, filters.cashierId.trim()));
+  // A scoped employee always wins over the requested cashier filter.
+  const effectiveCashierId
+    = scopedCashierId ?? (filters.cashierId?.trim() || null);
+  if (effectiveCashierId) {
+    conds.push(eq(salesSchema.cashierId, effectiveCashierId));
   }
 
   if (filters.posTokenId && filters.posTokenId.trim() !== '') {

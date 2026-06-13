@@ -86,8 +86,13 @@ const OWNER_ONLY_PREFIXES = [
   '/dashboard/ai-agent',
 ];
 
-// Dashboard routes any panel user may open regardless of modules.
-const PANEL_PUBLIC_PREFIXES = ['/dashboard/user-profile', '/dashboard/mi-perfil'];
+// Dashboard routes any panel user may open regardless of modules. "Mi día" is
+// the member home that replaces the owner-only Resumen for non-owners.
+const PANEL_PUBLIC_PREFIXES = [
+  '/dashboard/mi-dia',
+  '/dashboard/user-profile',
+  '/dashboard/mi-perfil',
+];
 
 type PathRequirement
   = | { kind: 'public' }
@@ -102,7 +107,8 @@ function dashboardPath(pathname: string): string | null {
 
 /**
  * Resolves what a given path requires from a non-owner panel user. The Resumen
- * landing (`/dashboard` exact) is public; known module routes require their
+ * landing (`/dashboard` exact) is OWNER-ONLY — it shows business-wide metrics, so
+ * members are bounced to their "Mi día" home. Known module routes require their
  * module; everything else under /dashboard is owner-only (deny-by-default).
  */
 export function requiredModuleForPath(pathname: string): PathRequirement {
@@ -111,7 +117,7 @@ export function requiredModuleForPath(pathname: string): PathRequirement {
     return { kind: 'public' };
   }
   if (path === '/dashboard' || path === '/dashboard/') {
-    return { kind: 'public' };
+    return { kind: 'owner' };
   }
   if (PANEL_PUBLIC_PREFIXES.some(p => path.startsWith(p))) {
     return { kind: 'public' };

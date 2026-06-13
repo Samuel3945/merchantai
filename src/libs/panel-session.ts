@@ -31,6 +31,43 @@ export async function getPanelUserModules(
   return row ? (row.enabledModules ?? []) : null;
 }
 
+export type CurrentPanelUser = {
+  id: string;
+  name: string;
+  enabledModules: string[];
+};
+
+/**
+ * Resolves the active business user (`pos_users` row) linked to a Clerk identity
+ * in an org. Members are scoped to their OWN data (e.g. their sales, their "Mi
+ * día" home) using the returned `id`, which equals `sales.cashier_id`. Returns
+ * `null` when there is no active linked user — callers deny-by-default.
+ */
+export async function getCurrentPanelUser(
+  clerkUserId: string,
+  organizationId: string,
+): Promise<CurrentPanelUser | null> {
+  const [row] = await db
+    .select({
+      id: posUsersSchema.id,
+      name: posUsersSchema.name,
+      enabledModules: posUsersSchema.enabledModules,
+    })
+    .from(posUsersSchema)
+    .where(
+      and(
+        eq(posUsersSchema.clerkUserId, clerkUserId),
+        eq(posUsersSchema.organizationId, organizationId),
+        eq(posUsersSchema.active, true),
+      ),
+    )
+    .limit(1);
+
+  return row
+    ? { id: row.id, name: row.name, enabledModules: row.enabledModules ?? [] }
+    : null;
+}
+
 /**
  * Backend authorization gate for a panel module (decision: validate on the
  * server too, not only by hiding views). The owner (Clerk org admin) passes

@@ -3,6 +3,7 @@
 import { auth } from '@clerk/nextjs/server';
 import { sql } from 'drizzle-orm';
 import { db } from '@/libs/DB';
+import { getCurrentPanelUser } from '@/libs/panel-session';
 
 export type PeriodStats = {
   total: number;
@@ -265,5 +266,67 @@ export async function getMetrics(
     cashFlow,
     inventory,
     salesByDay: byDay,
+  };
+}
+
+export type MyDay = {
+  /** Display name of the signed-in employee. */
+  name: string;
+  /** The employee's OWN sales for today (Bogota), never the whole business. */
+  salesToday: { total: number; count: number };
+  /** Whether the employee holds the `sales` module (drives the "Ver mis ventas" CTA). */
+  canViewSales: boolean;
+};
+
+/** Today's date in America/Bogota as YYYY-MM-DD, matching the metrics queries. */
+function todayBogota(): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Bogota',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const y = parts.find(p => p.type === 'year')?.value ?? '1970';
+  const m = parts.find(p => p.type === 'month')?.value ?? '01';
+  const d = parts.find(p => p.type === 'day')?.value ?? '01';
+  return `${y}-${m}-${d}`;
+}
+
+/**
+ * Personal "Mi día" summary for a non-owner employee: their OWN sales today,
+ * scoped to `sales.cashier_id = their pos_users.id`. Business-wide metrics live
+ * in the owner-only Resumen and are never exposed here.
+ */
+export async function getMyDay(): Promise<MyDay> {
+  const { userId, orgId, orgRole } = await requireOrg();
+
+  // Owners use the Resumen; they have no personal "Mi día".
+  if (orgRole === 'org:admin') {
+    return { name: '', salesToday: { total: 0, count: 0 }, canViewSales: true };
+  }
+
+  const me = await getCurrentPanelUser(userId, orgId);
+  if (!me) {
+    return { name: '', salesToday: { total: 0, count: 0 }, canViewSales: false };
+  }
+
+  const today = todayBogota();
+  const result = await db.execute(sql`
+    SELECT
+      COALESCE(SUM(total), 0)::float8 AS total,
+      COUNT(*)::int AS count
+    FROM sales
+    WHERE organization_id = ${orgId}
+      AND cashier_id = ${me.id}
+      AND status IN ('completed', 'settled', 'returned')
+      AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
+          = ${today}::date
+  `);
+
+  const row = (result.rows?.[0] ?? {}) as Record<string, unknown>;
+  return {
+    name: me.name,
+    salesToday: { total: toNum(row.total), count: toInt(row.count) },
+    canViewSales: me.enabledModules.includes('sales'),
   };
 }

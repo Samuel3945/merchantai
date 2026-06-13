@@ -179,9 +179,11 @@ export default async function proxy(
         return NextResponse.redirect(onboardingUrl);
       }
 
-      // Deny-by-default panel authorization for non-owner members. They may open
-      // the Resumen landing and only the dashboard modules they were granted;
-      // anything else (owner-only views or unmapped routes) bounces to /dashboard.
+      // Deny-by-default panel authorization for non-owner members. They land on
+      // their "Mi día" home and may open only the dashboard modules they were
+      // granted; anything else (the owner Resumen, owner-only views or unmapped
+      // routes) bounces to /dashboard/mi-dia. Redirecting to /dashboard would
+      // loop because the Resumen landing is itself owner-only now.
       // The DB is the source of truth (the Clerk metadata is only a cache).
       if (
         authObj.userId
@@ -199,7 +201,7 @@ export default async function proxy(
             = need.kind === 'module'
               && (modules?.includes(need.module) ?? false);
           if (!allowed) {
-            return NextResponse.redirect(new URL('/dashboard', req.url));
+            return NextResponse.redirect(new URL('/dashboard/mi-dia', req.url));
           }
         }
       }

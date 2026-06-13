@@ -1,4 +1,6 @@
+import { auth } from '@clerk/nextjs/server';
 import { setRequestLocale } from 'next-intl/server';
+import { redirect } from 'next/navigation';
 import { getMetrics } from '@/actions/dashboard';
 import { DashboardClient } from '@/features/dashboard/DashboardClient';
 import { PlanPanel } from '@/features/dashboard/PlanPanel';
@@ -28,6 +30,15 @@ export default async function DashboardIndexPage(props: {
 }) {
   const { locale } = await props.params;
   setRequestLocale(locale);
+
+  // The Resumen shows business-wide metrics, so it is owner-only. A non-owner
+  // member belongs on their personal "Mi día" home. The middleware already
+  // enforces this; the guard here keeps getMetrics from ever running for a
+  // member and protects against direct server-component hits.
+  const { orgRole } = await auth();
+  if (orgRole !== 'org:admin') {
+    redirect('/dashboard/mi-dia');
+  }
 
   const end = todayBogota();
   const start = addDays(end, -29);
