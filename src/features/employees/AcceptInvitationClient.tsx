@@ -7,8 +7,6 @@ const inputCls
   = 'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50';
 const labelCls = 'text-xs font-medium text-muted-foreground';
 
-const POS_SESSION_STORAGE_KEY = 'pos.sessionId';
-
 type ValidateResponse
   = | {
     valid: true;
@@ -174,11 +172,12 @@ export function AcceptInvitationClient({
         );
       }
 
-      if (typeof window !== 'undefined' && data.sessionId) {
-        window.localStorage.setItem(POS_SESSION_STORAGE_KEY, data.sessionId);
-      }
-
-      window.location.assign('/pos');
+      // The account is now active and a web panel identity was provisioned in
+      // Clerk with the same email + password (see /api/invitations/accept).
+      // Send the employee to the web sign-in so they enter with the credentials
+      // they just set. There is no /pos route in this app — the cashier POS
+      // (TiendaCajero) is a separate domain that authenticates by access code.
+      window.location.assign(`/${locale}/sign-in`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo activar la cuenta');
       setSubmitting(false);
