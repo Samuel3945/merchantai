@@ -983,17 +983,27 @@ export async function deleteEmployee(
 export type MyContact = {
   phone: string | null;
   hasProfile: boolean;
+  // Whether this employee can operate the POS (module 'pos'). Gates the personal
+  // PIN section in the profile — only cashiers need an access PIN.
+  canCashier: boolean;
+  // Whether the employee already set a personal PIN. The PIN itself is never
+  // returned; only its presence drives the "set" vs "change" UI.
+  hasPin: boolean;
 };
 
 /** Reads the current panel user's own WhatsApp for the active organization. */
 export async function getMyContact(): Promise<MyContact> {
   const { userId, orgId } = await auth();
   if (!userId || !orgId) {
-    return { phone: null, hasProfile: false };
+    return { phone: null, hasProfile: false, canCashier: false, hasPin: false };
   }
 
   const [row] = await db
-    .select({ phone: posUsersSchema.phone })
+    .select({
+      phone: posUsersSchema.phone,
+      enabledModules: posUsersSchema.enabledModules,
+      pin: posUsersSchema.pin,
+    })
     .from(posUsersSchema)
     .where(
       and(
@@ -1003,7 +1013,12 @@ export async function getMyContact(): Promise<MyContact> {
     )
     .limit(1);
 
-  return { phone: row?.phone ?? null, hasProfile: Boolean(row) };
+  return {
+    phone: row?.phone ?? null,
+    hasProfile: Boolean(row),
+    canCashier: (row?.enabledModules ?? []).includes('pos'),
+    hasPin: Boolean(row?.pin),
+  };
 }
 
 /** Updates the current panel user's own WhatsApp for the active organization. */
@@ -1060,4 +1075,85 @@ export async function updateMyContact(
 
   revalidatePath('/dashboard/mi-perfil');
   return { ok: true, data: { phone } };
+}
+
+/**
+ * Lets the current cashier set/change/remove their OWN personal POS PIN from the
+ * web profile. This PIN identifies who operates a shared caja: the device opens
+ * with the token only, so each action is attributed to the employee who entered
+ * their PIN. 4 to 8 digits; an empty newPin removes it. If a PIN already exists,
+ * the current one is required to change it.
+ */
+export async function updateMyPin(
+  input: { currentPin?: string; newPin: string },
+): Promise<ActionResult<{ hasPin: boolean }>> {
+  const { userId, orgId } = await auth();
+  if (!userId) {
+    return { ok: false, error: 'No autenticado' };
+  }
+  if (!orgId) {
+    return { ok: false, error: 'Sin organización activa' };
+  }
+
+  const newPin = (input.newPin ?? '').trim();
+  const currentPin = (input.currentPin ?? '').trim();
+  if (newPin && !/^\d{4,8}$/.test(newPin)) {
+    return { ok: false, error: 'El PIN debe tener entre 4 y 8 dígitos' };
+  }
+
+  const [existing] = await db
+    .select({
+      id: posUsersSchema.id,
+      pin: posUsersSchema.pin,
+      enabledModules: posUsersSchema.enabledModules,
+    })
+    .from(posUsersSchema)
+    .where(
+      and(
+        eq(posUsersSchema.clerkUserId, userId),
+        eq(posUsersSchema.organizationId, orgId),
+      ),
+    )
+    .limit(1);
+
+  if (!existing) {
+    return {
+      ok: false,
+      error: 'Tu usuario no tiene un perfil editable en esta organización.',
+    };
+  }
+  if (!(existing.enabledModules ?? []).includes('pos')) {
+    return { ok: false, error: 'Tu cuenta no tiene acceso a la caja.' };
+  }
+
+  // Changing or removing an existing PIN requires the current one.
+  if (existing.pin) {
+    const valid = await bcrypt.compare(currentPin, existing.pin);
+    if (!valid) {
+      return { ok: false, error: 'El PIN actual es incorrecto' };
+    }
+  }
+
+  const pinHash = newPin ? await bcrypt.hash(newPin, 10) : '';
+  await db
+    .update(posUsersSchema)
+    .set({ pin: pinHash })
+    .where(
+      and(
+        eq(posUsersSchema.id, existing.id),
+        eq(posUsersSchema.organizationId, orgId),
+      ),
+    );
+
+  await logAction({
+    organizationId: orgId,
+    actor: { type: 'user', id: userId },
+    action: 'employee.pin_self_updated',
+    entityType: 'pos_user',
+    entityId: existing.id,
+    metadata: { hasPin: pinHash !== '' },
+  });
+
+  revalidatePath('/dashboard/mi-perfil');
+  return { ok: true, data: { hasPin: pinHash !== '' } };
 }

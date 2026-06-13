@@ -8,7 +8,6 @@ import {
   Ban,
   CheckCircle2,
   ExternalLink,
-  KeyRound,
   Lock,
   MapPin,
   Monitor,
@@ -31,7 +30,6 @@ import {
   regeneratePosToken,
   renamePosToken,
   setPosTokenAddress,
-  setPosTokenPin,
   unblockPosToken,
 } from '@/actions/pos-tokens';
 import { Button } from '@/components/ui/button';
@@ -138,7 +136,6 @@ export function PosCajerosClient({
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [activeToken, setActiveToken] = useState<TokenRow | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<TokenRow | null>(null);
-  const [pinTarget, setPinTarget] = useState<TokenRow | null>(null);
   const [renameTarget, setRenameTarget] = useState<TokenRow | null>(null);
   const [addressTarget, setAddressTarget] = useState<TokenRow | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -416,14 +413,6 @@ export function PosCajerosClient({
                             Bloqueada
                           </span>
                         )}
-                    <span className="
-                      inline-flex items-center gap-1 text-xs
-                      text-muted-foreground
-                    "
-                    >
-                      <KeyRound className="size-3" />
-                      {t.hasPin ? 'Con PIN' : 'Sin PIN'}
-                    </span>
                   </div>
                 </td>
                 <td className="px-3 py-2 text-xs">{formatDate(t.createdAt)}</td>
@@ -477,10 +466,6 @@ export function PosCajerosClient({
                         <DropdownMenuItem onClick={() => setRenameTarget(t)}>
                           <Pencil className="size-4" />
                           Cambiar nombre
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setPinTarget(t)}>
-                          <KeyRound className="size-4" />
-                          Cambiar PIN
                         </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => setAddressTarget(t)}>
                           <MapPin className="size-4" />
@@ -541,7 +526,6 @@ export function PosCajerosClient({
               address: addresses.find(a => a.id === created.addressId)?.address ?? null,
               addressCity: addresses.find(a => a.id === created.addressId)?.city ?? null,
               active: created.active,
-              hasPin: created.pin !== '',
               createdAt: created.createdAt,
             });
             refresh();
@@ -568,18 +552,6 @@ export function PosCajerosClient({
           onClose={() => setRenameTarget(null)}
           onSaved={() => {
             setRenameTarget(null);
-            refresh();
-          }}
-          onError={msg => setError(msg)}
-        />
-      )}
-
-      {pinTarget && (
-        <PinModal
-          token={pinTarget}
-          onClose={() => setPinTarget(null)}
-          onSaved={() => {
-            setPinTarget(null);
             refresh();
           }}
           onError={msg => setError(msg)}
@@ -695,23 +667,15 @@ function CreateTokenModal({
 }) {
   const [deviceName, setDeviceName] = useState('');
   const [addressId, setAddressId] = useState<string | null>(null);
-  const [pin, setPin] = useState('');
   const [submitting, setSubmitting] = useState(false);
-
-  // El PIN es obligatorio: toda caja nace protegida.
-  const pinValid = /^\d{4,8}$/.test(pin);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!pinValid) {
-      return;
-    }
     setSubmitting(true);
     try {
       const result = await createPosToken({
         deviceName,
         addressId,
-        pin,
       });
       if (!result.ok) {
         onFailure(result);
@@ -771,33 +735,15 @@ function CreateTokenModal({
               />
             </div>
           </div>
-          <div>
-            <label htmlFor="pt-pin" className={labelCls}>
-              PIN de acceso
-              {' '}
-              <span className="text-destructive">*</span>
-            </label>
-            <input
-              id="pt-pin"
-              type="text"
-              inputMode="numeric"
-              autoComplete="off"
-              required
-              placeholder="4 a 8 dígitos"
-              value={pin}
-              onChange={e => setPin(e.target.value.replace(/\D/g, '').slice(0, 8))}
-              className={inputCls}
-            />
-            <p className="mt-1 text-xs text-muted-foreground">
-              Obligatorio. Se pedirá en el login de la caja junto con el código
-              de acceso, para que nadie entre solo con el QR.
-            </p>
-            {pin !== '' && !pinValid && (
-              <p className="mt-1 text-xs text-destructive">
-                El PIN debe tener entre 4 y 8 dígitos.
-              </p>
-            )}
-          </div>
+          <p className="
+            rounded-md border border-input bg-muted/30 px-3 py-2 text-xs
+            text-muted-foreground
+          "
+          >
+            La caja abre solo con el código de acceso (escrito o escaneado). Cada
+            empleado responde por lo que hace con su PIN personal, que configura
+            en su perfil.
+          </p>
 
           <div className="flex justify-end gap-2 pt-2">
             <Button
@@ -808,7 +754,7 @@ function CreateTokenModal({
             >
               Cancelar
             </Button>
-            <Button type="submit" disabled={submitting || !pinValid}>
+            <Button type="submit" disabled={submitting}>
               {submitting ? 'Creando…' : 'Crear caja'}
             </Button>
           </div>
@@ -963,7 +909,6 @@ function QrModal({
             También puedes abrir el POS y usar su botón «Escanear QR», o pegar
             el código de acceso a mano.
           </li>
-          {token.hasPin && <li>Ingresa el PIN de la caja cuando lo pida.</li>}
           <li>La caja queda vinculada y empieza a sincronizar.</li>
         </ol>
 
@@ -986,20 +931,6 @@ function QrModal({
               {token.token}
             </div>
           </div>
-
-          {token.hasPin && (
-            <div className="
-              flex w-full items-start gap-2 rounded-md border border-amber-300
-              bg-amber-50 px-3 py-2 text-xs text-amber-900
-            "
-            >
-              <KeyRound className="mt-0.5 size-4 shrink-0" />
-              <span>
-                Esta caja tiene PIN. Por seguridad no se muestra aquí: dáselo al
-                cajero por separado para que pueda entrar.
-              </span>
-            </div>
-          )}
 
           <div className="flex w-full justify-end gap-2">
             <Button variant="secondary" onClick={handleCopy}>
@@ -1117,118 +1048,6 @@ function RenameModal({
               disabled={submitting || !nameValid || unchanged}
             >
               {submitting ? 'Guardando…' : 'Guardar nombre'}
-            </Button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
-function PinModal({
-  token,
-  onClose,
-  onSaved,
-  onError,
-}: {
-  token: TokenRow;
-  onClose: () => void;
-  onSaved: () => void;
-  onError: (msg: string) => void;
-}) {
-  const [pin, setPin] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-
-  // El PIN es obligatorio, así que no se permite dejarlo vacío.
-  const pinValid = /^\d{4,8}$/.test(pin);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!pinValid) {
-      return;
-    }
-    setSubmitting(true);
-    try {
-      const result = await setPosTokenPin(token.id, pin);
-      if (!result.ok) {
-        onError(result.error);
-        return;
-      }
-      onSaved();
-    } catch {
-      onError('No se pudo guardar el PIN');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <div className="
-      fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4
-    "
-    >
-      <div className="w-full max-w-md rounded-lg bg-background p-6 shadow-lg">
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="flex items-center gap-2 text-lg font-semibold">
-            <KeyRound className="size-5" />
-            PIN de
-            {' '}
-            {token.deviceName}
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="
-              text-muted-foreground
-              hover:text-foreground
-            "
-          >
-            ✕
-          </button>
-        </div>
-
-        <p className="mb-3 text-sm text-muted-foreground">
-          {token.hasPin
-            ? 'Esta caja ya tiene un PIN. Escribe uno nuevo para cambiarlo.'
-            : 'Define el PIN que se pedirá en el login de la caja, junto con el código de acceso.'}
-        </p>
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label htmlFor="pin-input" className={labelCls}>
-              Nuevo PIN
-              {' '}
-              <span className="text-destructive">*</span>
-            </label>
-            <input
-              id="pin-input"
-              type="text"
-              inputMode="numeric"
-              autoComplete="off"
-              required
-              placeholder="4 a 8 dígitos"
-              value={pin}
-              onChange={e => setPin(e.target.value.replace(/\D/g, '').slice(0, 8))}
-              className={inputCls}
-            />
-            {pin !== '' && !pinValid && (
-              <p className="mt-1 text-xs text-destructive">
-                El PIN debe tener entre 4 y 8 dígitos.
-              </p>
-            )}
-          </div>
-
-          <div className="flex justify-end gap-2 pt-2">
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={onClose}
-              disabled={submitting}
-            >
-              Cancelar
-            </Button>
-            <Button type="submit" disabled={submitting || !pinValid}>
-              {submitting ? 'Guardando…' : 'Guardar PIN'}
             </Button>
           </div>
         </form>

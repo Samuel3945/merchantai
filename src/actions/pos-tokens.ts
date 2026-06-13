@@ -3,10 +3,8 @@
 import type { ActionResult } from '@/libs/action-result';
 import { randomUUID } from 'node:crypto';
 import { auth } from '@clerk/nextjs/server';
-import bcrypt from 'bcryptjs';
 import { and, count, desc, eq, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
-import { ActionValidationError } from '@/libs/action-result';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
 import { getOrgEntitlements, limitOf } from '@/libs/entitlements';
@@ -92,19 +90,6 @@ async function countActiveTokens(orgId: string): Promise<number> {
   return Number(row?.value ?? 0);
 }
 
-// PIN de caja: 4 a 8 dígitos, o '' para quitarlo (acceso directo con el token).
-// Devuelve el hash bcrypt listo para persistir.
-async function hashPinOrThrow(rawPin: string): Promise<string> {
-  const pin = rawPin.trim();
-  if (!pin) {
-    return '';
-  }
-  if (!/^\d{4,8}$/.test(pin)) {
-    throw new ActionValidationError('El PIN debe tener entre 4 y 8 dígitos');
-  }
-  return bcrypt.hash(pin, 10);
-}
-
 async function requireAdminContext() {
   const { userId, orgId, orgRole } = await auth();
   if (!userId) {
@@ -121,7 +106,6 @@ async function requireAdminContext() {
 
 export type CreatePosTokenInput = {
   deviceName: string;
-  pin?: string;
   /** Branch address for this caja (org_addresses.id). */
   addressId?: string | null;
 };
@@ -176,25 +160,11 @@ export async function createPosToken(
     return posLimitReached({ plan, limit, used, base, addons });
   }
 
-  // El PIN de la caja es obligatorio al crear (toda caja nace protegida).
-  const rawPin = input.pin?.trim() ?? '';
-  if (!rawPin) {
-    return { ok: false, error: 'El PIN de la caja es obligatorio' };
-  }
-  let pinHash: string;
-  try {
-    pinHash = await hashPinOrThrow(rawPin);
-  } catch (error) {
-    if (error instanceof ActionValidationError) {
-      return { ok: false, error: error.message };
-    }
-    throw error;
-  }
-
   const addressId = await resolveOrgAddressId(orgId, input.addressId);
 
-  // A caja is born with no operator and no assignment: the operator is stamped
-  // live when an employee changes profile on the device.
+  // A caja is born with no operator, no assignment and no device PIN: it opens
+  // with the token only (typed or scanned). Per-operator accountability is the
+  // employee's personal PIN, verified on profile change at the device.
   const [row] = await db
     .insert(posTokensSchema)
     .values({
@@ -202,7 +172,6 @@ export async function createPosToken(
       deviceName,
       createdBy: userId,
       addressId,
-      pin: pinHash,
     })
     .returning();
 
@@ -278,7 +247,6 @@ export async function listPosTokens() {
       address: orgAddressesSchema.address,
       addressCity: orgAddressesSchema.city,
       active: posTokensSchema.active,
-      hasPin: sql<boolean>`(${posTokensSchema.pin} <> '')`,
       createdAt: posTokensSchema.createdAt,
     })
     .from(posTokensSchema)
@@ -528,51 +496,6 @@ export async function setPosTokenAddress(
 
   revalidatePath('/dashboard/pos-cajeros');
   return { ok: true, data: updated };
-}
-
-// Admin setea/cambia/quita el PIN de acceso de la caja. newPin='' => sin PIN.
-export async function setPosTokenPin(
-  id: string,
-  newPin: string,
-): Promise<ActionResult<{ hasPin: boolean }>> {
-  const { userId, orgId } = await requireAdminContext();
-
-  let pinHash: string;
-  try {
-    pinHash = await hashPinOrThrow(newPin ?? '');
-  } catch (error) {
-    if (error instanceof ActionValidationError) {
-      return { ok: false, error: error.message };
-    }
-    throw error;
-  }
-
-  const [updated] = await db
-    .update(posTokensSchema)
-    .set({ pin: pinHash })
-    .where(
-      and(
-        eq(posTokensSchema.id, id),
-        eq(posTokensSchema.organizationId, orgId),
-      ),
-    )
-    .returning({ id: posTokensSchema.id });
-
-  if (!updated) {
-    return { ok: false, error: 'Caja no encontrada' };
-  }
-
-  await logAction({
-    organizationId: orgId,
-    actor: { type: 'user', id: userId },
-    action: 'pos_token.pin_changed',
-    entityType: 'pos_token',
-    entityId: id,
-    metadata: { hasPin: pinHash !== '' },
-  });
-
-  revalidatePath('/dashboard/pos-cajeros');
-  return { ok: true, data: { hasPin: pinHash !== '' } };
 }
 
 // Genera un token nuevo para la caja (invalida el anterior). El dispositivo que
