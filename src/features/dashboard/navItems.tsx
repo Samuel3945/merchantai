@@ -12,6 +12,7 @@ import {
   Settings,
   ShoppingCart,
   Sparkles,
+  Sun,
   TrendingDown,
   Truck,
   UserCog,
@@ -41,6 +42,7 @@ export const navGroups: NavGroup[] = [
   {
     title: 'Operación',
     items: [
+      { href: '/dashboard/mi-dia', label: 'Mi día', icon: Sun },
       { href: '/dashboard', label: 'Resumen', icon: LayoutDashboard },
       { href: '/dashboard/cash', label: 'Caja', icon: Wallet },
       { href: '/dashboard/sales', label: 'Ventas', icon: Receipt },
@@ -109,7 +111,11 @@ const GATED_HREF: Record<string, keyof NavModuleFlags> = {
 // Personal views that only make sense for non-owner members. The owner is a
 // Clerk member with no posUsers row, so "Mi perfil" (their WhatsApp) does not
 // apply to them — their business number lives in Ajustes → Negocio instead.
-const MEMBER_ONLY_HREFS = new Set<string>(['/dashboard/mi-perfil']);
+// "Mi día" is the employee home that stands in for the owner-only Resumen.
+const MEMBER_ONLY_HREFS = new Set<string>([
+  '/dashboard/mi-dia',
+  '/dashboard/mi-perfil',
+]);
 
 // Returns the nav groups with hidden items removed. Two filters apply:
 //   1. Module toggles (NavModuleFlags) — business-level on/off (Fiados/Empleados).
