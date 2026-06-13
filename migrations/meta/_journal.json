@@ -260,6 +260,13 @@
       "when": 1781302561008,
       "tag": "0036_yielding_whiplash",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1781314416230,
+      "tag": "0037_square_triathlon",
+      "breakpoints": true
     }
   ]
 }
