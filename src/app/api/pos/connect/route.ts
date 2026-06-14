@@ -9,32 +9,29 @@ export const dynamic = 'force-dynamic';
 
 type ConnectBody = { token?: string };
 
+// A missing row naturally yields '' / [] below, so we deliberately do NOT
+// swallow query errors. A transient DB failure during connect must surface as a
+// 500 (the device retries) — never as a silently broken store with no name and
+// no payment methods, where the cashier can't sell and sees no reason why. This
+// matches the products query below, which already fails loud.
 async function getSetting(
   organizationId: string,
   key: string,
 ): Promise<string> {
-  try {
-    const result = await db.execute<{ value: string | null }>(
-      sql`SELECT value FROM app_settings WHERE organization_id = ${organizationId} AND key = ${key} LIMIT 1`,
-    );
-    return result.rows[0]?.value ?? '';
-  } catch {
-    return '';
-  }
+  const result = await db.execute<{ value: string | null }>(
+    sql`SELECT value FROM app_settings WHERE organization_id = ${organizationId} AND key = ${key} LIMIT 1`,
+  );
+  return result.rows[0]?.value ?? '';
 }
 
 async function listActivePaymentMethods(organizationId: string) {
-  try {
-    const result = await db.execute(
-      sql`SELECT id, name, type, icon, active, sort_order, details, description
-          FROM payment_methods
-          WHERE organization_id = ${organizationId} AND active = true
-          ORDER BY sort_order`,
-    );
-    return result.rows;
-  } catch {
-    return [];
-  }
+  const result = await db.execute(
+    sql`SELECT id, name, type, icon, active, sort_order, details, description
+        FROM payment_methods
+        WHERE organization_id = ${organizationId} AND active = true
+        ORDER BY sort_order`,
+  );
+  return result.rows;
 }
 
 export async function POST(req: Request): Promise<NextResponse> {

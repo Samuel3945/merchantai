@@ -50,6 +50,7 @@ const DDL = `
   CREATE TABLE cash_sessions (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     organization_id text NOT NULL,
+    pos_token_id uuid,
     opened_at timestamp DEFAULT now() NOT NULL,
     opened_by text NOT NULL,
     opening_amount numeric(12, 2) DEFAULT '0' NOT NULL,
