@@ -41,32 +41,30 @@ type ResolvedContext = {
   sessionEpoch: number;
 };
 
+// A missing row naturally yields '' / [] below, so we deliberately do NOT
+// swallow query errors. On a transient DB failure this poll must return 500 so
+// the device keeps its last-known config and retries — swallowing would wipe the
+// store name and payment methods to empty mid-shift, blocking the cashier with
+// no reason shown. Matches the cashiers/session/products queries, which already
+// fail loud.
 async function getSetting(
   organizationId: string,
   key: string,
 ): Promise<string> {
-  try {
-    const result = await db.execute<{ value: string | null }>(
-      sql`SELECT value FROM app_settings WHERE organization_id = ${organizationId} AND key = ${key} LIMIT 1`,
-    );
-    return result.rows[0]?.value ?? '';
-  } catch {
-    return '';
-  }
+  const result = await db.execute<{ value: string | null }>(
+    sql`SELECT value FROM app_settings WHERE organization_id = ${organizationId} AND key = ${key} LIMIT 1`,
+  );
+  return result.rows[0]?.value ?? '';
 }
 
 async function listActivePaymentMethods(organizationId: string) {
-  try {
-    const result = await db.execute(
-      sql`SELECT id, name, type, icon, active, sort_order, details, description
-          FROM payment_methods
-          WHERE organization_id = ${organizationId} AND active = true
-          ORDER BY sort_order`,
-    );
-    return result.rows;
-  } catch {
-    return [];
-  }
+  const result = await db.execute(
+    sql`SELECT id, name, type, icon, active, sort_order, details, description
+        FROM payment_methods
+        WHERE organization_id = ${organizationId} AND active = true
+        ORDER BY sort_order`,
+  );
+  return result.rows;
 }
 
 async function listCashiers(organizationId: string) {
