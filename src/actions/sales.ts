@@ -304,7 +304,12 @@ export async function createSale(input: CreateSaleInput) {
     return { ...sale, items: insertedItems, payments: insertedPayments };
   });
 
-  await recordCashMovement(result.id, result.total);
+  // Best-effort, exactly like the POS sale route: the sale transaction has
+  // already committed. A throw here would reject createSale AFTER a committed
+  // sale, so the operator sees an error and retries — creating a DUPLICATE sale
+  // (double stock decrement, double revenue). A dropped cash movement only
+  // understates the drawer (reconciled at closing), which is far less harmful.
+  await recordCashMovement(result.id, result.total).catch(() => null);
 
   // Best-effort: emit the electronic invoice now if a provider is configured.
   // Never awaited into the response — the sale already succeeded; a failed
