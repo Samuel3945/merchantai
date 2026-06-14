@@ -22,7 +22,7 @@ export async function POST(request: Request) {
   if (!orgId) {
     return NextResponse.json({ error: 'No active organization' }, { status: 400 });
   }
-  if (orgRole && orgRole !== 'org:admin') {
+  if (orgRole !== 'org:admin') {
     return NextResponse.json({ error: 'Admin role required' }, { status: 403 });
   }
   if (!Env.BLOB_READ_WRITE_TOKEN) {

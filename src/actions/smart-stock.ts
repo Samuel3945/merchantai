@@ -63,7 +63,7 @@ export async function setSmartStockEnabled(
   if (!orgId) {
     throw new Error('No active organization');
   }
-  if (orgRole && orgRole !== 'org:admin') {
+  if (orgRole !== 'org:admin') {
     throw new Error('Solo un administrador puede cambiar los Modelos Inteligentes');
   }
 
