@@ -621,13 +621,20 @@ export type PosFiadoSale = {
   daysOld: number;
 };
 
+// Wire shape consumed by the cashier device (pos-merchatai FiadosCajero). Kept
+// in snake_case on purpose — the device reads these exact keys. `id` IS the
+// clientKey: the device passes it straight back to /pos/fiados/abonar and
+// /pos/fiados/settle as `clientKey`.
 export type PosFiadoClient = {
-  clientKey: string;
-  name: string;
-  phone: string;
-  totalOwed: number;
-  oldestDays: number;
-  risk: 'high' | 'mid' | 'low';
+  id: string;
+  client_name: string;
+  client_phone: string | null;
+  total_owed: number;
+  days_overdue: number;
+  risk_level: 'high' | 'mid' | 'low';
+  status: 'pending' | 'partial' | 'settled';
+  last_activity: string;
+  notes: string | null;
   sales: PosFiadoSale[];
 };
 
@@ -678,12 +685,16 @@ export async function getFiadosForPos(
     const dueDate = list.map(f => f.dueDate).sort()[0] ?? '';
     const { state } = deriveDueState(dueDate, false, today);
     clients.push({
-      clientKey,
-      name: name || 'Sin nombre',
-      phone,
-      totalOwed: round2(list.reduce((a, f) => a + f.balance, 0)),
-      oldestDays: list.reduce((a, f) => Math.max(a, ageDays(f.createdAt)), 0),
-      risk: riskFromDueState(state),
+      id: clientKey,
+      client_name: name || 'Sin nombre',
+      client_phone: phone || null,
+      total_owed: round2(list.reduce((a, f) => a + f.balance, 0)),
+      days_overdue: list.reduce((a, f) => Math.max(a, ageDays(f.createdAt)), 0),
+      risk_level: riskFromDueState(state),
+      status: 'pending',
+      last_activity:
+        list.map(f => f.createdAt.toISOString()).sort().at(-1) ?? '',
+      notes: null,
       sales: list.map(f => ({
         id: f.saleId ?? f.id,
         total: f.originalAmount,
@@ -694,14 +705,14 @@ export async function getFiadosForPos(
       })),
     });
   }
-  clients.sort((a, b) => b.oldestDays - a.oldestDays);
+  clients.sort((a, b) => b.days_overdue - a.days_overdue);
 
   return {
     stats: {
-      total_owed: round2(clients.reduce((a, c) => a + c.totalOwed, 0)),
-      urgent: clients.filter(c => c.risk === 'high').length,
-      remind: clients.filter(c => c.risk === 'mid').length,
-      ok: clients.filter(c => c.risk === 'low').length,
+      total_owed: round2(clients.reduce((a, c) => a + c.total_owed, 0)),
+      urgent: clients.filter(c => c.risk_level === 'high').length,
+      remind: clients.filter(c => c.risk_level === 'mid').length,
+      ok: clients.filter(c => c.risk_level === 'low').length,
       total_clients: clients.length,
     },
     clients,

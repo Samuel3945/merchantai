@@ -5,6 +5,7 @@ import {
   computeExpectedAmount,
   findOpenSession,
   toMoney,
+  toPosCashSession,
 } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import { requirePosAuth } from '@/libs/pos-auth';
@@ -115,7 +116,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       userAgent: req.headers.get('user-agent'),
     });
 
-    return NextResponse.json(session);
+    return NextResponse.json(toPosCashSession(session));
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Error al cerrar caja' },

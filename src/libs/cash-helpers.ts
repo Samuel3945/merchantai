@@ -15,6 +15,42 @@ export type CashMovement = typeof cashMovementsSchema.$inferSelect;
 export type CashMovementType
   = (typeof cashMovementsSchema.type.enumValues)[number];
 
+// ── POS wire shape ───────────────────────────────────────────────────────────
+// The cashier device (pos-merchatai) reads snake_case session fields. POS cash
+// endpoints must map to this explicit shape instead of returning the raw drizzle
+// row (camelCase), the same way /pos/me maps its payload. Leaking the ORM row
+// left the device reading opened_at / opening_amount as undefined ("Invalid
+// Date" and a $0 opening float in the till header).
+export type PosCashSessionWire = {
+  id: string;
+  opened_at: string;
+  opened_by: string;
+  opening_amount: number;
+  closed_at: string | null;
+  closed_by: string | null;
+  expected_amount: number | null;
+  counted_amount: number | null;
+  difference: number | null;
+  status: 'open' | 'closed';
+  notes: string | null;
+};
+
+export function toPosCashSession(s: CashSession): PosCashSessionWire {
+  return {
+    id: s.id,
+    opened_at: s.openedAt.toISOString(),
+    opened_by: s.openedBy,
+    opening_amount: Number(s.openingAmount),
+    closed_at: s.closedAt ? s.closedAt.toISOString() : null,
+    closed_by: s.closedBy,
+    expected_amount: s.expectedAmount == null ? null : Number(s.expectedAmount),
+    counted_amount: s.countedAmount == null ? null : Number(s.countedAmount),
+    difference: s.difference == null ? null : Number(s.difference),
+    status: s.status,
+    notes: s.notes,
+  };
+}
+
 export const CASH_PAYMENT_METHODS = ['efectivo', 'cash'];
 
 // Cash coming INTO the drawer. `adjustment` is a manual reconciliation entry
