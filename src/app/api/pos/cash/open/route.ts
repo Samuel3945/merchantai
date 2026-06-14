@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { logAction, resolvePosActor } from '@/libs/audit-log';
-import { findOpenSession, toMoney } from '@/libs/cash-helpers';
+import { findOpenSession, toMoney, toPosCashSession } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import { requirePosAuth } from '@/libs/pos-auth';
 import { cashSessionsSchema, posTokensSchema } from '@/models/Schema';
@@ -95,7 +95,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       userAgent: req.headers.get('user-agent'),
     });
 
-    return NextResponse.json(session, { status: 201 });
+    return NextResponse.json(toPosCashSession(session), { status: 201 });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Error al abrir caja' },

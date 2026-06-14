@@ -1,6 +1,6 @@
 import { and, desc, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
-import { computeExpectedAmount, findOpenSession } from '@/libs/cash-helpers';
+import { computeExpectedAmount, findOpenSession, toPosCashSession } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import { requirePosAuth } from '@/libs/pos-auth';
 import { cashMovementsSchema } from '@/models/Schema';
@@ -33,5 +33,5 @@ export async function GET(req: Request): Promise<NextResponse> {
     computeExpectedAmount(db, session),
   ]);
 
-  return NextResponse.json({ session, movements, expected });
+  return NextResponse.json({ session: toPosCashSession(session), movements, expected });
 }
