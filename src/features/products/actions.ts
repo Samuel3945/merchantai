@@ -228,9 +228,10 @@ export async function createProduct(input: ProductCreateInput) {
         barcode: data.barcode ?? null,
         price: data.price,
         cost: baseCost,
-        // Stock comes from the opening batch when present, so it has a single
-        // source of truth; otherwise it falls back to the provided value.
-        stock: initialQty > 0 ? 0 : data.stock,
+        // Stock always starts at 0. The opening batch below (initialQty) is the
+        // only path that grows it, via a FIFO entry movement — so there is never
+        // ledgerless stock that desyncs from SUM(remaining_qty).
+        stock: 0,
         category: data.category ?? null,
         categoryId,
         unitType: data.unitType,

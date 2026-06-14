@@ -34,7 +34,9 @@ const productBaseSchema = z.object({
     .transform(v => (v === '' || v === undefined ? null : v)),
   price: decimalString,
   cost: decimalString.optional().default('0'),
-  stock: z.coerce.number().int().min(0).optional().default(0),
+  // No `stock` field on purpose: stock is owned by the FIFO ledger. It starts at
+  // 0 and only grows via the opening batch (createProduct's initialQty) or an
+  // inventory movement — never set absolutely from a product create/edit.
   category: z
     .string()
     .trim()
@@ -154,12 +156,9 @@ export const productCreateSchema = productBaseSchema
   })
   .superRefine(refineProduct);
 
-// Stock is owned by inventory movements (recordMovement), never by a product
-// edit. Omit it from the update schema so an edit can never overwrite stock —
-// otherwise an omitted `stock` field defaults to 0 (Zod keeps the base
-// `.default(0)` through `.partial()`) and silently wipes the product's stock.
+// `stock` is not a field on the base schema (see note there), so an edit simply
+// cannot touch it — stock is owned by inventory movements and the opening batch.
 export const productUpdateSchema = productBaseSchema
-  .omit({ stock: true })
   .partial()
   .superRefine(refineProduct);
 
