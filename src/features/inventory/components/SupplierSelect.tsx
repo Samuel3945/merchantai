@@ -44,14 +44,17 @@ export function SupplierSelect({
 
   function saveNew() {
     const name = newName.trim();
-    if (!name) {
+    const phone = newPhone.trim();
+    // A contactable supplier is required: name + at least a phone here. The
+    // server enforces the same rule, this just keeps the inline form honest.
+    if (!name || !phone) {
       return;
     }
     startTransition(async () => {
       try {
         const created = await createSupplier({
           name,
-          phone: newPhone.trim() || null,
+          phone,
         });
         setSuppliers(prev =>
           [...prev, { id: created.id, name: created.name, company: created.company }]
@@ -83,7 +86,8 @@ export function SupplierSelect({
         <input
           value={newPhone}
           onChange={e => setNewPhone(e.target.value)}
-          placeholder="Teléfono (opcional)"
+          placeholder="Teléfono *"
+          inputMode="tel"
           className={inputCls}
         />
         <div className="flex justify-end gap-2">
@@ -99,7 +103,7 @@ export function SupplierSelect({
             type="button"
             size="sm"
             onClick={saveNew}
-            disabled={pending || !newName.trim()}
+            disabled={pending || !newName.trim() || !newPhone.trim()}
           >
             {pending ? 'Guardando...' : 'Guardar proveedor'}
           </Button>
