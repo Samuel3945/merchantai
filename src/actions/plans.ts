@@ -232,53 +232,60 @@ export async function upgradePlan(plan: PlanName): Promise<PlanSnapshot> {
 
   const previousPlan = await getActivePlan(orgId);
 
-  await db
-    .update(subscriptionsSchema)
-    .set({ active: false })
-    .where(
-      and(
-        eq(subscriptionsSchema.organizationId, orgId),
-        eq(subscriptionsSchema.active, true),
-      ),
-    );
-
-  await db.insert(subscriptionsSchema).values({
-    organizationId: orgId,
-    plan,
-    active: true,
-  });
-
   const limits = await aiLimitsForPlan(plan);
-  for (const kind of AGENT_KINDS) {
-    const inserted = await db
-      .insert(usageCountersSchema)
-      .values({
-        organizationId: orgId,
-        agentKind: kind,
-        used: 0,
-        monthlyLimit: limits[kind],
-        toppedUp: 0,
-      })
-      .onConflictDoNothing({
-        target: [
-          usageCountersSchema.organizationId,
-          usageCountersSchema.agentKind,
-        ],
-      })
-      .returning({ id: usageCountersSchema.id });
 
-    if (inserted.length === 0) {
-      await db
-        .update(usageCountersSchema)
-        .set({ used: 0, monthlyLimit: limits[kind], toppedUp: 0 })
-        .where(
-          and(
-            eq(usageCountersSchema.organizationId, orgId),
-            eq(usageCountersSchema.agentKind, kind),
-          ),
-        );
+  // One atomic swap: deactivate the old subscription, activate the new one and
+  // reset the AI counters together. A crash between these steps would otherwise
+  // leave the org with zero active subscriptions (silently on the free tier) or
+  // with the new plan but the old quota.
+  await db.transaction(async (tx) => {
+    await tx
+      .update(subscriptionsSchema)
+      .set({ active: false })
+      .where(
+        and(
+          eq(subscriptionsSchema.organizationId, orgId),
+          eq(subscriptionsSchema.active, true),
+        ),
+      );
+
+    await tx.insert(subscriptionsSchema).values({
+      organizationId: orgId,
+      plan,
+      active: true,
+    });
+
+    for (const kind of AGENT_KINDS) {
+      const inserted = await tx
+        .insert(usageCountersSchema)
+        .values({
+          organizationId: orgId,
+          agentKind: kind,
+          used: 0,
+          monthlyLimit: limits[kind],
+          toppedUp: 0,
+        })
+        .onConflictDoNothing({
+          target: [
+            usageCountersSchema.organizationId,
+            usageCountersSchema.agentKind,
+          ],
+        })
+        .returning({ id: usageCountersSchema.id });
+
+      if (inserted.length === 0) {
+        await tx
+          .update(usageCountersSchema)
+          .set({ used: 0, monthlyLimit: limits[kind], toppedUp: 0 })
+          .where(
+            and(
+              eq(usageCountersSchema.organizationId, orgId),
+              eq(usageCountersSchema.agentKind, kind),
+            ),
+          );
+      }
     }
-  }
+  });
 
   await logAction({
     organizationId: orgId,
@@ -307,34 +314,39 @@ export async function cancelSubscription(): Promise<PlanSnapshot> {
     return currentPlan();
   }
 
-  await db
-    .update(subscriptionsSchema)
-    .set({ active: false })
-    .where(
-      and(
-        eq(subscriptionsSchema.organizationId, orgId),
-        eq(subscriptionsSchema.active, true),
-      ),
-    );
-
-  await db.insert(subscriptionsSchema).values({
-    organizationId: orgId,
-    plan: defaultSlug,
-    active: true,
-  });
-
   const limits = await aiLimitsForPlan(defaultSlug);
-  for (const kind of AGENT_KINDS) {
-    await db
-      .update(usageCountersSchema)
-      .set({ used: 0, monthlyLimit: limits[kind], toppedUp: 0 })
+
+  // Atomic downgrade to the default plan — same reasoning as upgradePlan: the
+  // deactivate + activate + counter reset must not be interruptible.
+  await db.transaction(async (tx) => {
+    await tx
+      .update(subscriptionsSchema)
+      .set({ active: false })
       .where(
         and(
-          eq(usageCountersSchema.organizationId, orgId),
-          eq(usageCountersSchema.agentKind, kind),
+          eq(subscriptionsSchema.organizationId, orgId),
+          eq(subscriptionsSchema.active, true),
         ),
       );
-  }
+
+    await tx.insert(subscriptionsSchema).values({
+      organizationId: orgId,
+      plan: defaultSlug,
+      active: true,
+    });
+
+    for (const kind of AGENT_KINDS) {
+      await tx
+        .update(usageCountersSchema)
+        .set({ used: 0, monthlyLimit: limits[kind], toppedUp: 0 })
+        .where(
+          and(
+            eq(usageCountersSchema.organizationId, orgId),
+            eq(usageCountersSchema.agentKind, kind),
+          ),
+        );
+    }
+  });
 
   await logAction({
     organizationId: orgId,
@@ -370,22 +382,27 @@ export async function topUp(
 
   await ensureCountersForPlan(orgId, await getActivePlan(orgId));
 
-  await db.insert(topUpsSchema).values({
-    organizationId: orgId,
-    agentKind,
-    amountCop: amountCop.toFixed(2),
-    requestsAdded: requests,
-  });
+  // The paid top-up record and the credit grant must commit together: a crash
+  // between them would either record a payment that granted no credits, or grant
+  // credits with no audit of the payment.
+  await db.transaction(async (tx) => {
+    await tx.insert(topUpsSchema).values({
+      organizationId: orgId,
+      agentKind,
+      amountCop: amountCop.toFixed(2),
+      requestsAdded: requests,
+    });
 
-  await db
-    .update(usageCountersSchema)
-    .set({ toppedUp: sql`${usageCountersSchema.toppedUp} + ${requests}` })
-    .where(
-      and(
-        eq(usageCountersSchema.organizationId, orgId),
-        eq(usageCountersSchema.agentKind, agentKind),
-      ),
-    );
+    await tx
+      .update(usageCountersSchema)
+      .set({ toppedUp: sql`${usageCountersSchema.toppedUp} + ${requests}` })
+      .where(
+        and(
+          eq(usageCountersSchema.organizationId, orgId),
+          eq(usageCountersSchema.agentKind, agentKind),
+        ),
+      );
+  });
 
   revalidatePath('/dashboard/plans');
 
