@@ -422,6 +422,35 @@ export const suppliersSchema = pgTable(
   ],
 );
 
+// Which products a supplier provides (many-to-many). Lets the agent answer
+// "who can restock this item?" by reverse-looking-up suppliers from a product.
+export const supplierProductsSchema = pgTable(
+  'supplier_products',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: text('organization_id').notNull(),
+    supplierId: uuid('supplier_id')
+      .notNull()
+      .references(() => suppliersSchema.id, { onDelete: 'cascade' }),
+    productId: uuid('product_id')
+      .notNull()
+      .references(() => productsSchema.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+  },
+  table => [
+    // A product is linked to a given supplier at most once.
+    uniqueIndex('supplier_products_pair_idx').on(
+      table.supplierId,
+      table.productId,
+    ),
+    // Reverse lookup: "which suppliers provide this product?" within an org.
+    index('supplier_products_org_product_idx').on(
+      table.organizationId,
+      table.productId,
+    ),
+  ],
+);
+
 export const cashMovementsSchema = pgTable(
   'cash_movements',
   {
@@ -482,7 +511,22 @@ export const cashMovementsRelations = relations(
 
 export const suppliersRelations = relations(suppliersSchema, ({ many }) => ({
   movements: many(cashMovementsSchema),
+  products: many(supplierProductsSchema),
 }));
+
+export const supplierProductsRelations = relations(
+  supplierProductsSchema,
+  ({ one }) => ({
+    supplier: one(suppliersSchema, {
+      fields: [supplierProductsSchema.supplierId],
+      references: [suppliersSchema.id],
+    }),
+    product: one(productsSchema, {
+      fields: [supplierProductsSchema.productId],
+      references: [productsSchema.id],
+    }),
+  }),
+);
 
 // ── Cash security threshold cache ──────────────────────────────────────────
 // One row per organization, UPSERTed by the daily cron (reuses the smart-stock

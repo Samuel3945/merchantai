@@ -2,12 +2,17 @@
 
 import type { SupplierCreateInput, SupplierUpdateInput } from './validation';
 import { auth } from '@clerk/nextjs/server';
-import { and, asc, eq, gte, ilike, isNotNull, or, sql } from 'drizzle-orm';
+import { and, asc, eq, gte, ilike, inArray, isNotNull, or, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { isUniqueViolation } from '@/libs/action-result';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
-import { cashMovementsSchema, suppliersSchema } from '@/models/Schema';
+import {
+  cashMovementsSchema,
+  productsSchema,
+  supplierProductsSchema,
+  suppliersSchema,
+} from '@/models/Schema';
 import { supplierCreateSchema, supplierUpdateSchema } from './validation';
 
 async function requireOrgId() {
@@ -23,12 +28,115 @@ async function requireOrgId() {
 
 export type Supplier = typeof suppliersSchema.$inferSelect;
 
+// Lightweight reference to a product a supplier provides.
+export type SupplierProductRef = { id: string; name: string };
+
+// A supplier plus the products it provides — what create/update return so the
+// caller can refresh the row in place without a second fetch.
+export type SupplierWithProducts = Supplier & {
+  products: SupplierProductRef[];
+};
+
 // A supplier row enriched with payment data derived live from the cash ledger —
 // single source of truth, no stored aggregates that could drift.
 export type SupplierListItem = Supplier & {
   lastPaymentAt: Date | null;
   totalPaid: string;
+  products: SupplierProductRef[];
 };
+
+// Drizzle transaction handle — same query surface as `db`, scoped to the tx.
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+// Products (id + name) a set of suppliers provides, grouped by supplier id.
+// Archived/deleted products are excluded so stale links don't surface.
+async function loadProductRefsBySupplier(
+  orgId: string,
+  supplierIds: string[],
+): Promise<Map<string, SupplierProductRef[]>> {
+  const map = new Map<string, SupplierProductRef[]>();
+  if (supplierIds.length === 0) {
+    return map;
+  }
+
+  const rows = await db
+    .select({
+      supplierId: supplierProductsSchema.supplierId,
+      id: productsSchema.id,
+      name: productsSchema.name,
+    })
+    .from(supplierProductsSchema)
+    .innerJoin(
+      productsSchema,
+      eq(productsSchema.id, supplierProductsSchema.productId),
+    )
+    .where(
+      and(
+        eq(supplierProductsSchema.organizationId, orgId),
+        inArray(supplierProductsSchema.supplierId, supplierIds),
+        eq(productsSchema.deleted, false),
+      ),
+    )
+    .orderBy(asc(productsSchema.name));
+
+  for (const r of rows) {
+    const list = map.get(r.supplierId);
+    if (list) {
+      list.push({ id: r.id, name: r.name });
+    } else {
+      map.set(r.supplierId, [{ id: r.id, name: r.name }]);
+    }
+  }
+  return map;
+}
+
+async function loadSupplierProducts(
+  orgId: string,
+  supplierId: string,
+): Promise<SupplierProductRef[]> {
+  const map = await loadProductRefsBySupplier(orgId, [supplierId]);
+  return map.get(supplierId) ?? [];
+}
+
+// Replace a supplier's product links with the given set. Delete-then-insert is
+// simple and correct for the handful of products a supplier carries. Product
+// ids are filtered to the org as defense in depth against cross-org assignment.
+async function syncSupplierProducts(
+  tx: Tx,
+  orgId: string,
+  supplierId: string,
+  productIds: string[],
+): Promise<void> {
+  await tx
+    .delete(supplierProductsSchema)
+    .where(eq(supplierProductsSchema.supplierId, supplierId));
+
+  const unique = [...new Set(productIds)];
+  if (unique.length === 0) {
+    return;
+  }
+
+  const owned = await tx
+    .select({ id: productsSchema.id })
+    .from(productsSchema)
+    .where(
+      and(
+        eq(productsSchema.organizationId, orgId),
+        inArray(productsSchema.id, unique),
+      ),
+    );
+  if (owned.length === 0) {
+    return;
+  }
+
+  await tx.insert(supplierProductsSchema).values(
+    owned.map(p => ({
+      organizationId: orgId,
+      supplierId,
+      productId: p.id,
+    })),
+  );
+}
 
 // Minimal shape for the searchable selector inside Caja.
 export type SupplierOption = {
@@ -108,10 +216,16 @@ export async function listSuppliers(
     }
   }
 
+  const productMap = await loadProductRefsBySupplier(
+    orgId,
+    rows.map(r => r.id),
+  );
+
   return rows.map(r => ({
     ...r,
     totalPaid: paidMap.get(r.id)?.totalPaid ?? '0',
     lastPaymentAt: paidMap.get(r.id)?.lastPaymentAt ?? null,
+    products: productMap.get(r.id) ?? [],
   }));
 }
 
@@ -182,33 +296,38 @@ export async function getSupplierKpis(): Promise<SupplierKpis> {
 
 export async function createSupplier(
   input: SupplierCreateInput,
-): Promise<Supplier> {
+): Promise<SupplierWithProducts> {
   const { userId, orgId } = await requireOrgId();
   const data = supplierCreateSchema.parse(input);
 
   try {
-    const [row] = await db
-      .insert(suppliersSchema)
-      .values({
-        organizationId: orgId,
-        name: data.name,
-        company: data.company ?? null,
-        phone: data.phone ?? null,
-        email: data.email ?? null,
-        city: data.city ?? null,
-        address: data.address ?? null,
-        taxId: data.taxId ?? null,
-        notes: data.notes ?? null,
-        createdBy: userId,
-      })
-      .returning();
+    const row = await db.transaction(async (tx) => {
+      const [created] = await tx
+        .insert(suppliersSchema)
+        .values({
+          organizationId: orgId,
+          name: data.name,
+          company: data.company ?? null,
+          phone: data.phone ?? null,
+          email: data.email ?? null,
+          city: data.city ?? null,
+          address: data.address ?? null,
+          taxId: data.taxId ?? null,
+          notes: data.notes ?? null,
+          createdBy: userId,
+        })
+        .returning();
 
-    if (!row) {
-      throw new Error('Failed to create supplier');
-    }
+      if (!created) {
+        throw new Error('Failed to create supplier');
+      }
+
+      await syncSupplierProducts(tx, orgId, created.id, data.productIds);
+      return created;
+    });
 
     revalidatePath('/dashboard/suppliers');
-    return row;
+    return { ...row, products: await loadSupplierProducts(orgId, row.id) };
   } catch (error) {
     if (isUniqueViolation(error)) {
       throw new Error(DUP_TAX_ID);
@@ -220,38 +339,46 @@ export async function createSupplier(
 export async function updateSupplier(
   id: string,
   input: SupplierUpdateInput,
-): Promise<Supplier> {
+): Promise<SupplierWithProducts> {
   const { orgId } = await requireOrgId();
   const data = supplierUpdateSchema.parse(input);
 
   try {
-    const [row] = await db
-      .update(suppliersSchema)
-      .set({
-        ...(data.name !== undefined && { name: data.name }),
-        ...(data.company !== undefined && { company: data.company }),
-        ...(data.phone !== undefined && { phone: data.phone }),
-        ...(data.email !== undefined && { email: data.email }),
-        ...(data.city !== undefined && { city: data.city }),
-        ...(data.address !== undefined && { address: data.address }),
-        ...(data.taxId !== undefined && { taxId: data.taxId }),
-        ...(data.notes !== undefined && { notes: data.notes }),
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(suppliersSchema.id, id),
-          eq(suppliersSchema.organizationId, orgId),
-        ),
-      )
-      .returning();
+    const row = await db.transaction(async (tx) => {
+      const [updated] = await tx
+        .update(suppliersSchema)
+        .set({
+          ...(data.name !== undefined && { name: data.name }),
+          ...(data.company !== undefined && { company: data.company }),
+          ...(data.phone !== undefined && { phone: data.phone }),
+          ...(data.email !== undefined && { email: data.email }),
+          ...(data.city !== undefined && { city: data.city }),
+          ...(data.address !== undefined && { address: data.address }),
+          ...(data.taxId !== undefined && { taxId: data.taxId }),
+          ...(data.notes !== undefined && { notes: data.notes }),
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(suppliersSchema.id, id),
+            eq(suppliersSchema.organizationId, orgId),
+          ),
+        )
+        .returning();
 
-    if (!row) {
-      throw new Error('Supplier not found');
-    }
+      if (!updated) {
+        throw new Error('Supplier not found');
+      }
+
+      // undefined = caller didn't touch product assignments; leave them as-is.
+      if (data.productIds !== undefined) {
+        await syncSupplierProducts(tx, orgId, updated.id, data.productIds);
+      }
+      return updated;
+    });
 
     revalidatePath('/dashboard/suppliers');
-    return row;
+    return { ...row, products: await loadSupplierProducts(orgId, row.id) };
   } catch (error) {
     if (isUniqueViolation(error)) {
       throw new Error(DUP_TAX_ID);
@@ -289,4 +416,77 @@ export async function setSupplierStatus(
 
   revalidatePath('/dashboard/suppliers');
   return row;
+}
+
+export type ProductOption = { id: string; name: string };
+
+// Products (id + name) to pick from when assigning what a supplier provides.
+// Capped — the supplier modal searches as you type rather than loading all.
+export async function listSupplierProductOptions(
+  params?: { search?: string },
+): Promise<ProductOption[]> {
+  const { orgId } = await requireOrgId();
+  const search = params?.search?.trim();
+
+  const filters = [
+    eq(productsSchema.organizationId, orgId),
+    eq(productsSchema.deleted, false),
+  ];
+  if (search) {
+    const like = `%${search}%`;
+    const searchFilter = or(
+      ilike(productsSchema.name, like),
+      ilike(productsSchema.barcode, like),
+    );
+    if (searchFilter) {
+      filters.push(searchFilter);
+    }
+  }
+
+  return db
+    .select({ id: productsSchema.id, name: productsSchema.name })
+    .from(productsSchema)
+    .where(and(...filters))
+    .orderBy(asc(productsSchema.name))
+    .limit(50);
+}
+
+// Contact data for an active supplier surfaced by the reverse lookup.
+export type SupplierForProduct = {
+  id: string;
+  name: string;
+  company: string | null;
+  phone: string | null;
+  email: string | null;
+};
+
+// Reverse lookup for restocking: given a product (e.g. one that ran out), the
+// active suppliers that provide it, with the contact data needed to reach out.
+// This is the entry point the agent uses to request more units.
+export async function listSuppliersForProduct(
+  productId: string,
+): Promise<SupplierForProduct[]> {
+  const { orgId } = await requireOrgId();
+
+  return db
+    .select({
+      id: suppliersSchema.id,
+      name: suppliersSchema.name,
+      company: suppliersSchema.company,
+      phone: suppliersSchema.phone,
+      email: suppliersSchema.email,
+    })
+    .from(supplierProductsSchema)
+    .innerJoin(
+      suppliersSchema,
+      eq(suppliersSchema.id, supplierProductsSchema.supplierId),
+    )
+    .where(
+      and(
+        eq(supplierProductsSchema.organizationId, orgId),
+        eq(supplierProductsSchema.productId, productId),
+        eq(suppliersSchema.status, 'active'),
+      ),
+    )
+    .orderBy(asc(suppliersSchema.name));
 }

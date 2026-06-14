@@ -1,6 +1,11 @@
 'use client';
 
-import type { Supplier, SupplierKpis, SupplierListItem } from './actions';
+import type {
+  Supplier,
+  SupplierKpis,
+  SupplierListItem,
+  SupplierWithProducts,
+} from './actions';
 import { useEffect, useRef, useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/utils/Helpers';
@@ -138,7 +143,7 @@ export function SuppliersClient(props: {
     setOpen(true);
   }
 
-  function onSaved(saved: Supplier) {
+  function onSaved(saved: SupplierWithProducts) {
     setRows((prev) => {
       const enriched: SupplierListItem = {
         ...saved,
@@ -250,7 +255,7 @@ export function SuppliersClient(props: {
                       <th className="px-3 py-2">Empresa</th>
                       <th className="px-3 py-2">Teléfono</th>
                       <th className="px-3 py-2">Correo</th>
-                      <th className="px-3 py-2">Ciudad</th>
+                      <th className="px-3 py-2">Productos</th>
                       <th className="px-3 py-2">Estado</th>
                       <th className="px-3 py-2">Último pago</th>
                       <th className="px-3 py-2"></th>
@@ -279,7 +284,17 @@ export function SuppliersClient(props: {
                                 {s.phone ?? '—'}
                               </td>
                               <td className="px-3 py-2">{s.email ?? '—'}</td>
-                              <td className="px-3 py-2">{s.city ?? '—'}</td>
+                              <td className="px-3 py-2">
+                                {s.products.length === 0
+                                  ? <span className="text-muted-foreground">—</span>
+                                  : (
+                                      <span title={s.products.map(p => p.name).join(', ')}>
+                                        {s.products.length === 1
+                                          ? s.products[0]!.name
+                                          : `${s.products.length} productos`}
+                                      </span>
+                                    )}
+                              </td>
                               <td className="px-3 py-2">
                                 <StatusBadge status={s.status} />
                               </td>

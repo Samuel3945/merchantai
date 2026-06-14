@@ -1,45 +1,30 @@
 'use client';
 
-import type { Supplier, SupplierListItem } from './actions';
-import { useEffect, useState, useTransition } from 'react';
+import type {
+  ProductOption,
+  SupplierListItem,
+  SupplierProductRef,
+  SupplierWithProducts,
+} from './actions';
+import { useEffect, useRef, useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
-import { cn } from '@/utils/Helpers';
-import { createSupplier, updateSupplier } from './actions';
+import {
+  createSupplier,
+  listSupplierProductOptions,
+  updateSupplier,
+} from './actions';
 
 type SupplierFormState = {
   name: string;
-  company: string;
   phone: string;
   email: string;
-  city: string;
-  address: string;
-  taxId: string;
-  notes: string;
 };
 
 const emptyForm: SupplierFormState = {
   name: '',
-  company: '',
   phone: '',
   email: '',
-  city: '',
-  address: '',
-  taxId: '',
-  notes: '',
 };
-
-function toFormState(s: SupplierListItem): SupplierFormState {
-  return {
-    name: s.name,
-    company: s.company ?? '',
-    phone: s.phone ?? '',
-    email: s.email ?? '',
-    city: s.city ?? '',
-    address: s.address ?? '',
-    taxId: s.taxId ?? '',
-    notes: s.notes ?? '',
-  };
-}
 
 const inputCls
   = 'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50';
@@ -52,19 +37,27 @@ function nullify(value: string): string | null {
 }
 
 /**
- * Create / edit modal for a supplier. Used both from the Proveedores view and
- * from Caja's "quick create" flow — in the quick flow it stays mounted on top
- * of the movement modal and reports the saved row back via onSaved so the caller
- * can auto-select it.
+ * Create / edit modal for a supplier. We only ask for what it takes to reach
+ * and identify the supplier — name plus at least one contact (phone or email) —
+ * and which products they provide, so the agent can find who to restock from.
+ *
+ * Used both from the Proveedores view and from Caja's "quick create" flow — in
+ * the quick flow it stays mounted on top of the movement modal and reports the
+ * saved row back via onSaved so the caller can auto-select it.
  */
 export function SupplierModal(props: {
   editing: SupplierListItem | null;
   onClose: () => void;
-  onSaved: (supplier: Supplier) => void;
+  onSaved: (supplier: SupplierWithProducts) => void;
 }) {
   const { editing } = props;
   const [form, setForm] = useState<SupplierFormState>(() =>
-    editing ? toFormState(editing) : emptyForm,
+    editing
+      ? { name: editing.name, phone: editing.phone ?? '', email: editing.email ?? '' }
+      : emptyForm,
+  );
+  const [products, setProducts] = useState<SupplierProductRef[]>(
+    () => editing?.products ?? [],
   );
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -79,19 +72,22 @@ export function SupplierModal(props: {
     return () => window.removeEventListener('keydown', onKey);
   }, [props]);
 
+  const hasContact = form.phone.trim() !== '' || form.email.trim() !== '';
+
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
 
+    if (!hasContact) {
+      setError('Indica al menos un teléfono o un correo para contactar al proveedor');
+      return;
+    }
+
     const payload = {
       name: form.name.trim(),
-      company: nullify(form.company),
       phone: nullify(form.phone),
       email: nullify(form.email),
-      city: nullify(form.city),
-      address: nullify(form.address),
-      taxId: nullify(form.taxId),
-      notes: nullify(form.notes),
+      productIds: products.map(p => p.id),
     };
 
     startTransition(async () => {
@@ -117,7 +113,7 @@ export function SupplierModal(props: {
     >
       <div
         className="
-          max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg border
+          max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg border
           bg-background p-6 shadow-lg
         "
         onClick={e => e.stopPropagation()}
@@ -152,15 +148,6 @@ export function SupplierModal(props: {
           </div>
 
           <div>
-            <label className={labelCls}>Empresa</label>
-            <input
-              value={form.company}
-              onChange={e => setForm({ ...form, company: e.target.value })}
-              className={inputCls}
-            />
-          </div>
-
-          <div>
             <label className={labelCls}>Teléfono</label>
             <input
               inputMode="tel"
@@ -180,40 +167,16 @@ export function SupplierModal(props: {
             />
           </div>
 
-          <div>
-            <label className={labelCls}>Ciudad</label>
-            <input
-              value={form.city}
-              onChange={e => setForm({ ...form, city: e.target.value })}
-              className={inputCls}
-            />
-          </div>
+          <p className="col-span-2 -mt-2 text-xs text-muted-foreground">
+            Indica al menos un teléfono o un correo para poder contactarlo.
+          </p>
 
           <div className="col-span-2">
-            <label className={labelCls}>Dirección</label>
-            <input
-              value={form.address}
-              onChange={e => setForm({ ...form, address: e.target.value })}
-              className={inputCls}
-            />
-          </div>
-
-          <div className="col-span-2">
-            <label className={labelCls}>NIT</label>
-            <input
-              value={form.taxId}
-              onChange={e => setForm({ ...form, taxId: e.target.value })}
-              className={inputCls}
-            />
-          </div>
-
-          <div className="col-span-2">
-            <label className={labelCls}>Notas</label>
-            <textarea
-              value={form.notes}
-              onChange={e => setForm({ ...form, notes: e.target.value })}
-              className={cn(inputCls, 'h-20 py-2')}
-            />
+            <label className={labelCls}>Productos que provee</label>
+            <ProductPicker selected={products} onChange={setProducts} />
+            <p className="mt-1 text-xs text-muted-foreground">
+              Cuando un producto se agote, podrás ver quién lo provee y pedir más.
+            </p>
           </div>
 
           {error && (
@@ -230,11 +193,123 @@ export function SupplierModal(props: {
             <Button type="button" variant="secondary" onClick={props.onClose}>
               Cancelar
             </Button>
-            <Button type="submit" disabled={pending}>
+            <Button type="submit" disabled={pending || !hasContact}>
               {pending ? 'Guardando…' : 'Guardar proveedor'}
             </Button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Searchable multi-select for the products a supplier provides. Selected items
+ * show as removable chips; the search box lists matching products (the org's
+ * catalog, capped) that aren't selected yet.
+ */
+function ProductPicker(props: {
+  selected: SupplierProductRef[];
+  onChange: (next: SupplierProductRef[]) => void;
+}) {
+  const { selected, onChange } = props;
+  const [query, setQuery] = useState('');
+  const [options, setOptions] = useState<ProductOption[]>([]);
+  const [loading, setLoading] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+    }
+    timerRef.current = setTimeout(() => {
+      setLoading(true);
+      listSupplierProductOptions({ search: query })
+        .then(setOptions)
+        .catch(() => setOptions([]))
+        .finally(() => setLoading(false));
+    }, 200);
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+      }
+    };
+  }, [query]);
+
+  const selectedIds = new Set(selected.map(p => p.id));
+  const available = options.filter(o => !selectedIds.has(o.id));
+
+  function add(opt: ProductOption) {
+    onChange([...selected, { id: opt.id, name: opt.name }]);
+  }
+
+  function remove(id: string) {
+    onChange(selected.filter(p => p.id !== id));
+  }
+
+  return (
+    <div className="mt-1 space-y-2">
+      {selected.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {selected.map(p => (
+            <span
+              key={p.id}
+              className="
+                inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5
+                text-xs
+              "
+            >
+              {p.name}
+              <button
+                type="button"
+                onClick={() => remove(p.id)}
+                className="
+                  text-muted-foreground
+                  hover:text-foreground
+                "
+                aria-label={`Quitar ${p.name}`}
+              >
+                ✕
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      <input
+        type="search"
+        value={query}
+        onChange={e => setQuery(e.target.value)}
+        placeholder="Buscar producto por nombre o código…"
+        className={inputCls}
+      />
+
+      <div className="max-h-40 overflow-y-auto rounded-md border">
+        {loading
+          ? (
+              <div className="px-3 py-2 text-xs text-muted-foreground">Cargando…</div>
+            )
+          : available.length === 0
+            ? (
+                <div className="px-3 py-2 text-xs text-muted-foreground">
+                  {query.trim() ? 'Sin resultados' : 'No hay más productos'}
+                </div>
+              )
+            : (
+                available.map(o => (
+                  <button
+                    key={o.id}
+                    type="button"
+                    onClick={() => add(o)}
+                    className="
+                      block w-full px-3 py-1.5 text-left text-sm
+                      hover:bg-muted
+                    "
+                  >
+                    {o.name}
+                  </button>
+                ))
+              )}
       </div>
     </div>
   );
