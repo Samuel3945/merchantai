@@ -162,8 +162,14 @@ async function salesByDay(
   });
 }
 
-// Net revenue = completed sales minus what was refunded back to customers in
-// the same window. "What you actually kept", not gross billing.
+// Net revenue = gross billing of every real (non-cancelled) sale minus what was
+// refunded back to customers in the window. "What you actually kept".
+//
+// `gross` must include 'returned' sales: a fully-returned sale keeps its original
+// total but flips status to 'returned'. Filtering gross to 'completed' only while
+// still subtracting its refund made net go negative (e.g. a $100 sale fully
+// returned the same day read as -$100 instead of $0). 'settled' is included for
+// forward-safety in case the fiado-settled lifecycle ever flips status.
 async function netRevenue(
   orgId: string,
   start: string,
@@ -174,7 +180,7 @@ async function netRevenue(
       SELECT COALESCE(SUM(total), 0)::float8 AS v
       FROM sales
       WHERE organization_id = ${orgId}
-        AND status = 'completed'
+        AND status IN ('completed', 'settled', 'returned')
         AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
             BETWEEN ${start}::date AND ${end}::date
     ),
