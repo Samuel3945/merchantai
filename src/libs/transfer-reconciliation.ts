@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
 import { findOpenSession, toMoney } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import {
@@ -122,4 +122,189 @@ export async function createFiadoTransferReconciliation(
     })
     .returning({ id: transferReconciliationsSchema.id });
   return row?.id ?? null;
+}
+
+// ── Reconciliation surface: read + lifecycle ─────────────────────────────────
+// The owner (or an account holder) confirms incoming transfers against the
+// statement. Every read and mutation is scoped by organizationId for tenant
+// isolation. The happy path is bulkConfirmPending ("everything matched"); the
+// owner only marks the exceptions.
+
+export type TransferReconciliation
+  = typeof transferReconciliationsSchema.$inferSelect;
+export type ReconciliationStatus = TransferReconciliation['status'];
+
+export type ReconciliationFilter = {
+  organizationId: string;
+  status?: ReconciliationStatus;
+  from?: Date;
+  to?: Date;
+};
+
+function filterConds(filter: ReconciliationFilter) {
+  const conds = [
+    eq(transferReconciliationsSchema.organizationId, filter.organizationId),
+  ];
+  if (filter.status) {
+    conds.push(eq(transferReconciliationsSchema.status, filter.status));
+  }
+  if (filter.from) {
+    conds.push(gte(transferReconciliationsSchema.createdAt, filter.from));
+  }
+  if (filter.to) {
+    conds.push(lte(transferReconciliationsSchema.createdAt, filter.to));
+  }
+  return conds;
+}
+
+export async function listReconciliations(
+  executor: Executor,
+  filter: ReconciliationFilter,
+): Promise<TransferReconciliation[]> {
+  return executor
+    .select()
+    .from(transferReconciliationsSchema)
+    .where(and(...filterConds(filter)))
+    .orderBy(desc(transferReconciliationsSchema.createdAt));
+}
+
+// The "you have X transfers pending ($Y)" overview that drives the confirm-all
+// affordance and (later) the multi-store nudge.
+export async function countPendingReconciliations(
+  executor: Executor,
+  filter: Omit<ReconciliationFilter, 'status'>,
+): Promise<{ count: number; total: number }> {
+  const [row] = await executor
+    .select({
+      count: sql<number>`COUNT(*)::int`,
+      total: sql<string>`COALESCE(SUM(${transferReconciliationsSchema.expectedAmount}), 0)::text`,
+    })
+    .from(transferReconciliationsSchema)
+    .where(
+      and(...filterConds({ ...filter, status: 'pending' })),
+    );
+  return {
+    count: Number(row?.count ?? 0),
+    total: Number.parseFloat(row?.total ?? '0') || 0,
+  };
+}
+
+type MutationBase = {
+  id: string;
+  organizationId: string;
+  reconciledBy: string;
+};
+
+// Confirms a transfer landed. arrivedAmount defaults to the expected amount (a
+// plain "yes, it matched"). Works from any non-confirmed state, so a late
+// arrival is just a not_arrived → confirmed transition.
+export async function confirmReconciliation(
+  executor: Executor,
+  args: MutationBase & { arrivedAmount?: number | string | null },
+): Promise<TransferReconciliation | null> {
+  const [row] = await executor
+    .update(transferReconciliationsSchema)
+    .set({
+      status: 'confirmed',
+      arrivedAmount:
+        args.arrivedAmount != null
+          ? toMoney(args.arrivedAmount)
+          : sql`${transferReconciliationsSchema.expectedAmount}`,
+      reconciledBy: args.reconciledBy,
+      reconciledAt: new Date(),
+    })
+    .where(
+      and(
+        eq(transferReconciliationsSchema.id, args.id),
+        eq(transferReconciliationsSchema.organizationId, args.organizationId),
+      ),
+    )
+    .returning();
+  return row ?? null;
+}
+
+// Marks a transfer that never landed. Resolution (receivable / loss /
+// cashier_liability) is a separate phase; this only records the fact.
+export async function markReconciliationNotArrived(
+  executor: Executor,
+  args: MutationBase & { note?: string | null },
+): Promise<TransferReconciliation | null> {
+  const [row] = await executor
+    .update(transferReconciliationsSchema)
+    .set({
+      status: 'not_arrived',
+      reconciledBy: args.reconciledBy,
+      reconciledAt: new Date(),
+      note: args.note ?? null,
+    })
+    .where(
+      and(
+        eq(transferReconciliationsSchema.id, args.id),
+        eq(transferReconciliationsSchema.organizationId, args.organizationId),
+      ),
+    )
+    .returning();
+  return row ?? null;
+}
+
+// Marks a transfer that landed for a different amount than expected.
+export async function markReconciliationMismatch(
+  executor: Executor,
+  args: MutationBase & { arrivedAmount: number | string; note?: string | null },
+): Promise<TransferReconciliation | null> {
+  const [row] = await executor
+    .update(transferReconciliationsSchema)
+    .set({
+      status: 'mismatch',
+      arrivedAmount: toMoney(args.arrivedAmount),
+      reconciledBy: args.reconciledBy,
+      reconciledAt: new Date(),
+      note: args.note ?? null,
+    })
+    .where(
+      and(
+        eq(transferReconciliationsSchema.id, args.id),
+        eq(transferReconciliationsSchema.organizationId, args.organizationId),
+      ),
+    )
+    .returning();
+  return row ?? null;
+}
+
+// The happy path: confirm every pending transfer in the period (or a given
+// subset of ids). Returns how many rows were confirmed.
+export async function bulkConfirmPending(
+  executor: Executor,
+  args: {
+    organizationId: string;
+    reconciledBy: string;
+    ids?: string[];
+    from?: Date;
+    to?: Date;
+  },
+): Promise<number> {
+  const conds = [
+    eq(transferReconciliationsSchema.organizationId, args.organizationId),
+    eq(transferReconciliationsSchema.status, 'pending'),
+  ];
+  if (args.ids && args.ids.length > 0) {
+    conds.push(inArray(transferReconciliationsSchema.id, args.ids));
+  }
+  if (args.from) {
+    conds.push(gte(transferReconciliationsSchema.createdAt, args.from));
+  }
+  if (args.to) {
+    conds.push(lte(transferReconciliationsSchema.createdAt, args.to));
+  }
+  const updated = await executor
+    .update(transferReconciliationsSchema)
+    .set({
+      status: 'confirmed',
+      arrivedAmount: sql`${transferReconciliationsSchema.expectedAmount}`,
+      reconciledBy: args.reconciledBy,
+      reconciledAt: new Date(),
+    })
+    .where(and(...conds))
+    .returning({ id: transferReconciliationsSchema.id });
+  return updated.length;
 }
