@@ -1,14 +1,20 @@
 'use server';
 
 import type { ActionResult } from '@/libs/action-result';
-import type { TreasuryAccount } from '@/libs/treasury';
+import type { TreasuryAccount, TreasuryAccountRow } from '@/libs/treasury';
 import { currentUser } from '@clerk/nextjs/server';
 import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
 import { toMoney } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import { requirePanelModule } from '@/libs/panel-session';
-import { getTreasuryPosition, recordConsignacion } from '@/libs/treasury';
+import {
+  createTreasuryAccount,
+  deactivateTreasuryAccount,
+  getTreasuryPosition,
+  listTreasuryAccounts as listTreasuryAccountsLib,
+  recordConsignacion,
+} from '@/libs/treasury';
 
 const CASH_PATH = '/dashboard/cash';
 
@@ -31,6 +37,119 @@ async function getActorName(fallback: string): Promise<string> {
 export async function getTreasury(): Promise<TreasuryAccount[]> {
   const { orgId } = await requirePanelModule('cash');
   return getTreasuryPosition(db, orgId);
+}
+
+// ── 2A: treasury_accounts server actions ─────────────────────────────────────
+// All actions are gated by requirePanelModule('cash') — org admins pass
+// unconditionally; non-owner members must hold the 'cash' module.
+
+/** Creates a caja_fuerte (vault). Name must be unique within the org. */
+export async function createCajaFuerte(
+  name: string,
+  openingBalance: number | string,
+): Promise<ActionResult<TreasuryAccountRow>> {
+  const { userId, orgId } = await requirePanelModule('cash');
+  const trimmed = name.trim();
+  if (!trimmed) {
+    return { ok: false, error: 'El nombre de la caja fuerte es requerido' };
+  }
+  const actor = await getActorName(userId);
+  try {
+    const account = await createTreasuryAccount(db, {
+      organizationId: orgId,
+      type: 'caja_fuerte',
+      name: trimmed,
+      openingBalance,
+      createdBy: actor,
+    });
+    await logAction({
+      organizationId: orgId,
+      actor: { type: 'user', id: userId },
+      action: 'treasury.account.created',
+      entityType: 'treasury_account',
+      entityId: account.id,
+      after: { type: 'caja_fuerte', name: trimmed, openingBalance },
+    });
+    revalidatePath(CASH_PATH);
+    return { ok: true, data: account };
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Error al crear la caja fuerte',
+    };
+  }
+}
+
+/** Creates a banco account linked to a payment_methods row. */
+export async function createBanco(
+  name: string,
+  paymentMethodId: string,
+  openingBalance: number | string,
+): Promise<ActionResult<TreasuryAccountRow>> {
+  const { userId, orgId } = await requirePanelModule('cash');
+  const trimmed = name.trim();
+  if (!trimmed) {
+    return { ok: false, error: 'El nombre de la cuenta bancaria es requerido' };
+  }
+  if (!paymentMethodId) {
+    return {
+      ok: false,
+      error: 'La cuenta bancaria debe estar vinculada a un método de pago',
+    };
+  }
+  const actor = await getActorName(userId);
+  try {
+    const account = await createTreasuryAccount(db, {
+      organizationId: orgId,
+      type: 'banco',
+      name: trimmed,
+      openingBalance,
+      paymentMethodId,
+      createdBy: actor,
+    });
+    await logAction({
+      organizationId: orgId,
+      actor: { type: 'user', id: userId },
+      action: 'treasury.account.created',
+      entityType: 'treasury_account',
+      entityId: account.id,
+      after: { type: 'banco', name: trimmed, paymentMethodId, openingBalance },
+    });
+    revalidatePath(CASH_PATH);
+    return { ok: true, data: account };
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Error al crear la cuenta bancaria',
+    };
+  }
+}
+
+/** Returns active treasury accounts for the org. */
+export async function listTreasuryAccounts(): Promise<TreasuryAccountRow[]> {
+  const { orgId } = await requirePanelModule('cash');
+  return listTreasuryAccountsLib(db, orgId);
+}
+
+/** Soft-deletes a treasury account (active → false). Row is kept for history. */
+export async function deactivateAccount(
+  accountId: string,
+): Promise<ActionResult<null>> {
+  const { userId, orgId } = await requirePanelModule('cash');
+  if (!accountId) {
+    return { ok: false, error: 'accountId es requerido' };
+  }
+  await deactivateTreasuryAccount(db, accountId, orgId);
+  await logAction({
+    organizationId: orgId,
+    actor: { type: 'user', id: userId },
+    action: 'treasury.account.deactivated',
+    entityType: 'treasury_account',
+    entityId: accountId,
+    after: { active: false },
+  });
+  revalidatePath(CASH_PATH);
+  return { ok: true, data: null };
 }
 
 // Consignación: cash moved from the safe to a bank account. Lowers caja fuerte,

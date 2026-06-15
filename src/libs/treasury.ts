@@ -10,6 +10,7 @@ import {
   cashSessionsSchema,
   posTokensSchema,
   transferReconciliationsSchema,
+  treasuryAccountsSchema,
   treasuryTransfersSchema,
 } from '@/models/Schema';
 
@@ -179,4 +180,158 @@ export async function recordConsignacion(
     note: args.note ?? null,
     createdBy: args.createdBy,
   });
+}
+
+// ── 2A: treasury_accounts CRUD ────────────────────────────────────────────────
+
+export type TreasuryAccountRow = typeof treasuryAccountsSchema.$inferSelect;
+
+export type CreateTreasuryAccountInput = {
+  organizationId: string;
+  type: 'caja' | 'caja_fuerte' | 'banco';
+  name: string;
+  openingBalance: string | number;
+  paymentMethodId?: string | null;
+  posTokenId?: string | null;
+  createdBy: string;
+};
+
+/**
+ * Inserts a new treasury_accounts row. Enforces unique name per org at the DB
+ * level (unique index). Throws a descriptive error on conflict so callers can
+ * surface it cleanly.
+ */
+export async function createTreasuryAccount(
+  executor: Executor,
+  input: CreateTreasuryAccountInput,
+): Promise<TreasuryAccountRow> {
+  try {
+    const [row] = await executor
+      .insert(treasuryAccountsSchema)
+      .values({
+        organizationId: input.organizationId,
+        type: input.type,
+        name: input.name.trim(),
+        openingBalance: toMoney(input.openingBalance),
+        paymentMethodId: input.paymentMethodId ?? null,
+        posTokenId: input.posTokenId ?? null,
+      })
+      .returning();
+    if (!row) {
+      throw new Error('treasury_accounts: insert returned no row');
+    }
+    return row;
+  } catch (err: unknown) {
+    // Re-wrap unique-constraint violations with a human-readable message so the
+    // action layer can pass it straight to the UI without string-matching.
+    // pglite wraps constraint errors as "Failed query: ..." — we need to check
+    // the error message AND its cause for the unique violation marker.
+    const msg = err instanceof Error ? err.message : '';
+    const causeMsg
+      = err instanceof Error && err.cause instanceof Error
+        ? err.cause.message
+        : '';
+    const isUniqueViolation
+      = msg.includes('duplicate')
+        || msg.includes('unique')
+        || msg.includes('treasury_accounts_org_name_unique')
+        || causeMsg.includes('duplicate')
+        || causeMsg.includes('unique')
+        // pglite error code for unique constraint violation
+        || msg.includes('23505')
+        || causeMsg.includes('23505');
+    if (isUniqueViolation) {
+      throw new Error(
+        `ya existe una cuenta con el nombre "${input.name}" en esta organización`,
+      );
+    }
+    throw err;
+  }
+}
+
+/**
+ * Returns all ACTIVE treasury_accounts for the org, ordered by type then name.
+ */
+export async function listTreasuryAccounts(
+  executor: Executor,
+  organizationId: string,
+): Promise<TreasuryAccountRow[]> {
+  return executor
+    .select()
+    .from(treasuryAccountsSchema)
+    .where(
+      and(
+        eq(treasuryAccountsSchema.organizationId, organizationId),
+        eq(treasuryAccountsSchema.active, true),
+      ),
+    )
+    .orderBy(treasuryAccountsSchema.type, treasuryAccountsSchema.name);
+}
+
+/**
+ * Sets active=false on a treasury_accounts row. The row is retained for
+ * historical referential integrity (treasury_movements rows reference it).
+ */
+export async function deactivateTreasuryAccount(
+  executor: Executor,
+  accountId: string,
+  organizationId: string,
+): Promise<void> {
+  await executor
+    .update(treasuryAccountsSchema)
+    .set({ active: false })
+    .where(
+      and(
+        eq(treasuryAccountsSchema.id, accountId),
+        eq(treasuryAccountsSchema.organizationId, organizationId),
+      ),
+    );
+}
+
+/**
+ * Derives the opening balance for a container type from the Phase-1
+ * getTreasuryPosition derivation. Used by the 0045 seed migration and tests
+ * to guarantee that the ledger starts with exactly the same value that the
+ * legacy derivation would have returned at migration time.
+ *
+ * Currently only 'caja_fuerte' is implemented (the only type seeded in 0045).
+ */
+export async function seedOpeningBalance(
+  executor: Executor,
+  organizationId: string,
+  type: 'caja_fuerte',
+): Promise<number> {
+  if (type === 'caja_fuerte') {
+    // Mirror exactly what getTreasuryPosition computes for caja_fuerte:
+    // total security withdrawals − total consignaciones out.
+    const [safe] = await executor
+      .select({
+        sum: sql<string>`COALESCE(SUM(${cashMovementsSchema.amount}), 0)::text`,
+      })
+      .from(cashMovementsSchema)
+      .where(
+        and(
+          eq(cashMovementsSchema.organizationId, organizationId),
+          eq(cashMovementsSchema.type, 'withdrawal'),
+        ),
+      );
+    const withdrawn = Number.parseFloat(safe?.sum ?? '0') || 0;
+
+    const transfers = await executor
+      .select({
+        from: treasuryTransfersSchema.fromAccount,
+        sum: sql<string>`COALESCE(SUM(${treasuryTransfersSchema.amount}), 0)::text`,
+      })
+      .from(treasuryTransfersSchema)
+      .where(eq(treasuryTransfersSchema.organizationId, organizationId))
+      .groupBy(treasuryTransfersSchema.fromAccount);
+
+    const consignado = transfers
+      .filter(t => t.from === 'caja_fuerte')
+      .reduce((s, t) => s + (Number.parseFloat(t.sum) || 0), 0);
+
+    return Number.parseFloat((withdrawn - consignado).toFixed(2));
+  }
+  // Unreachable in Phase 2A; extended in later subphases.
+  throw new Error(`seedOpeningBalance: unsupported type "${type}"`);
 }
