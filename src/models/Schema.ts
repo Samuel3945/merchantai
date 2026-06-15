@@ -547,6 +547,26 @@ export const treasuryTransfersSchema = pgTable(
   ],
 );
 
+// ── Treasury containers (Phase 2A) ────────────────────────────────────────
+// First-class accounts + unified movements ledger. Balance per container:
+//   opening_balance + SUM(amount WHERE to_account_id = id)
+//                   − SUM(amount WHERE from_account_id = id)
+// Hot sales path (recordCashMovement / sales.ts) is NEVER touched by Phase 2.
+export const treasuryAccountTypeEnum = pgEnum('treasury_account_type', [
+  'caja',
+  'caja_fuerte',
+  'banco',
+]);
+
+export const treasuryMovementTypeEnum = pgEnum('treasury_movement_type', [
+  'transfer',
+  'consignacion',
+  'entrada',
+  'salida',
+  'gasto',
+  'adjustment',
+]);
+
 export const transferReconciliationStatusEnum = pgEnum(
   'transfer_reconciliation_status',
   ['pending', 'confirmed', 'not_arrived', 'mismatch'],
@@ -1624,6 +1644,48 @@ export const paymentMethodsSchema = pgTable(
     index('payment_methods_org_sort_idx').on(
       table.organizationId,
       table.sortOrder,
+    ),
+  ],
+);
+
+// Treasury containers (perpetual-balance accounts: cajas, cajas fuertes,
+// bancos). Defined after payment_methods + pos_tokens because its FKs reference
+// them. Enums live near the cash tables above.
+export const treasuryAccountsSchema = pgTable(
+  'treasury_accounts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: text('organization_id').notNull(),
+    type: treasuryAccountTypeEnum('type').notNull(),
+    name: text('name').notNull(),
+    openingBalance: numeric('opening_balance', {
+      precision: 12,
+      scale: 2,
+    })
+      .default('0')
+      .notNull(),
+    active: boolean('active').default(true).notNull(),
+    // banco only — FK to payment_methods; RESTRICT so deleting a method that
+    // still backs an account is blocked at the DB level.
+    paymentMethodId: uuid('payment_method_id').references(
+      () => paymentMethodsSchema.id,
+      { onDelete: 'restrict' },
+    ),
+    // caja link — SET NULL so retiring a POS device doesn't orphan the account.
+    posTokenId: uuid('pos_token_id').references(() => posTokensSchema.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { mode: 'date' })
+      .defaultNow()
+      .$onUpdate(() => new Date())
+      .notNull(),
+  },
+  t => [
+    index('treasury_accounts_org_idx').on(t.organizationId, t.type),
+    uniqueIndex('treasury_accounts_org_name_unique').on(
+      t.organizationId,
+      t.name,
     ),
   ],
 );
