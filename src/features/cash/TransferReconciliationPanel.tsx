@@ -9,6 +9,8 @@ import {
   confirmTransfer,
   markTransferMismatch,
   markTransferNotArrived,
+  recordTransferExplanation,
+  resolveTransfer,
 } from '@/actions/transfer-reconciliation';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/utils/Helpers';
@@ -29,6 +31,7 @@ function Card(props: { children: React.ReactNode; className?: string }) {
 
 export function TransferReconciliationPanel(props: {
   reconciliations: TransferReconciliation[];
+  investigating: TransferReconciliation[];
   pendingCount: number;
   pendingTotal: number;
 }) {
@@ -38,6 +41,9 @@ export function TransferReconciliationPanel(props: {
   // Which row is in "arrived for a different amount" edit mode, and its input.
   const [mismatchId, setMismatchId] = useState<string | null>(null);
   const [mismatchAmount, setMismatchAmount] = useState('');
+  // Which investigation row is recording the cashier explanation, and its text.
+  const [explainId, setExplainId] = useState<string | null>(null);
+  const [explainText, setExplainText] = useState('');
 
   function run(fn: () => Promise<ActionResult<unknown>>, onSuccess?: () => void) {
     setError(null);
@@ -196,6 +202,118 @@ export function TransferReconciliationPanel(props: {
               ))}
             </div>
           )}
+
+      {props.investigating.length > 0 && (
+        <div className="space-y-2">
+          <div className="text-sm font-medium">
+            En investigación
+            <span className="ml-1 text-xs font-normal text-muted-foreground">
+              · transferencias que no llegaron · el cajero debe explicar
+            </span>
+          </div>
+          {props.investigating.map(r => (
+            <Card key={r.id} className="border-destructive/30 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    <span>{r.method}</span>
+                    <span className="font-display tabular-nums">
+                      {money(r.expectedAmount)}
+                    </span>
+                  </div>
+                  <div className="mt-0.5 text-xs text-muted-foreground">
+                    {r.reference ? `Ref: ${r.reference} · ` : ''}
+                    {relativeTime(r.createdAt)}
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={pending}
+                    onClick={() => run(() => resolveTransfer(r.id, 'receivable'))}
+                  >
+                    Cobrar (fiado)
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={pending}
+                    onClick={() =>
+                      run(() => resolveTransfer(r.id, 'cashier_liability'))}
+                  >
+                    Culpa del cajero
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    disabled={pending}
+                    onClick={() => run(() => resolveTransfer(r.id, 'loss'))}
+                  >
+                    Pérdida
+                  </Button>
+                </div>
+              </div>
+
+              {r.cashierExplanation && (
+                <div className="
+                  mt-3 rounded-lg border border-border bg-background px-3 py-2
+                  text-xs
+                "
+                >
+                  <span className="text-muted-foreground">
+                    Explicación del cajero:
+                    {' '}
+                  </span>
+                  {r.cashierExplanation}
+                  {r.cashierExplainedBy ? ` — ${r.cashierExplainedBy}` : ''}
+                </div>
+              )}
+
+              {!r.cashierExplanation && explainId === r.id && (
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <input
+                    className={cn(cashInputCls, 'flex-1')}
+                    placeholder="Explicación del comprobante confirmado"
+                    value={explainText}
+                    onChange={e => setExplainText(e.target.value)}
+                  />
+                  <Button
+                    size="sm"
+                    disabled={pending || explainText.trim() === ''}
+                    onClick={() =>
+                      run(
+                        () => recordTransferExplanation(r.id, explainText),
+                        () => {
+                          setExplainId(null);
+                          setExplainText('');
+                        },
+                      )}
+                  >
+                    Guardar
+                  </Button>
+                </div>
+              )}
+
+              {!r.cashierExplanation && explainId !== r.id && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="mt-3"
+                  disabled={pending}
+                  onClick={() => {
+                    setExplainId(r.id);
+                    setExplainText('');
+                  }}
+                >
+                  Explicar comprobante
+                </Button>
+              )}
+            </Card>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

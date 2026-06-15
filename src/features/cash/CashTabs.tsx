@@ -39,6 +39,7 @@ function TabButton(props: {
 export function CashTabs(props: {
   cash: React.ComponentProps<typeof CashClient>;
   reconciliations: TransferReconciliation[];
+  investigating: TransferReconciliation[];
   pendingTransfers: { count: number; total: number };
 }) {
   const [view, setView] = useState<View>('arqueo');
@@ -74,6 +75,7 @@ export function CashTabs(props: {
         : (
             <TransferReconciliationPanel
               reconciliations={props.reconciliations}
+              investigating={props.investigating}
               pendingCount={props.pendingTransfers.count}
               pendingTotal={props.pendingTransfers.total}
             />
