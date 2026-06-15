@@ -2,6 +2,7 @@ import { auth } from '@clerk/nextjs/server';
 import { setRequestLocale } from 'next-intl/server';
 import { redirect } from 'next/navigation';
 import { listExpenses } from '@/actions/expenses';
+import { listTreasuryAccounts } from '@/actions/treasury';
 import { TitleBar } from '@/features/dashboard/TitleBar';
 import { ExpensesClient } from '@/features/expenses/ExpensesClient';
 
@@ -26,7 +27,13 @@ export default async function DashboardExpensesPage(props: {
   const lastDay = new Date(Date.UTC(year ?? 1970, month ?? 1, 0)).getUTCDate();
   const defaultEnd = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
 
-  const expenses = await listExpenses({ start: defaultStart, end: defaultEnd });
+  const [expenses, treasuryAccounts] = await Promise.all([
+    listExpenses({ start: defaultStart, end: defaultEnd }),
+    // Fetch treasury accounts so the gasto form can offer a source container.
+    // Graceful fallback: if the org has no treasury accounts yet, the form falls
+    // back to the legacy cash path (createExpense) without any UI change.
+    listTreasuryAccounts().catch(() => []),
+  ]);
 
   return (
     <>
@@ -38,6 +45,7 @@ export default async function DashboardExpensesPage(props: {
         initialExpenses={expenses}
         defaultStart={defaultStart}
         defaultEnd={defaultEnd}
+        treasuryAccounts={treasuryAccounts}
       />
     </>
   );

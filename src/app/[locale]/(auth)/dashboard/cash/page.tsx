@@ -77,7 +77,11 @@ export default async function DashboardCashPage(props: {
         description="Abre y cierra la caja, registra movimientos y haz el arqueo del día."
       />
       <div className="mb-6">
-        <TreasuryConsole accounts={treasury} accountRows={treasuryAccountRows} />
+        <TreasuryConsole
+          accounts={treasury}
+          accountRows={treasuryAccountRows}
+          transferMethods={methods}
+        />
       </div>
       <CashTabs
         cash={{
