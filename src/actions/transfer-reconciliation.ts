@@ -10,10 +10,12 @@ import { currentUser } from '@clerk/nextjs/server';
 import { revalidatePath } from 'next/cache';
 import { ActionValidationError } from '@/libs/action-result';
 import { logAction } from '@/libs/audit-log';
+import { findOpenSession } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import { createFiado } from '@/libs/fiados';
 import { parseClient } from '@/libs/fiados-math';
 import { requirePanelModule } from '@/libs/panel-session';
+import { reclassifyPayment } from '@/libs/payment-reclassification';
 import {
   bulkConfirmPending,
   confirmReconciliation,
@@ -295,4 +297,55 @@ export async function resolveTransfer(
     }
     throw err;
   }
+}
+
+// Corrects a mis-entered payment split (e.g. a mixed payment booked as all-cash):
+// moves an amount from one method to another on a sale. The total and stock are
+// untouched. The cash delta posts as a signed reclassification in the current
+// open session; a new transfer gets a reconciliation row to confirm later.
+export async function reclassifySalePayment(
+  salePaymentId: string,
+  toMethod: string,
+  amount: number | string,
+): Promise<ActionResult<null>> {
+  const { userId, orgId } = await requirePanelModule(MODULE);
+  const actor = await getActorName(userId);
+
+  try {
+    await db.transaction(async (tx) => {
+      const open = await findOpenSession(tx, orgId, null);
+      if (!open) {
+        throw new ActionValidationError(
+          'Abre la caja para reclasificar un pago',
+        );
+      }
+      const result = await reclassifyPayment(tx, {
+        organizationId: orgId,
+        salePaymentId,
+        toMethod,
+        amount,
+        currentSessionId: open.id,
+        createdBy: actor,
+      });
+      if (!result.ok) {
+        throw new ActionValidationError(result.error);
+      }
+    });
+  } catch (err) {
+    if (err instanceof ActionValidationError) {
+      return { ok: false, error: err.message };
+    }
+    throw err;
+  }
+
+  await logAction({
+    organizationId: orgId,
+    actor: { type: 'user', id: userId },
+    action: 'transfer.reclassified',
+    entityType: 'sale_payment',
+    entityId: salePaymentId,
+    after: { toMethod, amount: String(amount) },
+  });
+  revalidatePath(CASH_PATH);
+  return { ok: true, data: null };
 }

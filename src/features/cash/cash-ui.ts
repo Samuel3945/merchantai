@@ -114,21 +114,30 @@ const TYPE_META: Record<CashMovementType, TypeMeta> = {
   withdrawal: { direction: 'out', label: 'Retiro de seguridad' },
   advance: { direction: 'out', label: 'Vale de empleado' },
   fiado_payment: { direction: 'in', label: 'Cobro de fiado' },
+  reclassification: { direction: 'in', label: 'Reclasificación' },
 };
 
 export function describeMovement(
-  m: Pick<CashMovement, 'type' | 'category' | 'reason'>,
+  m: Pick<CashMovement, 'type' | 'category' | 'reason'> & { amount?: string },
 ): { direction: Direction; title: string; detail: string | null } {
   const meta = TYPE_META[m.type] ?? {
     direction: 'out' as Direction,
     label: m.type,
   };
+  // A reclassification is signed — its direction follows the amount (negative =
+  // cash left the drawer because it was really a transfer).
+  const direction: Direction
+    = m.type === 'reclassification'
+      ? (Number.parseFloat(m.amount ?? '0') || 0) < 0
+          ? 'out'
+          : 'in'
+      : meta.direction;
   const catLabel = categoryLabel(m.category);
   const title = m.type === 'expense' && catLabel ? catLabel : meta.label;
   const reason = m.reason?.trim();
   const detail
     = reason && reason.toLowerCase() !== title.toLowerCase() ? reason : null;
-  return { direction: meta.direction, title, detail };
+  return { direction, title, detail };
 }
 
 // ── Formatting helpers ────────────────────────────────────────────────────────

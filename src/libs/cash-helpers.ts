@@ -53,6 +53,11 @@ export function toPosCashSession(s: CashSession): PosCashSessionWire {
 
 export const CASH_PAYMENT_METHODS = ['efectivo', 'cash'];
 
+export function isCashMethod(method: string | null): boolean {
+  const m = (method ?? '').trim().toLowerCase();
+  return CASH_PAYMENT_METHODS.some(c => m.includes(c));
+}
+
 // Cash coming INTO the drawer. `adjustment` is a manual reconciliation entry
 // that raises expected cash — it existed in the enum but was counted nowhere
 // before, that gap is fixed here.
@@ -173,6 +178,36 @@ export async function recordCorrectionMovement(
   return created ?? null;
 }
 
+// Posts the signed cash delta of a payment reclassification into the CURRENT
+// session (never edits the original sale movement, never touches a closed
+// session). Negative = cash left the drawer because the payment was really a
+// transfer; positive = the reverse.
+export async function recordReclassificationMovement(
+  executor: Executor,
+  args: {
+    organizationId: string;
+    sessionId: string;
+    amount: number | string;
+    reason: string;
+    saleId?: string | null;
+    createdBy: string;
+  },
+): Promise<CashMovement | null> {
+  const [created] = await executor
+    .insert(cashMovementsSchema)
+    .values({
+      sessionId: args.sessionId,
+      organizationId: args.organizationId,
+      type: 'reclassification',
+      amount: toMoney(args.amount),
+      reason: args.reason,
+      saleId: args.saleId ?? null,
+      createdBy: args.createdBy,
+    })
+    .returning();
+  return created ?? null;
+}
+
 export type CashBreakdown = {
   /** Base inicial — opening float entered when the session was opened. */
   opening: number;
@@ -182,7 +217,12 @@ export type CashBreakdown = {
   entradas: number;
   /** Salidas: todo el efectivo que salió del cajón (gastos + retiros). */
   salidas: number;
-  /** Efectivo esperado = opening + cashSales + entradas - salidas. */
+  /**
+   * Reclasificaciones de método de pago, CON SIGNO: negativo cuando el efectivo
+   * salió del cajón porque era transferencia, positivo al revés.
+   */
+  reclassifications: number;
+  /** Efectivo esperado = opening + cashSales + entradas - salidas + reclassifications. */
   expected: number;
   /** Cantidad de movimientos de la sesión. */
   movementCount: number;
@@ -203,6 +243,8 @@ export async function computeCashBreakdown(
       cashSales: sql<string>`COALESCE(SUM(${cashMovementsSchema.amount}) FILTER (WHERE ${cashMovementsSchema.type} = 'sale'), 0)::text`,
       entradas: sql<string>`COALESCE(SUM(${cashMovementsSchema.amount}) FILTER (WHERE ${cashMovementsSchema.type} IN ('deposit','adjustment','fiado_payment')), 0)::text`,
       salidas: sql<string>`COALESCE(SUM(${cashMovementsSchema.amount}) FILTER (WHERE ${cashMovementsSchema.type} IN ('expense','salary','inventory_purchase','withdrawal','advance')), 0)::text`,
+      // Signed: a reclassification can move expected cash either way.
+      reclassifications: sql<string>`COALESCE(SUM(${cashMovementsSchema.amount}) FILTER (WHERE ${cashMovementsSchema.type} = 'reclassification'), 0)::text`,
       movementCount: sql<number>`COUNT(*)::int`,
     })
     .from(cashMovementsSchema)
@@ -212,8 +254,10 @@ export async function computeCashBreakdown(
   const cashSales = Number.parseFloat(row?.cashSales ?? '0') || 0;
   const entradas = Number.parseFloat(row?.entradas ?? '0') || 0;
   const salidas = Number.parseFloat(row?.salidas ?? '0') || 0;
+  const reclassifications
+    = Number.parseFloat(row?.reclassifications ?? '0') || 0;
   const expected = Number.parseFloat(
-    (opening + cashSales + entradas - salidas).toFixed(2),
+    (opening + cashSales + entradas - salidas + reclassifications).toFixed(2),
   );
 
   return {
@@ -221,6 +265,7 @@ export async function computeCashBreakdown(
     cashSales,
     entradas,
     salidas,
+    reclassifications,
     expected,
     movementCount: Number(row?.movementCount ?? 0),
   };
