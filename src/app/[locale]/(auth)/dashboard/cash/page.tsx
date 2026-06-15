@@ -14,7 +14,9 @@ import {
   getPendingTransfersOverview,
   listTransferReconciliations,
 } from '@/actions/transfer-reconciliation';
+import { getTreasury } from '@/actions/treasury';
 import { CashTabs } from '@/features/cash/CashTabs';
+import { TreasuryConsole } from '@/features/cash/TreasuryConsole';
 import { TitleBar } from '@/features/dashboard/TitleBar';
 
 export default async function DashboardCashPage(props: {
@@ -23,17 +25,27 @@ export default async function DashboardCashPage(props: {
   const { locale } = await props.params;
   setRequestLocale(locale);
 
-  const [current, sessions, alerts, kpis, security, history, openCajas, methods]
-    = await Promise.all([
-      getCurrentCash(),
-      listCashSessions(2000),
-      getFraudAlerts(14).catch(() => []),
-      getTodayCashKpis(),
-      getCashSecurityStatus(),
-      listAllCashMovements(1000),
-      listOpenCajas().catch(() => []),
-      listPaymentMethods({ activeOnly: true }).catch(() => []),
-    ]);
+  const [
+    current,
+    sessions,
+    alerts,
+    kpis,
+    security,
+    history,
+    openCajas,
+    methods,
+    treasury,
+  ] = await Promise.all([
+    getCurrentCash(),
+    listCashSessions(2000),
+    getFraudAlerts(14).catch(() => []),
+    getTodayCashKpis(),
+    getCashSecurityStatus(),
+    listAllCashMovements(1000),
+    listOpenCajas().catch(() => []),
+    listPaymentMethods({ activeOnly: true }).catch(() => []),
+    getTreasury().catch(() => []),
+  ]);
 
   // No transfer payment methods → the org doesn't deal with transfers at all, so
   // the whole reconciliation surface stays hidden. Don't even fetch it.
@@ -61,6 +73,9 @@ export default async function DashboardCashPage(props: {
         title="Caja"
         description="Abre y cierra la caja, registra movimientos y haz el arqueo del día."
       />
+      <div className="mb-6">
+        <TreasuryConsole accounts={treasury} />
+      </div>
       <CashTabs
         cash={{
           current,
