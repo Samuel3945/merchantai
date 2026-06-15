@@ -1,13 +1,15 @@
 'use client';
 
 import type { CashSession } from '@/libs/cash-helpers';
-import { useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { useMemo, useState, useTransition } from 'react';
+import { recordCashCorrection } from '@/actions/cash';
 import { DateRangePicker } from '@/components/DateRangePicker';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
 import { buildPresetOptions, todayBogota } from '@/utils/DateRange';
 import { cn } from '@/utils/Helpers';
-import { actorLabel, dayKey, money, stamp } from './cash-ui';
+import { actorLabel, cashInputCls, dayKey, money, stamp } from './cash-ui';
 
 type ResultFilter = 'all' | 'diff' | 'square';
 
@@ -27,6 +29,45 @@ export function CashClosuresHistory(props: { sessions: CashSession[] }) {
   const [actor, setActor] = useState('all');
   const [result, setResult] = useState<ResultFilter>('all');
   const [page, setPage] = useState(0);
+
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  // The closed session being corrected, plus the correction form fields.
+  const [correctId, setCorrectId] = useState<string | null>(null);
+  const [correctAmount, setCorrectAmount] = useState('');
+  const [correctReason, setCorrectReason] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  function openCorrect(sessionId: string, diff: number) {
+    setError(null);
+    setCorrectId(sessionId);
+    setCorrectAmount(diff !== 0 ? String(Math.abs(diff)) : '');
+    setCorrectReason('');
+  }
+
+  function submitCorrection() {
+    if (!correctId) {
+      return;
+    }
+    setError(null);
+    startTransition(async () => {
+      try {
+        const res = await recordCashCorrection(
+          correctId,
+          correctAmount,
+          correctReason,
+        );
+        if (!res.ok) {
+          setError(res.error);
+          return;
+        }
+        setCorrectId(null);
+        router.refresh();
+      } catch {
+        setError('Ocurrió un error inesperado. Volvé a intentar.');
+      }
+    });
+  }
 
   const presetOptions = useMemo(
     () => buildPresetOptions(['today', 'yesterday', '7d', '30d', 'mtd', 'lastMonth']),
@@ -288,7 +329,23 @@ export function CashClosuresHistory(props: { sessions: CashSession[] }) {
                           {money(r.diff)}
                         </td>
                         <td className="px-5 py-2.5 text-muted-foreground">
-                          {r.s.closedBy ? actorLabel(r.s.closedBy) : '—'}
+                          <div className="
+                            flex items-center justify-between gap-2
+                          "
+                          >
+                            <span>
+                              {r.s.closedBy ? actorLabel(r.s.closedBy) : '—'}
+                            </span>
+                            {r.diff !== 0 && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => openCorrect(r.s.id, r.diff)}
+                              >
+                                Corregir
+                              </Button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );
@@ -328,6 +385,70 @@ export function CashClosuresHistory(props: { sessions: CashSession[] }) {
             >
               Siguiente
             </Button>
+          </div>
+        </div>
+      )}
+
+      {correctId && (
+        <div className="
+          fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4
+        "
+        >
+          <div className="
+            w-full max-w-md rounded-xl border border-border bg-card p-5
+            shadow-lg
+          "
+          >
+            <div className="text-sm font-semibold">Corregir diferencia</div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              El cierre original no se modifica. Esto registra un ajuste en la
+              caja actual que explica la diferencia (requiere caja abierta).
+            </p>
+            <div className="mt-4 space-y-3">
+              <div>
+                <label
+                  className="mb-1.5 block text-sm font-medium"
+                  htmlFor="correct-amount"
+                >
+                  Monto
+                </label>
+                <input
+                  id="correct-amount"
+                  className={cashInputCls}
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  value={correctAmount}
+                  onChange={e => setCorrectAmount(e.target.value)}
+                />
+              </div>
+              <input
+                className={cashInputCls}
+                placeholder="Motivo (ej: apareció la plata, error de conteo)"
+                value={correctReason}
+                onChange={e => setCorrectReason(e.target.value)}
+              />
+              {error && <div className="text-sm text-destructive">{error}</div>}
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={pending}
+                onClick={() => setCorrectId(null)}
+              >
+                Cancelar
+              </Button>
+              <Button
+                size="sm"
+                disabled={
+                  pending || correctAmount === '' || correctReason.trim() === ''
+                }
+                onClick={submitCorrection}
+              >
+                Registrar corrección
+              </Button>
+            </div>
           </div>
         </div>
       )}
