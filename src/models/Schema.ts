@@ -475,6 +475,15 @@ export const cashMovementsSchema = pgTable(
     supplierId: uuid('supplier_id').references(() => suppliersSchema.id, {
       onDelete: 'set null',
     }),
+    // Set on a post-close correction: the already-CLOSED session this adjustment
+    // explains (e.g. a shortfall the owner accounts for the next day). The closed
+    // session's own numbers stay immutable — the correction is this new dated
+    // movement that references it, so the cash-fraud analysis keeps the original
+    // discrepancy AND sees how/when/by whom it was explained.
+    correctsSessionId: uuid('corrects_session_id').references(
+      () => cashSessionsSchema.id,
+      { onDelete: 'set null' },
+    ),
     createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
   },
   table => [

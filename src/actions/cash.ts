@@ -17,8 +17,10 @@ import {
   computeExpectedAmount,
   EMPTY_COLLECTIONS,
   EXPENSE_MOVEMENT_TYPES,
+  findCorrectableSession,
   findOpenSession,
   INCOME_MOVEMENT_TYPES,
+  recordCorrectionMovement,
   toMoney,
 } from '@/libs/cash-helpers';
 import { recomputeAndCacheCashThreshold } from '@/libs/cash-security-engine';
@@ -318,6 +320,83 @@ export async function addCashMovement(
     throw error;
   }
 
+  revalidatePath('/dashboard/cash');
+  return { ok: true, data: movement };
+}
+
+// Post-close correction: account for a discrepancy of an ALREADY-CLOSED session
+// (e.g. a shortfall the owner realizes was an error the next day) without ever
+// editing that closed arqueo. It posts an 'adjustment' in the current open
+// session that references the closed one. The original difference stays on the
+// record — the fraud analysis needs that signal — with this correction (amount,
+// reason, who, when) linked to it.
+export async function recordCashCorrection(
+  originalSessionId: string,
+  amount: number | string,
+  reason: string,
+): Promise<ActionResult<CashMovement>> {
+  const { userId, orgId } = await requireOrg();
+  const actor = await getActorName(userId);
+
+  const reasonTrimmed = reason?.trim();
+  if (!reasonTrimmed) {
+    return { ok: false, error: 'El motivo es obligatorio' };
+  }
+  const amt = toMoney(amount);
+  if (Number.parseFloat(amt) <= 0) {
+    return { ok: false, error: 'El monto debe ser mayor a 0' };
+  }
+
+  let movement: CashMovement;
+  try {
+    movement = await db.transaction(async (tx) => {
+      const original = await findCorrectableSession(tx, {
+        sessionId: originalSessionId,
+        organizationId: orgId,
+      });
+      if (!original) {
+        throw new ActionValidationError(
+          'La sesión a corregir no existe o no está cerrada',
+        );
+      }
+      const open = await findOpenSession(tx, orgId, null);
+      if (!open) {
+        throw new ActionValidationError(
+          'Abre la caja para registrar la corrección',
+        );
+      }
+      const created = await recordCorrectionMovement(tx, {
+        organizationId: orgId,
+        originalSessionId,
+        currentSessionId: open.id,
+        amount: amt,
+        reason: reasonTrimmed,
+        createdBy: actor,
+      });
+      if (!created) {
+        throw new Error('No se pudo registrar la corrección');
+      }
+      return created;
+    });
+  } catch (error) {
+    if (error instanceof ActionValidationError) {
+      return { ok: false, error: error.message };
+    }
+    throw error;
+  }
+
+  await logAction({
+    organizationId: orgId,
+    actor: { type: 'user', id: userId },
+    action: 'cash.correction',
+    entityType: 'cash_movement',
+    entityId: movement.id,
+    after: {
+      correctsSessionId: movement.correctsSessionId,
+      amount: movement.amount,
+      reason: movement.reason,
+    },
+  });
   revalidatePath('/dashboard/cash');
   return { ok: true, data: movement };
 }

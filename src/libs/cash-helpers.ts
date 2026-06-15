@@ -122,6 +122,57 @@ export async function findOpenSession(
   return session;
 }
 
+// A session is correctable only if it is already CLOSED and belongs to the org —
+// you correct a past arqueo, never an open one.
+export async function findCorrectableSession(
+  executor: Executor,
+  args: { sessionId: string; organizationId: string },
+): Promise<CashSession | undefined> {
+  const [session] = await executor
+    .select()
+    .from(cashSessionsSchema)
+    .where(
+      and(
+        eq(cashSessionsSchema.id, args.sessionId),
+        eq(cashSessionsSchema.organizationId, args.organizationId),
+        eq(cashSessionsSchema.status, 'closed'),
+      ),
+    )
+    .limit(1);
+  return session;
+}
+
+// Posts a post-close correction: an 'adjustment' movement in the CURRENT session
+// that references the original closed session. The original session's numbers are
+// never touched — that immutability is what keeps the correction auditable and
+// the cash-fraud signal intact (the original discrepancy survives, with how/when/
+// by whom it was explained recorded alongside).
+export async function recordCorrectionMovement(
+  executor: Executor,
+  args: {
+    organizationId: string;
+    originalSessionId: string;
+    currentSessionId: string;
+    amount: number | string;
+    reason: string;
+    createdBy: string;
+  },
+): Promise<CashMovement | null> {
+  const [created] = await executor
+    .insert(cashMovementsSchema)
+    .values({
+      sessionId: args.currentSessionId,
+      organizationId: args.organizationId,
+      type: 'adjustment',
+      amount: toMoney(args.amount),
+      reason: args.reason,
+      correctsSessionId: args.originalSessionId,
+      createdBy: args.createdBy,
+    })
+    .returning();
+  return created ?? null;
+}
+
 export type CashBreakdown = {
   /** Base inicial — opening float entered when the session was opened. */
   opening: number;
