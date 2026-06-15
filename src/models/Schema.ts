@@ -509,6 +509,23 @@ export const cashMovementsRelations = relations(
   }),
 );
 
+export const transferReconciliationStatusEnum = pgEnum(
+  'transfer_reconciliation_status',
+  ['pending', 'confirmed', 'not_arrived', 'mismatch'],
+);
+
+export const transferResolutionTypeEnum = pgEnum('transfer_resolution_type', [
+  // The customer still owes it — converted into a fiado (credit) debt.
+  'receivable',
+  // Written off; Finanzas offsets the revenue that never materialized. It does
+  // NOT post a cash_movement — the money never entered the drawer, so removing
+  // cash here would wrongly understate the arqueo.
+  'loss',
+  // The cashier accepted an invalid transfer (e.g. a fake screenshot). The
+  // shortfall is attributed to them and raises a fraud alert.
+  'cashier_liability',
+]);
+
 export const suppliersRelations = relations(suppliersSchema, ({ many }) => ({
   movements: many(cashMovementsSchema),
   products: many(supplierProductsSchema),
@@ -1090,6 +1107,98 @@ export const fiadosSchema = pgTable(
   ],
 );
 
+// Derived ledger for NON-cash incoming money (transferencia / nequi / daviplata,
+// from both sales and fiado abonos). It is the digital twin of cash_movements:
+// cash lands in the drawer and is reconciled by the cashier (arqueo); transfers
+// land in an account and are reconciled by whoever holds it (canConfirmTransfers),
+// decoupled from the cash close. One row = one incoming transfer that must be
+// confirmed against the bank/Nequi statement. A shared account resolves "which
+// caja?" because every row carries pos_token_id / cash_session_id.
+export const transferReconciliationsSchema = pgTable(
+  'transfer_reconciliations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: text('organization_id').notNull(),
+    // Sale source: the sale_payments row this transfer came from. UNIQUE so the
+    // backfill and the offline POS sync can never double-insert. NULL for fiado
+    // abonos — those link the other way, via
+    // fiado_movements.transfer_reconciliation_id (mirror of cash_movement_id).
+    salePaymentId: uuid('sale_payment_id').references(
+      () => salePaymentsSchema.id,
+      { onDelete: 'cascade' },
+    ),
+    // Attribution, denormalized so a shared bank account answers "which caja?"
+    // without a join chain. NULL for admin/legacy/no-device money-in.
+    posTokenId: uuid('pos_token_id').references(() => posTokensSchema.id, {
+      onDelete: 'set null',
+    }),
+    cashSessionId: uuid('cash_session_id').references(
+      () => cashSessionsSchema.id,
+      { onDelete: 'set null' },
+    ),
+    // The free-text method label, mirroring sale_payments.method. The configured
+    // account (payment_methods FK) is resolved in a later phase, not here.
+    method: text('method').notNull(),
+    // What the system says should arrive vs what actually landed (set on
+    // confirm/mismatch). The shortfall is expected - arrived.
+    expectedAmount: numeric('expected_amount', {
+      precision: 12,
+      scale: 2,
+    }).notNull(),
+    arrivedAmount: numeric('arrived_amount', { precision: 12, scale: 2 }),
+    // Comprobante captured at money-in, used to match against the statement.
+    reference: text('reference'),
+    status: transferReconciliationStatusEnum('status')
+      .default('pending')
+      .notNull(),
+    reconciledBy: text('reconciled_by'),
+    reconciledAt: timestamp('reconciled_at', { mode: 'date' }),
+    note: text('note'),
+    // Resolution for a transfer that did NOT arrive (or arrived short).
+    resolutionType: transferResolutionTypeEnum('resolution_type'),
+    resolvedBy: text('resolved_by'),
+    resolvedAt: timestamp('resolved_at', { mode: 'date' }),
+    // Set when resolved as 'receivable': the fiado (debt) booked for the customer.
+    resolutionFiadoId: uuid('resolution_fiado_id').references(
+      () => fiadosSchema.id,
+      { onDelete: 'set null' },
+    ),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+  },
+  table => [
+    // One reconciliation row per sale payment — makes the backfill and the
+    // offline sync idempotent.
+    uniqueIndex('transfer_reconciliations_sale_payment_idx')
+      .on(table.salePaymentId)
+      .where(sql`${table.salePaymentId} IS NOT NULL`),
+    // The owner's reconciliation queue scans org + status.
+    index('transfer_reconciliations_org_status_idx').on(
+      table.organizationId,
+      table.status,
+    ),
+    // Rollup + attribution by session/caja.
+    index('transfer_reconciliations_session_idx').on(table.cashSessionId),
+  ],
+);
+
+export const transferReconciliationsRelations = relations(
+  transferReconciliationsSchema,
+  ({ one }) => ({
+    salePayment: one(salePaymentsSchema, {
+      fields: [transferReconciliationsSchema.salePaymentId],
+      references: [salePaymentsSchema.id],
+    }),
+    session: one(cashSessionsSchema, {
+      fields: [transferReconciliationsSchema.cashSessionId],
+      references: [cashSessionsSchema.id],
+    }),
+    resolutionFiado: one(fiadosSchema, {
+      fields: [transferReconciliationsSchema.resolutionFiadoId],
+      references: [fiadosSchema.id],
+    }),
+  }),
+);
+
 export const fiadoMovementsSchema = pgTable(
   'fiado_movements',
   {
@@ -1111,6 +1220,14 @@ export const fiadoMovementsSchema = pgTable(
     // ledger survives if the cash movement is ever removed.
     cashMovementId: uuid('cash_movement_id').references(
       () => cashMovementsSchema.id,
+      { onDelete: 'set null' },
+    ),
+    // Digital twin of cashMovementId: links a digital abono (nequi / daviplata /
+    // transferencia) to the single reconciliation row it created, so the owner
+    // confirms one incoming transfer even when it paid down several fiados.
+    // Null for cash abonos (those use cashMovementId) and for charge/extension.
+    transferReconciliationId: uuid('transfer_reconciliation_id').references(
+      () => transferReconciliationsSchema.id,
       { onDelete: 'set null' },
     ),
     // Plazo-extension audit: the deadline before and after the change.
@@ -1158,6 +1275,10 @@ export const fiadoMovementsRelations = relations(
     cashMovement: one(cashMovementsSchema, {
       fields: [fiadoMovementsSchema.cashMovementId],
       references: [cashMovementsSchema.id],
+    }),
+    transferReconciliation: one(transferReconciliationsSchema, {
+      fields: [fiadoMovementsSchema.transferReconciliationId],
+      references: [transferReconciliationsSchema.id],
     }),
   }),
 );

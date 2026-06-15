@@ -36,6 +36,7 @@ import { getCurrentPanelUser } from '@/libs/panel-session';
 import { loadReturnPolicy } from '@/libs/return-policy';
 import { assignNextSaleNumber } from '@/libs/sale-number';
 import { applySaleReturn } from '@/libs/sale-returns';
+import { recordSaleTransferReconciliations } from '@/libs/transfer-reconciliation';
 import { wholesaleUnitPrice } from '@/libs/wholesale';
 import {
   posReturnItemsSchema,
@@ -310,6 +311,11 @@ export async function createSale(input: CreateSaleInput) {
   // (double stock decrement, double revenue). A dropped cash movement only
   // understates the drawer (reconciled at closing), which is far less harmful.
   await recordCashMovement(result.id, result.total).catch(() => null);
+
+  // Mirror for non-cash money: feed the transfer reconciliation ledger so the
+  // digital collections can be confirmed against the account later. Same
+  // best-effort contract — a failure must never reject a committed sale.
+  await recordSaleTransferReconciliations(result.id).catch(() => null);
 
   // Best-effort: emit the electronic invoice now if a provider is configured.
   // Never awaited into the response — the sale already succeeded; a failed

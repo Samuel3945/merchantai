@@ -14,6 +14,10 @@ import {
   deriveDueState,
 } from '@/libs/fiados-shared';
 import {
+  createFiadoTransferReconciliation,
+  methodNeedsReconciliation,
+} from '@/libs/transfer-reconciliation';
+import {
   appSettingsSchema,
   cashMovementsSchema,
   cashSessionsSchema,
@@ -313,6 +317,28 @@ export async function recordAbonoTx(
     }
   }
 
+  // Digital abono (nequi/daviplata/transferencia): never touches the drawer, so
+  // it gets ONE reconciliation row for the whole transfer (linked to every
+  // fiado_movement it covers), mirroring how the cash portion gets one
+  // cash_movement. The owner confirms it against the account later.
+  let transferReconciliationId: string | null = null;
+  if (
+    !isCashMethod(method)
+    && appliedTotal > 0
+    && methodNeedsReconciliation(method)
+  ) {
+    const session = await findOpenSession(executor, args.organizationId);
+    transferReconciliationId = await createFiadoTransferReconciliation(
+      executor,
+      {
+        organizationId: args.organizationId,
+        method,
+        expectedAmount: appliedTotal,
+        cashSessionId: session?.id ?? null,
+      },
+    );
+  }
+
   const paidFiadoIds: string[] = [];
   for (const p of plan) {
     if (p.apply > 0) {
@@ -323,6 +349,7 @@ export async function recordAbonoTx(
         amount: toMoney(p.apply),
         method,
         cashMovementId,
+        transferReconciliationId,
         note: args.note ?? null,
         createdBy: args.createdBy,
       });
