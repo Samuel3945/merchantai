@@ -165,28 +165,6 @@ export async function getTreasuryPosition(
   return accounts;
 }
 
-// Records a consignación: cash physically moved from the safe to a bank account.
-// Lowers caja fuerte, raises the bank — a real inter-container transfer.
-export async function recordConsignacion(
-  executor: Executor,
-  args: {
-    organizationId: string;
-    toBankMethod: string;
-    amount: number | string;
-    note?: string | null;
-    createdBy: string;
-  },
-): Promise<void> {
-  await executor.insert(treasuryTransfersSchema).values({
-    organizationId: args.organizationId,
-    fromAccount: 'caja_fuerte',
-    toAccount: `banco:${args.toBankMethod}`,
-    amount: toMoney(args.amount),
-    note: args.note ?? null,
-    createdBy: args.createdBy,
-  });
-}
-
 // ── 2A: treasury_accounts CRUD ────────────────────────────────────────────────
 
 export type TreasuryAccountRow = typeof treasuryAccountsSchema.$inferSelect;
@@ -501,8 +479,8 @@ type BankConsignacionInput = {
  * The source container (caja or caja_fuerte) must be active and have sufficient
  * balance. The destination banco account must also be active.
  *
- * NOTE: consignarABanco (the legacy treasury_transfers writer) is kept in
- * src/actions/treasury.ts as a thin fallback wrapper and is retired in Phase 2D.
+ * Phase 2D: treasury_transfers is now read-only. This function is the sole
+ * consignacion write path.
  */
 export async function recordBankConsignacion(
   executor: Executor,

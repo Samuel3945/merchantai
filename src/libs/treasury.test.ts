@@ -974,3 +974,102 @@ describe('recordGastoOutflow', () => {
     expect(expRows.rows[0]!.description).toBeNull();
   });
 });
+
+// ── 2D: retire treasury_transfers WRITE path ─────────────────────────────────
+
+// 2D-T1: consignarDesde (via recordBankConsignacion) does NOT insert into
+// treasury_transfers. Only a treasury_movements row is written.
+describe('2D: consignarDesde writes only to treasury_movements', () => {
+  it('after a consignacion, treasury_transfers table remains empty', async () => {
+    const vaultId = await makeAccount('caja_fuerte', '2D Vault', 500);
+    const bancoId = await makeAccount('banco', '2D Banco', 0);
+
+    await recordBankConsignacion(db, {
+      organizationId: ORG,
+      fromAccountId: vaultId,
+      toBankAccountId: bancoId,
+      amount: 100,
+      createdBy: 'owner',
+    });
+
+    // treasury_movements must have the consignacion row
+    const movRows = await pg.query<{ type: string }>(
+      `SELECT type FROM treasury_movements WHERE organization_id = $1`,
+      [ORG],
+    );
+
+    expect(movRows.rows).toHaveLength(1);
+    expect(movRows.rows[0]!.type).toBe('consignacion');
+
+    // treasury_transfers must NOT have been written
+    const transferRows = await pg.query(
+      `SELECT id FROM treasury_transfers WHERE organization_id = $1`,
+      [ORG],
+    );
+
+    expect(transferRows.rows).toHaveLength(0);
+  });
+});
+
+// 2D-T2: existing treasury_transfers rows are still readable — table is kept
+// read-only for audit/history. No data was dropped.
+describe('2D: treasury_transfers table remains readable (audit history intact)', () => {
+  it('rows inserted directly into treasury_transfers are still selectable', async () => {
+    // Insert directly (simulating a historical row from Phase 1).
+    await pg.query(
+      `INSERT INTO treasury_transfers (organization_id, from_account, to_account, amount, created_by)
+       VALUES ($1, 'caja_fuerte', 'banco:Nequi', '75.00', 'owner')`,
+      [ORG],
+    );
+
+    const rows = await pg.query<{ from_account: string; amount: string }>(
+      `SELECT from_account, amount FROM treasury_transfers WHERE organization_id = $1`,
+      [ORG],
+    );
+
+    expect(rows.rows).toHaveLength(1);
+    expect(rows.rows[0]!.from_account).toBe('caja_fuerte');
+    expect(Number(rows.rows[0]!.amount)).toBe(75);
+  });
+});
+
+// 2D-T3: consignarABanco no longer exists as an export from actions/treasury.ts.
+// This is validated at the TypeScript type level — knip + tsc will catch any
+// dangling export. The runtime test is that recordBankConsignacion is the ONLY
+// write path and the legacy wrapper is gone.
+// We confirm by checking recordBankConsignacion does the full job independently.
+describe('2D: recordBankConsignacion is the sole consignacion write path', () => {
+  it('recordBankConsignacion fully records a consignacion without any treasury_transfers write', async () => {
+    const vaultId = await makeAccount('caja_fuerte', '2D Sole Vault', 1000);
+    const bancoId = await makeAccount('banco', '2D Sole Banco', 0);
+
+    const row = await recordBankConsignacion(db, {
+      organizationId: ORG,
+      fromAccountId: vaultId,
+      toBankAccountId: bancoId,
+      amount: 300,
+      createdBy: 'owner',
+      note: 'consignacion test 2D',
+    });
+
+    // Row returned correctly
+    expect(row.type).toBe('consignacion');
+    expect(row.fromAccountId).toBe(vaultId);
+    expect(row.toAccountId).toBe(bancoId);
+
+    // Balances correct via treasury_movements only
+    const vaultBal = await dbBalance(vaultId, 1000);
+    const bancoBal = await dbBalance(bancoId, 0);
+
+    expect(vaultBal).toBe(700);
+    expect(bancoBal).toBe(300);
+
+    // treasury_transfers untouched
+    const transferRows = await pg.query(
+      `SELECT id FROM treasury_transfers WHERE organization_id = $1`,
+      [ORG],
+    );
+
+    expect(transferRows.rows).toHaveLength(0);
+  });
+});
