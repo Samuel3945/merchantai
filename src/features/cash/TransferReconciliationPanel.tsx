@@ -15,7 +15,7 @@ import {
 } from '@/actions/transfer-reconciliation';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/utils/Helpers';
-import { cashInputCls, money, relativeTime } from './cash-ui';
+import { cashInputCls, money, stamp } from './cash-ui';
 
 function Card(props: { children: React.ReactNode; className?: string }) {
   return (
@@ -142,7 +142,7 @@ export function TransferReconciliationPanel(props: {
                       </div>
                       <div className="mt-0.5 text-xs text-muted-foreground">
                         {r.reference ? `Ref: ${r.reference} · ` : ''}
-                        {relativeTime(r.createdAt)}
+                        {stamp(r.createdAt)}
                       </div>
                     </div>
 
@@ -228,7 +228,7 @@ export function TransferReconciliationPanel(props: {
                   </div>
                   <div className="mt-0.5 text-xs text-muted-foreground">
                     {r.reference ? `Ref: ${r.reference} · ` : ''}
-                    {relativeTime(r.createdAt)}
+                    {stamp(r.createdAt)}
                   </div>
                 </div>
 
