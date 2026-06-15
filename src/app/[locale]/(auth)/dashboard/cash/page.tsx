@@ -1,3 +1,4 @@
+import type { TransferReconciliation } from '@/libs/transfer-reconciliation';
 import { setRequestLocale } from 'next-intl/server';
 import {
   getCashSecurityStatus,
@@ -8,6 +9,7 @@ import {
   listCashSessions,
   listOpenCajas,
 } from '@/actions/cash';
+import { listPaymentMethods } from '@/actions/payment-methods';
 import {
   getPendingTransfersOverview,
   listTransferReconciliations,
@@ -21,35 +23,37 @@ export default async function DashboardCashPage(props: {
   const { locale } = await props.params;
   setRequestLocale(locale);
 
-  const [
-    current,
-    sessions,
-    alerts,
-    kpis,
-    security,
-    history,
-    openCajas,
-    reconResult,
-    investigatingResult,
-    overviewResult,
-  ] = await Promise.all([
-    getCurrentCash(),
-    listCashSessions(2000),
-    getFraudAlerts(14).catch(() => []),
-    getTodayCashKpis(),
-    getCashSecurityStatus(),
-    listAllCashMovements(1000),
-    listOpenCajas().catch(() => []),
-    listTransferReconciliations({ status: 'pending' }).catch(() => null),
-    listTransferReconciliations({ status: 'not_arrived' }).catch(() => null),
-    getPendingTransfersOverview().catch(() => null),
-  ]);
+  const [current, sessions, alerts, kpis, security, history, openCajas, methods]
+    = await Promise.all([
+      getCurrentCash(),
+      listCashSessions(2000),
+      getFraudAlerts(14).catch(() => []),
+      getTodayCashKpis(),
+      getCashSecurityStatus(),
+      listAllCashMovements(1000),
+      listOpenCajas().catch(() => []),
+      listPaymentMethods({ activeOnly: true }).catch(() => []),
+    ]);
 
-  const reconciliations = reconResult?.ok ? reconResult.data : [];
-  const investigating = investigatingResult?.ok ? investigatingResult.data : [];
-  const pendingTransfers = overviewResult?.ok
-    ? overviewResult.data
-    : { count: 0, total: 0 };
+  // No transfer payment methods → the org doesn't deal with transfers at all, so
+  // the whole reconciliation surface stays hidden. Don't even fetch it.
+  const hasTransferMethods = methods.some(m => m.type === 'transfer');
+
+  let reconciliations: TransferReconciliation[] = [];
+  let investigating: TransferReconciliation[] = [];
+  let pendingTransfers = { count: 0, total: 0 };
+  if (hasTransferMethods) {
+    const [reconResult, investigatingResult, overviewResult] = await Promise.all([
+      listTransferReconciliations({ status: 'pending' }).catch(() => null),
+      listTransferReconciliations({ status: 'not_arrived' }).catch(() => null),
+      getPendingTransfersOverview().catch(() => null),
+    ]);
+    reconciliations = reconResult?.ok ? reconResult.data : [];
+    investigating = investigatingResult?.ok ? investigatingResult.data : [];
+    pendingTransfers = overviewResult?.ok
+      ? overviewResult.data
+      : { count: 0, total: 0 };
+  }
 
   return (
     <>
@@ -67,6 +71,7 @@ export default async function DashboardCashPage(props: {
           history,
           openCajas,
         }}
+        hasTransferMethods={hasTransferMethods}
         reconciliations={reconciliations}
         investigating={investigating}
         pendingTransfers={pendingTransfers}
