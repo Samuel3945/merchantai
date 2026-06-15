@@ -1,12 +1,14 @@
 'use client';
 
 import type { ExpenseRow } from '@/actions/expenses';
+import type { TreasuryAccountRow } from '@/libs/treasury';
 import { useMemo, useState, useTransition } from 'react';
 import {
   createExpense,
   deleteExpense,
   listExpenses,
 } from '@/actions/expenses';
+import { recordGasto } from '@/actions/treasury';
 import { DateRangePicker } from '@/components/DateRangePicker';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
@@ -15,6 +17,7 @@ import {
   EXPENSE_CATEGORY_LABELS,
 } from '@/features/expenses/categories';
 import { buildPresetOptions, todayBogota } from '@/utils/DateRange';
+import { CASH_SENTINEL, resolveExpenseSource } from './expenses-routing';
 
 // ── Formatting helpers ──────────────────────────────────────────────────────
 
@@ -53,7 +56,13 @@ function categoryLabel(cat: string) {
 
 // ── Add expense form ────────────────────────────────────────────────────────
 
-function AddExpenseForm({ onSuccess }: { onSuccess: () => void }) {
+function AddExpenseForm({
+  onSuccess,
+  treasuryAccounts,
+}: {
+  onSuccess: () => void;
+  treasuryAccounts: TreasuryAccountRow[];
+}) {
   const [amount, setAmount] = useState('');
   const [category, setCategory] = useState<string>(EXPENSE_CATEGORIES[0]);
   const [description, setDescription] = useState('');
@@ -61,7 +70,28 @@ function AddExpenseForm({ onSuccess }: { onSuccess: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
+  // Treasury source selector:
+  // treasuryAccounts that are caja_fuerte or banco can receive gasto outflows.
+  const eligibleAccounts = treasuryAccounts.filter(
+    a => a.type === 'caja_fuerte' || a.type === 'banco',
+  );
+
+  // Default: CASH_SENTINEL (legacy cash path). When org has exactly one eligible
+  // treasury account, auto-select it so there's no extra friction.
+  const [fromAccountId, setFromAccountId] = useState<string>(
+    eligibleAccounts.length === 1 ? (eligibleAccounts[0]?.id ?? CASH_SENTINEL) : CASH_SENTINEL,
+  );
+
   const isOtros = category === 'otros';
+  const showSourceSelector = eligibleAccounts.length > 0;
+
+  const sourceOptions = [
+    { value: CASH_SENTINEL, label: 'Efectivo / caja (sin tesorería)' },
+    ...eligibleAccounts.map(a => ({
+      value: a.id,
+      label: `${a.name} (${a.type === 'caja_fuerte' ? 'caja fuerte' : 'banco'})`,
+    })),
+  ];
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -77,20 +107,45 @@ function AddExpenseForm({ onSuccess }: { onSuccess: () => void }) {
       return;
     }
 
+    // Determine routing: treasury dual-write vs. legacy cash path.
+    const source = resolveExpenseSource(fromAccountId, CASH_SENTINEL);
+
     startTransition(async () => {
-      const result = await createExpense({
-        amount: parsed,
-        category,
-        description: description.trim() || null,
-        incurredOn: date,
-      });
-      if (!result.ok) {
-        setError(result.error);
-        return;
+      if (source.type === 'treasury') {
+        // Treasury path: recordGasto inserts both expenses + treasury_movements atomically.
+        // Do NOT also call createExpense — that would be a double-write.
+        const result = await recordGasto({
+          fromAccountId: source.accountId,
+          amount: parsed,
+          category,
+          description: description.trim() || null,
+          incurredOn: date,
+        });
+        if (!result.ok) {
+          setError(result.error);
+          return;
+        }
+      } else {
+        // Cash path: unchanged legacy behavior.
+        const result = await createExpense({
+          amount: parsed,
+          category,
+          description: description.trim() || null,
+          incurredOn: date,
+        });
+        if (!result.ok) {
+          setError(result.error);
+          return;
+        }
       }
+
       setAmount('');
       setDescription('');
       setDate(todayBogota());
+      // Reset source selector to single-account auto-select or sentinel.
+      setFromAccountId(
+        eligibleAccounts.length === 1 ? (eligibleAccounts[0]?.id ?? CASH_SENTINEL) : CASH_SENTINEL,
+      );
       onSuccess();
     });
   }
@@ -165,6 +220,23 @@ function AddExpenseForm({ onSuccess }: { onSuccess: () => void }) {
           />
         </div>
       </div>
+
+      {/* Treasury source selector — only shown when the org has eligible containers */}
+      {showSourceSelector && (
+        <div className="mt-3 flex flex-col gap-1">
+          <span className={labelCls}>¿De dónde sale la plata?</span>
+          <Select
+            value={fromAccountId}
+            onValueChange={setFromAccountId}
+            options={sourceOptions}
+          />
+          {fromAccountId !== CASH_SENTINEL && (
+            <p className="text-[11px] text-muted-foreground">
+              El gasto se descontará del saldo del contenedor seleccionado.
+            </p>
+          )}
+        </div>
+      )}
 
       {error && (
         <p className="
@@ -354,10 +426,12 @@ export function ExpensesClient({
   initialExpenses,
   defaultStart,
   defaultEnd,
+  treasuryAccounts = [],
 }: {
   initialExpenses: ExpenseRow[];
   defaultStart: string;
   defaultEnd: string;
+  treasuryAccounts?: TreasuryAccountRow[];
 }) {
   const [expenses, setExpenses] = useState<ExpenseRow[]>(initialExpenses);
   const [start, setStart] = useState(defaultStart);
@@ -394,7 +468,10 @@ export function ExpensesClient({
 
   return (
     <div className="space-y-6">
-      <AddExpenseForm onSuccess={handleAddSuccess} />
+      <AddExpenseForm
+        onSuccess={handleAddSuccess}
+        treasuryAccounts={treasuryAccounts}
+      />
 
       {/* Filter bar — same pattern as Ventas and the report details */}
       <div className="space-y-3 rounded-md border bg-muted/30 p-4">
