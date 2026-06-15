@@ -226,7 +226,10 @@ export async function addCashMovement(
   const fromAccountId = options?.fromAccountId ?? null;
   const hasTreasuryDualWrite = toAccountId !== null || fromAccountId !== null;
 
-  // Validate the container account is active and belongs to this org.
+  // Pre-flight validation: fast-fail before opening a transaction when the
+  // container id is obviously invalid. This is a UX guard only — the authoritative
+  // active-status check runs INSIDE the transaction (see below) so a container
+  // deactivated between this check and the commit still rolls back both writes.
   if (hasTreasuryDualWrite) {
     const accountId = (toAccountId ?? fromAccountId)!;
     const [container] = await db
@@ -280,6 +283,27 @@ export async function addCashMovement(
       // cash_movements is the caja ledger (unchanged); treasury_movements is the
       // container ledger (new). The two reads are disjoint — no double count.
       if (hasTreasuryDualWrite) {
+        // W-2 hardening: re-validate the container is still active INSIDE the
+        // transaction. If the container was deactivated between the pre-flight
+        // check above and this point, throwing here rolls back BOTH the
+        // cash_movements insert and the treasury_movements insert atomically.
+        const txAccountId = (toAccountId ?? fromAccountId)!;
+        const [txContainer] = await tx
+          .select({ id: treasuryAccountsSchema.id, active: treasuryAccountsSchema.active })
+          .from(treasuryAccountsSchema)
+          .where(
+            and(
+              eq(treasuryAccountsSchema.id, txAccountId),
+              eq(treasuryAccountsSchema.organizationId, orgId),
+            ),
+          )
+          .limit(1);
+        if (!txContainer || !txContainer.active) {
+          throw new ActionValidationError(
+            'El contenedor seleccionado no existe o está inactivo',
+          );
+        }
+
         // Determine movement direction:
         //   toAccountId set   → cash entering a container (entrada): from=null, to=container
         //   fromAccountId set → cash leaving a container (salida):   from=container, to=null

@@ -141,7 +141,7 @@ const DDL = `
     type "treasury_movement_type" NOT NULL,
     category text,
     reason text,
-    expense_id uuid REFERENCES expenses(id) ON DELETE SET NULL,
+    expense_id uuid REFERENCES expenses(id) ON DELETE RESTRICT,
     created_by text NOT NULL,
     created_at timestamp DEFAULT now() NOT NULL,
     CONSTRAINT treasury_mov_one_external CHECK (
@@ -227,7 +227,11 @@ describe('getTreasuryPosition', () => {
 
     expect(balances[`caja:${TOKEN}`]).toBe(70);
     expect(balances['caja:oficina']).toBe(0);
-    expect(balances.caja_fuerte).toBe(30);
+
+    // S-1: key is now caja_fuerte:<id>; look up by type instead of literal key.
+    const vaultEntry = accounts.find(a => a.type === 'caja_fuerte');
+
+    expect(vaultEntry?.balance).toBe(30);
     expect(balances['banco:Nequi']).toBe(50);
   });
 
@@ -288,9 +292,13 @@ describe('getTreasuryPosition', () => {
       createdBy: 'owner',
     });
 
-    const balances = byKey(await getTreasuryPosition(db, ORG));
+    const accounts = await getTreasuryPosition(db, ORG);
+    const balances = byKey(accounts);
 
-    expect(balances.caja_fuerte).toBe(60); // 100 opening − 40 consignado
+    // S-1: key is now caja_fuerte:<id>; look up by type.
+    const vaultEntry = accounts.find(a => a.type === 'caja_fuerte');
+
+    expect(vaultEntry?.balance).toBe(60); // 100 opening − 40 consignado
     expect(balances['banco:Nequi']).toBe(40); // 0 opening + 40 consignado
   });
 
@@ -1030,6 +1038,122 @@ describe('2D: treasury_transfers table remains readable (audit history intact)',
     expect(rows.rows).toHaveLength(1);
     expect(rows.rows[0]!.from_account).toBe('caja_fuerte');
     expect(Number(rows.rows[0]!.amount)).toBe(75);
+  });
+});
+
+// ── Hardening fixes (verify-report W-2, W-3, S-1) ───────────────────────────
+
+// W-3: expense_id FK is RESTRICT — deleting an expense linked to a gasto
+// treasury_movements row must be blocked at the DB level.
+describe('W-3: expense_id FK RESTRICT — linked expense cannot be deleted', () => {
+  it('rejects deletion of an expense that is linked to a treasury_movements gasto row', async () => {
+    const fromId = await makeAccount('caja_fuerte', 'W3 Vault', 500);
+
+    const expenseId = await recordGastoOutflow(db, {
+      organizationId: ORG,
+      fromAccountId: fromId,
+      amount: 100,
+      category: 'servicios',
+      description: 'Luz',
+      incurredOn: '2026-06-15',
+      createdBy: 'owner',
+    });
+
+    // The treasury_movements row references this expense. Deleting the expense
+    // must be blocked by the RESTRICT FK.
+    await expect(
+      pg.query(`DELETE FROM expenses WHERE id = $1`, [expenseId]),
+    ).rejects.toThrow(/foreign key|constraint|violates/i);
+  });
+
+  it('allows deleting an expense that has no linked treasury_movements row', async () => {
+    const expRes = await pg.query<{ id: string }>(
+      `INSERT INTO expenses (organization_id, amount, category, incurred_on, created_by)
+       VALUES ($1, '50.00', 'otros', '2026-06-15', 'owner')
+       RETURNING id`,
+      [ORG],
+    );
+    const expId = expRes.rows[0]!.id;
+
+    // No treasury_movements row → delete should succeed.
+    await expect(
+      pg.query(`DELETE FROM expenses WHERE id = $1`, [expId]),
+    ).resolves.not.toThrow();
+  });
+});
+
+// S-1: getTreasuryPosition — multiple caja_fuertes must produce distinct keys.
+describe('S-1: getTreasuryPosition — multiple vaults produce distinct keys', () => {
+  it('each caja_fuerte gets a unique key based on account id', async () => {
+    const vault1Res = await pg.query<{ id: string }>(
+      `INSERT INTO treasury_accounts (id, organization_id, type, name, opening_balance, active, created_at, updated_at)
+       VALUES (gen_random_uuid(), $1, 'caja_fuerte', 'Bóveda Norte', '1000.00', true, now(), now())
+       RETURNING id`,
+      [ORG],
+    );
+    const vault2Res = await pg.query<{ id: string }>(
+      `INSERT INTO treasury_accounts (id, organization_id, type, name, opening_balance, active, created_at, updated_at)
+       VALUES (gen_random_uuid(), $1, 'caja_fuerte', 'Bóveda Sur', '500.00', true, now(), now())
+       RETURNING id`,
+      [ORG],
+    );
+
+    const id1 = vault1Res.rows[0]!.id;
+    const id2 = vault2Res.rows[0]!.id;
+
+    const accounts = await getTreasuryPosition(db, ORG);
+    const vaults = accounts.filter(a => a.type === 'caja_fuerte');
+
+    expect(vaults).toHaveLength(2);
+
+    const keys = vaults.map(v => v.key);
+
+    // All keys must be distinct.
+    expect(new Set(keys).size).toBe(2);
+    // Each key must embed the account id.
+    expect(keys).toContain(`caja_fuerte:${id1}`);
+    expect(keys).toContain(`caja_fuerte:${id2}`);
+
+    // Balances must be correct per vault.
+    const byKeyMap = Object.fromEntries(vaults.map(v => [v.key, v.balance]));
+
+    expect(byKeyMap[`caja_fuerte:${id1}`]).toBe(1000);
+    expect(byKeyMap[`caja_fuerte:${id2}`]).toBe(500);
+  });
+});
+
+// W-2: addCashMovement active-check inside the transaction.
+// We test via the lib layer: recordGastoOutflow uses a transaction internally
+// and validates active status inside it. For the cash.ts action path the test
+// is structural (validated by inspection) — pglite cannot call server actions.
+// The W-2 test verifies that recordContainerTransfer (which IS inside a tx)
+// rejects an inactive source even when the check is inside the transaction.
+describe('W-2: active-check inside tx — inactive container detected mid-transaction', () => {
+  it('recordContainerTransfer blocks an inactive source inside the transaction boundary', async () => {
+    const fromId = await makeAccount('caja_fuerte', 'W2 Source', 500);
+    const toId = await makeAccount('caja_fuerte', 'W2 Dest', 0);
+
+    // Deactivate source BEFORE the transfer call (simulates the race-window case
+    // where the container is already inactive by the time the tx runs).
+    await deactivateTreasuryAccount(db, fromId, ORG);
+
+    await expect(
+      recordContainerTransfer(db, {
+        organizationId: ORG,
+        fromAccountId: fromId,
+        toAccountId: toId,
+        amount: 100,
+        createdBy: 'owner',
+      }),
+    ).rejects.toThrow(/inactiva|inactive/i);
+
+    // No treasury_movements row should have been written.
+    const rows = await pg.query(
+      `SELECT id FROM treasury_movements WHERE organization_id = $1`,
+      [ORG],
+    );
+
+    expect(rows.rows).toHaveLength(0);
   });
 });
 

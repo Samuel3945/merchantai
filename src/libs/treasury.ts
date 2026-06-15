@@ -154,7 +154,7 @@ export async function getTreasuryPosition(
       const credits = creditsMap.get(acct.id) ?? 0;
       const debits = debitsMap.get(acct.id) ?? 0;
       accounts.push({
-        key: acct.type === 'caja_fuerte' ? 'caja_fuerte' : `banco:${acct.name}`,
+        key: acct.type === 'caja_fuerte' ? `caja_fuerte:${acct.id}` : `banco:${acct.name}`,
         name: acct.name,
         type: acct.type as TreasuryAccountType,
         balance: balanceForAccount(opening, credits, debits),
