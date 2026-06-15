@@ -2043,10 +2043,10 @@ export const treasuryMovementsSchema = pgTable(
     type: treasuryMovementTypeEnum('type').notNull(),
     category: text('category'),
     reason: text('reason'),
-    // Linked expenses row for gasto movements (SET NULL on delete so the
-    // expenses row can be deleted independently if business rules allow it).
+    // Linked expenses row for gasto movements (RESTRICT on delete: an expenses
+    // row MUST NOT be deleted while a linked treasury_movements row exists).
     expenseId: uuid('expense_id').references(() => expensesSchema.id, {
-      onDelete: 'set null',
+      onDelete: 'restrict',
     }),
     createdBy: text('created_by').notNull(),
     createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
