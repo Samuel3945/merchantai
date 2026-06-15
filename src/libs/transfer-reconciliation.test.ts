@@ -8,6 +8,9 @@ import {
   listReconciliations,
   markReconciliationMismatch,
   markReconciliationNotArrived,
+  outstandingAmount,
+  recordCashierExplanation,
+  setReconciliationResolution,
 } from '@/libs/transfer-reconciliation';
 import { transferReconciliationsSchema } from '@/models/Schema';
 
@@ -42,6 +45,9 @@ const DDL = `
     resolved_by text,
     resolved_at timestamp,
     resolution_fiado_id uuid,
+    cashier_explanation text,
+    cashier_explained_by text,
+    cashier_explained_at timestamp,
     created_at timestamp DEFAULT now() NOT NULL
   );
 `;
@@ -234,5 +240,90 @@ describe('countPendingReconciliations', () => {
 
     expect(overview.count).toBe(2);
     expect(overview.total).toBe(150);
+  });
+});
+
+describe('recordCashierExplanation', () => {
+  it('records the explanation with author and timestamp', async () => {
+    const id = await seed({ status: 'not_arrived' });
+    const row = await recordCashierExplanation(db, {
+      id,
+      organizationId: ORG,
+      explanation: 'Confirmé el comprobante que el cliente mostró en pantalla',
+      explainedBy: 'Cajero Ana',
+    });
+
+    expect(row?.cashierExplanation).toContain('comprobante');
+    expect(row?.cashierExplainedBy).toBe('Cajero Ana');
+    expect(row?.cashierExplainedAt).not.toBeNull();
+  });
+
+  it('does not touch another org row (tenant isolation)', async () => {
+    const id = await seed({ status: 'not_arrived' });
+    const row = await recordCashierExplanation(db, {
+      id,
+      organizationId: OTHER,
+      explanation: 'x',
+      explainedBy: 'y',
+    });
+
+    expect(row).toBeNull();
+  });
+});
+
+describe('setReconciliationResolution', () => {
+  it('records a loss outcome with author and timestamp', async () => {
+    const id = await seed({ status: 'not_arrived' });
+    const row = await setReconciliationResolution(db, {
+      id,
+      organizationId: ORG,
+      resolutionType: 'loss',
+      resolvedBy: USER,
+    });
+
+    expect(row?.resolutionType).toBe('loss');
+    expect(row?.resolvedBy).toBe(USER);
+    expect(row?.resolvedAt).not.toBeNull();
+  });
+
+  it('links the fiado when resolved as receivable', async () => {
+    const id = await seed({ status: 'not_arrived' });
+    const fiadoId = UUID(900);
+    const row = await setReconciliationResolution(db, {
+      id,
+      organizationId: ORG,
+      resolutionType: 'receivable',
+      resolvedBy: USER,
+      resolutionFiadoId: fiadoId,
+    });
+
+    expect(row?.resolutionType).toBe('receivable');
+    expect(row?.resolutionFiadoId).toBe(fiadoId);
+  });
+
+  it('does not touch another org row (tenant isolation)', async () => {
+    const id = await seed({ status: 'not_arrived' });
+    const row = await setReconciliationResolution(db, {
+      id,
+      organizationId: OTHER,
+      resolutionType: 'loss',
+      resolvedBy: USER,
+    });
+
+    expect(row).toBeNull();
+  });
+});
+
+describe('outstandingAmount', () => {
+  it('is the full amount when nothing arrived', () => {
+    expect(
+      outstandingAmount({ expectedAmount: '100.00', arrivedAmount: null }),
+    ).toBe(100);
+  });
+
+  it('is the shortfall on a mismatch', () => {
+    expect(
+      outstandingAmount({ expectedAmount: '100.00', arrivedAmount: '80.00' }),
+    ).toBe(20);
   });
 });
