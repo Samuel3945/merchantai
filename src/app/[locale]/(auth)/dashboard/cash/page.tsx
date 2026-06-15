@@ -8,7 +8,11 @@ import {
   listCashSessions,
   listOpenCajas,
 } from '@/actions/cash';
-import { CashClient } from '@/features/cash/CashClient';
+import {
+  getPendingTransfersOverview,
+  listTransferReconciliations,
+} from '@/actions/transfer-reconciliation';
+import { CashTabs } from '@/features/cash/CashTabs';
 import { TitleBar } from '@/features/dashboard/TitleBar';
 
 export default async function DashboardCashPage(props: {
@@ -17,16 +21,32 @@ export default async function DashboardCashPage(props: {
   const { locale } = await props.params;
   setRequestLocale(locale);
 
-  const [current, sessions, alerts, kpis, security, history, openCajas]
-    = await Promise.all([
-      getCurrentCash(),
-      listCashSessions(2000),
-      getFraudAlerts(14).catch(() => []),
-      getTodayCashKpis(),
-      getCashSecurityStatus(),
-      listAllCashMovements(1000),
-      listOpenCajas().catch(() => []),
-    ]);
+  const [
+    current,
+    sessions,
+    alerts,
+    kpis,
+    security,
+    history,
+    openCajas,
+    reconResult,
+    overviewResult,
+  ] = await Promise.all([
+    getCurrentCash(),
+    listCashSessions(2000),
+    getFraudAlerts(14).catch(() => []),
+    getTodayCashKpis(),
+    getCashSecurityStatus(),
+    listAllCashMovements(1000),
+    listOpenCajas().catch(() => []),
+    listTransferReconciliations({ status: 'pending' }).catch(() => null),
+    getPendingTransfersOverview().catch(() => null),
+  ]);
+
+  const reconciliations = reconResult?.ok ? reconResult.data : [];
+  const pendingTransfers = overviewResult?.ok
+    ? overviewResult.data
+    : { count: 0, total: 0 };
 
   return (
     <>
@@ -34,14 +54,18 @@ export default async function DashboardCashPage(props: {
         title="Caja"
         description="Abre y cierra la caja, registra movimientos y haz el arqueo del día."
       />
-      <CashClient
-        current={current}
-        sessions={sessions}
-        alerts={alerts}
-        kpis={kpis}
-        security={security}
-        history={history}
-        openCajas={openCajas}
+      <CashTabs
+        cash={{
+          current,
+          sessions,
+          alerts,
+          kpis,
+          security,
+          history,
+          openCajas,
+        }}
+        reconciliations={reconciliations}
+        pendingTransfers={pendingTransfers}
       />
     </>
   );
