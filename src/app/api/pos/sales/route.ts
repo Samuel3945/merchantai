@@ -11,6 +11,7 @@ import { fiadoAmountFor } from '@/libs/fiados-math';
 import { consumeFifoExits } from '@/libs/fifo-cogs';
 import { requirePosAuth } from '@/libs/pos-auth';
 import { assignNextSaleNumber } from '@/libs/sale-number';
+import { recordSaleTransferReconciliations } from '@/libs/transfer-reconciliation';
 import { wholesaleUnitPrice } from '@/libs/wholesale';
 import {
   productsSchema,
@@ -297,6 +298,8 @@ export async function POST(req: Request): Promise<NextResponse> {
       userId: ctx.cashierId ?? ctx.cashierName,
       posTokenId: ctx.tokenId,
     }).catch(() => null);
+
+    await recordSaleTransferReconciliations(result.id).catch(() => null);
 
     await applyInvoiceCustomerUpsert({
       organizationId: ctx.organizationId,

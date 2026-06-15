@@ -36,6 +36,8 @@ const ENUMS = [
   `CREATE TYPE "fiado_movement_type" AS ENUM('charge', 'payment', 'extension', 'writeoff', 'adjustment')`,
   `CREATE TYPE "cash_session_status" AS ENUM('open', 'closed')`,
   `CREATE TYPE "cash_movement_type" AS ENUM('sale', 'deposit', 'expense', 'salary', 'inventory_purchase', 'withdrawal', 'adjustment', 'fiado_payment')`,
+  `CREATE TYPE "transfer_reconciliation_status" AS ENUM('pending', 'confirmed', 'not_arrived', 'mismatch')`,
+  `CREATE TYPE "transfer_resolution_type" AS ENUM('receivable', 'loss', 'cashier_liability')`,
 ];
 
 const DDL = `
@@ -92,6 +94,27 @@ const DDL = `
     updated_at timestamp DEFAULT now() NOT NULL
   );
 
+  CREATE TABLE transfer_reconciliations (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+    organization_id text NOT NULL,
+    sale_payment_id uuid,
+    pos_token_id uuid,
+    cash_session_id uuid REFERENCES cash_sessions(id) ON DELETE SET NULL,
+    method text NOT NULL,
+    expected_amount numeric(12, 2) NOT NULL,
+    arrived_amount numeric(12, 2),
+    reference text,
+    status "transfer_reconciliation_status" DEFAULT 'pending' NOT NULL,
+    reconciled_by text,
+    reconciled_at timestamp,
+    note text,
+    resolution_type "transfer_resolution_type",
+    resolved_by text,
+    resolved_at timestamp,
+    resolution_fiado_id uuid REFERENCES fiados(id) ON DELETE SET NULL,
+    created_at timestamp DEFAULT now() NOT NULL
+  );
+
   CREATE TABLE fiado_movements (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     fiado_id uuid NOT NULL REFERENCES fiados(id) ON DELETE CASCADE,
@@ -100,6 +123,7 @@ const DDL = `
     amount numeric(12, 2) DEFAULT '0' NOT NULL,
     method text,
     cash_movement_id uuid REFERENCES cash_movements(id) ON DELETE SET NULL,
+    transfer_reconciliation_id uuid REFERENCES transfer_reconciliations(id) ON DELETE SET NULL,
     due_date_before date,
     due_date_after date,
     note text,
@@ -134,6 +158,7 @@ let fiadoCounter = 0;
 
 beforeEach(async () => {
   await pg.exec('DELETE FROM fiado_movements');
+  await pg.exec('DELETE FROM transfer_reconciliations');
   await pg.exec('DELETE FROM fiados');
   await pg.exec('DELETE FROM cash_movements');
   await pg.exec('DELETE FROM cash_sessions');
