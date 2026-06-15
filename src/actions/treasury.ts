@@ -14,7 +14,6 @@ import {
   getTreasuryPosition,
   listTreasuryAccounts as listTreasuryAccountsLib,
   recordBankConsignacion,
-  recordConsignacion,
   recordContainerTransfer,
   recordGastoOutflow,
 } from '@/libs/treasury';
@@ -155,44 +154,6 @@ export async function deactivateAccount(
   return { ok: true, data: null };
 }
 
-// Consignación: cash moved from the safe to a bank account. Lowers caja fuerte,
-// raises the bank — makes the safe an exact balance.
-// LEGACY: writes to treasury_transfers (Phase 1 ledger). Kept as fallback
-// until Phase 2D when treasury_transfers writes are retired.
-export async function consignarABanco(
-  toBankMethod: string,
-  amount: number | string,
-  note?: string | null,
-): Promise<ActionResult<null>> {
-  const { userId, orgId } = await requirePanelModule('cash');
-  const method = toBankMethod.trim();
-  if (!method) {
-    return { ok: false, error: 'Elegí la cuenta bancaria' };
-  }
-  const amt = toMoney(amount);
-  if (Number.parseFloat(amt) <= 0) {
-    return { ok: false, error: 'El monto debe ser mayor a 0' };
-  }
-  const actor = await getActorName(userId);
-  await recordConsignacion(db, {
-    organizationId: orgId,
-    toBankMethod: method,
-    amount: amt,
-    note,
-    createdBy: actor,
-  });
-  await logAction({
-    organizationId: orgId,
-    actor: { type: 'user', id: userId },
-    action: 'treasury.consignacion',
-    entityType: 'treasury_transfer',
-    entityId: orgId,
-    after: { toBankMethod: method, amount: amt },
-  });
-  revalidatePath(CASH_PATH);
-  return { ok: true, data: null };
-}
-
 // ── 2B: treasury_movements transfer actions ───────────────────────────────────
 
 /**
@@ -261,11 +222,9 @@ export async function transferEntreCajas(
 
 /**
  * Records a consignación into a banco account using the treasury_movements
- * ledger (FK-based, replaces the text-key consignarABanco for new consignations).
- * Both source container and banco must be active and have sufficient balance.
- *
- * NOTE: consignarABanco (legacy treasury_transfers writer) is kept alongside
- * for backward compatibility and is retired in Phase 2D.
+ * ledger (FK-based, UUID-keyed). Both source container and banco must be
+ * active and have sufficient balance. treasury_transfers is now read-only
+ * for audit history (Phase 2D — writes retired).
  */
 export async function consignarDesde(
   fromAccountId: string,
