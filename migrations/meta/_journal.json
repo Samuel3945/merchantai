@@ -288,6 +288,13 @@
       "when": 1781539385134,
       "tag": "0040_lush_sunset_bain",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1781540491620,
+      "tag": "0041_open_stephen_strange",
+      "breakpoints": true
     }
   ]
 }

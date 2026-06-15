@@ -1,0 +1,2 @@
+ALTER TABLE "cash_movements" ADD COLUMN "corrects_session_id" uuid;--> statement-breakpoint
+ALTER TABLE "cash_movements" ADD CONSTRAINT "cash_movements_corrects_session_id_cash_sessions_id_fk" FOREIGN KEY ("corrects_session_id") REFERENCES "public"."cash_sessions"("id") ON DELETE set null ON UPDATE no action;
