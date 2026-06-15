@@ -10,6 +10,7 @@ import type {
 } from '@/actions/cash';
 import type { ActionResult } from '@/libs/action-result';
 import type { CashMovement, CashSession } from '@/libs/cash-helpers';
+import type { TreasuryAccountRow } from '@/libs/treasury';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState, useTransition } from 'react';
 import { addCashMovement, closeCashSession } from '@/actions/cash';
@@ -96,6 +97,8 @@ export function CashClient(props: {
   security: CashSecurityStatus;
   history: CashMovement[];
   openCajas: OpenCaja[];
+  // 2C: optional treasury accounts for the container selector in MovementModal.
+  treasuryAccounts?: TreasuryAccountRow[];
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -148,6 +151,9 @@ export function CashClient(props: {
         addCashMovement(p.type, p.amount, p.reason, {
           category: p.category,
           supplierId: p.supplierId,
+          // 2C: pass container ids for treasury dual-write (null when no selection).
+          toAccountId: p.toAccountId,
+          fromAccountId: p.fromAccountId,
         }),
       () => setModal(null),
     );
@@ -621,6 +627,7 @@ export function CashClient(props: {
           error={error}
           onClose={() => setModal(null)}
           onSubmit={submitMovement}
+          treasuryAccounts={props.treasuryAccounts}
         />
       )}
     </div>

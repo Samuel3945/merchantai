@@ -14,7 +14,7 @@ import {
   getPendingTransfersOverview,
   listTransferReconciliations,
 } from '@/actions/transfer-reconciliation';
-import { getTreasury } from '@/actions/treasury';
+import { getTreasury, listTreasuryAccounts } from '@/actions/treasury';
 import { CashTabs } from '@/features/cash/CashTabs';
 import { TreasuryConsole } from '@/features/cash/TreasuryConsole';
 import { TitleBar } from '@/features/dashboard/TitleBar';
@@ -35,6 +35,7 @@ export default async function DashboardCashPage(props: {
     openCajas,
     methods,
     treasury,
+    treasuryAccountRows,
   ] = await Promise.all([
     getCurrentCash(),
     listCashSessions(2000),
@@ -45,6 +46,8 @@ export default async function DashboardCashPage(props: {
     listOpenCajas().catch(() => []),
     listPaymentMethods({ activeOnly: true }).catch(() => []),
     getTreasury().catch(() => []),
+    // 2C: full account rows (with UUIDs) needed by Consignar and MovementModal.
+    listTreasuryAccounts().catch(() => []),
   ]);
 
   // No transfer payment methods → the org doesn't deal with transfers at all, so
@@ -74,7 +77,7 @@ export default async function DashboardCashPage(props: {
         description="Abre y cierra la caja, registra movimientos y haz el arqueo del día."
       />
       <div className="mb-6">
-        <TreasuryConsole accounts={treasury} />
+        <TreasuryConsole accounts={treasury} accountRows={treasuryAccountRows} />
       </div>
       <CashTabs
         cash={{
@@ -90,6 +93,7 @@ export default async function DashboardCashPage(props: {
         reconciliations={reconciliations}
         investigating={investigating}
         pendingTransfers={pendingTransfers}
+        treasuryAccounts={treasuryAccountRows}
       />
     </>
   );

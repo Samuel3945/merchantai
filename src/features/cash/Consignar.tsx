@@ -1,36 +1,47 @@
 'use client';
 
+import type { TreasuryAccountRow } from '@/libs/treasury';
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
-import { consignarABanco } from '@/actions/treasury';
+import { consignarDesde } from '@/actions/treasury';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
 import { cashInputCls } from './cash-ui';
 
-// Move cash from the safe to a bank account. Lowers caja fuerte, raises the bank.
-export function Consignar(props: { banks: { value: string; label: string }[] }) {
+// Move cash from a vault (caja_fuerte) to a bank account.
+// Calls the 2B treasury_movements path (consignarDesde) so the write is
+// visible to getTreasuryPosition after the 2C ledger cutover.
+export function Consignar(props: {
+  vaultAccountId: string;
+  bankAccounts: TreasuryAccountRow[];
+}) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
-  const [method, setMethod] = useState('');
+  const [bankAccountId, setBankAccountId] = useState('');
   const [amount, setAmount] = useState('');
   const [error, setError] = useState<string | null>(null);
 
-  if (props.banks.length === 0) {
+  if (props.bankAccounts.length === 0) {
     return null;
   }
+
+  const bankOptions = props.bankAccounts.map(a => ({
+    value: a.id,
+    label: a.name,
+  }));
 
   function submit() {
     setError(null);
     startTransition(async () => {
       try {
-        const res = await consignarABanco(method, amount);
+        const res = await consignarDesde(props.vaultAccountId, bankAccountId, amount);
         if (!res.ok) {
           setError(res.error);
           return;
         }
         setOpen(false);
-        setMethod('');
+        setBankAccountId('');
         setAmount('');
         router.refresh();
       } catch {
@@ -57,9 +68,9 @@ export function Consignar(props: { banks: { value: string; label: string }[] }) 
   return (
     <div className="mt-2 space-y-2">
       <Select
-        value={method}
-        onValueChange={setMethod}
-        options={props.banks}
+        value={bankAccountId}
+        onValueChange={setBankAccountId}
+        options={bankOptions}
         placeholder="¿A qué banco?"
       />
       <input
@@ -75,7 +86,7 @@ export function Consignar(props: { banks: { value: string; label: string }[] }) 
       <div className="flex gap-2">
         <Button
           size="sm"
-          disabled={pending || method === '' || amount === ''}
+          disabled={pending || bankAccountId === '' || amount === ''}
           onClick={submit}
         >
           Consignar

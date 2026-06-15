@@ -1,7 +1,7 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import type { TreasuryAccount } from '@/libs/treasury';
+import type { TreasuryAccount, TreasuryAccountRow } from '@/libs/treasury';
 import { ChevronDown, Coins, Landmark, Lock, Wallet } from 'lucide-react';
 import { useState } from 'react';
 import { money } from './cash-ui';
@@ -60,16 +60,24 @@ function SummaryCard(props: {
 // container kind + grand total) with the per-container breakdown available
 // on demand, so the position is readable at a glance instead of a wall of
 // half-empty cards.
-export function TreasuryConsole(props: { accounts: TreasuryAccount[] }) {
+//
+// accountRows: the full TreasuryAccountRow list (with UUIDs) used by Consignar
+// to write to the ledger via consignarDesde. accounts: the display-only
+// TreasuryAccount list used for balances and grouping.
+export function TreasuryConsole(props: {
+  accounts: TreasuryAccount[];
+  accountRows?: TreasuryAccountRow[];
+}) {
   const [showDetail, setShowDetail] = useState(false);
 
   if (props.accounts.length === 0) {
     return null;
   }
 
-  const banks = props.accounts
-    .filter(a => a.type === 'banco')
-    .map(a => ({ value: a.name, label: a.name }));
+  const accountRows = props.accountRows ?? [];
+  // All active banco rows — passed to every vault's Consignar so the owner can
+  // pick the destination bank from a list of real account UUIDs.
+  const bankRows = accountRows.filter(r => r.type === 'banco');
 
   const cajas = props.accounts.filter(a => a.type === 'caja');
   const safe = props.accounts.filter(a => a.type === 'caja_fuerte');
@@ -160,33 +168,47 @@ export function TreasuryConsole(props: { accounts: TreasuryAccount[] }) {
                   lg:grid-cols-4
                 "
                 >
-                  {items.map(a => (
-                    <div
-                      key={a.key}
-                      className="
-                        rounded-lg border border-border bg-background p-3
-                      "
-                    >
-                      <div className="truncate text-xs text-muted-foreground">
-                        {a.name}
-                      </div>
-                      <div className="
-                        mt-1 font-display text-lg font-medium tabular-nums
-                      "
+                  {items.map((a) => {
+                    // For vault cards, find the matching TreasuryAccountRow to get the UUID
+                    // for the Consignar ledger write.
+                    const vaultRow
+                      = a.type === 'caja_fuerte'
+                        ? accountRows.find(r => r.type === 'caja_fuerte' && r.name === a.name)
+                        : undefined;
+
+                    return (
+                      <div
+                        key={a.key}
+                        className="
+                          rounded-lg border border-border bg-background p-3
+                        "
                       >
-                        {money(a.balance)}
-                      </div>
-                      {a.note && (
+                        <div className="truncate text-xs text-muted-foreground">
+                          {a.name}
+                        </div>
                         <div className="
-                          mt-0.5 text-[11px] text-muted-foreground
+                          mt-1 font-display text-lg font-medium tabular-nums
                         "
                         >
-                          {a.note}
+                          {money(a.balance)}
                         </div>
-                      )}
-                      {a.type === 'caja_fuerte' && <Consignar banks={banks} />}
-                    </div>
-                  ))}
+                        {a.note && (
+                          <div className="
+                            mt-0.5 text-[11px] text-muted-foreground
+                          "
+                          >
+                            {a.note}
+                          </div>
+                        )}
+                        {a.type === 'caja_fuerte' && vaultRow && bankRows.length > 0 && (
+                          <Consignar
+                            vaultAccountId={vaultRow.id}
+                            bankAccounts={bankRows}
+                          />
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             );

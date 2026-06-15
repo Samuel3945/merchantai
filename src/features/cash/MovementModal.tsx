@@ -3,6 +3,7 @@
 import type { Direction, EntryMotivo, ExitMotivo } from './cash-ui';
 import type { Supplier, SupplierOption } from '@/features/suppliers/actions';
 import type { CashMovementType } from '@/libs/cash-helpers';
+import type { TreasuryAccountRow } from '@/libs/treasury';
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { listSuppliersForSelect } from '@/features/suppliers/actions';
@@ -23,6 +24,11 @@ export type MovementSubmit = {
   reason: string;
   category: string | null;
   supplierId: string | null;
+  // 2C: optional container for dual-write to treasury_movements.
+  // toAccountId = cash entering a container (security withdrawal to vault).
+  // fromAccountId = cash leaving a container (salida from container).
+  toAccountId: string | null;
+  fromAccountId: string | null;
 };
 
 const labelCls = 'mb-1.5 block text-sm font-medium';
@@ -34,6 +40,13 @@ const chipCls
  * minimal: monto + motivo, plus a category when paying an expense and a
  * mandatory description when the motivo is "Otro". The motivo → DB type mapping
  * lives in cash-ui so this component stays presentational.
+ *
+ * 2C: accepts an optional `treasuryAccounts` list. When provided:
+ *   - For retiro_seguridad (salida): shows a container selector so the owner
+ *     can pick which vault/container receives the dual-write entrada.
+ *   - For entradas (in): shows a container selector for the optional fromAccountId.
+ *   - Single account: auto-selected, no selector rendered (no friction).
+ *   - No accounts: selector hidden entirely (backward compatible).
  */
 export function MovementModal(props: {
   direction: Direction;
@@ -41,6 +54,7 @@ export function MovementModal(props: {
   error: string | null;
   onClose: () => void;
   onSubmit: (payload: MovementSubmit) => void;
+  treasuryAccounts?: TreasuryAccountRow[];
 }) {
   const { direction, onClose } = props;
   const isIn = direction === 'in';
@@ -53,6 +67,9 @@ export function MovementModal(props: {
   const [supplierOptions, setSupplierOptions] = useState<SupplierOption[]>([]);
   const [supplierLoading, setSupplierLoading] = useState(false);
   const [showSupplierModal, setShowSupplierModal] = useState(false);
+
+  // 2C: container selector state.
+  const accounts = props.treasuryAccounts ?? [];
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -67,6 +84,14 @@ export function MovementModal(props: {
   const isOtro = motivo === 'otro';
   const isRetiro = !isIn && motivo === 'retiro_seguridad';
   const isProveedor = !isIn && motivo === 'pago_proveedor';
+
+  // 2C: container selector — visible for retiro_seguridad (vault entry) or any entrada.
+  // Single account → auto-select, no selector shown. No accounts → hidden entirely.
+  const showContainerSelector = (isRetiro || isIn) && accounts.length > 0;
+  const autoSelectedAccount = accounts.length === 1 ? accounts[0] : null;
+  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(
+    autoSelectedAccount?.id ?? null,
+  );
 
   // Lazily load the supplier list the first time the user picks "Pago a
   // proveedor" — no point fetching it for every cash movement.
@@ -125,7 +150,21 @@ export function MovementModal(props: {
       }
     }
 
-    props.onSubmit({ type, amount, reason, category: null, supplierId });
+    // 2C: resolve container ids for the optional treasury dual-write.
+    // retiro_seguridad (out): cash enters the selected vault → toAccountId.
+    // entrada (in): cash comes from outside a container → fromAccountId.
+    // Only set when showContainerSelector and an account is selected/auto-selected.
+    let toAccountId: string | null = null;
+    let fromAccountId: string | null = null;
+    if (showContainerSelector && selectedAccountId) {
+      if (isRetiro) {
+        toAccountId = selectedAccountId;
+      } else if (isIn) {
+        fromAccountId = selectedAccountId;
+      }
+    }
+
+    props.onSubmit({ type, amount, reason, category: null, supplierId, toAccountId, fromAccountId });
   }
 
   return (
@@ -233,19 +272,39 @@ export function MovementModal(props: {
                 {isOtro
                   ? 'Descripción'
                   : isRetiro
-                    ? 'Destino (opcional)'
+                    ? 'Nota (opcional)'
                     : 'Nota (opcional)'}
               </label>
               <input
                 id="mov-description"
                 className={cashInputCls}
-                placeholder={
-                  isRetiro ? 'Caja fuerte, banco, oficina…' : 'Describe el motivo'
-                }
+                placeholder="Describe el motivo"
                 value={description}
                 onChange={e => setDescription(e.target.value)}
               />
             </div>
+
+            {/* 2C: container selector for retiro_seguridad and entradas. */}
+            {showContainerSelector && accounts.length > 1 && (
+              <div>
+                <label className={labelCls} htmlFor="mov-container">
+                  {isRetiro ? 'Destino (contenedor)' : 'Fuente (contenedor)'}
+                </label>
+                <select
+                  id="mov-container"
+                  className={cashInputCls}
+                  value={selectedAccountId ?? ''}
+                  onChange={e => setSelectedAccountId(e.target.value || null)}
+                >
+                  <option value="">Sin contenedor</option>
+                  {accounts.map(a => (
+                    <option key={a.id} value={a.id}>
+                      {a.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             {props.error && (
               <div className="
