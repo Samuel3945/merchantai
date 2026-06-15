@@ -12,11 +12,7 @@ import type { ActionResult } from '@/libs/action-result';
 import type { CashMovement, CashSession } from '@/libs/cash-helpers';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState, useTransition } from 'react';
-import {
-  addCashMovement,
-  closeCashSession,
-  openCashSession,
-} from '@/actions/cash';
+import { addCashMovement, closeCashSession } from '@/actions/cash';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/utils/Helpers';
 import { ActivityFeed } from './ActivityFeed';
@@ -105,7 +101,6 @@ export function CashClient(props: {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
-  const [opening, setOpening] = useState('');
   const [modal, setModal] = useState<Direction | null>(null);
   const [counted, setCounted] = useState('');
   const [closeNote, setCloseNote] = useState('');
@@ -288,43 +283,28 @@ export function CashClient(props: {
             "
             >
               <Card className="p-5">
-                <div className="text-lg font-semibold">Abrir caja</div>
+                <div className="text-lg font-semibold">Caja sin abrir</div>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  Ingresá el efectivo con el que arrancás la jornada. No se
-                  arrastra el dinero del día anterior: vos decidís cuánto dejás
-                  disponible.
+                  La caja se abre sola cuando registrás un movimiento o entra una
+                  venta. No arrastra el dinero del día anterior.
                 </p>
-                <div className="mt-4 space-y-3">
-                  <div>
-                    <label className="mb-1.5 block text-sm font-medium" htmlFor="opening">
-                      Base inicial
-                    </label>
-                    <input
-                      id="opening"
-                      className={cashInputCls}
-                      type="number"
-                      inputMode="decimal"
-                      min="0"
-                      placeholder="0"
-                      value={opening}
-                      onChange={e => setOpening(e.target.value)}
-                    />
-                    <DenominationCounter
-                      className="mt-2"
-                      onTotal={t => setOpening(t > 0 ? String(t) : '')}
-                    />
-                  </div>
+                <div className="mt-4 flex gap-2">
                   <Button
                     size="lg"
-                    className="w-full"
-                    disabled={pending || opening === ''}
-                    onClick={() =>
-                      run(
-                        () => openCashSession(opening, null),
-                        () => setOpening(''),
-                      )}
+                    className="flex-1"
+                    disabled={pending}
+                    onClick={() => openModal('in')}
                   >
-                    Abrir caja
+                    + Entrada
+                  </Button>
+                  <Button
+                    size="lg"
+                    variant="outline"
+                    className="flex-1"
+                    disabled={pending}
+                    onClick={() => openModal('out')}
+                  >
+                    − Salida
                   </Button>
                 </div>
               </Card>
