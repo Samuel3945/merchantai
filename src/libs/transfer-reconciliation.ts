@@ -308,3 +308,114 @@ export async function bulkConfirmPending(
     .returning({ id: transferReconciliationsSchema.id });
   return updated.length;
 }
+
+// ── Investigation + resolution (F3) ──────────────────────────────────────────
+// A not_arrived transfer is NOT credit — it is a discrepancy to investigate. The
+// cashier on duty explains the comprobante they confirmed; the owner then closes
+// it with an outcome. 'receivable' (honest known customer -> fiado) is the only
+// outcome that needs orchestration (it touches the fiados ledger), so it lives in
+// the action layer to avoid a fiados <-> reconciliation import cycle. The lib
+// here only does the tenant-scoped reads and the status writes.
+
+export type ResolutionType = NonNullable<TransferReconciliation['resolutionType']>;
+
+// expected - arrived. For not_arrived (arrived null) this is the full amount; for
+// a mismatch it is the shortfall.
+export function outstandingAmount(
+  row: Pick<TransferReconciliation, 'expectedAmount' | 'arrivedAmount'>,
+): number {
+  const expected = Number.parseFloat(row.expectedAmount) || 0;
+  const arrived
+    = row.arrivedAmount != null ? Number.parseFloat(row.arrivedAmount) || 0 : 0;
+  return Number.parseFloat((expected - arrived).toFixed(2));
+}
+
+export async function getReconciliationById(
+  executor: Executor,
+  args: { id: string; organizationId: string },
+): Promise<TransferReconciliation | null> {
+  const [row] = await executor
+    .select()
+    .from(transferReconciliationsSchema)
+    .where(
+      and(
+        eq(transferReconciliationsSchema.id, args.id),
+        eq(transferReconciliationsSchema.organizationId, args.organizationId),
+      ),
+    )
+    .limit(1);
+  return row ?? null;
+}
+
+// Resolves the originating sale + its customer notes for a sale-sourced row, so
+// the action can decide whether 'receivable' (fiado) is even possible.
+export async function getReconciliationSale(
+  executor: Executor,
+  salePaymentId: string,
+): Promise<{ saleId: string; notes: string | null } | null> {
+  const [row] = await executor
+    .select({ saleId: salesSchema.id, notes: salesSchema.notes })
+    .from(salePaymentsSchema)
+    .innerJoin(salesSchema, eq(salesSchema.id, salePaymentsSchema.saleId))
+    .where(eq(salePaymentsSchema.id, salePaymentId))
+    .limit(1);
+  return row ?? null;
+}
+
+// The cashier on duty's account of the comprobante they confirmed (async — the
+// owner may flag the case days before the cashier can answer).
+export async function recordCashierExplanation(
+  executor: Executor,
+  args: {
+    id: string;
+    organizationId: string;
+    explanation: string;
+    explainedBy: string;
+  },
+): Promise<TransferReconciliation | null> {
+  const [row] = await executor
+    .update(transferReconciliationsSchema)
+    .set({
+      cashierExplanation: args.explanation,
+      cashierExplainedBy: args.explainedBy,
+      cashierExplainedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(transferReconciliationsSchema.id, args.id),
+        eq(transferReconciliationsSchema.organizationId, args.organizationId),
+      ),
+    )
+    .returning();
+  return row ?? null;
+}
+
+// Closes the investigation with an outcome. The fiado for 'receivable' is created
+// by the caller (action layer) and passed in as resolutionFiadoId.
+export async function setReconciliationResolution(
+  executor: Executor,
+  args: {
+    id: string;
+    organizationId: string;
+    resolutionType: ResolutionType;
+    resolvedBy: string;
+    resolutionFiadoId?: string | null;
+  },
+): Promise<TransferReconciliation | null> {
+  const [row] = await executor
+    .update(transferReconciliationsSchema)
+    .set({
+      resolutionType: args.resolutionType,
+      resolvedBy: args.resolvedBy,
+      resolvedAt: new Date(),
+      resolutionFiadoId: args.resolutionFiadoId ?? null,
+    })
+    .where(
+      and(
+        eq(transferReconciliationsSchema.id, args.id),
+        eq(transferReconciliationsSchema.organizationId, args.organizationId),
+      ),
+    )
+    .returning();
+  return row ?? null;
+}

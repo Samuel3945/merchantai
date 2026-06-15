@@ -3,20 +3,29 @@
 import type { ActionResult } from '@/libs/action-result';
 import type {
   ReconciliationStatus,
+  ResolutionType,
   TransferReconciliation,
 } from '@/libs/transfer-reconciliation';
 import { currentUser } from '@clerk/nextjs/server';
 import { revalidatePath } from 'next/cache';
+import { ActionValidationError } from '@/libs/action-result';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
+import { createFiado } from '@/libs/fiados';
+import { parseClient } from '@/libs/fiados-math';
 import { requirePanelModule } from '@/libs/panel-session';
 import {
   bulkConfirmPending,
   confirmReconciliation,
   countPendingReconciliations,
+  getReconciliationById,
+  getReconciliationSale,
   listReconciliations,
   markReconciliationMismatch,
   markReconciliationNotArrived,
+  outstandingAmount,
+  recordCashierExplanation,
+  setReconciliationResolution,
 } from '@/libs/transfer-reconciliation';
 
 // Transfer reconciliation is the digital counterpart of the cash arqueo, so it
@@ -169,4 +178,121 @@ export async function confirmAllPendingTransfers(
   });
   revalidatePath(CASH_PATH);
   return { ok: true, data: { confirmed } };
+}
+
+// The cashier on duty explains the comprobante they confirmed for a transfer
+// under investigation. Recorded async — the owner may have flagged it days ago.
+export async function recordTransferExplanation(
+  id: string,
+  explanation: string,
+): Promise<ActionResult<TransferReconciliation>> {
+  const { userId, orgId } = await requirePanelModule(MODULE);
+  const text = explanation.trim();
+  if (!text) {
+    return { ok: false, error: 'La explicación no puede estar vacía' };
+  }
+  const actor = await getActorName(userId);
+  const row = await recordCashierExplanation(db, {
+    id,
+    organizationId: orgId,
+    explanation: text,
+    explainedBy: actor,
+  });
+  if (!row) {
+    return { ok: false, error: 'Transferencia no encontrada' };
+  }
+  await logAction({
+    organizationId: orgId,
+    actor: { type: 'user', id: userId },
+    action: 'transfer.explained',
+    entityType: 'transfer_reconciliation',
+    entityId: row.id,
+    after: { cashierExplainedBy: row.cashierExplainedBy },
+  });
+  revalidatePath(CASH_PATH);
+  return { ok: true, data: row };
+}
+
+// Closes the investigation of a not_arrived / mismatch transfer with an outcome.
+// 'receivable' is only legal for a sale with a known customer (honest error) and
+// books a fiado for the outstanding amount — atomically with the resolution.
+// 'loss' and 'cashier_liability' just record the outcome; the audit trail is the
+// fraud signal (alerts are computed, not stored).
+export async function resolveTransfer(
+  id: string,
+  resolutionType: ResolutionType,
+): Promise<ActionResult<TransferReconciliation>> {
+  const { userId, orgId } = await requirePanelModule(MODULE);
+  const actor = await getActorName(userId);
+
+  try {
+    const resolved = await db.transaction(async (tx) => {
+      const row = await getReconciliationById(tx, { id, organizationId: orgId });
+      if (!row) {
+        throw new ActionValidationError('Transferencia no encontrada');
+      }
+
+      let resolutionFiadoId: string | null = null;
+      if (resolutionType === 'receivable') {
+        if (!row.salePaymentId) {
+          throw new ActionValidationError(
+            'Solo una venta con cliente puede pasar a fiado',
+          );
+        }
+        const sale = await getReconciliationSale(tx, row.salePaymentId);
+        const client = parseClient(sale?.notes ?? null);
+        if (!sale || !client.name) {
+          throw new ActionValidationError(
+            'La venta no tiene cliente; marcá pérdida o responsabilidad del cajero',
+          );
+        }
+        const owed = outstandingAmount(row);
+        if (owed <= 0) {
+          throw new ActionValidationError('No hay saldo pendiente para cobrar');
+        }
+        const fiado = await createFiado(tx, {
+          organizationId: orgId,
+          saleId: sale.saleId,
+          originalAmount: owed,
+          createdBy: actor,
+          notes: sale.notes,
+        });
+        if (!fiado) {
+          throw new ActionValidationError('No se pudo crear el fiado');
+        }
+        resolutionFiadoId = fiado.id;
+      }
+
+      const updated = await setReconciliationResolution(tx, {
+        id,
+        organizationId: orgId,
+        resolutionType,
+        resolvedBy: actor,
+        resolutionFiadoId,
+      });
+      if (!updated) {
+        throw new Error('No se pudo resolver la transferencia');
+      }
+      return updated;
+    });
+
+    await logAction({
+      organizationId: orgId,
+      actor: { type: 'user', id: userId },
+      action: `transfer.resolved.${resolutionType}`,
+      entityType: 'transfer_reconciliation',
+      entityId: resolved.id,
+      after: {
+        resolutionType: resolved.resolutionType,
+        resolutionFiadoId: resolved.resolutionFiadoId,
+      },
+    });
+    revalidatePath(CASH_PATH);
+    return { ok: true, data: resolved };
+  } catch (err) {
+    if (err instanceof ActionValidationError) {
+      return { ok: false, error: err.message };
+    }
+    throw err;
+  }
 }

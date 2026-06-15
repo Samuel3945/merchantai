@@ -112,6 +112,9 @@ const DDL = `
     resolved_by text,
     resolved_at timestamp,
     resolution_fiado_id uuid REFERENCES fiados(id) ON DELETE SET NULL,
+    cashier_explanation text,
+    cashier_explained_by text,
+    cashier_explained_at timestamp,
     created_at timestamp DEFAULT now() NOT NULL
   );
 

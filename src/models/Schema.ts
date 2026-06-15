@@ -1159,10 +1159,18 @@ export const transferReconciliationsSchema = pgTable(
     resolvedBy: text('resolved_by'),
     resolvedAt: timestamp('resolved_at', { mode: 'date' }),
     // Set when resolved as 'receivable': the fiado (debt) booked for the customer.
+    // Only legal when the sale has a known customer and the case was an honest
+    // error — never for an anonymous sale or a fake comprobante.
     resolutionFiadoId: uuid('resolution_fiado_id').references(
       () => fiadosSchema.id,
       { onDelete: 'set null' },
     ),
+    // The cashier on duty's explanation of why they confirmed the comprobante,
+    // recorded asynchronously while a not_arrived transfer is under investigation.
+    // Feeds the cash-fraud analysis (who confirmed it, what they said, how late).
+    cashierExplanation: text('cashier_explanation'),
+    cashierExplainedBy: text('cashier_explained_by'),
+    cashierExplainedAt: timestamp('cashier_explained_at', { mode: 'date' }),
     createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
   },
   table => [
