@@ -419,3 +419,58 @@ export async function setReconciliationResolution(
     .returning();
   return row ?? null;
 }
+
+// ── Reclassification support (F5) ────────────────────────────────────────────
+// When a reclassification moves money INTO a transfer method it creates a row
+// for the new sale payment; when it reduces a transfer payment it syncs that
+// payment's pending reconciliation. Executor-aware so the reclassification can
+// run inside its transaction.
+
+export async function createReconciliationForPayment(
+  executor: Executor,
+  args: {
+    organizationId: string;
+    salePaymentId: string;
+    method: string;
+    expectedAmount: number | string;
+    posTokenId?: string | null;
+    cashSessionId?: string | null;
+    reference?: string | null;
+  },
+): Promise<void> {
+  await executor
+    .insert(transferReconciliationsSchema)
+    .values({
+      organizationId: args.organizationId,
+      salePaymentId: args.salePaymentId,
+      method: args.method,
+      expectedAmount: toMoney(args.expectedAmount),
+      posTokenId: args.posTokenId ?? null,
+      cashSessionId: args.cashSessionId ?? null,
+      reference: args.reference ?? null,
+    })
+    .onConflictDoNothing();
+}
+
+// Adjusts the expected amount of a sale payment's PENDING reconciliation (a
+// reclassification reduced the transfer). Confirmed/resolved rows are left
+// untouched — you do not silently change a transfer the owner already reconciled.
+export async function syncPendingReconciliationAmount(
+  executor: Executor,
+  args: {
+    salePaymentId: string;
+    organizationId: string;
+    expectedAmount: number | string;
+  },
+): Promise<void> {
+  await executor
+    .update(transferReconciliationsSchema)
+    .set({ expectedAmount: toMoney(args.expectedAmount) })
+    .where(
+      and(
+        eq(transferReconciliationsSchema.salePaymentId, args.salePaymentId),
+        eq(transferReconciliationsSchema.organizationId, args.organizationId),
+        eq(transferReconciliationsSchema.status, 'pending'),
+      ),
+    );
+}

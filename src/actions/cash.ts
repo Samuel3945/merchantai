@@ -406,6 +406,7 @@ const EMPTY_BREAKDOWN: CashBreakdown = {
   cashSales: 0,
   entradas: 0,
   salidas: 0,
+  reclassifications: 0,
   expected: 0,
   movementCount: 0,
 };

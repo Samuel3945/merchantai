@@ -71,7 +71,7 @@ export function ActivityFeed(props: { movements: CashMovement[] }) {
               )}
             >
               {isIn ? '+' : '−'}
-              {money(amount)}
+              {money(Math.abs(amount))}
             </div>
           </li>
         );

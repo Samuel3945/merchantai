@@ -348,6 +348,13 @@ export const cashMovementTypeEnum = pgEnum('cash_movement_type', [
   // efectivo portion lands here; digital abonos (nequi/daviplata/transfer) are
   // recorded on the fiado ledger but never touch the physical drawer.
   'fiado_payment',
+  // Payment reclassification: a sale's method split was mis-entered (e.g. a
+  // mixed payment booked as all-cash). Moving an amount in/out of cash shifts the
+  // expected drawer balance, so this posts a SIGNED compensating row (negative
+  // when cash leaves the drawer because it was really a transfer, positive the
+  // other way). It is neither revenue nor a cost — Finanzas ignores it, and the
+  // arqueo sums it as its own term. Never edits the original sale movement.
+  'reclassification',
 ]);
 
 export const cashSessionsSchema = pgTable(
