@@ -124,7 +124,7 @@ describe('findCorrectableSession', () => {
 });
 
 describe('recordCorrectionMovement', () => {
-  it('posts an adjustment in the current session referencing the closed one', async () => {
+  it('records an income correction (adjustment) referencing the closed session', async () => {
     const closed = await seedSession({ status: 'closed', closedAt: new Date() });
     const current = await seedSession({ status: 'open' });
 
@@ -132,8 +132,9 @@ describe('recordCorrectionMovement', () => {
       organizationId: ORG,
       originalSessionId: closed,
       currentSessionId: current,
+      type: 'adjustment',
       amount: 20,
-      reason: 'Apareció la plata, fue error de conteo',
+      reason: 'Apareció la plata que no había contado',
       createdBy: 'owner',
     });
 
@@ -141,5 +142,24 @@ describe('recordCorrectionMovement', () => {
     expect(m?.sessionId).toBe(current);
     expect(m?.correctsSessionId).toBe(closed);
     expect(m?.amount).toBe('20.00');
+  });
+
+  it('records an outflow correction (expense) the owner chose', async () => {
+    const closed = await seedSession({ status: 'closed', closedAt: new Date() });
+    const current = await seedSession({ status: 'open' });
+
+    const m = await recordCorrectionMovement(db, {
+      organizationId: ORG,
+      originalSessionId: closed,
+      currentSessionId: current,
+      type: 'expense',
+      amount: 15,
+      reason: 'Pagué un gasto en efectivo y no lo registré',
+      createdBy: 'owner',
+    });
+
+    expect(m?.type).toBe('expense');
+    expect(m?.correctsSessionId).toBe(closed);
+    expect(m?.amount).toBe('15.00');
   });
 });
