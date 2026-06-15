@@ -9,6 +9,7 @@ import {
   confirmTransfer,
   markTransferMismatch,
   markTransferNotArrived,
+  reclassifySalePayment,
   recordTransferExplanation,
   resolveTransfer,
 } from '@/actions/transfer-reconciliation';
@@ -44,6 +45,10 @@ export function TransferReconciliationPanel(props: {
   // Which investigation row is recording the cashier explanation, and its text.
   const [explainId, setExplainId] = useState<string | null>(null);
   const [explainText, setExplainText] = useState('');
+  // Which investigation row is being reclassified (it wasn't really a transfer).
+  const [reclassifyId, setReclassifyId] = useState<string | null>(null);
+  const [reclassifyMethod, setReclassifyMethod] = useState('Efectivo');
+  const [reclassifyAmount, setReclassifyAmount] = useState('');
 
   function run(fn: () => Promise<ActionResult<unknown>>, onSuccess?: () => void) {
     setError(null);
@@ -309,6 +314,79 @@ export function TransferReconciliationPanel(props: {
                 >
                   Explicar comprobante
                 </Button>
+              )}
+
+              {r.salePaymentId && reclassifyId !== r.id && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="mt-3 ml-2"
+                  disabled={pending}
+                  onClick={() => {
+                    setReclassifyId(r.id);
+                    setReclassifyMethod('Efectivo');
+                    setReclassifyAmount(r.expectedAmount);
+                  }}
+                >
+                  Fue error de carga
+                </Button>
+              )}
+
+              {r.salePaymentId && reclassifyId === r.id && (
+                <div className="
+                  mt-3 space-y-2 rounded-lg border border-border bg-background
+                  p-3
+                "
+                >
+                  <div className="text-xs text-muted-foreground">
+                    No era una transferencia: reclasificá a su método real. Ajusta
+                    el efectivo esperado y saca esta transferencia de la cola.
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      className={cn(cashInputCls, 'max-w-40')}
+                      placeholder="Método real (ej: Efectivo)"
+                      value={reclassifyMethod}
+                      onChange={e => setReclassifyMethod(e.target.value)}
+                    />
+                    <input
+                      className={cn(cashInputCls, 'max-w-32')}
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      value={reclassifyAmount}
+                      onChange={e => setReclassifyAmount(e.target.value)}
+                    />
+                    <Button
+                      size="sm"
+                      disabled={
+                        pending
+                        || reclassifyMethod.trim() === ''
+                        || reclassifyAmount === ''
+                      }
+                      onClick={() =>
+                        run(
+                          () =>
+                            reclassifySalePayment(
+                              r.salePaymentId ?? '',
+                              reclassifyMethod,
+                              reclassifyAmount,
+                            ),
+                          () => setReclassifyId(null),
+                        )}
+                    >
+                      Reclasificar
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={pending}
+                      onClick={() => setReclassifyId(null)}
+                    >
+                      Cancelar
+                    </Button>
+                  </div>
+                </div>
               )}
             </Card>
           ))}
