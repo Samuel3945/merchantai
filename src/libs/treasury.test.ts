@@ -2,11 +2,14 @@ import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  balanceForAccount,
   createTreasuryAccount,
   deactivateTreasuryAccount,
   getTreasuryPosition,
   listTreasuryAccounts,
+  recordBankConsignacion,
   recordConsignacion,
+  recordContainerTransfer,
   seedOpeningBalance,
 } from '@/libs/treasury';
 
@@ -143,7 +146,10 @@ const DDL = `
     created_at timestamp DEFAULT now() NOT NULL,
     CONSTRAINT treasury_mov_one_external CHECK (
       num_nonnulls(from_account_id, to_account_id) = 2
-      OR num_nonnulls(from_account_id, to_account_id) = 1
+      OR (
+        num_nonnulls(from_account_id, to_account_id) = 1
+        AND type IN ('entrada', 'salida', 'gasto', 'consignacion', 'adjustment')
+      )
     )
   );
 `;
@@ -419,5 +425,222 @@ describe('seedOpeningBalance', () => {
 
     expect(seeded).toBe(phase1Balance);
     expect(seeded).toBe(150); // 200 withdrawn − 50 consigned
+  });
+});
+
+// ── 2B: treasury_movements schema + transfer actions ──────────────────────────
+
+// 2B-T1: balanceForAccount pure helper
+describe('balanceForAccount', () => {
+  it('computes opening + to_credits − from_debits', () => {
+    // opening=100, +50 credit (to), −30 debit (from)
+    expect(balanceForAccount(100, 50, 30)).toBe(120);
+  });
+
+  it('returns opening when no movements', () => {
+    expect(balanceForAccount(250, 0, 0)).toBe(250);
+  });
+
+  it('can go negative (overdraft)', () => {
+    expect(balanceForAccount(10, 0, 50)).toBe(-40);
+  });
+});
+
+// 2B-T2: CHECK rejects both-null insert
+describe('treasury_movements CHECK constraint', () => {
+  it('rejects a row with both from_account_id and to_account_id NULL', async () => {
+    const account = await createTreasuryAccount(db, {
+      organizationId: ORG,
+      type: 'caja_fuerte',
+      name: 'Vault Check Test',
+      openingBalance: '0',
+      createdBy: 'owner',
+    });
+    // We must reference an existing account so we can pass a valid row for the
+    // non-null case. For the null-null case we expect the CHECK to fire.
+    void account; // silence unused warning
+
+    await expect(
+      pg.query(
+        `INSERT INTO treasury_movements (organization_id, from_account_id, to_account_id, amount, type, created_by)
+         VALUES ($1, NULL, NULL, '100.00', 'entrada', 'owner')`,
+        [ORG],
+      ),
+    ).rejects.toThrow(/check|constraint|treasury_mov_one_external/i);
+  });
+});
+
+// 2B-T3 is covered by the CHECK above (both-null). Transfer with one null for
+// an 'entrada'/'salida' type is ALLOWED per the constraint design — only
+// 'transfer' rows are required to have BOTH. The design CHECK is:
+//   num_nonnulls = 2 OR (num_nonnulls = 1 AND type IN external types)
+// We verify a 'transfer' with one null is rejected:
+describe('treasury_movements CHECK — transfer must have both accounts', () => {
+  it('rejects type=transfer with only one account set', async () => {
+    const acct = await createTreasuryAccount(db, {
+      organizationId: ORG,
+      type: 'caja_fuerte',
+      name: 'Transfer Check Vault',
+      openingBalance: '0',
+      createdBy: 'owner',
+    });
+
+    await expect(
+      pg.query(
+        `INSERT INTO treasury_movements (organization_id, from_account_id, to_account_id, amount, type, created_by)
+         VALUES ($1, $2, NULL, '50.00', 'transfer', 'owner')`,
+        [ORG, acct.id],
+      ),
+    ).rejects.toThrow(/check|constraint|treasury_mov_one_external/i);
+  });
+});
+
+// Helper — creates an account and returns its id (reduces boilerplate in tests)
+async function makeAccount(
+  type: 'caja' | 'caja_fuerte' | 'banco',
+  name: string,
+  opening: number,
+): Promise<string> {
+  const row = await createTreasuryAccount(db, {
+    organizationId: ORG,
+    type,
+    name,
+    openingBalance: opening,
+    createdBy: 'owner',
+  });
+  return row.id;
+}
+
+// Helper — compute balance from DB movements for a given account id
+async function dbBalance(accountId: string, opening: number): Promise<number> {
+  const res = await pg.query<{ credits: string; debits: string }>(
+    `SELECT
+       COALESCE(SUM(amount) FILTER (WHERE to_account_id = $1), 0)::text AS credits,
+       COALESCE(SUM(amount) FILTER (WHERE from_account_id = $1), 0)::text AS debits
+     FROM treasury_movements`,
+    [accountId],
+  );
+  const row = res.rows[0]!;
+  return balanceForAccount(opening, Number(row.credits), Number(row.debits));
+};
+
+// 2B-T5: recordContainerTransfer happy path (caja↔caja ledger transfer)
+describe('recordContainerTransfer', () => {
+  it('lowers source balance and raises destination; sum is invariant', async () => {
+    const fromId = await makeAccount('caja', 'Caja A', 200);
+    const toId = await makeAccount('caja', 'Caja B', 50);
+
+    await recordContainerTransfer(db, {
+      organizationId: ORG,
+      fromAccountId: fromId,
+      toAccountId: toId,
+      amount: 80,
+      createdBy: 'owner',
+      reason: 'prueba',
+    });
+
+    const fromBalance = await dbBalance(fromId, 200);
+    const toBalance = await dbBalance(toId, 50);
+
+    expect(fromBalance).toBe(120); // 200 − 80
+    expect(toBalance).toBe(130); // 50 + 80
+    // Sum invariant: total is unchanged
+    expect(fromBalance + toBalance).toBe(250);
+  });
+
+  // 2B-T6: insufficient balance rejected
+  it('rejects when source balance < amount', async () => {
+    const fromId = await makeAccount('caja', 'Caja Pobre', 30);
+    const toId = await makeAccount('caja', 'Caja Rica', 100);
+
+    await expect(
+      recordContainerTransfer(db, {
+        organizationId: ORG,
+        fromAccountId: fromId,
+        toAccountId: toId,
+        amount: 50, // more than 30
+        createdBy: 'owner',
+      }),
+    ).rejects.toThrow(/saldo insuficiente/i);
+  });
+
+  // 2B-T7: inactive source rejected
+  it('rejects when source is inactive', async () => {
+    const fromId = await makeAccount('caja', 'Caja Inactiva', 200);
+    const toId = await makeAccount('caja', 'Caja Activa', 0);
+    await deactivateTreasuryAccount(db, fromId, ORG);
+
+    await expect(
+      recordContainerTransfer(db, {
+        organizationId: ORG,
+        fromAccountId: fromId,
+        toAccountId: toId,
+        amount: 50,
+        createdBy: 'owner',
+      }),
+    ).rejects.toThrow(/inactiva|inactive/i);
+  });
+
+  it('rejects when destination is inactive', async () => {
+    const fromId = await makeAccount('caja', 'Caja Fuente', 200);
+    const toId = await makeAccount('caja', 'Caja Destino Inactiva', 0);
+    await deactivateTreasuryAccount(db, toId, ORG);
+
+    await expect(
+      recordContainerTransfer(db, {
+        organizationId: ORG,
+        fromAccountId: fromId,
+        toAccountId: toId,
+        amount: 50,
+        createdBy: 'owner',
+      }),
+    ).rejects.toThrow(/inactiva|inactive/i);
+  });
+});
+
+// 2B-T8: recordBankConsignacion happy path
+describe('recordBankConsignacion', () => {
+  it('inserts a consignacion row; balances update correctly', async () => {
+    const fromId = await makeAccount('caja_fuerte', 'Vault Consig', 500);
+    const toId = await makeAccount('banco', 'Banco Nequi', 0);
+
+    await recordBankConsignacion(db, {
+      organizationId: ORG,
+      fromAccountId: fromId,
+      toBankAccountId: toId,
+      amount: 200,
+      createdBy: 'owner',
+    });
+
+    const fromBalance = await dbBalance(fromId, 500);
+    const toBalance = await dbBalance(toId, 0);
+
+    expect(fromBalance).toBe(300); // 500 − 200
+    expect(toBalance).toBe(200); // 0 + 200
+
+    // Verify the row type is 'consignacion'
+    const rows = await pg.query<{ type: string }>(
+      'SELECT type FROM treasury_movements WHERE organization_id = $1',
+      [ORG],
+    );
+
+    expect(rows.rows[0]?.type).toBe('consignacion');
+  });
+
+  // 2B-T9: banco inactive rejected
+  it('rejects when banco account is inactive', async () => {
+    const fromId = await makeAccount('caja_fuerte', 'Vault Active', 500);
+    const toId = await makeAccount('banco', 'Banco Inactivo', 0);
+    await deactivateTreasuryAccount(db, toId, ORG);
+
+    await expect(
+      recordBankConsignacion(db, {
+        organizationId: ORG,
+        fromAccountId: fromId,
+        toBankAccountId: toId,
+        amount: 100,
+        createdBy: 'owner',
+      }),
+    ).rejects.toThrow(/inactiva|inactive/i);
   });
 });

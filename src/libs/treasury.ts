@@ -11,6 +11,7 @@ import {
   posTokensSchema,
   transferReconciliationsSchema,
   treasuryAccountsSchema,
+  treasuryMovementsSchema,
   treasuryTransfersSchema,
 } from '@/models/Schema';
 
@@ -334,4 +335,200 @@ export async function seedOpeningBalance(
   }
   // Unreachable in Phase 2A; extended in later subphases.
   throw new Error(`seedOpeningBalance: unsupported type "${type}"`);
+}
+
+// ── 2B: treasury_movements ledger ────────────────────────────────────────────
+
+export type TreasuryMovementRow = typeof treasuryMovementsSchema.$inferSelect;
+
+/**
+ * Pure formula: balance = opening + credits − debits.
+ * credits = SUM(amount WHERE to_account_id = id)
+ * debits  = SUM(amount WHERE from_account_id = id)
+ *
+ * Intentionally pure so callers can unit-test it without a DB.
+ */
+export function balanceForAccount(
+  opening: number,
+  credits: number,
+  debits: number,
+): number {
+  return Number.parseFloat((opening + credits - debits).toFixed(2));
+}
+
+type TransferInput = {
+  organizationId: string;
+  fromAccountId: string;
+  toAccountId: string;
+  amount: number | string;
+  createdBy: string;
+  reason?: string | null;
+};
+
+/**
+ * Records a caja↔caja (or any container↔container) transfer in the
+ * treasury_movements ledger. This is AUDIT-ONLY in Phase 2 — caja balances
+ * still derive from cash_sessions + cash_movements (Phase 1 path).
+ *
+ * Validates:
+ *   - source and destination are active
+ *   - source balance (opening_balance + Σ movements) ≥ amount
+ *
+ * Throws descriptive errors so the action layer can surface them directly.
+ */
+export async function recordContainerTransfer(
+  executor: Executor,
+  input: TransferInput,
+): Promise<TreasuryMovementRow> {
+  const amt = Number.parseFloat(toMoney(input.amount));
+
+  // Load both accounts in one query to avoid two round-trips.
+  const accounts = await executor
+    .select()
+    .from(treasuryAccountsSchema)
+    .where(
+      and(
+        eq(treasuryAccountsSchema.organizationId, input.organizationId),
+        sql`${treasuryAccountsSchema.id} IN (${input.fromAccountId}, ${input.toAccountId})`,
+      ),
+    );
+
+  const source = accounts.find(a => a.id === input.fromAccountId);
+  const dest = accounts.find(a => a.id === input.toAccountId);
+
+  if (!source || !source.active) {
+    throw new Error(
+      'cuenta de origen inactiva o no encontrada — container inactive or not found',
+    );
+  }
+  if (!dest || !dest.active) {
+    throw new Error(
+      'cuenta de destino inactiva o no encontrada — container inactive or not found',
+    );
+  }
+
+  // Compute current source balance via movements ledger.
+  const [movRow] = await executor
+    .select({
+      credits: sql<string>`COALESCE(SUM(${treasuryMovementsSchema.amount}) FILTER (WHERE ${treasuryMovementsSchema.toAccountId} = ${input.fromAccountId}), 0)::text`,
+      debits: sql<string>`COALESCE(SUM(${treasuryMovementsSchema.amount}) FILTER (WHERE ${treasuryMovementsSchema.fromAccountId} = ${input.fromAccountId}), 0)::text`,
+    })
+    .from(treasuryMovementsSchema)
+    .where(eq(treasuryMovementsSchema.organizationId, input.organizationId));
+
+  const opening = Number.parseFloat(source.openingBalance ?? '0') || 0;
+  const credits = Number.parseFloat(movRow?.credits ?? '0') || 0;
+  const debits = Number.parseFloat(movRow?.debits ?? '0') || 0;
+  const currentBalance = balanceForAccount(opening, credits, debits);
+
+  if (currentBalance < amt) {
+    throw new Error(
+      `saldo insuficiente: balance ${currentBalance.toFixed(2)}, requested ${amt.toFixed(2)}`,
+    );
+  }
+
+  const [row] = await executor
+    .insert(treasuryMovementsSchema)
+    .values({
+      organizationId: input.organizationId,
+      fromAccountId: input.fromAccountId,
+      toAccountId: input.toAccountId,
+      amount: toMoney(amt),
+      type: 'transfer',
+      reason: input.reason ?? null,
+      createdBy: input.createdBy,
+    })
+    .returning();
+
+  if (!row) {
+    throw new Error('treasury_movements: insert returned no row');
+  }
+  return row;
+}
+
+type BankConsignacionInput = {
+  organizationId: string;
+  fromAccountId: string;
+  toBankAccountId: string;
+  amount: number | string;
+  createdBy: string;
+  note?: string | null;
+};
+
+/**
+ * Records a consignación (cash → banco) in the treasury_movements ledger.
+ * The source container (caja or caja_fuerte) must be active and have sufficient
+ * balance. The destination banco account must also be active.
+ *
+ * NOTE: consignarABanco (the legacy treasury_transfers writer) is kept in
+ * src/actions/treasury.ts as a thin fallback wrapper and is retired in Phase 2D.
+ */
+export async function recordBankConsignacion(
+  executor: Executor,
+  input: BankConsignacionInput,
+): Promise<TreasuryMovementRow> {
+  const amt = Number.parseFloat(toMoney(input.amount));
+
+  // Load both accounts.
+  const accounts = await executor
+    .select()
+    .from(treasuryAccountsSchema)
+    .where(
+      and(
+        eq(treasuryAccountsSchema.organizationId, input.organizationId),
+        sql`${treasuryAccountsSchema.id} IN (${input.fromAccountId}, ${input.toBankAccountId})`,
+      ),
+    );
+
+  const source = accounts.find(a => a.id === input.fromAccountId);
+  const banco = accounts.find(a => a.id === input.toBankAccountId);
+
+  if (!source || !source.active) {
+    throw new Error(
+      'cuenta de origen inactiva o no encontrada — container inactive or not found',
+    );
+  }
+  if (!banco || !banco.active) {
+    throw new Error(
+      'cuenta bancaria inactiva o no encontrada — container inactive or not found',
+    );
+  }
+
+  // Compute source balance.
+  const [movRow] = await executor
+    .select({
+      credits: sql<string>`COALESCE(SUM(${treasuryMovementsSchema.amount}) FILTER (WHERE ${treasuryMovementsSchema.toAccountId} = ${input.fromAccountId}), 0)::text`,
+      debits: sql<string>`COALESCE(SUM(${treasuryMovementsSchema.amount}) FILTER (WHERE ${treasuryMovementsSchema.fromAccountId} = ${input.fromAccountId}), 0)::text`,
+    })
+    .from(treasuryMovementsSchema)
+    .where(eq(treasuryMovementsSchema.organizationId, input.organizationId));
+
+  const opening = Number.parseFloat(source.openingBalance ?? '0') || 0;
+  const credits = Number.parseFloat(movRow?.credits ?? '0') || 0;
+  const debits = Number.parseFloat(movRow?.debits ?? '0') || 0;
+  const currentBalance = balanceForAccount(opening, credits, debits);
+
+  if (currentBalance < amt) {
+    throw new Error(
+      `saldo insuficiente: balance ${currentBalance.toFixed(2)}, requested ${amt.toFixed(2)}`,
+    );
+  }
+
+  const [row] = await executor
+    .insert(treasuryMovementsSchema)
+    .values({
+      organizationId: input.organizationId,
+      fromAccountId: input.fromAccountId,
+      toAccountId: input.toBankAccountId,
+      amount: toMoney(amt),
+      type: 'consignacion',
+      reason: input.note ?? null,
+      createdBy: input.createdBy,
+    })
+    .returning();
+
+  if (!row) {
+    throw new Error('treasury_movements: insert returned no row');
+  }
+  return row;
 }

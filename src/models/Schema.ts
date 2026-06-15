@@ -2015,6 +2015,49 @@ export const expensesSchema = pgTable(
   ],
 );
 
+// ── Treasury movements (Phase 2B) ─────────────────────────────────────────
+// Unified ledger for inter-container transfers, consignaciones, gastos, and
+// external in/out flows. Defined after treasury_accounts + expenses because its
+// FKs reference them. Balance formula per container:
+//   opening_balance + SUM(amount WHERE to_account_id = id)
+//                   − SUM(amount WHERE from_account_id = id)
+// Constraint: exactly one of from/to may be NULL (external flow), or both
+// must be set (transfer/consignacion). Neither may BOTH be NULL.
+// NOTE: the CHECK constraint is hand-appended to migration 0046 because
+// drizzle-kit does not emit raw CHECK clauses.
+export const treasuryMovementsSchema = pgTable(
+  'treasury_movements',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: text('organization_id').notNull(),
+    // NULL = external source (entrada) / external destination (salida/gasto).
+    fromAccountId: uuid('from_account_id').references(
+      () => treasuryAccountsSchema.id,
+      { onDelete: 'restrict' },
+    ),
+    toAccountId: uuid('to_account_id').references(
+      () => treasuryAccountsSchema.id,
+      { onDelete: 'restrict' },
+    ),
+    amount: numeric('amount', { precision: 12, scale: 2 }).notNull(),
+    type: treasuryMovementTypeEnum('type').notNull(),
+    category: text('category'),
+    reason: text('reason'),
+    // Linked expenses row for gasto movements (SET NULL on delete so the
+    // expenses row can be deleted independently if business rules allow it).
+    expenseId: uuid('expense_id').references(() => expensesSchema.id, {
+      onDelete: 'set null',
+    }),
+    createdBy: text('created_by').notNull(),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+  },
+  t => [
+    index('treasury_movements_org_idx').on(t.organizationId),
+    index('treasury_movements_from_idx').on(t.fromAccountId),
+    index('treasury_movements_to_idx').on(t.toAccountId),
+  ],
+);
+
 // ── Staff absences and coverage ───────────────────────────────────────────
 // Tracks planned rest days and unplanned absences for pos_users. When an
 // employee can't come (status='open'), the owner finds a replacement using
