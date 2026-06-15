@@ -1,5 +1,6 @@
 import type { TreasuryAccount } from '@/libs/treasury';
 import { money } from './cash-ui';
+import { Consignar } from './Consignar';
 
 const GROUPS: { type: TreasuryAccount['type']; label: string }[] = [
   { type: 'caja', label: 'Cajas' },
@@ -13,6 +14,10 @@ export function TreasuryConsole(props: { accounts: TreasuryAccount[] }) {
   if (props.accounts.length === 0) {
     return null;
   }
+
+  const banks = props.accounts
+    .filter(a => a.type === 'banco')
+    .map(a => ({ value: a.name, label: a.name }));
 
   return (
     <div className="rounded-xl border border-border bg-card p-5 shadow-xs">
@@ -57,6 +62,7 @@ export function TreasuryConsole(props: { accounts: TreasuryAccount[] }) {
                         {a.note}
                       </div>
                     )}
+                    {a.type === 'caja_fuerte' && <Consignar banks={banks} />}
                   </div>
                 ))}
               </div>

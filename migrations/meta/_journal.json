@@ -302,6 +302,13 @@
       "when": 1781541875675,
       "tag": "0042_overjoyed_echo",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1781547461377,
+      "tag": "0043_sparkling_calypso",
+      "breakpoints": true
     }
   ]
 }

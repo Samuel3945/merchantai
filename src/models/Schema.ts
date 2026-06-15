@@ -525,6 +525,28 @@ export const cashMovementsRelations = relations(
   }),
 );
 
+// Inter-container money transfers (treasury). The first use is the consignación
+// Caja Fuerte → Banco, which makes the safe an EXACT live balance (retiros −
+// consignaciones) instead of an accumulated approximation. Account keys match
+// the treasury position keys ('caja_fuerte', 'banco:<method>', 'caja:<token>')
+// so this stays light until a formal accounts table arrives in a later phase.
+export const treasuryTransfersSchema = pgTable(
+  'treasury_transfers',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: text('organization_id').notNull(),
+    fromAccount: text('from_account').notNull(),
+    toAccount: text('to_account').notNull(),
+    amount: numeric('amount', { precision: 12, scale: 2 }).notNull(),
+    note: text('note'),
+    createdBy: text('created_by').notNull(),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+  },
+  table => [
+    index('treasury_transfers_org_idx').on(table.organizationId),
+  ],
+);
+
 export const transferReconciliationStatusEnum = pgEnum(
   'transfer_reconciliation_status',
   ['pending', 'confirmed', 'not_arrived', 'mismatch'],

@@ -1,7 +1,7 @@
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { getTreasuryPosition } from '@/libs/treasury';
+import { getTreasuryPosition, recordConsignacion } from '@/libs/treasury';
 
 // ── PGlite-backed tests for the Phase 1 treasury position (read layer) ───────
 
@@ -74,6 +74,17 @@ const DDL = `
     cashier_explained_at timestamp,
     created_at timestamp DEFAULT now() NOT NULL
   );
+
+  CREATE TABLE treasury_transfers (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+    organization_id text NOT NULL,
+    from_account text NOT NULL,
+    to_account text NOT NULL,
+    amount numeric(12, 2) NOT NULL,
+    note text,
+    created_by text NOT NULL,
+    created_at timestamp DEFAULT now() NOT NULL
+  );
 `;
 
 const ORG = 'org-1';
@@ -90,6 +101,7 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
+  await pg.exec('DELETE FROM treasury_transfers');
   await pg.exec('DELETE FROM transfer_reconciliations');
   await pg.exec('DELETE FROM cash_movements');
   await pg.exec('DELETE FROM cash_sessions');
@@ -147,6 +159,30 @@ describe('getTreasuryPosition', () => {
     const balances = byKey(await getTreasuryPosition(db, ORG));
 
     expect(balances[`caja:${TOKEN}`]).toBe(250);
+  });
+
+  it('a consignación lowers the safe and raises the bank', async () => {
+    await pg.query(
+      `INSERT INTO cash_sessions (id, organization_id, opened_by, opening_amount, status) VALUES ($1, $2, 'x', '0', 'open')`,
+      [SESSION, ORG],
+    );
+    // 100 moved to the safe via a security withdrawal.
+    await pg.query(
+      `INSERT INTO cash_movements (session_id, organization_id, type, amount, reason, created_by) VALUES ($1, $2, 'withdrawal', '100.00', 'Retiro', 'x')`,
+      [SESSION, ORG],
+    );
+    // 40 consigned from the safe to Nequi.
+    await recordConsignacion(db, {
+      organizationId: ORG,
+      toBankMethod: 'Nequi',
+      amount: 40,
+      createdBy: 'owner',
+    });
+
+    const balances = byKey(await getTreasuryPosition(db, ORG));
+
+    expect(balances.caja_fuerte).toBe(60); // 100 retirado − 40 consignado
+    expect(balances['banco:Nequi']).toBe(40); // landed in the bank
   });
 
   it('scopes everything to the organization', async () => {
