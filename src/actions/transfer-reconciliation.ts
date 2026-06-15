@@ -10,7 +10,7 @@ import { currentUser } from '@clerk/nextjs/server';
 import { revalidatePath } from 'next/cache';
 import { ActionValidationError } from '@/libs/action-result';
 import { logAction } from '@/libs/audit-log';
-import { findOpenSession } from '@/libs/cash-helpers';
+import { findOrCreateOpenSession } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import { createFiado } from '@/libs/fiados';
 import { parseClient } from '@/libs/fiados-math';
@@ -313,12 +313,11 @@ export async function reclassifySalePayment(
 
   try {
     await db.transaction(async (tx) => {
-      const open = await findOpenSession(tx, orgId, null);
-      if (!open) {
-        throw new ActionValidationError(
-          'Abre la caja para reclasificar un pago',
-        );
-      }
+      // Auto-open the panel session — the owner never opens a caja here.
+      const open = await findOrCreateOpenSession(tx, {
+        organizationId: orgId,
+        openedBy: actor,
+      });
       const result = await reclassifyPayment(tx, {
         organizationId: orgId,
         salePaymentId,

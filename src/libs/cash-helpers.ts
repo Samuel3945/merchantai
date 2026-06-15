@@ -127,6 +127,44 @@ export async function findOpenSession(
   return session;
 }
 
+// Returns the org's open session for the device (null = admin/dashboard),
+// auto-creating one with a zero opening float if none is open. The dashboard
+// never asks the owner to "open" a caja — cajas open at the POS, and the panel's
+// own session opens itself the moment a movement or correction needs to land.
+export async function findOrCreateOpenSession(
+  executor: Executor,
+  args: {
+    organizationId: string;
+    openedBy: string;
+    posTokenId?: string | null;
+    notes?: string | null;
+  },
+): Promise<CashSession> {
+  const existing = await findOpenSession(
+    executor,
+    args.organizationId,
+    args.posTokenId ?? null,
+  );
+  if (existing) {
+    return existing;
+  }
+  const [created] = await executor
+    .insert(cashSessionsSchema)
+    .values({
+      organizationId: args.organizationId,
+      posTokenId: args.posTokenId ?? null,
+      openedBy: args.openedBy,
+      openingAmount: '0',
+      status: 'open',
+      notes: args.notes ?? null,
+    })
+    .returning();
+  if (!created) {
+    throw new Error('No se pudo abrir la caja');
+  }
+  return created;
+}
+
 // A session is correctable only if it is already CLOSED and belongs to the org —
 // you correct a past arqueo, never an open one.
 export async function findCorrectableSession(

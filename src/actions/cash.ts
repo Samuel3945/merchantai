@@ -6,10 +6,7 @@ import type { CashRiskLevel } from '@/libs/cash-security-policy';
 import { auth, currentUser } from '@clerk/nextjs/server';
 import { and, desc, eq, gte, lt, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
-import {
-  ActionValidationError,
-  isUniqueViolation,
-} from '@/libs/action-result';
+import { ActionValidationError } from '@/libs/action-result';
 import { logAction } from '@/libs/audit-log';
 import {
   computeCashBreakdown,
@@ -19,6 +16,7 @@ import {
   EXPENSE_MOVEMENT_TYPES,
   findCorrectableSession,
   findOpenSession,
+  findOrCreateOpenSession,
   INCOME_MOVEMENT_TYPES,
   recordCorrectionMovement,
   toMoney,
@@ -61,77 +59,6 @@ async function getActorName(fallback: string): Promise<string> {
   } catch {
     return fallback;
   }
-}
-
-export async function openCashSession(
-  openingAmount: number | string,
-  notes?: string | null,
-): Promise<ActionResult<CashSession>> {
-  const { userId, orgId } = await requireOrg();
-  const actor = await getActorName(userId);
-
-  const opening = toMoney(openingAmount ?? 0);
-  if (Number.parseFloat(opening) < 0) {
-    return { ok: false, error: 'El monto base no puede ser negativo' };
-  }
-
-  let session: CashSession;
-  try {
-    session = await db.transaction(async (tx) => {
-      const existing = await findOpenSession(tx, orgId, null);
-      if (existing) {
-        throw new ActionValidationError(
-          'Ya tienes una caja abierta en el panel',
-        );
-      }
-
-      const [created] = await tx
-        .insert(cashSessionsSchema)
-        .values({
-          organizationId: orgId,
-          openingAmount: opening,
-          openedBy: actor,
-          status: 'open',
-          notes: notes ?? null,
-        })
-        .returning();
-
-      if (!created) {
-        throw new Error('Failed to open cash session');
-      }
-      return created;
-    });
-  } catch (error) {
-    if (error instanceof ActionValidationError) {
-      return { ok: false, error: error.message };
-    }
-    // A concurrent open can slip past the in-transaction check and hit the
-    // one-open-session-per-org unique index instead — surface the same message.
-    if (isUniqueViolation(error)) {
-      return {
-        ok: false,
-        error: 'Ya hay una caja abierta en esta organización',
-      };
-    }
-    throw error;
-  }
-
-  await logAction({
-    organizationId: orgId,
-    actor: { type: 'user', id: userId },
-    action: 'cash.opened',
-    entityType: 'cash_session',
-    entityId: session.id,
-    after: {
-      id: session.id,
-      openingAmount: session.openingAmount,
-      openedBy: session.openedBy,
-      notes: session.notes,
-    },
-  });
-
-  revalidatePath('/dashboard/cash');
-  return { ok: true, data: session };
 }
 
 export async function closeCashSession(
@@ -286,12 +213,12 @@ export async function addCashMovement(
   let movement: CashMovement;
   try {
     movement = await db.transaction(async (tx) => {
-      const open = await findOpenSession(tx, orgId, null);
-      if (!open) {
-        throw new ActionValidationError(
-          'No hay caja abierta. Abre la caja primero.',
-        );
-      }
+      // The dashboard caja opens itself on the first movement — the owner never
+      // opens it explicitly (cajas open at the POS).
+      const open = await findOrCreateOpenSession(tx, {
+        organizationId: orgId,
+        openedBy: actor,
+      });
 
       const [created] = await tx
         .insert(cashMovementsSchema)
@@ -359,12 +286,10 @@ export async function recordCashCorrection(
           'La sesión a corregir no existe o no está cerrada',
         );
       }
-      const open = await findOpenSession(tx, orgId, null);
-      if (!open) {
-        throw new ActionValidationError(
-          'Abre la caja para registrar la corrección',
-        );
-      }
+      const open = await findOrCreateOpenSession(tx, {
+        organizationId: orgId,
+        openedBy: actor,
+      });
       const created = await recordCorrectionMovement(tx, {
         organizationId: orgId,
         originalSessionId,
