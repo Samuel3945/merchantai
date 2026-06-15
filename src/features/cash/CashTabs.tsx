@@ -38,11 +38,18 @@ function TabButton(props: {
 // side by side under the same Caja module instead of being merged.
 export function CashTabs(props: {
   cash: React.ComponentProps<typeof CashClient>;
+  hasTransferMethods: boolean;
   reconciliations: TransferReconciliation[];
   investigating: TransferReconciliation[];
   pendingTransfers: { count: number; total: number };
 }) {
   const [view, setView] = useState<View>('arqueo');
+
+  // No transfer payment methods → no transfers to reconcile. Skip the tab
+  // entirely; the owner only sees the cash arqueo.
+  if (!props.hasTransferMethods) {
+    return <CashClient {...props.cash} />;
+  }
 
   return (
     <div className="space-y-6">
