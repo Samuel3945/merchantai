@@ -8,6 +8,7 @@ import {
 import {
   cashMovementsSchema,
   cashSessionsSchema,
+  expensesSchema,
   posTokensSchema,
   transferReconciliationsSchema,
   treasuryAccountsSchema,
@@ -57,16 +58,20 @@ async function cajaBalance(
   return last ? Number.parseFloat(last.counted ?? '0') || 0 : 0;
 }
 
-// Phase 1 treasury position, DERIVED from existing data — no new tables, no flow
-// changes. It surfaces what used to be invisible: the safe (accumulated security
-// withdrawals) and each bank account (transfers that actually landed).
+// Phase 2C treasury position — CUTOVER.
+// Cajas (POS drawers): unchanged — still derive from cash_sessions + cash_movements
+//   via cajaBalance() (Phase 1 path). Hot sales path not touched.
+// Caja fuerte + banco: NOW read from the treasury_accounts ledger.
+//   balance = opening_balance + Σ(treasury_movements to=id) − Σ(from=id)
+//   The old SUM(cash_movements.withdrawal) and SUM(treasury_transfers) derivations
+//   are DELETED here — this is the atomic cutover. No feature flag, no dual-read.
 export async function getTreasuryPosition(
   executor: Executor,
   organizationId: string,
 ): Promise<TreasuryAccount[]> {
   const accounts: TreasuryAccount[] = [];
 
-  // Cajas POS — one drawer per device.
+  // Cajas POS — one drawer per device. UNCHANGED from Phase 1.
   const tokens = await executor
     .select({ id: posTokensSchema.id, name: posTokensSchema.deviceName })
     .from(posTokensSchema)
@@ -81,7 +86,7 @@ export async function getTreasuryPosition(
   );
   accounts.push(...cajas);
 
-  // The office drawer — movements made from the panel (no device).
+  // Office drawer — movements from the panel (no device). UNCHANGED from Phase 1.
   accounts.push({
     key: 'caja:oficina',
     name: 'Caja oficina',
@@ -89,73 +94,72 @@ export async function getTreasuryPosition(
     balance: await cajaBalance(executor, organizationId, null),
   });
 
-  // Treasury ledger (inter-container transfers — first use: consignaciones
-  // Caja Fuerte → Banco).
-  const transfers = await executor
-    .select({
-      from: treasuryTransfersSchema.fromAccount,
-      to: treasuryTransfersSchema.toAccount,
-      sum: sql<string>`COALESCE(SUM(${treasuryTransfersSchema.amount}), 0)::text`,
-    })
-    .from(treasuryTransfersSchema)
-    .where(eq(treasuryTransfersSchema.organizationId, organizationId))
-    .groupBy(treasuryTransfersSchema.fromAccount, treasuryTransfersSchema.toAccount);
-
-  // Caja fuerte — now EXACT: security withdrawals in, consignaciones out.
-  const [safe] = await executor
-    .select({
-      sum: sql<string>`COALESCE(SUM(${cashMovementsSchema.amount}), 0)::text`,
-    })
-    .from(cashMovementsSchema)
+  // Vault (caja_fuerte) + banco accounts — READ FROM LEDGER (Phase 2C cutover).
+  // Fetch all non-caja treasury_accounts for this org.
+  const containerAccounts = await executor
+    .select()
+    .from(treasuryAccountsSchema)
     .where(
       and(
-        eq(cashMovementsSchema.organizationId, organizationId),
-        eq(cashMovementsSchema.type, 'withdrawal'),
-      ),
-    );
-  const withdrawn = Number.parseFloat(safe?.sum ?? '0') || 0;
-  const consignado = transfers
-    .filter(t => t.from === 'caja_fuerte')
-    .reduce((s, t) => s + (Number.parseFloat(t.sum) || 0), 0);
-  accounts.push({
-    key: 'caja_fuerte',
-    name: 'Caja fuerte',
-    type: 'caja_fuerte',
-    balance: Number.parseFloat((withdrawn - consignado).toFixed(2)),
-  });
-
-  // Bancos — transfers that landed (confirmed + mismatch) PLUS consignaciones
-  // received from the safe, grouped by account/method.
-  const bankRows = await executor
-    .select({
-      method: transferReconciliationsSchema.method,
-      sum: sql<string>`COALESCE(SUM(COALESCE(${transferReconciliationsSchema.arrivedAmount}, ${transferReconciliationsSchema.expectedAmount})), 0)::text`,
-    })
-    .from(transferReconciliationsSchema)
-    .where(
-      and(
-        eq(transferReconciliationsSchema.organizationId, organizationId),
-        sql`${transferReconciliationsSchema.status} IN ('confirmed', 'mismatch')`,
+        eq(treasuryAccountsSchema.organizationId, organizationId),
+        sql`${treasuryAccountsSchema.type} IN ('caja_fuerte', 'banco')`,
       ),
     )
-    .groupBy(transferReconciliationsSchema.method);
-  const bankMap = new Map<string, number>();
-  for (const b of bankRows) {
-    bankMap.set(b.method, Number.parseFloat(b.sum) || 0);
-  }
-  for (const t of transfers) {
-    if (t.to.startsWith('banco:')) {
-      const method = t.to.slice('banco:'.length);
-      bankMap.set(
-        method,
-        Number.parseFloat(
-          ((bankMap.get(method) ?? 0) + (Number.parseFloat(t.sum) || 0)).toFixed(2),
+    .orderBy(treasuryAccountsSchema.type, treasuryAccountsSchema.name);
+
+  if (containerAccounts.length > 0) {
+    // Aggregate credits and debits per account in two separate queries to avoid
+    // the UNION complexity of a single-query approach for both-account movements.
+    // Credits: SUM(amount WHERE to_account_id = id)
+    const creditRows = await executor
+      .select({
+        accountId: sql<string>`${treasuryMovementsSchema.toAccountId}::text`,
+        total: sql<string>`COALESCE(SUM(${treasuryMovementsSchema.amount}), 0)::text`,
+      })
+      .from(treasuryMovementsSchema)
+      .where(
+        and(
+          eq(treasuryMovementsSchema.organizationId, organizationId),
+          sql`${treasuryMovementsSchema.toAccountId} IS NOT NULL`,
         ),
-      );
+      )
+      .groupBy(treasuryMovementsSchema.toAccountId);
+
+    // Debits: SUM(amount WHERE from_account_id = id)
+    const debitRows = await executor
+      .select({
+        accountId: sql<string>`${treasuryMovementsSchema.fromAccountId}::text`,
+        total: sql<string>`COALESCE(SUM(${treasuryMovementsSchema.amount}), 0)::text`,
+      })
+      .from(treasuryMovementsSchema)
+      .where(
+        and(
+          eq(treasuryMovementsSchema.organizationId, organizationId),
+          sql`${treasuryMovementsSchema.fromAccountId} IS NOT NULL`,
+        ),
+      )
+      .groupBy(treasuryMovementsSchema.fromAccountId);
+
+    const creditsMap = new Map<string, number>();
+    for (const row of creditRows) {
+      creditsMap.set(row.accountId, (creditsMap.get(row.accountId) ?? 0) + (Number.parseFloat(row.total) || 0));
     }
-  }
-  for (const [method, balance] of bankMap) {
-    accounts.push({ key: `banco:${method}`, name: method, type: 'banco', balance });
+    const debitsMap = new Map<string, number>();
+    for (const row of debitRows) {
+      debitsMap.set(row.accountId, (debitsMap.get(row.accountId) ?? 0) + (Number.parseFloat(row.total) || 0));
+    }
+
+    for (const acct of containerAccounts) {
+      const opening = Number.parseFloat(acct.openingBalance ?? '0') || 0;
+      const credits = creditsMap.get(acct.id) ?? 0;
+      const debits = debitsMap.get(acct.id) ?? 0;
+      accounts.push({
+        key: acct.type === 'caja_fuerte' ? 'caja_fuerte' : `banco:${acct.name}`,
+        name: acct.name,
+        type: acct.type as TreasuryAccountType,
+        balance: balanceForAccount(opening, credits, debits),
+      });
+    }
   }
 
   return accounts;
@@ -295,12 +299,15 @@ export async function deactivateTreasuryAccount(
  * to guarantee that the ledger starts with exactly the same value that the
  * legacy derivation would have returned at migration time.
  *
- * Currently only 'caja_fuerte' is implemented (the only type seeded in 0045).
+ * Supported types:
+ *   'caja_fuerte' → SUM(cash_movements.withdrawal) − SUM(treasury_transfers FROM caja_fuerte)
+ *   'banco'       → SUM(COALESCE(arrived, expected) WHERE status IN confirmed/mismatch)
+ *                   + SUM(treasury_transfers TO banco:*)
  */
 export async function seedOpeningBalance(
   executor: Executor,
   organizationId: string,
-  type: 'caja_fuerte',
+  type: 'caja_fuerte' | 'banco',
 ): Promise<number> {
   if (type === 'caja_fuerte') {
     // Mirror exactly what getTreasuryPosition computes for caja_fuerte:
@@ -333,8 +340,42 @@ export async function seedOpeningBalance(
 
     return Number.parseFloat((withdrawn - consignado).toFixed(2));
   }
-  // Unreachable in Phase 2A; extended in later subphases.
-  throw new Error(`seedOpeningBalance: unsupported type "${type}"`);
+
+  if (type === 'banco') {
+    // Mirror the Phase-1 banco derivation:
+    //   R = SUM(COALESCE(arrived_amount, expected_amount)) WHERE status IN ('confirmed','mismatch')
+    //   C = SUM(treasury_transfers.amount) WHERE to_account LIKE 'banco:%'
+    const [reconRow] = await executor
+      .select({
+        sum: sql<string>`COALESCE(SUM(COALESCE(${transferReconciliationsSchema.arrivedAmount}, ${transferReconciliationsSchema.expectedAmount})), 0)::text`,
+      })
+      .from(transferReconciliationsSchema)
+      .where(
+        and(
+          eq(transferReconciliationsSchema.organizationId, organizationId),
+          sql`${transferReconciliationsSchema.status} IN ('confirmed', 'mismatch')`,
+        ),
+      );
+    const reconciled = Number.parseFloat(reconRow?.sum ?? '0') || 0;
+
+    const allTransfers = await executor
+      .select({
+        to: treasuryTransfersSchema.toAccount,
+        sum: sql<string>`COALESCE(SUM(${treasuryTransfersSchema.amount}), 0)::text`,
+      })
+      .from(treasuryTransfersSchema)
+      .where(eq(treasuryTransfersSchema.organizationId, organizationId))
+      .groupBy(treasuryTransfersSchema.toAccount);
+
+    const consignado = allTransfers
+      .filter(t => t.to.startsWith('banco:'))
+      .reduce((s, t) => s + (Number.parseFloat(t.sum) || 0), 0);
+
+    return Number.parseFloat((reconciled + consignado).toFixed(2));
+  }
+
+  // Type-safe exhaustive check — TypeScript narrows this as unreachable.
+  throw new Error(`seedOpeningBalance: unsupported type "${type as string}"`);
 }
 
 // ── 2B: treasury_movements ledger ────────────────────────────────────────────
@@ -531,4 +572,126 @@ export async function recordBankConsignacion(
     throw new Error('treasury_movements: insert returned no row');
   }
   return row;
+}
+
+// ── 2C: gasto outflow (dual linked record) ────────────────────────────────────
+
+type GastoOutflowInput = {
+  organizationId: string;
+  fromAccountId: string;
+  amount: number | string;
+  category: string;
+  description?: string | null;
+  incurredOn: string; // ISO date string e.g. '2026-06-15'
+  createdBy: string;
+  reason?: string | null;
+};
+
+/**
+ * Atomically inserts one `expenses` row (P&L record — schema unchanged) and
+ * one `treasury_movements` row (type='gasto', from_account_id=selected container,
+ * expense_id=new expense.id). Both succeed or both roll back.
+ *
+ * Balance check: source container must have sufficient balance BEFORE either
+ * insert. If balance < amount, throws "saldo insuficiente" and writes nothing.
+ *
+ * Returns the new expense.id so the action layer can log it.
+ *
+ * Constraints:
+ * - Does NOT touch cash_movements (hot sales path sealed — AC-6).
+ * - expensesSchema columns are UNCHANGED — no structural alteration.
+ * - net-profit.ts continues reading expensesSchema only (AC-3).
+ */
+export async function recordGastoOutflow(
+  executor: Executor,
+  input: GastoOutflowInput,
+): Promise<string> {
+  const amt = Number.parseFloat(toMoney(input.amount));
+
+  // Load source container.
+  const [source] = await executor
+    .select()
+    .from(treasuryAccountsSchema)
+    .where(
+      and(
+        eq(treasuryAccountsSchema.id, input.fromAccountId),
+        eq(treasuryAccountsSchema.organizationId, input.organizationId),
+      ),
+    )
+    .limit(1);
+
+  if (!source || !source.active) {
+    throw new Error(
+      'cuenta de origen inactiva o no encontrada — container inactive or not found',
+    );
+  }
+
+  // Compute current balance for the source container.
+  const [movRow] = await executor
+    .select({
+      credits: sql<string>`COALESCE(SUM(${treasuryMovementsSchema.amount}) FILTER (WHERE ${treasuryMovementsSchema.toAccountId} = ${input.fromAccountId}), 0)::text`,
+      debits: sql<string>`COALESCE(SUM(${treasuryMovementsSchema.amount}) FILTER (WHERE ${treasuryMovementsSchema.fromAccountId} = ${input.fromAccountId}), 0)::text`,
+    })
+    .from(treasuryMovementsSchema)
+    .where(eq(treasuryMovementsSchema.organizationId, input.organizationId));
+
+  const opening = Number.parseFloat(source.openingBalance ?? '0') || 0;
+  const credits = Number.parseFloat(movRow?.credits ?? '0') || 0;
+  const debits = Number.parseFloat(movRow?.debits ?? '0') || 0;
+  const currentBalance = balanceForAccount(opening, credits, debits);
+
+  if (currentBalance < amt) {
+    throw new Error(
+      `saldo insuficiente: balance ${currentBalance.toFixed(2)}, requested ${amt.toFixed(2)}`,
+    );
+  }
+
+  const doInserts = async (tx: Executor): Promise<string> => {
+    // 1. Insert expenses row (P&L — schema unchanged).
+    const [expense] = await tx
+      .insert(expensesSchema)
+      .values({
+        organizationId: input.organizationId,
+        amount: toMoney(amt),
+        category: input.category,
+        description: input.description ?? null,
+        incurredOn: input.incurredOn,
+        createdBy: input.createdBy,
+      })
+      .returning({ id: expensesSchema.id });
+
+    if (!expense) {
+      throw new Error('expenses: insert returned no row');
+    }
+
+    // 2. Insert treasury_movements gasto row linked by expense_id.
+    const [movement] = await tx
+      .insert(treasuryMovementsSchema)
+      .values({
+        organizationId: input.organizationId,
+        fromAccountId: input.fromAccountId,
+        toAccountId: null,
+        amount: toMoney(amt),
+        type: 'gasto',
+        category: input.category,
+        reason: input.reason ?? input.description ?? null,
+        expenseId: expense.id,
+        createdBy: input.createdBy,
+      })
+      .returning({ id: treasuryMovementsSchema.id });
+
+    if (!movement) {
+      throw new Error('treasury_movements: gasto insert returned no row');
+    }
+
+    return expense.id;
+  };
+
+  // When executor is the real `db`, wrap in a transaction for atomicity.
+  // When executor is already a tx (passed from a parent transaction), use it directly.
+  const isRealDb = typeof (executor as { transaction?: unknown }).transaction === 'function';
+  if (isRealDb) {
+    return (executor as typeof import('@/libs/DB').db).transaction(tx => doInserts(tx as unknown as Executor));
+  }
+  return doInserts(executor);
 }

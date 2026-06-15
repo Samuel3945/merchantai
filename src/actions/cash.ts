@@ -33,6 +33,8 @@ import {
   cashSessionsSchema,
   posTokensSchema,
   suppliersSchema,
+  treasuryAccountsSchema,
+  treasuryMovementsSchema,
 } from '@/models/Schema';
 import { notifyCashDifference } from './notifications';
 
@@ -157,6 +159,13 @@ export async function addCashMovement(
     authorizedBy?: string | null;
     category?: string | null;
     supplierId?: string | null;
+    // 2C: optional container selector for dual-write to treasury_movements.
+    // toAccountId: for entrada (cash IN to a container — e.g. security withdrawal to vault).
+    // fromAccountId: for salida (cash OUT from a container).
+    // When provided, a companion treasury_movements row is inserted in the same tx.
+    // When omitted, only cash_movements is written (backward compatible).
+    toAccountId?: string | null;
+    fromAccountId?: string | null;
   },
 ): Promise<ActionResult<CashMovement>> {
   const { userId, orgId } = await requireOrg();
@@ -210,6 +219,34 @@ export async function addCashMovement(
     }
   }
 
+  // 2C: Resolve optional container account for the dual-write.
+  // toAccountId is used for security withdrawals (cash enters vault/container).
+  // fromAccountId is used for entradas from outside a container.
+  const toAccountId = options?.toAccountId ?? null;
+  const fromAccountId = options?.fromAccountId ?? null;
+  const hasTreasuryDualWrite = toAccountId !== null || fromAccountId !== null;
+
+  // Validate the container account is active and belongs to this org.
+  if (hasTreasuryDualWrite) {
+    const accountId = (toAccountId ?? fromAccountId)!;
+    const [container] = await db
+      .select({ id: treasuryAccountsSchema.id, active: treasuryAccountsSchema.active })
+      .from(treasuryAccountsSchema)
+      .where(
+        and(
+          eq(treasuryAccountsSchema.id, accountId),
+          eq(treasuryAccountsSchema.organizationId, orgId),
+        ),
+      )
+      .limit(1);
+    if (!container || !container.active) {
+      return {
+        ok: false,
+        error: 'El contenedor seleccionado no existe o está inactivo',
+      };
+    }
+  }
+
   let movement: CashMovement;
   try {
     movement = await db.transaction(async (tx) => {
@@ -238,6 +275,28 @@ export async function addCashMovement(
       if (!created) {
         throw new Error('Failed to register cash movement');
       }
+
+      // 2C dual-write: companion treasury_movements row in the same transaction.
+      // cash_movements is the caja ledger (unchanged); treasury_movements is the
+      // container ledger (new). The two reads are disjoint — no double count.
+      if (hasTreasuryDualWrite) {
+        // Determine movement direction:
+        //   toAccountId set   → cash entering a container (entrada): from=null, to=container
+        //   fromAccountId set → cash leaving a container (salida):   from=container, to=null
+        const treasuryType = toAccountId !== null ? 'entrada' : 'salida';
+        await tx
+          .insert(treasuryMovementsSchema)
+          .values({
+            organizationId: orgId,
+            fromAccountId,
+            toAccountId,
+            amount: amt,
+            type: treasuryType,
+            reason: reasonTrimmed,
+            createdBy: actor,
+          });
+      }
+
       return created;
     });
   } catch (error) {

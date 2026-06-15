@@ -16,6 +16,7 @@ import {
   recordBankConsignacion,
   recordConsignacion,
   recordContainerTransfer,
+  recordGastoOutflow,
 } from '@/libs/treasury';
 
 const CASH_PATH = '/dashboard/cash';
@@ -306,6 +307,74 @@ export async function consignarDesde(
     return {
       ok: false,
       error: err instanceof Error ? err.message : 'Error al realizar la consignación',
+    };
+  }
+}
+
+// ── 2C: gasto as treasury outflow (dual linked record) ───────────────────────
+
+/**
+ * Registers a gasto that:
+ * (a) inserts one `expenses` row for P&L (net-profit.ts reads this unchanged)
+ * (b) inserts one `treasury_movements` row (type='gasto', from=selectedContainerId)
+ * Both writes are atomic — partial state is prohibited (REQ-4).
+ *
+ * Gated by requirePanelModule('cash').
+ * Source container balance is checked before any insert.
+ */
+export async function recordGasto(input: {
+  fromAccountId: string;
+  amount: number | string;
+  category: string;
+  description?: string | null;
+  incurredOn: string; // ISO date string 'YYYY-MM-DD'
+}): Promise<ActionResult<{ expenseId: string }>> {
+  const { userId, orgId } = await requirePanelModule('cash');
+
+  if (!input.fromAccountId) {
+    return { ok: false, error: 'Contenedor de origen requerido' };
+  }
+  const amt = toMoney(input.amount);
+  if (Number.parseFloat(amt) <= 0) {
+    return { ok: false, error: 'El monto debe ser mayor a 0' };
+  }
+  if (!input.category?.trim()) {
+    return { ok: false, error: 'La categoría es requerida' };
+  }
+  if (!input.incurredOn) {
+    return { ok: false, error: 'La fecha del gasto es requerida' };
+  }
+
+  const actor = await getActorName(userId);
+  try {
+    const expenseId = await recordGastoOutflow(db, {
+      organizationId: orgId,
+      fromAccountId: input.fromAccountId,
+      amount: amt,
+      category: input.category.trim(),
+      description: input.description?.trim() || null,
+      incurredOn: input.incurredOn,
+      createdBy: actor,
+    });
+    await logAction({
+      organizationId: orgId,
+      actor: { type: 'user', id: userId },
+      action: 'treasury.gasto',
+      entityType: 'expense',
+      entityId: expenseId,
+      after: {
+        fromAccountId: input.fromAccountId,
+        amount: amt,
+        category: input.category,
+        incurredOn: input.incurredOn,
+      },
+    });
+    revalidatePath(CASH_PATH);
+    return { ok: true, data: { expenseId } };
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Error al registrar el gasto',
     };
   }
 }
