@@ -251,14 +251,15 @@ export async function addCashMovement(
   return { ok: true, data: movement };
 }
 
-// Post-close correction: account for a discrepancy of an ALREADY-CLOSED session
-// (e.g. a shortfall the owner realizes was an error the next day) without ever
-// editing that closed arqueo. It posts an 'adjustment' in the current open
-// session that references the closed one. The original difference stays on the
-// record — the fraud analysis needs that signal — with this correction (amount,
-// reason, who, when) linked to it.
+// Post-close correction of an ALREADY-CLOSED session, without editing that
+// arqueo. The OWNER chooses the direction (the system never infers it): 'in'
+// records money that came in and was missed (raises), 'out' records money that
+// went out and was missed (lowers). It posts to the current open session,
+// referencing the closed one; the original difference stays for the fraud
+// analysis, with this correction (direction, amount, reason, who, when) linked.
 export async function recordCashCorrection(
   originalSessionId: string,
+  direction: 'in' | 'out',
   amount: number | string,
   reason: string,
 ): Promise<ActionResult<CashMovement>> {
@@ -269,6 +270,7 @@ export async function recordCashCorrection(
   if (!reasonTrimmed) {
     return { ok: false, error: 'El motivo es obligatorio' };
   }
+  const type = direction === 'in' ? 'adjustment' : 'expense';
   const amt = toMoney(amount);
   if (Number.parseFloat(amt) <= 0) {
     return { ok: false, error: 'El monto debe ser mayor a 0' };
@@ -294,6 +296,7 @@ export async function recordCashCorrection(
         organizationId: orgId,
         originalSessionId,
         currentSessionId: open.id,
+        type,
         amount: amt,
         reason: reasonTrimmed,
         createdBy: actor,

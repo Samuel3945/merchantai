@@ -16,6 +16,39 @@ type ResultFilter = 'all' | 'diff' | 'square';
 // Keep the table short so relevant closures stay above the fold; page the rest.
 const PAGE_SIZE = 8;
 
+const OTHER_MOTIVO = '__otro__';
+
+// Common reasons a closed session ends off, by the direction the owner records.
+// 'in' raises the drawer (money that came in and was missed); 'out' lowers it
+// (money that went out and was missed). Most-common first.
+const IN_MOTIVOS = [
+  {
+    value: 'Olvidé registrar una venta o ingreso en efectivo',
+    label: 'Olvidé registrar una venta o ingreso en efectivo',
+  },
+  {
+    value: 'Apareció dinero que no había contado',
+    label: 'Apareció dinero que no había contado',
+  },
+  {
+    value: 'Registré un pago que en realidad no se hizo',
+    label: 'Registré un pago que en realidad no se hizo',
+  },
+  { value: OTHER_MOTIVO, label: 'Otro (especificar)' },
+];
+
+const OUT_MOTIVOS = [
+  {
+    value: 'Pagué un gasto en efectivo y no lo registré',
+    label: 'Pagué un gasto en efectivo y no lo registré',
+  },
+  {
+    value: 'Di mal el vuelto / error a favor del cliente',
+    label: 'Di mal el vuelto / error a favor del cliente',
+  },
+  { value: OTHER_MOTIVO, label: 'Otro (especificar)' },
+];
+
 /**
  * Permanent closure (arqueo) history. Every closed session is kept forever, so
  * this browses the full record and filters it client-side by date range,
@@ -32,30 +65,52 @@ export function CashClosuresHistory(props: { sessions: CashSession[] }) {
 
   const router = useRouter();
   const [pending, startTransition] = useTransition();
-  // The closed session being corrected, plus the correction form fields.
+  // The closed session being corrected, plus the correction form fields. The
+  // owner picks the direction and reason — the system never infers them.
   const [correctId, setCorrectId] = useState<string | null>(null);
+  const [correctDir, setCorrectDir] = useState<'in' | 'out'>('in');
+  const [correctMotivo, setCorrectMotivo] = useState('');
+  const [correctOther, setCorrectOther] = useState('');
   const [correctAmount, setCorrectAmount] = useState('');
-  const [correctReason, setCorrectReason] = useState('');
   const [error, setError] = useState<string | null>(null);
+
+  const motivos = correctDir === 'in' ? IN_MOTIVOS : OUT_MOTIVOS;
+  const needsOther = correctMotivo === OTHER_MOTIVO;
+  const correctReady
+    = correctAmount !== ''
+      && correctMotivo !== ''
+      && (!needsOther || correctOther.trim() !== '');
 
   function openCorrect(sessionId: string, diff: number) {
     setError(null);
     setCorrectId(sessionId);
+    // Suggest the direction that explains the sign (short → an unrecorded
+    // outflow; surplus → an unrecorded income), but the owner can flip it.
+    setCorrectDir(diff < 0 ? 'out' : 'in');
+    setCorrectMotivo('');
+    setCorrectOther('');
     setCorrectAmount(diff !== 0 ? String(Math.abs(diff)) : '');
-    setCorrectReason('');
+  }
+
+  function pickDir(dir: 'in' | 'out') {
+    setCorrectDir(dir);
+    setCorrectMotivo('');
+    setCorrectOther('');
   }
 
   function submitCorrection() {
     if (!correctId) {
       return;
     }
+    const reason = needsOther ? correctOther.trim() : correctMotivo;
     setError(null);
     startTransition(async () => {
       try {
         const res = await recordCashCorrection(
           correctId,
+          correctDir,
           correctAmount,
-          correctReason,
+          reason,
         );
         if (!res.ok) {
           setError(res.error);
@@ -399,12 +454,64 @@ export function CashClosuresHistory(props: { sessions: CashSession[] }) {
             shadow-lg
           "
           >
-            <div className="text-sm font-semibold">Corregir diferencia</div>
+            <div className="text-sm font-semibold">Corregir cierre</div>
             <p className="mt-1 text-xs text-muted-foreground">
-              El cierre original no se modifica. Esto registra un ajuste en la
-              caja actual que explica la diferencia (requiere caja abierta).
+              El cierre original no se modifica. Registrás el movimiento que se
+              olvidó, ligado a este cierre. Vos elegís si entró o salió plata.
             </p>
             <div className="mt-4 space-y-3">
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => pickDir('in')}
+                  className={cn(
+                    `
+                      rounded-lg border px-3 py-2 text-sm font-medium
+                      transition-colors
+                    `,
+                    correctDir === 'in'
+                      ? 'border-success bg-success/10 text-success'
+                      : 'border-border text-muted-foreground',
+                  )}
+                >
+                  Entró plata
+                </button>
+                <button
+                  type="button"
+                  onClick={() => pickDir('out')}
+                  className={cn(
+                    `
+                      rounded-lg border px-3 py-2 text-sm font-medium
+                      transition-colors
+                    `,
+                    correctDir === 'out'
+                      ? 'border-destructive bg-destructive/10 text-destructive'
+                      : 'border-border text-muted-foreground',
+                  )}
+                >
+                  Salió plata
+                </button>
+              </div>
+
+              <label className="block text-sm">
+                <span className="mb-1 block text-muted-foreground">Motivo</span>
+                <Select
+                  value={correctMotivo}
+                  onValueChange={setCorrectMotivo}
+                  options={motivos}
+                  placeholder="Elegí un motivo"
+                />
+              </label>
+
+              {needsOther && (
+                <input
+                  className={cashInputCls}
+                  placeholder="Descripción (obligatoria)"
+                  value={correctOther}
+                  onChange={e => setCorrectOther(e.target.value)}
+                />
+              )}
+
               <div>
                 <label
                   className="mb-1.5 block text-sm font-medium"
@@ -422,12 +529,7 @@ export function CashClosuresHistory(props: { sessions: CashSession[] }) {
                   onChange={e => setCorrectAmount(e.target.value)}
                 />
               </div>
-              <input
-                className={cashInputCls}
-                placeholder="Motivo (ej: apareció la plata, error de conteo)"
-                value={correctReason}
-                onChange={e => setCorrectReason(e.target.value)}
-              />
+
               {error && <div className="text-sm text-destructive">{error}</div>}
             </div>
             <div className="mt-4 flex justify-end gap-2">
@@ -441,9 +543,7 @@ export function CashClosuresHistory(props: { sessions: CashSession[] }) {
               </Button>
               <Button
                 size="sm"
-                disabled={
-                  pending || correctAmount === '' || correctReason.trim() === ''
-                }
+                disabled={pending || !correctReady}
                 onClick={submitCorrection}
               >
                 Registrar corrección

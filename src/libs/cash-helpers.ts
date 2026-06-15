@@ -190,12 +190,18 @@ export async function findCorrectableSession(
 // never touched — that immutability is what keeps the correction auditable and
 // the cash-fraud signal intact (the original discrepancy survives, with how/when/
 // by whom it was explained recorded alongside).
+// `type` carries the direction the owner CHOSE: 'adjustment' raises the drawer
+// (money that came in and wasn't recorded), 'expense' lowers it (money that went
+// out and wasn't recorded). The system never infers it — the owner knows what
+// really happened, and the correction can even widen the original gap (e.g. extra
+// uncounted cash on top of a surplus).
 export async function recordCorrectionMovement(
   executor: Executor,
   args: {
     organizationId: string;
     originalSessionId: string;
     currentSessionId: string;
+    type: 'adjustment' | 'expense';
     amount: number | string;
     reason: string;
     createdBy: string;
@@ -206,7 +212,7 @@ export async function recordCorrectionMovement(
     .values({
       sessionId: args.currentSessionId,
       organizationId: args.organizationId,
-      type: 'adjustment',
+      type: args.type,
       amount: toMoney(args.amount),
       reason: args.reason,
       correctsSessionId: args.originalSessionId,
