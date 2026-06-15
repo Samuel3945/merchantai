@@ -30,6 +30,7 @@ export default async function DashboardCashPage(props: {
     history,
     openCajas,
     reconResult,
+    investigatingResult,
     overviewResult,
   ] = await Promise.all([
     getCurrentCash(),
@@ -40,10 +41,12 @@ export default async function DashboardCashPage(props: {
     listAllCashMovements(1000),
     listOpenCajas().catch(() => []),
     listTransferReconciliations({ status: 'pending' }).catch(() => null),
+    listTransferReconciliations({ status: 'not_arrived' }).catch(() => null),
     getPendingTransfersOverview().catch(() => null),
   ]);
 
   const reconciliations = reconResult?.ok ? reconResult.data : [];
+  const investigating = investigatingResult?.ok ? investigatingResult.data : [];
   const pendingTransfers = overviewResult?.ok
     ? overviewResult.data
     : { count: 0, total: 0 };
@@ -65,6 +68,7 @@ export default async function DashboardCashPage(props: {
           openCajas,
         }}
         reconciliations={reconciliations}
+        investigating={investigating}
         pendingTransfers={pendingTransfers}
       />
     </>
