@@ -2,7 +2,7 @@
 
 import type { ActionResult } from '@/libs/action-result';
 import type { TreasuryAccount, TreasuryAccountRow } from '@/libs/treasury';
-import { currentUser } from '@clerk/nextjs/server';
+import { auth, currentUser } from '@clerk/nextjs/server';
 import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
 import { toMoney } from '@/libs/cash-helpers';
@@ -13,7 +13,9 @@ import {
   deactivateTreasuryAccount,
   getTreasuryPosition,
   listTreasuryAccounts as listTreasuryAccountsLib,
+  recordBankConsignacion,
   recordConsignacion,
+  recordContainerTransfer,
 } from '@/libs/treasury';
 
 const CASH_PATH = '/dashboard/cash';
@@ -154,6 +156,8 @@ export async function deactivateAccount(
 
 // Consignación: cash moved from the safe to a bank account. Lowers caja fuerte,
 // raises the bank — makes the safe an exact balance.
+// LEGACY: writes to treasury_transfers (Phase 1 ledger). Kept as fallback
+// until Phase 2D when treasury_transfers writes are retired.
 export async function consignarABanco(
   toBankMethod: string,
   amount: number | string,
@@ -186,4 +190,122 @@ export async function consignarABanco(
   });
   revalidatePath(CASH_PATH);
   return { ok: true, data: null };
+}
+
+// ── 2B: treasury_movements transfer actions ───────────────────────────────────
+
+/**
+ * Caja-to-caja (or any container-to-container) transfer using the new
+ * treasury_movements ledger. Restricted to org:admin (owner-only) — this is an
+ * owner-level physical cash rebalance, not a cashier operation.
+ *
+ * In Phase 2 this is LEDGER-ONLY: caja balances still derive from cash sessions
+ * (Phase 1 path). The treasury_movements row is an audit entry that tracks the
+ * declared rebalance. Native caja ledger migration = Phase 3.
+ */
+export async function transferEntreCajas(
+  fromAccountId: string,
+  toAccountId: string,
+  amount: number | string,
+  reason?: string | null,
+): Promise<ActionResult<null>> {
+  // Owner-only gate: re-assert org:admin regardless of module grants.
+  const { orgRole } = await auth();
+  if (orgRole !== 'org:admin') {
+    return {
+      ok: false,
+      error: 'Solo el propietario puede realizar transferencias entre contenedores',
+    };
+  }
+  const { userId, orgId } = await requirePanelModule('cash');
+
+  if (!fromAccountId || !toAccountId) {
+    return { ok: false, error: 'Cuenta de origen y destino son requeridos' };
+  }
+  if (fromAccountId === toAccountId) {
+    return { ok: false, error: 'Las cuentas de origen y destino deben ser diferentes' };
+  }
+  const amt = toMoney(amount);
+  if (Number.parseFloat(amt) <= 0) {
+    return { ok: false, error: 'El monto debe ser mayor a 0' };
+  }
+
+  const actor = await getActorName(userId);
+  try {
+    await recordContainerTransfer(db, {
+      organizationId: orgId,
+      fromAccountId,
+      toAccountId,
+      amount: amt,
+      createdBy: actor,
+      reason: reason ?? null,
+    });
+    await logAction({
+      organizationId: orgId,
+      actor: { type: 'user', id: userId },
+      action: 'treasury.transfer',
+      entityType: 'treasury_movement',
+      entityId: orgId,
+      after: { fromAccountId, toAccountId, amount: amt, reason },
+    });
+    revalidatePath(CASH_PATH);
+    return { ok: true, data: null };
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Error al realizar la transferencia',
+    };
+  }
+}
+
+/**
+ * Records a consignación into a banco account using the treasury_movements
+ * ledger (FK-based, replaces the text-key consignarABanco for new consignations).
+ * Both source container and banco must be active and have sufficient balance.
+ *
+ * NOTE: consignarABanco (legacy treasury_transfers writer) is kept alongside
+ * for backward compatibility and is retired in Phase 2D.
+ */
+export async function consignarDesde(
+  fromAccountId: string,
+  toBankAccountId: string,
+  amount: number | string,
+  note?: string | null,
+): Promise<ActionResult<null>> {
+  const { userId, orgId } = await requirePanelModule('cash');
+
+  if (!fromAccountId || !toBankAccountId) {
+    return { ok: false, error: 'Cuenta de origen y banco de destino son requeridos' };
+  }
+  const amt = toMoney(amount);
+  if (Number.parseFloat(amt) <= 0) {
+    return { ok: false, error: 'El monto debe ser mayor a 0' };
+  }
+
+  const actor = await getActorName(userId);
+  try {
+    await recordBankConsignacion(db, {
+      organizationId: orgId,
+      fromAccountId,
+      toBankAccountId,
+      amount: amt,
+      createdBy: actor,
+      note: note ?? null,
+    });
+    await logAction({
+      organizationId: orgId,
+      actor: { type: 'user', id: userId },
+      action: 'treasury.consignacion',
+      entityType: 'treasury_movement',
+      entityId: orgId,
+      after: { fromAccountId, toBankAccountId, amount: amt },
+    });
+    revalidatePath(CASH_PATH);
+    return { ok: true, data: null };
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Error al realizar la consignación',
+    };
+  }
 }
