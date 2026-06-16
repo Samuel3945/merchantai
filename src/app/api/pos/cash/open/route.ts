@@ -100,9 +100,11 @@ export async function POST(req: Request): Promise<NextResponse> {
           openedBy: attribution,
           status: 'open',
           notes: body.notes ?? null,
-          // Carry-over columns (R1 / R3 / R4 — always set for POS sessions)
-          openingExpected: ctx.tokenId ? toMoney(expected) : null,
-          openingDifference: ctx.tokenId ? toMoney(difference) : null,
+          // Carry-over columns: only meaningful when a prior close exists to
+          // reconcile against. A first-ever open (no prior close) has no
+          // carry-over expectation, so these stay null — it is NOT a discrepancy.
+          openingExpected: priorCloseExists ? toMoney(expected) : null,
+          openingDifference: priorCloseExists ? toMoney(difference) : null,
           openingExplanation: body.explanation?.trim() || null,
         })
         .returning();
@@ -110,13 +112,19 @@ export async function POST(req: Request): Promise<NextResponse> {
       if (!created) {
         throw new Error('No se pudo abrir la caja');
       }
-      return { session: created, expected, difference, priorCloseExists };
+      return { session: created };
     });
 
-    const { session, expected, difference, priorCloseExists: _priorCloseExists } = result;
+    const { session } = result;
 
-    // Audit log: enrich with open-time discrepancy metadata when difference ≠ 0 (R4).
-    const hasDiscrepancy = difference !== 0;
+    // A real open-time discrepancy requires a prior close to deviate from (R4):
+    // it surfaces as a non-null, non-zero opening_difference. A first-ever open
+    // with a starting float is NOT a discrepancy — flagging it would pollute the
+    // fraud signal with false positives.
+    const storedDiff = session.openingDifference != null
+      ? Number.parseFloat(session.openingDifference)
+      : 0;
+    const hasDiscrepancy = storedDiff !== 0;
     await logAction({
       organizationId: ctx.organizationId,
       actor: resolvePosActor(ctx),
@@ -128,14 +136,14 @@ export async function POST(req: Request): Promise<NextResponse> {
         openingAmount: session.openingAmount,
         openedBy: session.openedBy,
         notes: session.notes,
-        openingExpected: toMoney(expected),
-        openingDifference: toMoney(difference),
+        openingExpected: session.openingExpected,
+        openingDifference: session.openingDifference,
         openingExplanation: session.openingExplanation,
       },
       metadata: {
         cashierName: ctx.cashierName,
         source: ctx.source,
-        ...(hasDiscrepancy && { openingDifference: toMoney(difference) }),
+        ...(hasDiscrepancy && { openingDifference: session.openingDifference }),
       },
       ip:
         req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
