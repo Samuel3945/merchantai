@@ -1168,6 +1168,58 @@ export async function depositConfirmedTransfer(
   return { deposited: inserted.length > 0 };
 }
 
+// Keeps the bank in sync when an ALREADY-confirmed transfer is corrected. The
+// original deposit is immutable and unique per reconciliation, so a correction is
+// posted as a SEPARATE, unlinked compensating movement for the delta between what
+// the bank was previously credited and the corrected amount:
+//   delta > 0 → an `entrada` topping the bank up,
+//   delta < 0 → a `salida` clawing the over-credit back (e.g. it never arrived).
+// Returns the signed delta applied (0 when there is nothing to adjust or the
+// method resolves to no bank account). MUST run inside the correction transaction
+// so the status change and the bank adjustment commit together — the bank can
+// never drift from the reconciliation.
+export async function adjustConfirmedTransferDeposit(
+  executor: Executor,
+  args: {
+    organizationId: string;
+    method: string;
+    previousBankAmount: number | string;
+    newBankAmount: number | string;
+    createdBy: string;
+    reference?: string | null;
+  },
+): Promise<{ adjusted: number }> {
+  const previous = Number.parseFloat(toMoney(args.previousBankAmount)) || 0;
+  const next = Number.parseFloat(toMoney(args.newBankAmount)) || 0;
+  const delta = Number.parseFloat((next - previous).toFixed(2));
+  if (delta === 0) {
+    return { adjusted: 0 };
+  }
+
+  const bancoId = await resolveBancoForMethod(executor, {
+    organizationId: args.organizationId,
+    method: args.method,
+  });
+  if (!bancoId) {
+    return { adjusted: 0 };
+  }
+
+  const isCredit = delta > 0;
+  await executor.insert(treasuryMovementsSchema).values({
+    organizationId: args.organizationId,
+    fromAccountId: isCredit ? null : bancoId,
+    toAccountId: isCredit ? bancoId : null,
+    amount: toMoney(Math.abs(delta)),
+    type: isCredit ? 'entrada' : 'salida',
+    reason: args.reference
+      ? `Corrección de transferencia confirmada · Ref. ${args.reference}`
+      : 'Corrección de transferencia confirmada',
+    createdBy: args.createdBy,
+  });
+
+  return { adjusted: delta };
+}
+
 // ── Phase 3 PR3: per-handover remaining + settled state ───────────────────────
 
 /**

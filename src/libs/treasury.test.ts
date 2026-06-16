@@ -3,6 +3,7 @@ import { drizzle } from 'drizzle-orm/pglite';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { getOpeningExpected, validateOpenCarryover } from '@/libs/cash-helpers';
 import {
+  adjustConfirmedTransferDeposit,
   balanceForAccount,
   countPendingHandovers,
   createTreasuryAccount,
@@ -1377,6 +1378,130 @@ describe('depositConfirmedTransfer', () => {
     );
 
     expect(rows.rows).toHaveLength(0);
+  });
+});
+
+describe('adjustConfirmedTransferDeposit', () => {
+  const METHOD = '00000000-0000-0000-0000-0000000000c4';
+  const BANCO = '00000000-0000-0000-0000-0000000000d4';
+
+  async function seedBank() {
+    await pg.query(
+      `INSERT INTO payment_methods (id, organization_id, name, type) VALUES ($1, $2, 'Nequi', 'transfer')`,
+      [METHOD, ORG],
+    );
+    await pg.query(
+      `INSERT INTO treasury_accounts (id, organization_id, type, name, payment_method_id)
+       VALUES ($1, $2, 'banco', 'Banco Nequi', $3)`,
+      [BANCO, ORG, METHOD],
+    );
+  }
+
+  async function bankMovements() {
+    const rows = await pg.query(
+      `SELECT type, amount, from_account_id, to_account_id FROM treasury_movements
+       WHERE organization_id = $1 ORDER BY created_at`,
+      [ORG],
+    );
+    return rows.rows as {
+      type: string;
+      amount: string;
+      from_account_id: string | null;
+      to_account_id: string | null;
+    }[];
+  }
+
+  it('credits the delta as an entrada when the corrected amount is higher', async () => {
+    await seedBank();
+
+    const res = await adjustConfirmedTransferDeposit(db, {
+      organizationId: ORG,
+      method: 'Nequi',
+      previousBankAmount: 100,
+      newBankAmount: 150,
+      createdBy: 'Dueño',
+    });
+
+    expect(res.adjusted).toBe(50);
+
+    const movs = await bankMovements();
+
+    expect(movs).toHaveLength(1);
+    expect(movs[0]!.type).toBe('entrada');
+    expect(Number.parseFloat(movs[0]!.amount)).toBe(50);
+    expect(movs[0]!.to_account_id).toBe(BANCO);
+    expect(movs[0]!.from_account_id).toBeNull();
+  });
+
+  it('claws the delta back as a salida when the corrected amount is lower', async () => {
+    await seedBank();
+
+    const res = await adjustConfirmedTransferDeposit(db, {
+      organizationId: ORG,
+      method: 'Nequi',
+      previousBankAmount: 100,
+      newBankAmount: 80,
+      createdBy: 'Dueño',
+    });
+
+    expect(res.adjusted).toBe(-20);
+
+    const movs = await bankMovements();
+
+    expect(movs).toHaveLength(1);
+    expect(movs[0]!.type).toBe('salida');
+    expect(Number.parseFloat(movs[0]!.amount)).toBe(20);
+    expect(movs[0]!.from_account_id).toBe(BANCO);
+    expect(movs[0]!.to_account_id).toBeNull();
+  });
+
+  it('fully reverses the bank when the transfer turns out to not have arrived', async () => {
+    await seedBank();
+
+    const res = await adjustConfirmedTransferDeposit(db, {
+      organizationId: ORG,
+      method: 'Nequi',
+      previousBankAmount: 100,
+      newBankAmount: 0,
+      createdBy: 'Dueño',
+    });
+
+    expect(res.adjusted).toBe(-100);
+
+    const movs = await bankMovements();
+
+    expect(movs).toHaveLength(1);
+    expect(movs[0]!.type).toBe('salida');
+    expect(Number.parseFloat(movs[0]!.amount)).toBe(100);
+  });
+
+  it('is a no-op when the amount did not change', async () => {
+    await seedBank();
+
+    const res = await adjustConfirmedTransferDeposit(db, {
+      organizationId: ORG,
+      method: 'Nequi',
+      previousBankAmount: 100,
+      newBankAmount: 100,
+      createdBy: 'Dueño',
+    });
+
+    expect(res.adjusted).toBe(0);
+    expect(await bankMovements()).toHaveLength(0);
+  });
+
+  it('does not adjust when the method resolves to no bank account', async () => {
+    // No bank seeded for 'Efectivo'.
+    const res = await adjustConfirmedTransferDeposit(db, {
+      organizationId: ORG,
+      method: 'Efectivo',
+      previousBankAmount: 100,
+      newBankAmount: 150,
+      createdBy: 'Dueño',
+    });
+
+    expect(res.adjusted).toBe(0);
+    expect(await bankMovements()).toHaveLength(0);
   });
 });
 

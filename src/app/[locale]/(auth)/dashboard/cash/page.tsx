@@ -34,18 +34,34 @@ export default async function DashboardCashPage(props: {
 
   let reconciliations: TransferReconciliation[] = [];
   let investigating: TransferReconciliation[] = [];
+  // Confirmed + mismatch rows = the editable history of already-verified
+  // transfers (the owner may need to correct one). not_arrived stays in its own
+  // investigation block.
+  let history: TransferReconciliation[] = [];
   let pendingTransfers = { count: 0, total: 0 };
   let transferCounts = { pending: 0, confirmedToday: 0, notArrived: 0 };
   if (hasTransferMethods) {
-    const [reconResult, investigatingResult, overviewResult, countsResult]
-      = await Promise.all([
-        listTransferReconciliations({ status: 'pending' }).catch(() => null),
-        listTransferReconciliations({ status: 'not_arrived' }).catch(() => null),
-        getPendingTransfersOverview().catch(() => null),
-        getTransferStatusCounts().catch(() => null),
-      ]);
+    const [
+      reconResult,
+      investigatingResult,
+      confirmedResult,
+      mismatchResult,
+      overviewResult,
+      countsResult,
+    ] = await Promise.all([
+      listTransferReconciliations({ status: 'pending' }).catch(() => null),
+      listTransferReconciliations({ status: 'not_arrived' }).catch(() => null),
+      listTransferReconciliations({ status: 'confirmed' }).catch(() => null),
+      listTransferReconciliations({ status: 'mismatch' }).catch(() => null),
+      getPendingTransfersOverview().catch(() => null),
+      getTransferStatusCounts().catch(() => null),
+    ]);
     reconciliations = reconResult?.ok ? reconResult.data : [];
     investigating = investigatingResult?.ok ? investigatingResult.data : [];
+    history = [
+      ...(confirmedResult?.ok ? confirmedResult.data : []),
+      ...(mismatchResult?.ok ? mismatchResult.data : []),
+    ];
     pendingTransfers = overviewResult?.ok
       ? overviewResult.data
       : { count: 0, total: 0 };
@@ -59,13 +75,17 @@ export default async function DashboardCashPage(props: {
         description="Supervisión de los puntos de cobro: tocá una caja para ver su detalle, movimientos y cierres."
       />
       <div className="mb-6">
-        <CajasSupervision openCajas={openCajas} />
+        <CajasSupervision
+          openCajas={openCajas}
+          notArrivedCount={transferCounts.notArrived}
+        />
       </div>
       <CashTabs
         cash={{ collections, alerts }}
         hasTransferMethods={hasTransferMethods}
         reconciliations={reconciliations}
         investigating={investigating}
+        history={history}
         pendingTransfers={pendingTransfers}
         transferCounts={transferCounts}
       />

@@ -41,6 +41,7 @@ export function CashTabs(props: {
   hasTransferMethods: boolean;
   reconciliations: TransferReconciliation[];
   investigating: TransferReconciliation[];
+  history: TransferReconciliation[];
   pendingTransfers: { count: number; total: number };
   transferCounts: { pending: number; confirmedToday: number; notArrived: number };
 }) {
@@ -84,6 +85,7 @@ export function CashTabs(props: {
             <TransferReconciliationPanel
               reconciliations={props.reconciliations}
               investigating={props.investigating}
+              history={props.history}
               pendingCount={props.pendingTransfers.count}
               pendingTotal={props.pendingTransfers.total}
               counts={props.transferCounts}

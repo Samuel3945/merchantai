@@ -31,7 +31,10 @@ import {
   recordCashierExplanation,
   setReconciliationResolution,
 } from '@/libs/transfer-reconciliation';
-import { depositConfirmedTransfer } from '@/libs/treasury';
+import {
+  adjustConfirmedTransferDeposit,
+  depositConfirmedTransfer,
+} from '@/libs/treasury';
 import {
   transferReconciliationsSchema,
   treasuryMovementsSchema,
@@ -284,6 +287,110 @@ export async function markTransferMismatch(
   });
   revalidatePath(CASH_PATH);
   return { ok: true, data: row };
+}
+
+// Edits an ALREADY-confirmed transfer (a confirmed or mismatch row) and keeps
+// Tesorería in sync — the "corrección segura" contract. Two corrections:
+//   • 'amount'      — it really landed for a different amount. The row becomes
+//                     confirmed (== expected) or mismatch (≠ expected) and the
+//                     bank is adjusted by the delta.
+//   • 'not_arrived' — it turned out it never landed. The row moves back to
+//                     investigation and the full bank credit is clawed back.
+// The status change and the bank adjustment run in ONE transaction, so the bank
+// can never drift from the reconciliation.
+export async function correctConfirmedTransfer(
+  id: string,
+  correction:
+    | { kind: 'amount'; arrivedAmount: number | string }
+    | { kind: 'not_arrived'; note?: string | null },
+): Promise<ActionResult<TransferReconciliation>> {
+  const { userId, orgId } = await requirePanelModule(MODULE);
+  const actor = await getActorName(userId);
+
+  try {
+    const updated = await db.transaction(async (tx) => {
+      const row = await getReconciliationById(tx, { id, organizationId: orgId });
+      if (!row) {
+        throw new ActionValidationError('Transferencia no encontrada');
+      }
+      if (row.status !== 'confirmed' && row.status !== 'mismatch') {
+        throw new ActionValidationError(
+          'Solo se puede editar una transferencia ya confirmada',
+        );
+      }
+
+      // What the bank was credited when the transfer was confirmed.
+      const previousBankAmount
+        = Number.parseFloat(row.arrivedAmount ?? row.expectedAmount) || 0;
+
+      let result: TransferReconciliation | null;
+      let newBankAmount: number;
+
+      if (correction.kind === 'not_arrived') {
+        newBankAmount = 0;
+        result = await markReconciliationNotArrived(tx, {
+          id,
+          organizationId: orgId,
+          reconciledBy: actor,
+          note: correction.note ?? null,
+        });
+      } else {
+        const amount = Number.parseFloat(String(correction.arrivedAmount));
+        if (!Number.isFinite(amount) || amount < 0) {
+          throw new ActionValidationError('El monto corregido no es válido');
+        }
+        newBankAmount = amount;
+        const expected = Number.parseFloat(row.expectedAmount) || 0;
+        result
+          = amount === expected
+            ? await confirmReconciliation(tx, {
+                id,
+                organizationId: orgId,
+                reconciledBy: actor,
+                arrivedAmount: amount,
+              })
+            : await markReconciliationMismatch(tx, {
+                id,
+                organizationId: orgId,
+                reconciledBy: actor,
+                arrivedAmount: amount,
+              });
+      }
+
+      if (!result) {
+        throw new Error('No se pudo actualizar la transferencia');
+      }
+
+      await adjustConfirmedTransferDeposit(tx, {
+        organizationId: orgId,
+        method: row.method,
+        previousBankAmount,
+        newBankAmount,
+        createdBy: actor,
+        reference: row.reference,
+      });
+
+      return result;
+    });
+
+    await logAction({
+      organizationId: orgId,
+      actor: { type: 'user', id: userId },
+      action: 'transfer.corrected',
+      entityType: 'transfer_reconciliation',
+      entityId: updated.id,
+      after: { status: updated.status, arrivedAmount: updated.arrivedAmount },
+    });
+
+    revalidatePath(CASH_PATH);
+    revalidatePath(TESORERIA_PATH);
+    return { ok: true, data: updated };
+  } catch (err) {
+    if (err instanceof ActionValidationError) {
+      return { ok: false, error: err.message };
+    }
+    throw err;
+  }
 }
 
 export async function confirmAllPendingTransfers(
