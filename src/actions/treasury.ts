@@ -343,8 +343,6 @@ export async function recordGasto(input: {
 
 // ── Slice C: Financial Timeline ───────────────────────────────────────────────
 
-export type { TreasuryTimelineEntry };
-
 /**
  * Returns the financial timeline for the org — treasury_movements ordered
  * newest-first with account names resolved. Read-only.
