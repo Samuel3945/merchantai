@@ -43,6 +43,7 @@ export function CashTabs(props: {
   reconciliations: TransferReconciliation[];
   investigating: TransferReconciliation[];
   pendingTransfers: { count: number; total: number };
+  transferCounts: { pending: number; confirmedToday: number; notArrived: number };
   // 2C: treasury accounts for container selector in MovementModal.
   treasuryAccounts?: TreasuryAccountRow[];
 }) {
@@ -88,6 +89,7 @@ export function CashTabs(props: {
               investigating={props.investigating}
               pendingCount={props.pendingTransfers.count}
               pendingTotal={props.pendingTransfers.total}
+              counts={props.transferCounts}
             />
           )}
     </div>

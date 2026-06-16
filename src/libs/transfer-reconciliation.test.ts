@@ -5,6 +5,7 @@ import {
   bulkConfirmPending,
   confirmReconciliation,
   countPendingReconciliations,
+  countReconciliationsByStatus,
   listReconciliations,
   markReconciliationMismatch,
   markReconciliationNotArrived,
@@ -240,6 +241,56 @@ describe('countPendingReconciliations', () => {
 
     expect(overview.count).toBe(2);
     expect(overview.total).toBe(150);
+  });
+});
+
+describe('countReconciliationsByStatus', () => {
+  // 00:00 America/Bogota (UTC-5) for 2026-06-15.
+  const SINCE = new Date('2026-06-15T05:00:00.000Z');
+
+  it('counts pending, confirmed-today and not_arrived per status', async () => {
+    await seed();
+    await seed();
+    await seed({
+      status: 'confirmed',
+      reconciledAt: new Date('2026-06-15T14:00:00.000Z'),
+    });
+    await seed({ status: 'not_arrived' });
+
+    const counts = await countReconciliationsByStatus(db, {
+      organizationId: ORG,
+      confirmedSince: SINCE,
+    });
+
+    expect(counts.pending).toBe(2);
+    expect(counts.confirmedToday).toBe(1);
+    expect(counts.notArrived).toBe(1);
+  });
+
+  it('excludes confirmations made before the start of today', async () => {
+    await seed({
+      status: 'confirmed',
+      reconciledAt: new Date('2026-06-14T20:00:00.000Z'),
+    });
+
+    const counts = await countReconciliationsByStatus(db, {
+      organizationId: ORG,
+      confirmedSince: SINCE,
+    });
+
+    expect(counts.confirmedToday).toBe(0);
+  });
+
+  it('scopes counts to the org (tenant isolation)', async () => {
+    await seed();
+    await seed({ organizationId: OTHER });
+
+    const counts = await countReconciliationsByStatus(db, {
+      organizationId: ORG,
+      confirmedSince: SINCE,
+    });
+
+    expect(counts.pending).toBe(1);
   });
 });
 

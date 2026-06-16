@@ -20,6 +20,7 @@ import {
   bulkConfirmPending,
   confirmReconciliation,
   countPendingReconciliations,
+  countReconciliationsByStatus,
   getReconciliationById,
   getReconciliationSale,
   listReconciliations,
@@ -71,6 +72,23 @@ export async function getPendingTransfersOverview(period?: {
     ...period,
   });
   return { ok: true, data: overview };
+}
+
+// Approval-inbox header counts: pendientes, confirmados hoy, no llegaron.
+// "Hoy" is the America/Bogota calendar day (fixed UTC-5, no DST).
+export async function getTransferStatusCounts(): Promise<
+  ActionResult<{ pending: number; confirmedToday: number; notArrived: number }>
+> {
+  const { orgId } = await requirePanelModule(MODULE);
+  const bogotaDate = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Bogota',
+  }).format(new Date());
+  const confirmedSince = new Date(`${bogotaDate}T00:00:00-05:00`);
+  const counts = await countReconciliationsByStatus(db, {
+    organizationId: orgId,
+    confirmedSince,
+  });
+  return { ok: true, data: counts };
 }
 
 export async function confirmTransfer(

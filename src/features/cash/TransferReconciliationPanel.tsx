@@ -2,6 +2,7 @@
 
 import type { ActionResult } from '@/libs/action-result';
 import type { TransferReconciliation } from '@/libs/transfer-reconciliation';
+import { AlertTriangle, CheckCircle2, Clock } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import {
@@ -30,11 +31,37 @@ function Card(props: { children: React.ReactNode; className?: string }) {
   );
 }
 
+function InboxStat(props: {
+  icon: React.ReactNode;
+  label: string;
+  value: number;
+  tone: 'default' | 'success' | 'destructive';
+}) {
+  return (
+    <div className="rounded-xl border border-border bg-card p-4 shadow-xs">
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        {props.icon}
+        <span className="font-medium">{props.label}</span>
+      </div>
+      <div
+        className={cn(
+          'mt-2 font-display text-2xl font-semibold tabular-nums',
+          props.tone === 'success' && 'text-success',
+          props.tone === 'destructive' && 'text-destructive',
+        )}
+      >
+        {props.value}
+      </div>
+    </div>
+  );
+}
+
 export function TransferReconciliationPanel(props: {
   reconciliations: TransferReconciliation[];
   investigating: TransferReconciliation[];
   pendingCount: number;
   pendingTotal: number;
+  counts: { pending: number; confirmedToday: number; notArrived: number };
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -71,6 +98,27 @@ export function TransferReconciliationPanel(props: {
 
   return (
     <div className="space-y-6">
+      <div className="grid grid-cols-3 gap-3">
+        <InboxStat
+          icon={<Clock className="size-4" />}
+          label="Pendientes"
+          value={props.counts.pending}
+          tone="default"
+        />
+        <InboxStat
+          icon={<CheckCircle2 className="size-4" />}
+          label="Confirmados hoy"
+          value={props.counts.confirmedToday}
+          tone="success"
+        />
+        <InboxStat
+          icon={<AlertTriangle className="size-4" />}
+          label="No llegaron"
+          value={props.counts.notArrived}
+          tone={props.counts.notArrived > 0 ? 'destructive' : 'default'}
+        />
+      </div>
+
       <Card className="border-primary/30 bg-primary/5 p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -83,10 +131,8 @@ export function TransferReconciliationPanel(props: {
             </p>
           </div>
           <div className="text-right">
-            <div className="text-xs text-muted-foreground">Pendientes</div>
+            <div className="text-xs text-muted-foreground">Monto pendiente</div>
             <div className="font-display text-xl font-medium tabular-nums">
-              {props.pendingCount}
-              {' · '}
               {money(props.pendingTotal)}
             </div>
           </div>

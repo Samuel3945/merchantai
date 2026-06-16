@@ -189,6 +189,28 @@ export async function countPendingReconciliations(
   };
 }
 
+// Counts for the approval-inbox header: how many transfers are waiting, how many
+// were confirmed since `confirmedSince` (the start of today), and how many never
+// arrived (in investigation). One scan, FILTERed per status.
+export async function countReconciliationsByStatus(
+  executor: Executor,
+  args: { organizationId: string; confirmedSince: Date },
+): Promise<{ pending: number; confirmedToday: number; notArrived: number }> {
+  const [row] = await executor
+    .select({
+      pending: sql<number>`COUNT(*) FILTER (WHERE ${transferReconciliationsSchema.status} = 'pending')::int`,
+      confirmedToday: sql<number>`COUNT(*) FILTER (WHERE ${transferReconciliationsSchema.status} = 'confirmed' AND ${transferReconciliationsSchema.reconciledAt} >= ${args.confirmedSince})::int`,
+      notArrived: sql<number>`COUNT(*) FILTER (WHERE ${transferReconciliationsSchema.status} = 'not_arrived')::int`,
+    })
+    .from(transferReconciliationsSchema)
+    .where(eq(transferReconciliationsSchema.organizationId, args.organizationId));
+  return {
+    pending: Number(row?.pending ?? 0),
+    confirmedToday: Number(row?.confirmedToday ?? 0),
+    notArrived: Number(row?.notArrived ?? 0),
+  };
+}
+
 type MutationBase = {
   id: string;
   organizationId: string;
