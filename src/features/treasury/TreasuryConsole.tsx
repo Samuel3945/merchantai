@@ -548,6 +548,12 @@ export function TreasuryConsole(props: {
   totalOverride?: number;
   /** Outstanding Pendiente handovers list for the placement queue. */
   pendingHandovers?: PendingHandover[];
+  /**
+   * R7: Map of sessionId → boolean indicating whether that session had a handover
+   * movement (type='handover', cash_session_id=sessionId). Used to show the
+   * "entregado" badge on caja cards.
+   */
+  handoverStatusBySessions?: Record<string, boolean>;
 }) {
   const [showDetail, setShowDetail] = useState(false);
 
