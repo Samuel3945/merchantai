@@ -464,6 +464,8 @@ type TransferInput = {
   amount: number | string;
   createdBy: string;
   reason?: string | null;
+  /** Optional: FK to originating handover movement. Set for placement rows; null for all other transfers. */
+  handoverMovementId?: string | null;
 };
 
 /**
@@ -537,6 +539,7 @@ export async function recordContainerTransfer(
       amount: toMoney(amt),
       type: 'transfer',
       reason: input.reason ?? null,
+      handoverMovementId: input.handoverMovementId ?? null,
       createdBy: input.createdBy,
     })
     .returning();
@@ -554,6 +557,8 @@ type BankConsignacionInput = {
   amount: number | string;
   createdBy: string;
   note?: string | null;
+  /** Optional: FK to originating handover movement. Set for placement rows; null for all other consignaciones. */
+  handoverMovementId?: string | null;
 };
 
 /**
@@ -624,6 +629,7 @@ export async function recordBankConsignacion(
       amount: toMoney(amt),
       type: 'consignacion',
       reason: input.note ?? null,
+      handoverMovementId: input.handoverMovementId ?? null,
       createdBy: input.createdBy,
     })
     .returning();
@@ -645,6 +651,8 @@ type GastoOutflowInput = {
   incurredOn: string; // ISO date string e.g. '2026-06-15'
   createdBy: string;
   reason?: string | null;
+  /** Optional: FK to originating handover movement. Set for placement rows; null for all other gastos. */
+  handoverMovementId?: string | null;
 };
 
 /**
@@ -736,6 +744,7 @@ export async function recordGastoOutflow(
         category: input.category,
         reason: input.reason ?? input.description ?? null,
         expenseId: expense.id,
+        handoverMovementId: input.handoverMovementId ?? null,
         createdBy: input.createdBy,
       })
       .returning({ id: treasuryMovementsSchema.id });
@@ -1022,4 +1031,97 @@ export async function depositConfirmedTransfer(
     .returning({ id: treasuryMovementsSchema.id });
 
   return { deposited: inserted.length > 0 };
+}
+
+// ── Phase 3 PR2: placement helpers + badge counter ────────────────────────────
+
+export type PendingHandover = {
+  /** ID of the handover treasury_movements row — used as handoverMovementId in placements. */
+  id: string;
+  /** Original amount credited to Pendiente at close time. */
+  amount: number;
+  /** Remaining balance: amount − Σ(placed). */
+  remaining: number;
+  /** When the handover was created (close time). */
+  createdAt: Date;
+};
+
+/**
+ * Returns the list of pending handover movements with their remaining balances.
+ * A handover is "pending" while remaining > 0.
+ * Used by the TreasuryConsole placement queue to show per-handover placement rows.
+ */
+export async function listPendingHandovers(
+  executor: Executor,
+  organizationId: string,
+): Promise<PendingHandover[]> {
+  const rows = await executor
+    .select({
+      id: sql<string>`h.id::text`,
+      amount: sql<string>`h.amount::text`,
+      remaining: sql<string>`(h.amount - COALESCE(p.placed, 0))::text`,
+      createdAt: sql<Date>`h.created_at`,
+    })
+    .from(sql`treasury_movements h`)
+    .leftJoin(
+      sql`(
+        SELECT handover_movement_id, SUM(amount)::numeric AS placed
+        FROM treasury_movements
+        WHERE handover_movement_id IS NOT NULL
+        GROUP BY handover_movement_id
+      ) p`,
+      sql`p.handover_movement_id = h.id`,
+    )
+    .where(
+      sql`h.organization_id = ${organizationId}
+        AND h.type = 'handover'
+        AND (h.amount - COALESCE(p.placed, 0)) > 0`,
+    )
+    .orderBy(sql`h.created_at ASC`);
+
+  return rows.map(r => ({
+    id: r.id,
+    amount: Number.parseFloat(r.amount) || 0,
+    remaining: Number.parseFloat(r.remaining) || 0,
+    createdAt: new Date(r.createdAt),
+  }));
+}
+
+/**
+ * Returns the count and outstanding aggregate total of handover movements that
+ * have not yet been fully placed. A handover is "pending" while:
+ *   remaining = handover.amount − Σ(amount WHERE handover_movement_id = handover.id) > 0
+ *
+ * Mirrors countPendingReconciliations in transfer-reconciliation.ts.
+ * Feeds the "$X sin ubicar" badge on the dashboard / TreasuryConsole.
+ */
+export async function countPendingHandovers(
+  executor: Executor,
+  organizationId: string,
+): Promise<{ count: number; total: number }> {
+  const [row] = await executor
+    .select({
+      count: sql<number>`COUNT(*)::int`,
+      total: sql<string>`COALESCE(SUM(h.amount - COALESCE(p.placed, 0)), 0)::text`,
+    })
+    .from(sql`treasury_movements h`)
+    .leftJoin(
+      sql`(
+        SELECT handover_movement_id, SUM(amount)::numeric AS placed
+        FROM treasury_movements
+        WHERE handover_movement_id IS NOT NULL
+        GROUP BY handover_movement_id
+      ) p`,
+      sql`p.handover_movement_id = h.id`,
+    )
+    .where(
+      sql`h.organization_id = ${organizationId}
+        AND h.type = 'handover'
+        AND (h.amount - COALESCE(p.placed, 0)) > 0`,
+    );
+
+  return {
+    count: Number(row?.count ?? 0),
+    total: Number.parseFloat(row?.total ?? '0') || 0,
+  };
 }

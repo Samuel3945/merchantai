@@ -16,6 +16,7 @@ import { buildNavGroups, navGroups } from './navItems';
  */
 export const MobileNavigation = (props: {
   cashBadge?: 'red' | null;
+  pendingHandoversBadge?: boolean;
   navFlags?: NavModuleFlags;
   /** Non-owner member's allowed modules; null/undefined = owner (sees all). */
   panelModules?: string[] | null;
@@ -77,6 +78,12 @@ export const MobileNavigation = (props: {
                     <span
                       className="ml-auto size-2 rounded-full bg-destructive"
                       aria-label="Alerta de caja"
+                    />
+                  )}
+                  {item.href === '/dashboard/tesoreria' && props.pendingHandoversBadge && (
+                    <span
+                      className="ml-auto size-2 rounded-full bg-amber-500"
+                      aria-label="Dinero sin ubicar"
                     />
                   )}
                 </Link>
