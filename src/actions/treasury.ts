@@ -1,7 +1,7 @@
 'use server';
 
 import type { ActionResult } from '@/libs/action-result';
-import type { TreasuryAccount, TreasuryAccountRow } from '@/libs/treasury';
+import type { TreasuryAccount, TreasuryAccountRow, TreasuryTimelineEntry } from '@/libs/treasury';
 import { auth, currentUser } from '@clerk/nextjs/server';
 import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
@@ -13,12 +13,14 @@ import {
   deactivateTreasuryAccount,
   getTreasuryPosition,
   listTreasuryAccounts as listTreasuryAccountsLib,
+  listTreasuryTimeline as listTreasuryTimelineLib,
   recordBankConsignacion,
   recordContainerTransfer,
   recordGastoOutflow,
 } from '@/libs/treasury';
 
 const CASH_PATH = '/dashboard/cash';
+const TESORERIA_PATH = '/dashboard/tesoreria';
 
 async function getActorName(fallback: string): Promise<string> {
   try {
@@ -329,6 +331,7 @@ export async function recordGasto(input: {
       },
     });
     revalidatePath(CASH_PATH);
+    revalidatePath(TESORERIA_PATH);
     return { ok: true, data: { expenseId } };
   } catch (err: unknown) {
     return {
@@ -336,4 +339,21 @@ export async function recordGasto(input: {
       error: err instanceof Error ? err.message : 'Error al registrar el gasto',
     };
   }
+}
+
+// ── Slice C: Financial Timeline ───────────────────────────────────────────────
+
+export type { TreasuryTimelineEntry };
+
+/**
+ * Returns the financial timeline for the org — treasury_movements ordered
+ * newest-first with account names resolved. Read-only.
+ *
+ * @param limit - optional max rows (default 100)
+ */
+export async function getTimeline(
+  limit?: number,
+): Promise<TreasuryTimelineEntry[]> {
+  const { orgId } = await requirePanelModule('cash');
+  return listTreasuryTimelineLib(db, orgId, limit);
 }
