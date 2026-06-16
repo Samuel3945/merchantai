@@ -14,10 +14,9 @@ import {
   getPendingTransfersOverview,
   listTransferReconciliations,
 } from '@/actions/transfer-reconciliation';
-import { getTreasury, listTreasuryAccounts } from '@/actions/treasury';
+import { listTreasuryAccounts } from '@/actions/treasury';
 import { CashTabs } from '@/features/cash/CashTabs';
 import { TitleBar } from '@/features/dashboard/TitleBar';
-import { TreasuryConsole } from '@/features/treasury/TreasuryConsole';
 
 export default async function DashboardCashPage(props: {
   params: Promise<{ locale: string }>;
@@ -34,7 +33,6 @@ export default async function DashboardCashPage(props: {
     history,
     openCajas,
     methods,
-    treasury,
     treasuryAccountRows,
   ] = await Promise.all([
     getCurrentCash(),
@@ -45,8 +43,7 @@ export default async function DashboardCashPage(props: {
     listAllCashMovements(1000),
     listOpenCajas().catch(() => []),
     listPaymentMethods({ activeOnly: true }).catch(() => []),
-    getTreasury().catch(() => []),
-    // 2C: full account rows (with UUIDs) needed by Consignar and MovementModal.
+    // Full account rows (with UUIDs) needed by the caja movement modal.
     listTreasuryAccounts().catch(() => []),
   ]);
 
@@ -76,13 +73,6 @@ export default async function DashboardCashPage(props: {
         title="Caja"
         description="Abre y cierra la caja, registra movimientos y haz el arqueo del día."
       />
-      <div className="mb-6">
-        <TreasuryConsole
-          accounts={treasury}
-          accountRows={treasuryAccountRows}
-          transferMethods={methods}
-        />
-      </div>
       <CashTabs
         cash={{
           current,
