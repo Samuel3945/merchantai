@@ -561,6 +561,7 @@ export const treasuryAccountTypeEnum = pgEnum('treasury_account_type', [
   'caja',
   'caja_fuerte',
   'banco',
+  'transito',
 ]);
 
 export const treasuryMovementTypeEnum = pgEnum('treasury_movement_type', [
@@ -570,6 +571,7 @@ export const treasuryMovementTypeEnum = pgEnum('treasury_movement_type', [
   'salida',
   'gasto',
   'adjustment',
+  'handover',
 ]);
 
 export const transferReconciliationStatusEnum = pgEnum(
@@ -2059,6 +2061,17 @@ export const treasuryMovementsSchema = pgTable(
       () => transferReconciliationsSchema.id,
       { onDelete: 'restrict' },
     ),
+    // Set on placement movements to tag the originating handover row (N:1 — NOT unique).
+    // NULL on all non-placement movements.
+    // FK is enforced via migration 0053 (self-referential FK: omitting .references() here
+    // to avoid the TypeScript TS7022 circular-initializer error on self-referential tables).
+    handoverMovementId: uuid('handover_movement_id'),
+    // Set ONLY on type='handover' rows to link back to the cash session that was closed.
+    // NULL on all other movement types.
+    cashSessionId: uuid('cash_session_id').references(
+      () => cashSessionsSchema.id,
+      { onDelete: 'set null' },
+    ),
     createdBy: text('created_by').notNull(),
     createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
   },
@@ -2070,6 +2083,10 @@ export const treasuryMovementsSchema = pgTable(
     uniqueIndex('treasury_movements_transfer_recon_unique').on(
       t.transferReconciliationId,
     ),
+    // Placement query index: find all placements for a given handover (N:1 — NOT unique).
+    index('treasury_movements_handover_idx').on(t.handoverMovementId),
+    // Session → handover link for the caja card 'entregado' query.
+    index('treasury_movements_session_idx').on(t.cashSessionId),
   ],
 );
 

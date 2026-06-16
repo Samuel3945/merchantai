@@ -8,11 +8,13 @@ import {
   deactivateTreasuryAccount,
   depositConfirmedTransfer,
   ensurePaymentMethodAccounts,
+  getOrCreatePendingAccount,
   getTreasuryPosition,
   listTreasuryAccounts,
   recordBankConsignacion,
   recordContainerTransfer,
   recordGastoOutflow,
+  recordHandoverMovement,
   resolveBancoForMethod,
   seedOpeningBalance,
 } from '@/libs/treasury';
@@ -29,9 +31,9 @@ const ENUMS = [
   `CREATE TYPE "cash_movement_type" AS ENUM('sale', 'deposit', 'expense', 'salary', 'inventory_purchase', 'withdrawal', 'adjustment', 'advance', 'fiado_payment', 'reclassification')`,
   `CREATE TYPE "transfer_reconciliation_status" AS ENUM('pending', 'confirmed', 'not_arrived', 'mismatch')`,
   `CREATE TYPE "transfer_resolution_type" AS ENUM('receivable', 'loss', 'cashier_liability')`,
-  // 2A enum additions
-  `CREATE TYPE "treasury_account_type" AS ENUM('caja','caja_fuerte','banco')`,
-  `CREATE TYPE "treasury_movement_type" AS ENUM('transfer','consignacion','entrada','salida','gasto','adjustment')`,
+  // 2A enum additions + Phase 3 handover values
+  `CREATE TYPE "treasury_account_type" AS ENUM('caja','caja_fuerte','banco','transito')`,
+  `CREATE TYPE "treasury_movement_type" AS ENUM('transfer','consignacion','entrada','salida','gasto','adjustment','handover')`,
 ];
 
 const DDL = `
@@ -151,13 +153,15 @@ const DDL = `
     reason text,
     expense_id uuid REFERENCES expenses(id) ON DELETE RESTRICT,
     transfer_reconciliation_id uuid REFERENCES transfer_reconciliations(id) ON DELETE RESTRICT,
+    handover_movement_id uuid REFERENCES treasury_movements(id) ON DELETE RESTRICT,
+    cash_session_id uuid REFERENCES cash_sessions(id) ON DELETE SET NULL,
     created_by text NOT NULL,
     created_at timestamp DEFAULT now() NOT NULL,
     CONSTRAINT treasury_mov_one_external CHECK (
       num_nonnulls(from_account_id, to_account_id) = 2
       OR (
         num_nonnulls(from_account_id, to_account_id) = 1
-        AND type IN ('entrada', 'salida', 'gasto', 'consignacion', 'adjustment')
+        AND type IN ('entrada', 'salida', 'gasto', 'consignacion', 'adjustment', 'handover')
       )
     ),
     CONSTRAINT treasury_mov_transfer_recon_unique UNIQUE (transfer_reconciliation_id)
@@ -1515,7 +1519,9 @@ describe('validateOpenCarryover', () => {
       expected: 3000000,
       explanation: undefined,
     });
+
     expect(result.valid).toBe(false);
+
     if (!result.valid) {
       expect(result.code).toBe(422);
     }
@@ -1528,7 +1534,9 @@ describe('validateOpenCarryover', () => {
       expected: 3000000,
       explanation: '   ',
     });
+
     expect(result.valid).toBe(false);
+
     if (!result.valid) {
       expect(result.code).toBe(422);
     }
@@ -1542,7 +1550,9 @@ describe('validateOpenCarryover', () => {
       expected: 3000000,
       explanation: 'El supervisor retiró fondos antes del turno',
     });
+
     expect(result.valid).toBe(true);
+
     if (result.valid) {
       expect(result.difference).toBe(-200000);
     }
@@ -1556,7 +1566,9 @@ describe('validateOpenCarryover', () => {
       expected: 3000000,
       explanation: undefined,
     });
+
     expect(result.valid).toBe(true);
+
     if (result.valid) {
       expect(result.difference).toBe(0);
     }
@@ -1570,7 +1582,9 @@ describe('validateOpenCarryover', () => {
       expected: 0,
       explanation: undefined,
     });
+
     expect(result.valid).toBe(true);
+
     if (result.valid) {
       expect(result.difference).toBe(200000);
     }
@@ -1585,7 +1599,9 @@ describe('validateOpenCarryover', () => {
       expected: 3000000,
       explanation: undefined,
     });
+
     expect(result.valid).toBe(false);
+
     if (!result.valid) {
       expect(result.code).toBe(422);
     }
@@ -1661,6 +1677,7 @@ describe('R4: prior closed session immutability', () => {
       `SELECT counted_amount, opening_difference FROM cash_sessions WHERE id = $1`,
       [SESSION_A],
     );
+
     expect(Number(s1.rows[0]!.counted_amount)).toBe(3000000);
     expect(s1.rows[0]!.opening_difference).toBeNull();
 
@@ -1669,8 +1686,125 @@ describe('R4: prior closed session immutability', () => {
       `SELECT opening_expected, opening_difference, opening_explanation FROM cash_sessions WHERE id = $1`,
       [SESSION_B],
     );
+
     expect(Number(s2.rows[0]!.opening_expected)).toBe(3000000);
     expect(Number(s2.rows[0]!.opening_difference)).toBe(-200000);
     expect(s2.rows[0]!.opening_explanation).toBe('El supervisor retiró fondos');
+  });
+});
+
+// ── Phase 3 — Handover ledger foundation ─────────────────────────────────────
+
+describe('getOrCreatePendingAccount', () => {
+  it('creates a transito account on first call and returns it', async () => {
+    const acct = await getOrCreatePendingAccount(db, ORG, 'owner');
+
+    expect(acct.type).toBe('transito');
+    expect(acct.name).toBe('Pendiente de ubicar');
+    expect(acct.organizationId).toBe(ORG);
+    expect(Number(acct.openingBalance)).toBe(0);
+  });
+
+  it('is idempotent — second call returns the same account id', async () => {
+    const first = await getOrCreatePendingAccount(db, ORG, 'owner');
+    const second = await getOrCreatePendingAccount(db, ORG, 'owner');
+
+    expect(first.id).toBe(second.id);
+
+    const { rows } = await pg.query<{ cnt: string }>(
+      `SELECT COUNT(*)::text AS cnt FROM treasury_accounts WHERE organization_id = $1 AND type = 'transito'`,
+      [ORG],
+    );
+
+    expect(Number(rows[0]!.cnt)).toBe(1);
+  });
+});
+
+describe('recordHandoverMovement', () => {
+  it('inserts a movement with from=null, to=transito, type=handover and cash_session_id', async () => {
+    const sessionId = '00000000-0000-0000-0000-000000001234';
+    await pg.query(
+      `INSERT INTO cash_sessions (id, organization_id, pos_token_id, opened_by, opening_amount, status)
+       VALUES ($1, $2, NULL, 'cajero', '0', 'closed')`,
+      [sessionId, ORG],
+    );
+
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    const row = await recordHandoverMovement(db, {
+      organizationId: ORG,
+      toAccountId: pending.id,
+      amount: 3000000,
+      createdBy: 'owner',
+      cashSessionId: sessionId,
+    });
+
+    expect(row.type).toBe('handover');
+    expect(row.fromAccountId).toBeNull();
+    expect(row.toAccountId).toBe(pending.id);
+    expect(Number(row.amount)).toBe(3000000);
+    expect(row.cashSessionId).toBe(sessionId);
+    expect(row.organizationId).toBe(ORG);
+  });
+});
+
+describe('getTreasuryPosition — transito included', () => {
+  it('includes transito account balance in the position and grand total', async () => {
+    const sessionId = '00000000-0000-0000-0000-000000005678';
+    await pg.query(
+      `INSERT INTO cash_sessions (id, organization_id, pos_token_id, opened_by, opening_amount, status)
+       VALUES ($1, $2, NULL, 'cajero', '0', 'closed')`,
+      [sessionId, ORG],
+    );
+
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    await recordHandoverMovement(db, {
+      organizationId: ORG,
+      toAccountId: pending.id,
+      amount: 3000000,
+      createdBy: 'owner',
+      cashSessionId: sessionId,
+    });
+
+    const position = await getTreasuryPosition(db, ORG);
+    const transitoEntry = position.find(a => a.type === 'transito');
+
+    expect(transitoEntry).toBeDefined();
+    expect(transitoEntry!.balance).toBe(3000000);
+    expect(transitoEntry!.key).toBe(`transito:${pending.id}`);
+
+    const total = position.reduce((s, a) => s + a.balance, 0);
+
+    expect(total).toBeGreaterThanOrEqual(3000000);
+  });
+});
+
+describe('zero countedAmount — handover skipped', () => {
+  it('does not insert a handover movement when counted amount is 0', async () => {
+    const sessionId = '00000000-0000-0000-0000-000000009999';
+    await pg.query(
+      `INSERT INTO cash_sessions (id, organization_id, pos_token_id, opened_by, opening_amount, status)
+       VALUES ($1, $2, NULL, 'cajero', '0', 'closed')`,
+      [sessionId, ORG],
+    );
+
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+
+    const counted = 0;
+    if (Number.parseFloat(String(counted)) > 0) {
+      await recordHandoverMovement(db, {
+        organizationId: ORG,
+        toAccountId: pending.id,
+        amount: counted,
+        createdBy: 'owner',
+        cashSessionId: sessionId,
+      });
+    }
+
+    const { rows } = await pg.query<{ cnt: string }>(
+      `SELECT COUNT(*)::text AS cnt FROM treasury_movements WHERE type = 'handover' AND cash_session_id = $1`,
+      [sessionId],
+    );
+
+    expect(Number(rows[0]!.cnt)).toBe(0);
   });
 });

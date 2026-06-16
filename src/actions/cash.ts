@@ -27,6 +27,7 @@ import {
   riskLevelForRatio,
 } from '@/libs/cash-security-policy';
 import { db } from '@/libs/DB';
+import { getOrCreatePendingAccount, recordHandoverMovement } from '@/libs/treasury';
 import {
   cashMovementsSchema,
   cashSecurityThresholdCacheSchema,
@@ -109,6 +110,20 @@ export async function closeCashSession(
       if (!closed) {
         throw new Error('Failed to close cash session');
       }
+
+      // Phase 3: record handover movement into the transito (Pendiente) account.
+      // Skip when the drawer was empty (no cash to hand over — avoids zero-amount noise).
+      if (Number.parseFloat(counted) > 0) {
+        const pending = await getOrCreatePendingAccount(tx, orgId, actor);
+        await recordHandoverMovement(tx, {
+          organizationId: orgId,
+          toAccountId: pending.id,
+          amount: counted,
+          createdBy: actor,
+          cashSessionId: closed.id,
+        });
+      }
+
       return closed;
     });
   } catch (error) {
