@@ -68,6 +68,18 @@ export default async function DashboardLayout(props: DashboardLayoutProps) {
     }
   }
 
+  // Sin-ubicar badge for the Tesorería menu item. Non-fatal — layout never crashes.
+  let pendingHandoversBadge = false;
+  if (orgId && isOwner) {
+    try {
+      const { getPendingHandoversOverview } = await import('@/actions/treasury-placement');
+      const overview = await getPendingHandoversOverview();
+      pendingHandoversBadge = overview.ok && overview.data.count > 0;
+    } catch {
+      pendingHandoversBadge = false;
+    }
+  }
+
   // Module-gated nav: hide Fiados/Empleados when their toggle is off so the menu
   // reflects exactly what the business has enabled in settings. We pass plain
   // booleans (not the built groups) because the nav groups carry Lucide icon
@@ -104,6 +116,7 @@ export default async function DashboardLayout(props: DashboardLayoutProps) {
     <div className="flex min-h-screen bg-background">
       <DashboardSidebar
         cashBadge={cashBadge}
+        pendingHandoversBadge={pendingHandoversBadge}
         navFlags={navFlags}
         panelModules={panelModules}
         defaultCollapsed={sidebarCollapsed}
@@ -118,6 +131,7 @@ export default async function DashboardLayout(props: DashboardLayoutProps) {
         >
           <DashboardHeader
             cashBadge={cashBadge}
+            pendingHandoversBadge={pendingHandoversBadge}
             navFlags={navFlags}
             panelModules={panelModules}
           />

@@ -17,6 +17,7 @@ import { MobileNavigation } from './MobileNavigation';
  */
 export const DashboardHeader = (props: {
   cashBadge?: 'red' | null;
+  pendingHandoversBadge?: boolean;
   navFlags?: NavModuleFlags;
   panelModules?: string[] | null;
 }) => {
@@ -31,6 +32,7 @@ export const DashboardHeader = (props: {
       >
         <MobileNavigation
           cashBadge={props.cashBadge}
+          pendingHandoversBadge={props.pendingHandoversBadge}
           navFlags={props.navFlags}
           panelModules={props.panelModules}
         />
