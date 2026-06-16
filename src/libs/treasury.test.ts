@@ -6,6 +6,7 @@ import {
   createTreasuryAccount,
   deactivateTreasuryAccount,
   depositConfirmedTransfer,
+  ensurePaymentMethodAccounts,
   getTreasuryPosition,
   listTreasuryAccounts,
   recordBankConsignacion,
@@ -106,7 +107,8 @@ const DDL = `
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     organization_id text NOT NULL,
     name text NOT NULL,
-    type text NOT NULL
+    type text NOT NULL,
+    active boolean DEFAULT true NOT NULL
   );
 
   CREATE TABLE expenses (
@@ -1352,5 +1354,81 @@ describe('depositConfirmedTransfer', () => {
     );
 
     expect(rows.rows).toHaveLength(0);
+  });
+});
+
+describe('ensurePaymentMethodAccounts', () => {
+  const PM_NEQUI = '00000000-0000-0000-0000-0000000000c1';
+  const PM_EFECTIVO = '00000000-0000-0000-0000-0000000000c2';
+  const PM_FIADO = '00000000-0000-0000-0000-0000000000c3';
+
+  async function insertMethod(id: string, name: string, type: string) {
+    await pg.query(
+      `INSERT INTO payment_methods (id, organization_id, name, type, active)
+       VALUES ($1, $2, $3, $4, true)`,
+      [id, ORG, name, type],
+    );
+  }
+
+  it('opens a linked banco account for a money-holding method', async () => {
+    await insertMethod(PM_NEQUI, 'Nequi', 'transfer');
+    await ensurePaymentMethodAccounts(db, ORG, 'tester');
+
+    const rows = await pg.query<{
+      name: string;
+      type: string;
+      payment_method_id: string;
+    }>(
+      `SELECT name, type, payment_method_id FROM treasury_accounts WHERE organization_id = $1`,
+      [ORG],
+    );
+
+    expect(rows.rows).toHaveLength(1);
+    expect(rows.rows[0]!.type).toBe('banco');
+    expect(rows.rows[0]!.name).toBe('Nequi');
+    expect(rows.rows[0]!.payment_method_id).toBe(PM_NEQUI);
+  });
+
+  it('skips cash and fiado methods', async () => {
+    await insertMethod(PM_EFECTIVO, 'Efectivo', 'cash');
+    await insertMethod(PM_FIADO, 'Fiado', 'credit');
+    await ensurePaymentMethodAccounts(db, ORG, 'tester');
+
+    const rows = await pg.query(
+      `SELECT id FROM treasury_accounts WHERE organization_id = $1`,
+      [ORG],
+    );
+
+    expect(rows.rows).toHaveLength(0);
+  });
+
+  it('is idempotent — a second call does not duplicate', async () => {
+    await insertMethod(PM_NEQUI, 'Nequi', 'transfer');
+    await ensurePaymentMethodAccounts(db, ORG, 'tester');
+    await ensurePaymentMethodAccounts(db, ORG, 'tester');
+
+    const rows = await pg.query(
+      `SELECT id FROM treasury_accounts WHERE organization_id = $1 AND payment_method_id = $2`,
+      [ORG, PM_NEQUI],
+    );
+
+    expect(rows.rows).toHaveLength(1);
+  });
+
+  it('skips when a same-name account already exists (no throw, no dup)', async () => {
+    await insertMethod(PM_NEQUI, 'Nequi', 'transfer');
+    await pg.query(
+      `INSERT INTO treasury_accounts (id, organization_id, type, name, opening_balance, active, created_at, updated_at)
+       VALUES (gen_random_uuid(), $1, 'caja_fuerte', 'Nequi', '0.00', true, now(), now())`,
+      [ORG],
+    );
+    await ensurePaymentMethodAccounts(db, ORG, 'tester');
+
+    const rows = await pg.query(
+      `SELECT id FROM treasury_accounts WHERE organization_id = $1 AND name = 'Nequi'`,
+      [ORG],
+    );
+
+    expect(rows.rows).toHaveLength(1);
   });
 });

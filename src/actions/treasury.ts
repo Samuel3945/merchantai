@@ -11,6 +11,7 @@ import { requirePanelModule } from '@/libs/panel-session';
 import {
   createTreasuryAccount,
   deactivateTreasuryAccount,
+  ensurePaymentMethodAccounts,
   getTreasuryPosition,
   listTreasuryAccounts as listTreasuryAccountsLib,
   listTreasuryTimeline as listTreasuryTimelineLib,
@@ -131,7 +132,12 @@ export async function createBanco(
 
 /** Returns active treasury accounts for the org. */
 export async function listTreasuryAccounts(): Promise<TreasuryAccountRow[]> {
-  const { orgId } = await requirePanelModule('cash');
+  const { userId, orgId } = await requirePanelModule('cash');
+  // Lazy, idempotent backfill: ensure every money-holding payment method has its
+  // linked banco account before listing. Best-effort — never blocks the read.
+  await ensurePaymentMethodAccounts(db, orgId, await getActorName(userId)).catch(
+    () => {},
+  );
   return listTreasuryAccountsLib(db, orgId);
 }
 

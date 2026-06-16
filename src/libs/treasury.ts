@@ -233,6 +233,84 @@ export async function createTreasuryAccount(
   }
 }
 
+// Payment-method types that hold money in an account (vs the cash drawer, which
+// lives in cajas/caja_fuerte, or fiado, which is a debt). Each of these gets a
+// linked `banco` treasury account so a transfer/digital payment has a real
+// destination — that is where the money lands when the transfer is confirmed.
+const MONEY_METHOD_TYPES = ['transfer', 'card', 'other'] as const;
+
+/**
+ * Idempotent backfill: makes sure every active money-holding payment method has a
+ * linked `banco` treasury account. Creating a payment method "opens it in
+ * treasury" — but the reverse is not required (a treasury account can be a
+ * standalone storage/personal account with no payment method).
+ *
+ * Safe to call repeatedly and from a read path (mirrors the seedIfEmpty pattern):
+ * it skips methods that already have a linked account and skips names that would
+ * clash with an existing account, and never throws — a residual conflict must not
+ * break the caller.
+ */
+export async function ensurePaymentMethodAccounts(
+  executor: Executor,
+  organizationId: string,
+  createdBy: string,
+): Promise<void> {
+  const methods = await executor
+    .select({
+      id: paymentMethodsSchema.id,
+      name: paymentMethodsSchema.name,
+    })
+    .from(paymentMethodsSchema)
+    .where(
+      and(
+        eq(paymentMethodsSchema.organizationId, organizationId),
+        eq(paymentMethodsSchema.active, true),
+        inArray(paymentMethodsSchema.type, [...MONEY_METHOD_TYPES]),
+      ),
+    );
+  if (methods.length === 0) {
+    return;
+  }
+
+  const accounts = await executor
+    .select({
+      name: treasuryAccountsSchema.name,
+      paymentMethodId: treasuryAccountsSchema.paymentMethodId,
+    })
+    .from(treasuryAccountsSchema)
+    .where(eq(treasuryAccountsSchema.organizationId, organizationId));
+
+  const linkedPmIds = new Set(
+    accounts
+      .map(a => a.paymentMethodId)
+      .filter((id): id is string => id !== null),
+  );
+  const usedNames = new Set(accounts.map(a => a.name.trim().toLowerCase()));
+
+  for (const method of methods) {
+    if (linkedPmIds.has(method.id)) {
+      continue;
+    }
+    const nameKey = method.name.trim().toLowerCase();
+    if (usedNames.has(nameKey)) {
+      continue;
+    }
+    try {
+      await createTreasuryAccount(executor, {
+        organizationId,
+        type: 'banco',
+        name: method.name,
+        openingBalance: 0,
+        paymentMethodId: method.id,
+        createdBy,
+      });
+      usedNames.add(nameKey);
+    } catch {
+      // Best-effort: a race or residual name clash must not break the caller.
+    }
+  }
+}
+
 /**
  * Returns all ACTIVE treasury_accounts for the org, ordered by type then name.
  */
