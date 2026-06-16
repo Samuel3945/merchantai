@@ -40,7 +40,7 @@ function CajaCard({ caja }: { caja: OpenCaja }) {
     <div className="rounded-xl border border-border bg-card p-4 shadow-xs">
       <div className="flex items-center justify-between gap-2">
         <span className="font-display font-semibold">
-          {caja.deviceName || 'Caja administrativa'}
+          {caja.deviceName || 'Caja sin nombre'}
         </span>
         <span className="
           inline-flex items-center gap-1.5 rounded-full bg-success/10 px-2

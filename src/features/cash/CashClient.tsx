@@ -622,7 +622,7 @@ export function CashClient(props: {
 
       {modal && (
         <MovementModal
-          direction={modal}
+          initialDirection={modal}
           pending={pending}
           error={error}
           onClose={() => setModal(null)}
