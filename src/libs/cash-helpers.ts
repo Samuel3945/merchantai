@@ -10,6 +10,44 @@ import {
   salesSchema,
 } from '@/models/Schema';
 
+// ── Carry-over helper (extracted from treasury.ts#cajaBalance ELSE branch) ────
+
+/**
+ * Returns the carry-over expected amount for a POS session: the `countedAmount`
+ * of the most recent CLOSED session for the given pos token, plus a boolean that
+ * distinguishes "first open ever" from "last close was 0".
+ *
+ * The priorCloseExists flag is load-bearing: it drives explanation enforcement
+ * in the open route — a legitimate prior close of 0 must still trigger enforcement
+ * when the new count differs.
+ */
+export async function getOpeningExpected(
+  executor: typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0],
+  organizationId: string,
+  posTokenId: string,
+): Promise<{ expected: number; priorCloseExists: boolean }> {
+  const [last] = await executor
+    .select({ counted: cashSessionsSchema.countedAmount })
+    .from(cashSessionsSchema)
+    .where(
+      and(
+        eq(cashSessionsSchema.organizationId, organizationId),
+        eq(cashSessionsSchema.posTokenId, posTokenId),
+        eq(cashSessionsSchema.status, 'closed'),
+      ),
+    )
+    .orderBy(desc(cashSessionsSchema.closedAt))
+    .limit(1);
+
+  if (!last) {
+    return { expected: 0, priorCloseExists: false };
+  }
+  return {
+    expected: Number.parseFloat(last.counted ?? '0') || 0,
+    priorCloseExists: true,
+  };
+}
+
 export type CashSession = typeof cashSessionsSchema.$inferSelect;
 export type CashMovement = typeof cashMovementsSchema.$inferSelect;
 export type CashMovementType

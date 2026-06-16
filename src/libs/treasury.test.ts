@@ -1,6 +1,7 @@
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { getOpeningExpected } from '@/libs/cash-helpers';
 import {
   balanceForAccount,
   createTreasuryAccount,
@@ -1435,5 +1436,68 @@ describe('ensurePaymentMethodAccounts', () => {
     );
 
     expect(rows.rows).toHaveLength(1);
+  });
+});
+
+// ── Phase 3: getOpeningExpected (carry-over helper) ───────────────────────────
+
+const TOKEN_B = '00000000-0000-0000-0000-0000000000b2';
+const SESSION_A = '00000000-0000-0000-0000-0000000000c1';
+const SESSION_B = '00000000-0000-0000-0000-0000000000c2';
+
+describe('getOpeningExpected', () => {
+  it('R1: returns last closed session countedAmount and priorCloseExists=true', async () => {
+    await pg.query(
+      `INSERT INTO pos_tokens (id, organization_id, device_name) VALUES ($1, $2, 'Caja A')`,
+      [TOKEN_B, ORG],
+    );
+    // One closed session with countedAmount = 3_000_000
+    await pg.query(
+      `INSERT INTO cash_sessions (id, organization_id, pos_token_id, opened_by, opening_amount, status, closed_at, counted_amount)
+       VALUES ($1, $2, $3, 'cajero', '0', 'closed', now(), '3000000.00')`,
+      [SESSION_A, ORG, TOKEN_B],
+    );
+
+    const result = await getOpeningExpected(db, ORG, TOKEN_B);
+
+    expect(result.expected).toBe(3000000);
+    expect(result.priorCloseExists).toBe(true);
+  });
+
+  it('R2: returns { expected: 0, priorCloseExists: false } when no prior closed session exists', async () => {
+    await pg.query(
+      `INSERT INTO pos_tokens (id, organization_id, device_name) VALUES ($1, $2, 'Caja B')`,
+      [TOKEN_B, ORG],
+    );
+    // No sessions inserted for this token
+
+    const result = await getOpeningExpected(db, ORG, TOKEN_B);
+
+    expect(result.expected).toBe(0);
+    expect(result.priorCloseExists).toBe(false);
+  });
+
+  it('R1 scenario 2: returns the MOST RECENT close when multiple closed sessions exist', async () => {
+    await pg.query(
+      `INSERT INTO pos_tokens (id, organization_id, device_name) VALUES ($1, $2, 'Caja C')`,
+      [TOKEN_B, ORG],
+    );
+    // Older close: 1_000_000
+    await pg.query(
+      `INSERT INTO cash_sessions (id, organization_id, pos_token_id, opened_by, opening_amount, status, closed_at, counted_amount)
+       VALUES ($1, $2, $3, 'cajero', '0', 'closed', now() - interval '1 day', '1000000.00')`,
+      [SESSION_A, ORG, TOKEN_B],
+    );
+    // Newer close: 2_500_000
+    await pg.query(
+      `INSERT INTO cash_sessions (id, organization_id, pos_token_id, opened_by, opening_amount, status, closed_at, counted_amount)
+       VALUES ($1, $2, $3, 'cajero', '0', 'closed', now(), '2500000.00')`,
+      [SESSION_B, ORG, TOKEN_B],
+    );
+
+    const result = await getOpeningExpected(db, ORG, TOKEN_B);
+
+    expect(result.expected).toBe(2500000);
+    expect(result.priorCloseExists).toBe(true);
   });
 });
