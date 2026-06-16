@@ -12,6 +12,7 @@ import {
 import { listPaymentMethods } from '@/actions/payment-methods';
 import {
   getPendingTransfersOverview,
+  getTransferStatusCounts,
   listTransferReconciliations,
 } from '@/actions/transfer-reconciliation';
 import { listTreasuryAccounts } from '@/actions/treasury';
@@ -55,17 +56,21 @@ export default async function DashboardCashPage(props: {
   let reconciliations: TransferReconciliation[] = [];
   let investigating: TransferReconciliation[] = [];
   let pendingTransfers = { count: 0, total: 0 };
+  let transferCounts = { pending: 0, confirmedToday: 0, notArrived: 0 };
   if (hasTransferMethods) {
-    const [reconResult, investigatingResult, overviewResult] = await Promise.all([
-      listTransferReconciliations({ status: 'pending' }).catch(() => null),
-      listTransferReconciliations({ status: 'not_arrived' }).catch(() => null),
-      getPendingTransfersOverview().catch(() => null),
-    ]);
+    const [reconResult, investigatingResult, overviewResult, countsResult]
+      = await Promise.all([
+        listTransferReconciliations({ status: 'pending' }).catch(() => null),
+        listTransferReconciliations({ status: 'not_arrived' }).catch(() => null),
+        getPendingTransfersOverview().catch(() => null),
+        getTransferStatusCounts().catch(() => null),
+      ]);
     reconciliations = reconResult?.ok ? reconResult.data : [];
     investigating = investigatingResult?.ok ? investigatingResult.data : [];
     pendingTransfers = overviewResult?.ok
       ? overviewResult.data
       : { count: 0, total: 0 };
+    transferCounts = countsResult?.ok ? countsResult.data : transferCounts;
   }
 
   // Today's net cash difference across sessions closed today (America/Bogota),
@@ -106,6 +111,7 @@ export default async function DashboardCashPage(props: {
         reconciliations={reconciliations}
         investigating={investigating}
         pendingTransfers={pendingTransfers}
+        transferCounts={transferCounts}
         treasuryAccounts={treasuryAccountRows}
       />
     </>
