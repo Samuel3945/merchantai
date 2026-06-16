@@ -22,6 +22,8 @@ const COOKIE_KEY = 'sidebar-collapsed';
  */
 export const DashboardSidebar = (props: {
   cashBadge?: 'red' | null;
+  /** Whether there is outstanding Pendiente de ubicar balance. Renders a dot on Tesorería nav item. */
+  pendingHandoversBadge?: boolean;
   navFlags?: NavModuleFlags;
   /** Non-owner member's allowed modules; null/undefined = owner (sees all). */
   panelModules?: string[] | null;
@@ -99,6 +101,8 @@ export const DashboardSidebar = (props: {
                 const Icon = item.icon;
                 const showCashBadge
                   = item.href === '/dashboard/cash' && props.cashBadge === 'red';
+                const showHandoverBadge
+                  = item.href === '/dashboard/tesoreria' && props.pendingHandoversBadge;
                 return (
                   <li key={item.href}>
                     <Link
@@ -133,6 +137,15 @@ export const DashboardSidebar = (props: {
                             collapsed ? 'absolute top-1.5 right-1.5' : 'ml-auto',
                           )}
                           aria-label="Alerta de caja"
+                        />
+                      )}
+                      {showHandoverBadge && !showCashBadge && (
+                        <span
+                          className={cn(
+                            'size-2 rounded-full bg-amber-500',
+                            collapsed ? 'absolute top-1.5 right-1.5' : 'ml-auto',
+                          )}
+                          aria-label="Dinero sin ubicar"
                         />
                       )}
                     </Link>

@@ -7,6 +7,7 @@ import {
   toMoney,
 } from '@/libs/cash-helpers';
 import {
+  appSettingsSchema,
   cashMovementsSchema,
   cashSessionsSchema,
   expensesSchema,
@@ -20,7 +21,7 @@ import {
 
 type Executor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-export type TreasuryAccountType = 'caja' | 'caja_fuerte' | 'banco';
+export type TreasuryAccountType = 'caja' | 'caja_fuerte' | 'banco' | 'transito';
 
 export type TreasuryAccount = {
   key: string;
@@ -28,6 +29,12 @@ export type TreasuryAccount = {
   type: TreasuryAccountType;
   balance: number;
   note?: string;
+  /**
+   * For type='caja' only: the ID of the last closed cash session for this drawer.
+   * Used by the TreasuryConsole to look up whether the session had a handover
+   * (R7 "entregado" label). Absent when there is no closed session for the drawer.
+   */
+  sessionId?: string;
 };
 
 // A drawer's current cash: the open session's expected, or — if closed — the
@@ -83,13 +90,79 @@ export async function getTreasuryPosition(
     .select({ id: posTokensSchema.id, name: posTokensSchema.deviceName })
     .from(posTokensSchema)
     .where(eq(posTokensSchema.organizationId, organizationId));
+
+  // Batch-fetch the most recent closed session ID per pos_token (for R7 "entregado" label).
+  // One query for all tokens avoids N+1. Result: Map<posTokenId, sessionId>.
+  const lastSessionIds = new Map<string, string>();
+  if (tokens.length > 0) {
+    const sessionRows = await executor
+      .select({
+        posTokenId: sql<string>`pos_token_id::text`,
+        sessionId: sql<string>`id::text`,
+      })
+      .from(
+        sql`(
+          SELECT DISTINCT ON (pos_token_id)
+            id, pos_token_id
+          FROM cash_sessions
+          WHERE organization_id = ${organizationId}
+            AND status = 'closed'
+            AND pos_token_id IS NOT NULL
+          ORDER BY pos_token_id, closed_at DESC
+        ) latest_sessions`,
+      );
+    for (const r of sessionRows) {
+      lastSessionIds.set(r.posTokenId, r.sessionId);
+    }
+  }
+
+  // PR4 double-count fix: when the handover flag is ON, the caja's contribution
+  // to the total must subtract any handover already in-transit (credit to transito)
+  // so the total counts the cash exactly once (in transito, not in both).
+  // When OFF (default), no handover rows exist → subtract 0 → Option A unchanged.
+  const handoverFlag = await getTreasuryHandoverEnabled(executor, organizationId);
+  const handoverBySession = new Map<string, number>();
+  if (handoverFlag && lastSessionIds.size > 0) {
+    const sessionIds = [...lastSessionIds.values()];
+    const handoverRows = await executor
+      .select({
+        cashSessionId: sql<string>`cash_session_id::text`,
+        total: sql<string>`SUM(amount)::text`,
+      })
+      .from(treasuryMovementsSchema)
+      .where(
+        sql`organization_id = ${organizationId}
+          AND type = 'handover'
+          AND cash_session_id = ANY(ARRAY[${sql.join(sessionIds.map(id => sql`${id}::uuid`), sql`, `)}])`,
+      )
+      .groupBy(sql`cash_session_id`);
+    for (const r of handoverRows) {
+      if (r.cashSessionId) {
+        handoverBySession.set(r.cashSessionId, Number.parseFloat(r.total) || 0);
+      }
+    }
+  }
+
   const cajas = await Promise.all(
-    tokens.map(async t => ({
-      key: `caja:${t.id}`,
-      name: t.name,
-      type: 'caja' as const,
-      balance: await cajaBalance(executor, organizationId, t.id),
-    })),
+    tokens.map(async (t) => {
+      const sessionId = lastSessionIds.get(t.id);
+      const rawBalance = await cajaBalance(executor, organizationId, t.id);
+      // Subtract the handover for the last closed session (when flag ON).
+      // This removes the double-count: the same counted amount is in both
+      // caja carry-over (rawBalance) AND transito. After subtraction, the
+      // caja contribution is the POST-handover in-drawer expectation (0 if
+      // fully handed, partial otherwise). Universally safe: no handover rows
+      // → subtract 0 → rawBalance unchanged.
+      const handoverSubtraction = sessionId ? (handoverBySession.get(sessionId) ?? 0) : 0;
+      const balance = Math.max(0, rawBalance - handoverSubtraction);
+      return {
+        key: `caja:${t.id}`,
+        name: t.name,
+        type: 'caja' as const,
+        balance,
+        sessionId,
+      };
+    }),
   );
   accounts.push(...cajas);
 
@@ -101,7 +174,7 @@ export async function getTreasuryPosition(
     .where(
       and(
         eq(treasuryAccountsSchema.organizationId, organizationId),
-        sql`${treasuryAccountsSchema.type} IN ('caja_fuerte', 'banco')`,
+        sql`${treasuryAccountsSchema.type} IN ('caja_fuerte', 'banco', 'transito')`,
       ),
     )
     .orderBy(treasuryAccountsSchema.type, treasuryAccountsSchema.name);
@@ -152,8 +225,13 @@ export async function getTreasuryPosition(
       const opening = Number.parseFloat(acct.openingBalance ?? '0') || 0;
       const credits = creditsMap.get(acct.id) ?? 0;
       const debits = debitsMap.get(acct.id) ?? 0;
+      const key = acct.type === 'caja_fuerte'
+        ? `caja_fuerte:${acct.id}`
+        : acct.type === 'transito'
+          ? `transito:${acct.id}`
+          : `banco:${acct.name}`;
       accounts.push({
-        key: acct.type === 'caja_fuerte' ? `caja_fuerte:${acct.id}` : `banco:${acct.name}`,
+        key,
         name: acct.name,
         type: acct.type as TreasuryAccountType,
         balance: balanceForAccount(opening, credits, debits),
@@ -170,7 +248,7 @@ export type TreasuryAccountRow = typeof treasuryAccountsSchema.$inferSelect;
 
 export type CreateTreasuryAccountInput = {
   organizationId: string;
-  type: 'caja' | 'caja_fuerte' | 'banco';
+  type: 'caja' | 'caja_fuerte' | 'banco' | 'transito';
   name: string;
   openingBalance: string | number;
   paymentMethodId?: string | null;
@@ -459,6 +537,8 @@ type TransferInput = {
   amount: number | string;
   createdBy: string;
   reason?: string | null;
+  /** Optional: FK to originating handover movement. Set for placement rows; null for all other transfers. */
+  handoverMovementId?: string | null;
 };
 
 /**
@@ -523,6 +603,16 @@ export async function recordContainerTransfer(
     );
   }
 
+  // Per-handover guard (ADR-5 C2): re-check inside executor.
+  if (input.handoverMovementId) {
+    const remaining = await getRemainingForHandover(executor, input.handoverMovementId, input.organizationId);
+    if (amt > remaining + 0.005) {
+      throw new Error(
+        `excede el saldo pendiente del cierre: remaining ${remaining.toFixed(2)}, requested ${amt.toFixed(2)}`,
+      );
+    }
+  }
+
   const [row] = await executor
     .insert(treasuryMovementsSchema)
     .values({
@@ -532,6 +622,7 @@ export async function recordContainerTransfer(
       amount: toMoney(amt),
       type: 'transfer',
       reason: input.reason ?? null,
+      handoverMovementId: input.handoverMovementId ?? null,
       createdBy: input.createdBy,
     })
     .returning();
@@ -549,6 +640,8 @@ type BankConsignacionInput = {
   amount: number | string;
   createdBy: string;
   note?: string | null;
+  /** Optional: FK to originating handover movement. Set for placement rows; null for all other consignaciones. */
+  handoverMovementId?: string | null;
 };
 
 /**
@@ -610,6 +703,17 @@ export async function recordBankConsignacion(
     );
   }
 
+  // Per-handover guard (ADR-5 C2): when this placement is attributed to a specific
+  // handover, re-check inside the executor that amt ≤ handover's remaining balance.
+  if (input.handoverMovementId) {
+    const remaining = await getRemainingForHandover(executor, input.handoverMovementId, input.organizationId);
+    if (amt > remaining + 0.005) {
+      throw new Error(
+        `excede el saldo pendiente del cierre: remaining ${remaining.toFixed(2)}, requested ${amt.toFixed(2)}`,
+      );
+    }
+  }
+
   const [row] = await executor
     .insert(treasuryMovementsSchema)
     .values({
@@ -619,6 +723,7 @@ export async function recordBankConsignacion(
       amount: toMoney(amt),
       type: 'consignacion',
       reason: input.note ?? null,
+      handoverMovementId: input.handoverMovementId ?? null,
       createdBy: input.createdBy,
     })
     .returning();
@@ -640,6 +745,8 @@ type GastoOutflowInput = {
   incurredOn: string; // ISO date string e.g. '2026-06-15'
   createdBy: string;
   reason?: string | null;
+  /** Optional: FK to originating handover movement. Set for placement rows; null for all other gastos. */
+  handoverMovementId?: string | null;
 };
 
 /**
@@ -701,6 +808,16 @@ export async function recordGastoOutflow(
     );
   }
 
+  // Per-handover guard (ADR-5 C2): re-check inside executor.
+  if (input.handoverMovementId) {
+    const remaining = await getRemainingForHandover(executor, input.handoverMovementId, input.organizationId);
+    if (amt > remaining + 0.005) {
+      throw new Error(
+        `excede el saldo pendiente del cierre: remaining ${remaining.toFixed(2)}, requested ${amt.toFixed(2)}`,
+      );
+    }
+  }
+
   const doInserts = async (tx: Executor): Promise<string> => {
     // 1. Insert expenses row (P&L — schema unchanged).
     const [expense] = await tx
@@ -731,6 +848,7 @@ export async function recordGastoOutflow(
         category: input.category,
         reason: input.reason ?? input.description ?? null,
         expenseId: expense.id,
+        handoverMovementId: input.handoverMovementId ?? null,
         createdBy: input.createdBy,
       })
       .returning({ id: treasuryMovementsSchema.id });
@@ -749,6 +867,140 @@ export async function recordGastoOutflow(
     return (executor as typeof import('@/libs/DB').db).transaction(tx => doInserts(tx as unknown as Executor));
   }
   return doInserts(executor);
+}
+
+// ── Phase 3 PR4: opt-in config flag ──────────────────────────────────────────
+
+/**
+ * App-settings key for the per-org opt-in handover flag.
+ * Value is the string 'true' or 'false'. Default (absent row) → false.
+ * Mirrors the smartStockEnabled pattern from src/libs/smart-stock.ts.
+ */
+export const TREASURY_HANDOVER_SETTING_KEY = 'treasuryHandoverEnabled';
+
+/**
+ * Reads the per-org `treasuryHandoverEnabled` flag from `app_settings`.
+ * Returns false when no row exists (default OFF — carry-over behavior unchanged).
+ * Safe to call inside a transaction (takes an Executor).
+ */
+export async function getTreasuryHandoverEnabled(
+  executor: Executor,
+  organizationId: string,
+): Promise<boolean> {
+  const [row] = await executor
+    .select({ value: appSettingsSchema.value })
+    .from(appSettingsSchema)
+    .where(
+      and(
+        eq(appSettingsSchema.organizationId, organizationId),
+        eq(appSettingsSchema.key, TREASURY_HANDOVER_SETTING_KEY),
+      ),
+    )
+    .limit(1);
+  return row?.value === 'true';
+}
+
+// ── Phase 3: Handover ledger foundation ──────────────────────────────────────
+
+/**
+ * Lazy-seeds ONE `transito` (Pendiente de ubicar) treasury account per org.
+ * Safe to call inside a transaction — idempotent on re-entry (race-safe via
+ * the unique org+name constraint: on conflict it re-selects the existing row
+ * rather than throwing, so a close-tx is never aborted by a race here).
+ */
+export async function getOrCreatePendingAccount(
+  executor: Executor,
+  organizationId: string,
+  createdBy: string,
+): Promise<TreasuryAccountRow> {
+  // SELECT the existing transito account first (common path after first close).
+  const [existing] = await executor
+    .select()
+    .from(treasuryAccountsSchema)
+    .where(
+      and(
+        eq(treasuryAccountsSchema.organizationId, organizationId),
+        sql`${treasuryAccountsSchema.type} = 'transito'`,
+        eq(treasuryAccountsSchema.active, true),
+      ),
+    )
+    .limit(1);
+
+  if (existing) {
+    return existing;
+  }
+
+  // First close for this org — create the account.
+  try {
+    return await createTreasuryAccount(executor, {
+      organizationId,
+      type: 'transito',
+      name: 'Pendiente de ubicar',
+      openingBalance: 0,
+      createdBy,
+    });
+  } catch (err: unknown) {
+    // Race condition: a concurrent close may have created the transito account
+    // between our SELECT and INSERT. Re-select on ANY creation failure — no
+    // message/code matching, so it stays robust to translation or error-wrapper
+    // changes — and use the row if it appeared. Only propagate if it still isn't
+    // there. NEVER throw out of a close transaction for a benign race.
+    const [raceRow] = await executor
+      .select()
+      .from(treasuryAccountsSchema)
+      .where(
+        and(
+          eq(treasuryAccountsSchema.organizationId, organizationId),
+          sql`${treasuryAccountsSchema.type} = 'transito'`,
+        ),
+      )
+      .limit(1);
+    if (raceRow) {
+      return raceRow;
+    }
+    throw err;
+  }
+}
+
+type HandoverMovementInput = {
+  organizationId: string;
+  toAccountId: string;
+  amount: number | string;
+  createdBy: string;
+  cashSessionId: string;
+  reason?: string | null;
+};
+
+/**
+ * Inserts a type='handover' movement: from=NULL → to=transito account.
+ * Called inside the close transaction AFTER the session UPDATE.
+ * Carries cash_session_id so the caja card can identify the session's handover.
+ *
+ * NEVER call this when amount === 0 — guard the caller with:
+ *   if (Number.parseFloat(counted) > 0) { await recordHandoverMovement(...) }
+ */
+export async function recordHandoverMovement(
+  executor: Executor,
+  input: HandoverMovementInput,
+): Promise<TreasuryMovementRow> {
+  const [row] = await executor
+    .insert(treasuryMovementsSchema)
+    .values({
+      organizationId: input.organizationId,
+      fromAccountId: null,
+      toAccountId: input.toAccountId,
+      amount: toMoney(input.amount),
+      type: 'handover',
+      reason: input.reason ?? null,
+      cashSessionId: input.cashSessionId,
+      createdBy: input.createdBy,
+    })
+    .returning();
+
+  if (!row) {
+    throw new Error('treasury_movements: handover insert returned no row');
+  }
+  return row;
 }
 
 // ── Slice C: Financial Timeline ───────────────────────────────────────────────
@@ -914,4 +1166,176 @@ export async function depositConfirmedTransfer(
     .returning({ id: treasuryMovementsSchema.id });
 
   return { deposited: inserted.length > 0 };
+}
+
+// ── Phase 3 PR3: per-handover remaining + settled state ───────────────────────
+
+/**
+ * Returns the remaining unplaced amount for a specific handover movement row.
+ * remaining = handover.amount − Σ(amount WHERE handover_movement_id = handoverId)
+ *
+ * Must be called INSIDE a transaction. Takes a `FOR UPDATE` lock on the handover
+ * row so that concurrent placements cannot both read the same remaining and both
+ * pass the guard (serialises the per-handover guard writes).
+ *
+ * `organizationId` is mandatory — cross-org access returns 0, preventing a caller
+ * from passing another org's handoverId and attributing placements to it.
+ */
+export async function getRemainingForHandover(
+  executor: Executor,
+  handoverId: string,
+  organizationId: string,
+): Promise<number> {
+  // Lock the handover row + compute remaining in one query.
+  // The FOR UPDATE prevents concurrent placements from racing past the guard.
+  const [row] = await executor
+    .select({
+      remaining: sql<string>`(
+        tm.amount - COALESCE((
+          SELECT SUM(p.amount)
+          FROM treasury_movements p
+          WHERE p.handover_movement_id = tm.id
+        ), 0)
+      )::text`,
+    })
+    .from(sql`treasury_movements tm`)
+    .where(sql`tm.id = ${handoverId} AND tm.organization_id = ${organizationId} FOR UPDATE`);
+
+  return Number.parseFloat(row?.remaining ?? '0') || 0;
+}
+
+/**
+ * For each session ID in the input array, returns whether a handover movement
+ * row exists for that session (type='handover', cash_session_id = sessionId).
+ * Used by the caja card to show the "entregado" label.
+ *
+ * Scoped to the org to prevent cross-org leaks.
+ * Returns a Map<sessionId, boolean> with false as default for sessions without handovers.
+ */
+export async function getHandoverStatusForSessions(
+  executor: Executor,
+  organizationId: string,
+  sessionIds: string[],
+): Promise<Map<string, boolean>> {
+  const result = new Map<string, boolean>();
+  if (sessionIds.length === 0) {
+    return result;
+  }
+
+  // Initialize all to false
+  for (const id of sessionIds) {
+    result.set(id, false);
+  }
+
+  const rows = await executor
+    .select({
+      cashSessionId: sql<string>`cash_session_id::text`,
+    })
+    .from(treasuryMovementsSchema)
+    .where(
+      sql`organization_id = ${organizationId}
+        AND type = 'handover'
+        AND cash_session_id = ANY(ARRAY[${sql.join(sessionIds.map(id => sql`${id}::uuid`), sql`, `)}])`,
+    );
+
+  for (const row of rows) {
+    if (row.cashSessionId) {
+      result.set(row.cashSessionId, true);
+    }
+  }
+
+  return result;
+}
+
+// ── Phase 3 PR2: placement helpers + badge counter ────────────────────────────
+
+export type PendingHandover = {
+  /** ID of the handover treasury_movements row — used as handoverMovementId in placements. */
+  id: string;
+  /** Original amount credited to Pendiente at close time. */
+  amount: number;
+  /** Remaining balance: amount − Σ(placed). */
+  remaining: number;
+  /** When the handover was created (close time). */
+  createdAt: Date;
+};
+
+/**
+ * Returns the list of pending handover movements with their remaining balances.
+ * A handover is "pending" while remaining > 0.
+ * Used by the TreasuryConsole placement queue to show per-handover placement rows.
+ */
+export async function listPendingHandovers(
+  executor: Executor,
+  organizationId: string,
+): Promise<PendingHandover[]> {
+  const rows = await executor
+    .select({
+      id: sql<string>`h.id::text`,
+      amount: sql<string>`h.amount::text`,
+      remaining: sql<string>`(h.amount - COALESCE(p.placed, 0))::text`,
+      createdAt: sql<Date>`h.created_at`,
+    })
+    .from(sql`treasury_movements h`)
+    .leftJoin(
+      sql`(
+        SELECT handover_movement_id, SUM(amount)::numeric AS placed
+        FROM treasury_movements
+        WHERE handover_movement_id IS NOT NULL
+        GROUP BY handover_movement_id
+      ) p`,
+      sql`p.handover_movement_id = h.id`,
+    )
+    .where(
+      sql`h.organization_id = ${organizationId}
+        AND h.type = 'handover'
+        AND (h.amount - COALESCE(p.placed, 0)) > 0`,
+    )
+    .orderBy(sql`h.created_at ASC`);
+
+  return rows.map(r => ({
+    id: r.id,
+    amount: Number.parseFloat(r.amount) || 0,
+    remaining: Number.parseFloat(r.remaining) || 0,
+    createdAt: new Date(r.createdAt),
+  }));
+}
+
+/**
+ * Returns the count and outstanding aggregate total of handover movements that
+ * have not yet been fully placed. A handover is "pending" while:
+ *   remaining = handover.amount − Σ(amount WHERE handover_movement_id = handover.id) > 0
+ *
+ * Mirrors countPendingReconciliations in transfer-reconciliation.ts.
+ * Feeds the "$X sin ubicar" badge on the dashboard / TreasuryConsole.
+ */
+export async function countPendingHandovers(
+  executor: Executor,
+  organizationId: string,
+): Promise<{ count: number; total: number }> {
+  const [row] = await executor
+    .select({
+      count: sql<number>`COUNT(*)::int`,
+      total: sql<string>`COALESCE(SUM(h.amount - COALESCE(p.placed, 0)), 0)::text`,
+    })
+    .from(sql`treasury_movements h`)
+    .leftJoin(
+      sql`(
+        SELECT handover_movement_id, SUM(amount)::numeric AS placed
+        FROM treasury_movements
+        WHERE handover_movement_id IS NOT NULL
+        GROUP BY handover_movement_id
+      ) p`,
+      sql`p.handover_movement_id = h.id`,
+    )
+    .where(
+      sql`h.organization_id = ${organizationId}
+        AND h.type = 'handover'
+        AND (h.amount - COALESCE(p.placed, 0)) > 0`,
+    );
+
+  return {
+    count: Number(row?.count ?? 0),
+    total: Number.parseFloat(row?.total ?? '0') || 0,
+  };
 }

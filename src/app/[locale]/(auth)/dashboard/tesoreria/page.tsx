@@ -1,7 +1,14 @@
+import { auth } from '@clerk/nextjs/server';
 import { setRequestLocale } from 'next-intl/server';
 import { listPaymentMethods } from '@/actions/payment-methods';
-import { getTimeline, getTreasury, listTreasuryAccounts } from '@/actions/treasury';
+import { getTimeline, getTreasury, getTreasuryHandoverSettings, listTreasuryAccounts } from '@/actions/treasury';
+import {
+  getHandoverStatusForSessionsAction,
+  getPendingHandoversOverview,
+  listPendingHandoversAction,
+} from '@/actions/treasury-placement';
 import { TitleBar } from '@/features/dashboard/TitleBar';
+import { HandoverToggle } from '@/features/treasury/HandoverToggle';
 import { SummaryCards } from '@/features/treasury/SummaryCards';
 import { TreasuryConsole } from '@/features/treasury/TreasuryConsole';
 import { TreasuryTimeline } from '@/features/treasury/TreasuryTimeline';
@@ -12,15 +19,47 @@ export default async function TesoreriaPage(props: {
   const { locale } = await props.params;
   setRequestLocale(locale);
 
-  const [treasury, treasuryAccountRows, methods, timelineEntries] = await Promise.all([
+  // Resolve whether the current user is the org owner (for the handover toggle).
+  const { orgRole } = await auth();
+  const isOwner = orgRole === 'org:admin';
+
+  const [treasury, treasuryAccountRows, methods, timelineEntries, handoverSettings] = await Promise.all([
     getTreasury().catch(() => []),
     listTreasuryAccounts().catch(() => []),
     listPaymentMethods({ activeOnly: true }).catch(() => []),
     getTimeline(50).catch(() => []),
+    getTreasuryHandoverSettings().catch(() => ({ enabled: false })),
   ]);
 
   // Header total = Σ all balances from the single getTreasuryPosition call.
   const totalEmpresa = treasury.reduce((acc, a) => acc + a.balance, 0);
+
+  // Pending handovers: only fetch when there is a transito balance (fast-path).
+  const hasTransito = treasury.some(a => a.type === 'transito' && a.balance > 0);
+
+  // Collect session IDs from caja entries for the R7 "entregado" label query.
+  const cajaSessionIds = treasury
+    .filter(a => a.type === 'caja' && a.sessionId)
+    .map(a => a.sessionId!);
+
+  const [pendingHandoversResult, pendingOverview, handoverStatusResult] = await Promise.all([
+    hasTransito
+      ? listPendingHandoversAction().catch(() => ({ ok: false as const, error: '' }))
+      : Promise.resolve({ ok: true as const, data: [] }),
+    getPendingHandoversOverview().catch(() => ({ ok: false as const, error: '' })),
+    cajaSessionIds.length > 0
+      ? getHandoverStatusForSessionsAction(cajaSessionIds).catch(() => ({ ok: false as const, error: '' }))
+      : Promise.resolve({ ok: true as const, data: {} as Record<string, boolean> }),
+  ]);
+
+  const pendingHandovers = pendingHandoversResult.ok ? pendingHandoversResult.data : [];
+  const handoverStatusBySessions: Record<string, boolean>
+    = handoverStatusResult.ok ? handoverStatusResult.data : {};
+
+  const pendingBadgeTotal
+    = pendingOverview.ok && pendingOverview.data.total > 0
+      ? pendingOverview.data.total
+      : 0;
 
   return (
     <>
@@ -28,6 +67,31 @@ export default async function TesoreriaPage(props: {
         title="Tesorería"
         description="Todo el dinero de la empresa en un solo lugar."
       />
+
+      {/* Sin-ubicar badge — shown when there is outstanding Pendiente balance */}
+      {pendingBadgeTotal > 0 && (
+        <div className="
+          mb-4 flex items-center gap-2 rounded-lg border border-amber-200
+          bg-amber-50 px-3 py-2 text-sm text-amber-800
+          dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300
+        "
+        >
+          <span className="font-medium">
+            {new Intl.NumberFormat('es-CO', {
+              style: 'currency',
+              currency: 'COP',
+              maximumFractionDigits: 0,
+            }).format(pendingBadgeTotal)}
+          </span>
+          <span className="
+            text-amber-700
+            dark:text-amber-400
+          "
+          >
+            sin ubicar
+          </span>
+        </div>
+      )}
 
       {/* Header: Dinero total empresa */}
       <div className="mb-6">
@@ -58,12 +122,21 @@ export default async function TesoreriaPage(props: {
         accountRows={treasuryAccountRows}
         transferMethods={methods}
         totalOverride={totalEmpresa}
+        pendingHandovers={pendingHandovers}
+        handoverStatusBySessions={handoverStatusBySessions}
       />
 
       {/* Slice C: Financial timeline — read-only movement history */}
       <div className="mt-8">
         <TreasuryTimeline entries={timelineEntries} />
       </div>
+
+      {/* PR4: handover opt-in toggle — owner only */}
+      {isOwner && (
+        <div className="mt-8">
+          <HandoverToggle initialEnabled={handoverSettings.enabled} />
+        </div>
+      )}
     </>
   );
 }

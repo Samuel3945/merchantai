@@ -4,15 +4,21 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { getOpeningExpected, validateOpenCarryover } from '@/libs/cash-helpers';
 import {
   balanceForAccount,
+  countPendingHandovers,
   createTreasuryAccount,
   deactivateTreasuryAccount,
   depositConfirmedTransfer,
   ensurePaymentMethodAccounts,
+  getHandoverStatusForSessions,
+  getOrCreatePendingAccount,
+  getRemainingForHandover,
+  getTreasuryHandoverEnabled,
   getTreasuryPosition,
   listTreasuryAccounts,
   recordBankConsignacion,
   recordContainerTransfer,
   recordGastoOutflow,
+  recordHandoverMovement,
   resolveBancoForMethod,
   seedOpeningBalance,
 } from '@/libs/treasury';
@@ -29,12 +35,20 @@ const ENUMS = [
   `CREATE TYPE "cash_movement_type" AS ENUM('sale', 'deposit', 'expense', 'salary', 'inventory_purchase', 'withdrawal', 'adjustment', 'advance', 'fiado_payment', 'reclassification')`,
   `CREATE TYPE "transfer_reconciliation_status" AS ENUM('pending', 'confirmed', 'not_arrived', 'mismatch')`,
   `CREATE TYPE "transfer_resolution_type" AS ENUM('receivable', 'loss', 'cashier_liability')`,
-  // 2A enum additions
-  `CREATE TYPE "treasury_account_type" AS ENUM('caja','caja_fuerte','banco')`,
-  `CREATE TYPE "treasury_movement_type" AS ENUM('transfer','consignacion','entrada','salida','gasto','adjustment')`,
+  // 2A enum additions + Phase 3 handover values
+  `CREATE TYPE "treasury_account_type" AS ENUM('caja','caja_fuerte','banco','transito')`,
+  `CREATE TYPE "treasury_movement_type" AS ENUM('transfer','consignacion','entrada','salida','gasto','adjustment','handover')`,
 ];
 
 const DDL = `
+  CREATE TABLE app_settings (
+    organization_id text NOT NULL,
+    key text NOT NULL,
+    value text DEFAULT '' NOT NULL,
+    updated_at timestamp DEFAULT now() NOT NULL,
+    PRIMARY KEY (organization_id, key)
+  );
+
   CREATE TABLE pos_tokens (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     organization_id text NOT NULL,
@@ -151,13 +165,15 @@ const DDL = `
     reason text,
     expense_id uuid REFERENCES expenses(id) ON DELETE RESTRICT,
     transfer_reconciliation_id uuid REFERENCES transfer_reconciliations(id) ON DELETE RESTRICT,
+    handover_movement_id uuid REFERENCES treasury_movements(id) ON DELETE RESTRICT,
+    cash_session_id uuid REFERENCES cash_sessions(id) ON DELETE SET NULL,
     created_by text NOT NULL,
     created_at timestamp DEFAULT now() NOT NULL,
     CONSTRAINT treasury_mov_one_external CHECK (
       num_nonnulls(from_account_id, to_account_id) = 2
       OR (
         num_nonnulls(from_account_id, to_account_id) = 1
-        AND type IN ('entrada', 'salida', 'gasto', 'consignacion', 'adjustment')
+        AND type IN ('entrada', 'salida', 'gasto', 'consignacion', 'adjustment', 'handover')
       )
     ),
     CONSTRAINT treasury_mov_transfer_recon_unique UNIQUE (transfer_reconciliation_id)
@@ -190,6 +206,7 @@ beforeEach(async () => {
   await pg.exec('DELETE FROM cash_movements');
   await pg.exec('DELETE FROM cash_sessions');
   await pg.exec('DELETE FROM pos_tokens');
+  await pg.exec('DELETE FROM app_settings');
 });
 
 function byKey(accounts: Awaited<ReturnType<typeof getTreasuryPosition>>) {
@@ -1515,7 +1532,9 @@ describe('validateOpenCarryover', () => {
       expected: 3000000,
       explanation: undefined,
     });
+
     expect(result.valid).toBe(false);
+
     if (!result.valid) {
       expect(result.code).toBe(422);
     }
@@ -1528,7 +1547,9 @@ describe('validateOpenCarryover', () => {
       expected: 3000000,
       explanation: '   ',
     });
+
     expect(result.valid).toBe(false);
+
     if (!result.valid) {
       expect(result.code).toBe(422);
     }
@@ -1542,7 +1563,9 @@ describe('validateOpenCarryover', () => {
       expected: 3000000,
       explanation: 'El supervisor retiró fondos antes del turno',
     });
+
     expect(result.valid).toBe(true);
+
     if (result.valid) {
       expect(result.difference).toBe(-200000);
     }
@@ -1556,7 +1579,9 @@ describe('validateOpenCarryover', () => {
       expected: 3000000,
       explanation: undefined,
     });
+
     expect(result.valid).toBe(true);
+
     if (result.valid) {
       expect(result.difference).toBe(0);
     }
@@ -1570,7 +1595,9 @@ describe('validateOpenCarryover', () => {
       expected: 0,
       explanation: undefined,
     });
+
     expect(result.valid).toBe(true);
+
     if (result.valid) {
       expect(result.difference).toBe(200000);
     }
@@ -1585,7 +1612,9 @@ describe('validateOpenCarryover', () => {
       expected: 3000000,
       explanation: undefined,
     });
+
     expect(result.valid).toBe(false);
+
     if (!result.valid) {
       expect(result.code).toBe(422);
     }
@@ -1661,6 +1690,7 @@ describe('R4: prior closed session immutability', () => {
       `SELECT counted_amount, opening_difference FROM cash_sessions WHERE id = $1`,
       [SESSION_A],
     );
+
     expect(Number(s1.rows[0]!.counted_amount)).toBe(3000000);
     expect(s1.rows[0]!.opening_difference).toBeNull();
 
@@ -1669,8 +1699,850 @@ describe('R4: prior closed session immutability', () => {
       `SELECT opening_expected, opening_difference, opening_explanation FROM cash_sessions WHERE id = $1`,
       [SESSION_B],
     );
+
     expect(Number(s2.rows[0]!.opening_expected)).toBe(3000000);
     expect(Number(s2.rows[0]!.opening_difference)).toBe(-200000);
     expect(s2.rows[0]!.opening_explanation).toBe('El supervisor retiró fondos');
+  });
+});
+
+// ── Phase 3 — Handover ledger foundation ─────────────────────────────────────
+
+describe('getOrCreatePendingAccount', () => {
+  it('creates a transito account on first call and returns it', async () => {
+    const acct = await getOrCreatePendingAccount(db, ORG, 'owner');
+
+    expect(acct.type).toBe('transito');
+    expect(acct.name).toBe('Pendiente de ubicar');
+    expect(acct.organizationId).toBe(ORG);
+    expect(Number(acct.openingBalance)).toBe(0);
+  });
+
+  it('is idempotent — second call returns the same account id', async () => {
+    const first = await getOrCreatePendingAccount(db, ORG, 'owner');
+    const second = await getOrCreatePendingAccount(db, ORG, 'owner');
+
+    expect(first.id).toBe(second.id);
+
+    const { rows } = await pg.query<{ cnt: string }>(
+      `SELECT COUNT(*)::text AS cnt FROM treasury_accounts WHERE organization_id = $1 AND type = 'transito'`,
+      [ORG],
+    );
+
+    expect(Number(rows[0]!.cnt)).toBe(1);
+  });
+});
+
+describe('recordHandoverMovement', () => {
+  it('inserts a movement with from=null, to=transito, type=handover and cash_session_id', async () => {
+    const sessionId = '00000000-0000-0000-0000-000000001234';
+    await pg.query(
+      `INSERT INTO cash_sessions (id, organization_id, pos_token_id, opened_by, opening_amount, status)
+       VALUES ($1, $2, NULL, 'cajero', '0', 'closed')`,
+      [sessionId, ORG],
+    );
+
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    const row = await recordHandoverMovement(db, {
+      organizationId: ORG,
+      toAccountId: pending.id,
+      amount: 3000000,
+      createdBy: 'owner',
+      cashSessionId: sessionId,
+    });
+
+    expect(row.type).toBe('handover');
+    expect(row.fromAccountId).toBeNull();
+    expect(row.toAccountId).toBe(pending.id);
+    expect(Number(row.amount)).toBe(3000000);
+    expect(row.cashSessionId).toBe(sessionId);
+    expect(row.organizationId).toBe(ORG);
+  });
+});
+
+describe('getTreasuryPosition — transito included', () => {
+  it('includes transito account balance in the position and grand total', async () => {
+    const sessionId = '00000000-0000-0000-0000-000000005678';
+    await pg.query(
+      `INSERT INTO cash_sessions (id, organization_id, pos_token_id, opened_by, opening_amount, status)
+       VALUES ($1, $2, NULL, 'cajero', '0', 'closed')`,
+      [sessionId, ORG],
+    );
+
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    await recordHandoverMovement(db, {
+      organizationId: ORG,
+      toAccountId: pending.id,
+      amount: 3000000,
+      createdBy: 'owner',
+      cashSessionId: sessionId,
+    });
+
+    const position = await getTreasuryPosition(db, ORG);
+    const transitoEntry = position.find(a => a.type === 'transito');
+
+    expect(transitoEntry).toBeDefined();
+    expect(transitoEntry!.balance).toBe(3000000);
+    expect(transitoEntry!.key).toBe(`transito:${pending.id}`);
+
+    const total = position.reduce((s, a) => s + a.balance, 0);
+
+    expect(total).toBeGreaterThanOrEqual(3000000);
+  });
+});
+
+describe('zero countedAmount — handover skipped', () => {
+  it('does not insert a handover movement when counted amount is 0', async () => {
+    const sessionId = '00000000-0000-0000-0000-000000009999';
+    await pg.query(
+      `INSERT INTO cash_sessions (id, organization_id, pos_token_id, opened_by, opening_amount, status)
+       VALUES ($1, $2, NULL, 'cajero', '0', 'closed')`,
+      [sessionId, ORG],
+    );
+
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+
+    const counted = 0;
+    if (Number.parseFloat(String(counted)) > 0) {
+      await recordHandoverMovement(db, {
+        organizationId: ORG,
+        toAccountId: pending.id,
+        amount: counted,
+        createdBy: 'owner',
+        cashSessionId: sessionId,
+      });
+    }
+
+    const { rows } = await pg.query<{ cnt: string }>(
+      `SELECT COUNT(*)::text AS cnt FROM treasury_movements WHERE type = 'handover' AND cash_session_id = $1`,
+      [sessionId],
+    );
+
+    expect(Number(rows[0]!.cnt)).toBe(0);
+  });
+});
+
+// ── PR2: countPendingHandovers + placement wiring ────────────────────────────
+
+// Helper — inserts a cash session and returns its id
+async function makeSession(id: string): Promise<string> {
+  await pg.query(
+    `INSERT INTO cash_sessions (id, organization_id, pos_token_id, opened_by, opening_amount, status)
+     VALUES ($1, $2, NULL, 'cajero', '0', 'closed')`,
+    [id, ORG],
+  );
+  return id;
+}
+
+// Helper — seeds a handover movement and returns the movement row id
+async function makeHandover(pendingId: string, sessionId: string, amount: number): Promise<string> {
+  const row = await recordHandoverMovement(db, {
+    organizationId: ORG,
+    toAccountId: pendingId,
+    amount,
+    createdBy: 'owner',
+    cashSessionId: sessionId,
+  });
+  return row.id;
+}
+
+describe('countPendingHandovers', () => {
+  const SES_A = '00000000-0000-0000-aaa0-000000000001';
+  const SES_B = '00000000-0000-0000-bbb0-000000000001';
+
+  it('returns count=0 and total=0 when no handovers exist', async () => {
+    const result = await countPendingHandovers(db, ORG);
+
+    expect(result.count).toBe(0);
+    expect(result.total).toBe(0);
+  });
+
+  it('counts unsettled handovers and their outstanding total', async () => {
+    // H1: $3M handover, $1M placed → remaining $2M
+    await makeSession(SES_A);
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    const bancoId = await makeAccount('banco', 'Banco Badge Test', 0);
+
+    const h1Id = await makeHandover(pending.id, SES_A, 3000000);
+    // Place $1M from H1 (tagged with handover_movement_id)
+    await pg.query(
+      `INSERT INTO treasury_movements (organization_id, from_account_id, to_account_id, amount, type, handover_movement_id, created_by)
+       VALUES ($1, $2, $3, '1000000.00', 'consignacion', $4, 'owner')`,
+      [ORG, pending.id, bancoId, h1Id],
+    );
+
+    // H2: $500k handover, no placements → remaining $500k
+    await makeSession(SES_B);
+    await makeHandover(pending.id, SES_B, 500000);
+
+    const result = await countPendingHandovers(db, ORG);
+
+    expect(result.count).toBe(2);
+    expect(result.total).toBeCloseTo(2500000, 0);
+  });
+
+  it('excludes fully-placed handovers from the count', async () => {
+    // H1: $1M handover, fully placed → excluded
+    await makeSession(SES_A);
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    const bancoId = await makeAccount('banco', 'Banco Full Test', 0);
+
+    const h1Id = await makeHandover(pending.id, SES_A, 1000000);
+    await pg.query(
+      `INSERT INTO treasury_movements (organization_id, from_account_id, to_account_id, amount, type, handover_movement_id, created_by)
+       VALUES ($1, $2, $3, '1000000.00', 'consignacion', $4, 'owner')`,
+      [ORG, pending.id, bancoId, h1Id],
+    );
+
+    // H2: $500k handover, no placements → still pending
+    await makeSession(SES_B);
+    const h2Id = await makeHandover(pending.id, SES_B, 500000);
+    void h2Id;
+
+    const result = await countPendingHandovers(db, ORG);
+
+    expect(result.count).toBe(1);
+    expect(result.total).toBeCloseTo(500000, 0);
+  });
+
+  it('badge clears — all handovers fully placed → count=0 and total=0', async () => {
+    await makeSession(SES_A);
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    const bancoId = await makeAccount('banco', 'Banco Clear Test', 0);
+
+    const h1Id = await makeHandover(pending.id, SES_A, 500000);
+    await pg.query(
+      `INSERT INTO treasury_movements (organization_id, from_account_id, to_account_id, amount, type, handover_movement_id, created_by)
+       VALUES ($1, $2, $3, '500000.00', 'consignacion', $4, 'owner')`,
+      [ORG, pending.id, bancoId, h1Id],
+    );
+
+    const result = await countPendingHandovers(db, ORG);
+
+    expect(result.count).toBe(0);
+    expect(result.total).toBe(0);
+  });
+
+  it('scopes results to the org — another org handovers do not leak', async () => {
+    await makeSession(SES_A);
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    await makeHandover(pending.id, SES_A, 1000000);
+
+    // Other org: create its own pending account and handover
+    await pg.query(
+      `INSERT INTO treasury_accounts (id, organization_id, type, name, opening_balance, active, created_at, updated_at)
+       VALUES ('00000000-0000-0000-0000-999999999990', 'other-org', 'transito', 'Pendiente de ubicar', '0', true, now(), now())`,
+    );
+    await pg.query(
+      `INSERT INTO cash_sessions (id, organization_id, pos_token_id, opened_by, opening_amount, status)
+       VALUES ('00000000-0000-0000-0000-999999999991', 'other-org', NULL, 'cajero', '0', 'closed')`,
+    );
+    await pg.query(
+      `INSERT INTO treasury_movements (organization_id, from_account_id, to_account_id, amount, type, cash_session_id, created_by)
+       VALUES ('other-org', NULL, '00000000-0000-0000-0000-999999999990', '2000000.00', 'handover', '00000000-0000-0000-0000-999999999991', 'owner')`,
+    );
+
+    const result = await countPendingHandovers(db, ORG);
+
+    expect(result.count).toBe(1);
+    expect(result.total).toBeCloseTo(1000000, 0);
+  });
+});
+
+// ── PR2: placement helpers with handoverMovementId tagging ──────────────────
+
+describe('recordBankConsignacion — handoverMovementId tagging', () => {
+  it('threads handoverMovementId into the inserted row when provided', async () => {
+    const SES = '00000000-0000-0000-dd00-000000000001';
+    await makeSession(SES);
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    const bancoId = await makeAccount('banco', 'Banco HMI Test', 0);
+
+    // Create a handover row to reference
+    const handoverId = await makeHandover(pending.id, SES, 2000000);
+
+    const row = await recordBankConsignacion(db, {
+      organizationId: ORG,
+      fromAccountId: pending.id,
+      toBankAccountId: bancoId,
+      amount: 2000000,
+      createdBy: 'owner',
+      handoverMovementId: handoverId,
+    });
+
+    expect(row.type).toBe('consignacion');
+    expect(row.fromAccountId).toBe(pending.id);
+    expect(row.toAccountId).toBe(bancoId);
+    expect(row.handoverMovementId).toBe(handoverId);
+
+    const pendingBal = await dbBalance(pending.id, 0);
+
+    expect(pendingBal).toBe(0); // 2M handover − 2M placement = 0
+  });
+
+  it('works without handoverMovementId (existing callers unaffected)', async () => {
+    const vaultId = await makeAccount('caja_fuerte', 'Vault HMI None', 500000);
+    const bancoId = await makeAccount('banco', 'Banco HMI None', 0);
+
+    const row = await recordBankConsignacion(db, {
+      organizationId: ORG,
+      fromAccountId: vaultId,
+      toBankAccountId: bancoId,
+      amount: 500000,
+      createdBy: 'owner',
+    });
+
+    expect(row.handoverMovementId).toBeNull();
+  });
+});
+
+describe('recordContainerTransfer — handoverMovementId tagging', () => {
+  it('threads handoverMovementId into the inserted row when provided', async () => {
+    const SES = '00000000-0000-0000-ee00-000000000001';
+    await makeSession(SES);
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    const vaultId = await makeAccount('caja_fuerte', 'Vault RCT HMI', 0);
+
+    const handoverId = await makeHandover(pending.id, SES, 1000000);
+
+    const row = await recordContainerTransfer(db, {
+      organizationId: ORG,
+      fromAccountId: pending.id,
+      toAccountId: vaultId,
+      amount: 1000000,
+      createdBy: 'owner',
+      handoverMovementId: handoverId,
+    });
+
+    expect(row.type).toBe('transfer');
+    expect(row.handoverMovementId).toBe(handoverId);
+  });
+
+  it('works without handoverMovementId (existing callers unaffected)', async () => {
+    const fromId = await makeAccount('caja_fuerte', 'Vault RCT None From', 200000);
+    const toId = await makeAccount('caja_fuerte', 'Vault RCT None To', 0);
+
+    const row = await recordContainerTransfer(db, {
+      organizationId: ORG,
+      fromAccountId: fromId,
+      toAccountId: toId,
+      amount: 200000,
+      createdBy: 'owner',
+    });
+
+    expect(row.handoverMovementId).toBeNull();
+  });
+});
+
+describe('recordGastoOutflow — handoverMovementId tagging', () => {
+  it('threads handoverMovementId into the treasury_movements row when provided', async () => {
+    const SES = '00000000-0000-0000-ff00-000000000001';
+    await makeSession(SES);
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+
+    const handoverId = await makeHandover(pending.id, SES, 500000);
+
+    await recordGastoOutflow(db, {
+      organizationId: ORG,
+      fromAccountId: pending.id,
+      amount: 500000,
+      category: 'servicios',
+      description: 'Pago luz',
+      incurredOn: '2026-06-16',
+      createdBy: 'owner',
+      handoverMovementId: handoverId,
+    });
+
+    const movRows = await pg.query<{ handover_movement_id: string | null }>(
+      `SELECT handover_movement_id FROM treasury_movements WHERE type = 'gasto' AND organization_id = $1`,
+      [ORG],
+    );
+
+    expect(movRows.rows).toHaveLength(1);
+    expect(movRows.rows[0]!.handover_movement_id).toBe(handoverId);
+  });
+
+  it('works without handoverMovementId (existing callers unaffected)', async () => {
+    const fromId = await makeAccount('caja_fuerte', 'Vault Gasto HMI None', 500000);
+
+    await recordGastoOutflow(db, {
+      organizationId: ORG,
+      fromAccountId: fromId,
+      amount: 100000,
+      category: 'otros',
+      description: null,
+      incurredOn: '2026-06-16',
+      createdBy: 'owner',
+    });
+
+    const movRows = await pg.query<{ handover_movement_id: string | null }>(
+      `SELECT handover_movement_id FROM treasury_movements WHERE type = 'gasto' AND organization_id = $1`,
+      [ORG],
+    );
+
+    expect(movRows.rows).toHaveLength(1);
+    expect(movRows.rows[0]!.handover_movement_id).toBeNull();
+  });
+});
+
+// ── PR3: per-handover remaining guard + split mechanics ───────────────────────
+
+describe('getRemainingForHandover', () => {
+  const SES_R = '00000000-0000-0000-aa10-000000000001';
+
+  it('returns the full handover amount when nothing has been placed', async () => {
+    await makeSession(SES_R);
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    const handoverId = await makeHandover(pending.id, SES_R, 3000000);
+
+    const remaining = await getRemainingForHandover(db, handoverId, ORG);
+
+    expect(remaining).toBe(3000000);
+  });
+
+  it('subtracts placed amounts from the remaining', async () => {
+    await makeSession(SES_R);
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    const bancoId = await makeAccount('banco', 'Banco Remaining Test', 0);
+    const handoverId = await makeHandover(pending.id, SES_R, 3000000);
+
+    // Place $1M
+    await pg.query(
+      `INSERT INTO treasury_movements (organization_id, from_account_id, to_account_id, amount, type, handover_movement_id, created_by)
+       VALUES ($1, $2, $3, '1000000.00', 'consignacion', $4, 'owner')`,
+      [ORG, pending.id, bancoId, handoverId],
+    );
+
+    const remaining = await getRemainingForHandover(db, handoverId, ORG);
+
+    expect(remaining).toBeCloseTo(2000000, 0);
+  });
+
+  it('returns 0 when the handover is fully placed (settled)', async () => {
+    await makeSession(SES_R);
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    const bancoId = await makeAccount('banco', 'Banco Settled Test', 0);
+    const handoverId = await makeHandover(pending.id, SES_R, 1000000);
+
+    // Place the full amount
+    await pg.query(
+      `INSERT INTO treasury_movements (organization_id, from_account_id, to_account_id, amount, type, handover_movement_id, created_by)
+       VALUES ($1, $2, $3, '1000000.00', 'consignacion', $4, 'owner')`,
+      [ORG, pending.id, bancoId, handoverId],
+    );
+
+    const remaining = await getRemainingForHandover(db, handoverId, ORG);
+
+    expect(remaining).toBe(0);
+  });
+});
+
+describe('per-handover over-place guard', () => {
+  const SES_G1 = '00000000-0000-0000-bb10-000000000001';
+  const SES_G2 = '00000000-0000-0000-bb10-000000000002';
+
+  it('rejects when placement would exceed the per-handover remaining (account has enough, but handover does not)', async () => {
+    // Set up: H1 = $1M, H2 = $3M. Total transito = $4M.
+    // Place $800k against H1 → H1 remaining = $200k.
+    // Try to place $300k against H1 → per-account guard passes ($3.2M avail)
+    //   but per-handover guard rejects ($200k remaining < $300k requested).
+    await makeSession(SES_G1);
+    await makeSession(SES_G2);
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    const bancoId = await makeAccount('banco', 'Banco Guard Multi Test', 0);
+
+    const h1Id = await makeHandover(pending.id, SES_G1, 1000000);
+    await makeHandover(pending.id, SES_G2, 3000000); // H2 untouched
+
+    // Partial place $800k against H1
+    await recordBankConsignacion(db, {
+      organizationId: ORG,
+      fromAccountId: pending.id,
+      toBankAccountId: bancoId,
+      amount: 800000,
+      createdBy: 'owner',
+      handoverMovementId: h1Id,
+    });
+
+    // $300k > H1 remaining ($200k) — must be rejected by per-handover guard
+    await expect(
+      recordBankConsignacion(db, {
+        organizationId: ORG,
+        fromAccountId: pending.id,
+        toBankAccountId: bancoId,
+        amount: 300000,
+        createdBy: 'owner',
+        handoverMovementId: h1Id,
+      }),
+    ).rejects.toThrow(/excede el saldo pendiente/);
+  });
+
+  it('allows placing exactly the remaining amount (boundary)', async () => {
+    await makeSession(SES_G1);
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    const bancoId = await makeAccount('banco', 'Banco Boundary Test', 0);
+    const handoverId = await makeHandover(pending.id, SES_G1, 1000000);
+
+    // Place $600k
+    await recordBankConsignacion(db, {
+      organizationId: ORG,
+      fromAccountId: pending.id,
+      toBankAccountId: bancoId,
+      amount: 600000,
+      createdBy: 'owner',
+      handoverMovementId: handoverId,
+    });
+
+    // Place exactly the remaining $400k — must succeed
+    const row = await recordBankConsignacion(db, {
+      organizationId: ORG,
+      fromAccountId: pending.id,
+      toBankAccountId: bancoId,
+      amount: 400000,
+      createdBy: 'owner',
+      handoverMovementId: handoverId,
+    });
+
+    expect(row.type).toBe('consignacion');
+    expect(Number(row.amount)).toBe(400000);
+  });
+});
+
+describe('split drain to zero — settled state', () => {
+  const SES_S = '00000000-0000-0000-cc10-000000000001';
+
+  it('3-way split: all placements tagged H1 drain it to exactly 0', async () => {
+    await makeSession(SES_S);
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    const bancoId = await makeAccount('banco', 'Banco Split Test', 0);
+    const vaultId = await makeAccount('caja_fuerte', 'Vault Split Test', 0);
+    const handoverId = await makeHandover(pending.id, SES_S, 1500000);
+
+    // Three partial placements summing to $1.5M
+    await recordBankConsignacion(db, {
+      organizationId: ORG,
+      fromAccountId: pending.id,
+      toBankAccountId: bancoId,
+      amount: 500000,
+      createdBy: 'owner',
+      handoverMovementId: handoverId,
+    });
+    await recordContainerTransfer(db, {
+      organizationId: ORG,
+      fromAccountId: pending.id,
+      toAccountId: vaultId,
+      amount: 600000,
+      createdBy: 'owner',
+      handoverMovementId: handoverId,
+    });
+    await recordBankConsignacion(db, {
+      organizationId: ORG,
+      fromAccountId: pending.id,
+      toBankAccountId: bancoId,
+      amount: 400000,
+      createdBy: 'owner',
+      handoverMovementId: handoverId,
+    });
+
+    const remaining = await getRemainingForHandover(db, handoverId, ORG);
+
+    expect(remaining).toBe(0);
+
+    // Exactly 3 placement rows tagged to H1
+    const { rows } = await pg.query<{ cnt: string }>(
+      `SELECT COUNT(*)::text AS cnt FROM treasury_movements WHERE handover_movement_id = $1`,
+      [handoverId],
+    );
+
+    expect(Number(rows[0]!.cnt)).toBe(3);
+  });
+
+  it('settled handover (remaining=0) is excluded from listPendingHandovers', async () => {
+    await makeSession(SES_S);
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    const bancoId = await makeAccount('banco', 'Banco Settled List', 0);
+    const handoverId = await makeHandover(pending.id, SES_S, 500000);
+
+    // Fully settle
+    await recordBankConsignacion(db, {
+      organizationId: ORG,
+      fromAccountId: pending.id,
+      toBankAccountId: bancoId,
+      amount: 500000,
+      createdBy: 'owner',
+      handoverMovementId: handoverId,
+    });
+
+    const list = await import('@/libs/treasury').then(m => m.listPendingHandovers(db, ORG));
+
+    expect(list.every(h => h.id !== handoverId)).toBe(true);
+  });
+
+  it('settled handover is excluded from countPendingHandovers', async () => {
+    await makeSession(SES_S);
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    const bancoId = await makeAccount('banco', 'Banco Settled Count', 0);
+    const handoverId = await makeHandover(pending.id, SES_S, 300000);
+
+    // Fully settle
+    await recordBankConsignacion(db, {
+      organizationId: ORG,
+      fromAccountId: pending.id,
+      toBankAccountId: bancoId,
+      amount: 300000,
+      createdBy: 'owner',
+      handoverMovementId: handoverId,
+    });
+
+    const { count } = await countPendingHandovers(db, ORG);
+
+    expect(count).toBe(0);
+  });
+});
+
+describe('multi-handover independence', () => {
+  const SES_M1 = '00000000-0000-0000-dd10-000000000001';
+  const SES_M2 = '00000000-0000-0000-dd10-000000000002';
+
+  it('H1 and H2 per-handover remaining are independent', async () => {
+    await makeSession(SES_M1);
+    await makeSession(SES_M2);
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    const bancoId = await makeAccount('banco', 'Banco Multi Test', 0);
+
+    const h1Id = await makeHandover(pending.id, SES_M1, 2000000);
+    const h2Id = await makeHandover(pending.id, SES_M2, 1000000);
+
+    // Place $1.5M against H1 only
+    await recordBankConsignacion(db, {
+      organizationId: ORG,
+      fromAccountId: pending.id,
+      toBankAccountId: bancoId,
+      amount: 1500000,
+      createdBy: 'owner',
+      handoverMovementId: h1Id,
+    });
+
+    const r1 = await getRemainingForHandover(db, h1Id, ORG);
+    const r2 = await getRemainingForHandover(db, h2Id, ORG);
+
+    expect(r1).toBeCloseTo(500000, 0); // H1: 2M − 1.5M
+    expect(r2).toBe(1000000); // H2: untouched
+  });
+});
+
+describe('getHandoverStatusForSessions', () => {
+  const SES_H1 = '00000000-0000-0000-ee10-000000000001';
+  const SES_H2 = '00000000-0000-0000-ee10-000000000002';
+  const SES_H3 = '00000000-0000-0000-ee10-000000000003';
+
+  it('returns true for sessions that have a handover movement', async () => {
+    await makeSession(SES_H1);
+    await makeSession(SES_H2);
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    await makeHandover(pending.id, SES_H1, 1000000);
+    // SES_H2 has no handover
+
+    const result = await getHandoverStatusForSessions(db, ORG, [SES_H1, SES_H2]);
+
+    expect(result.get(SES_H1)).toBe(true);
+    expect(result.get(SES_H2)).toBe(false);
+  });
+
+  it('returns false for all sessions when none have handovers', async () => {
+    await makeSession(SES_H3);
+
+    const result = await getHandoverStatusForSessions(db, ORG, [SES_H3]);
+
+    expect(result.get(SES_H3)).toBe(false);
+  });
+
+  it('returns an empty map for an empty input', async () => {
+    const result = await getHandoverStatusForSessions(db, ORG, []);
+
+    expect(result.size).toBe(0);
+  });
+
+  it('does not leak sessions from other orgs', async () => {
+    await makeSession(SES_H1);
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    await makeHandover(pending.id, SES_H1, 1000000);
+
+    // Query from a different org — should get false, not true
+    const result = await getHandoverStatusForSessions(db, 'other-org', [SES_H1]);
+
+    expect(result.get(SES_H1)).toBe(false);
+  });
+});
+
+// ── PR4: opt-in config flag ────────────────────────────────────────────────────
+
+describe('getTreasuryHandoverEnabled', () => {
+  it('returns false (default) when no setting row exists for the org', async () => {
+    const enabled = await getTreasuryHandoverEnabled(db, ORG);
+
+    expect(enabled).toBe(false);
+  });
+
+  it('returns true when the org has the flag set to "true"', async () => {
+    await pg.query(
+      `INSERT INTO app_settings (organization_id, key, value) VALUES ($1, 'treasuryHandoverEnabled', 'true')`,
+      [ORG],
+    );
+
+    const enabled = await getTreasuryHandoverEnabled(db, ORG);
+
+    expect(enabled).toBe(true);
+  });
+
+  it('returns false when the org has the flag set to "false"', async () => {
+    await pg.query(
+      `INSERT INTO app_settings (organization_id, key, value) VALUES ($1, 'treasuryHandoverEnabled', 'false')`,
+      [ORG],
+    );
+
+    const enabled = await getTreasuryHandoverEnabled(db, ORG);
+
+    expect(enabled).toBe(false);
+  });
+
+  it('is scoped per org — flag off for org2 does not affect org1', async () => {
+    await pg.query(
+      `INSERT INTO app_settings (organization_id, key, value) VALUES ($1, 'treasuryHandoverEnabled', 'true')`,
+      [ORG],
+    );
+
+    const enabledOrg1 = await getTreasuryHandoverEnabled(db, ORG);
+    const enabledOrg2 = await getTreasuryHandoverEnabled(db, 'org-2');
+
+    expect(enabledOrg1).toBe(true);
+    expect(enabledOrg2).toBe(false);
+  });
+});
+
+// ── PR4: double-count fix in getTreasuryPosition ───────────────────────────────
+
+describe('getTreasuryPosition — caja contribution subtracts handover when flag ON', () => {
+  const SES_DC = '00000000-0000-0000-ff01-000000000001';
+
+  it('caja balance stays at counted when flag OFF (no handover rows — Option A unchanged)', async () => {
+    // Setup: token + closed session with counted=100
+    const tokenRes = await pg.query<{ id: string }>(
+      `INSERT INTO pos_tokens (id, organization_id, device_name) VALUES (gen_random_uuid(), $1, 'Caja DC') RETURNING id`,
+      [ORG],
+    );
+    const tokenId = tokenRes.rows[0]!.id;
+    await pg.query(
+      `INSERT INTO cash_sessions (id, organization_id, pos_token_id, opened_by, opening_amount, status, closed_at, counted_amount)
+       VALUES ($1, $2, $3, 'cajero', '0', 'closed', now(), '100.00')`,
+      [SES_DC, ORG, tokenId],
+    );
+    // No handover rows; flag OFF (no app_settings row).
+    const accounts = await getTreasuryPosition(db, ORG);
+    const caja = accounts.find(a => a.type === 'caja');
+
+    // Carry-over: caja balance = last counted = 100
+    expect(caja?.balance).toBe(100);
+  });
+
+  it('caja contribution subtracts handover when flag ON and handover exists for last session', async () => {
+    // Enable the flag
+    await pg.query(
+      `INSERT INTO app_settings (organization_id, key, value) VALUES ($1, 'treasuryHandoverEnabled', 'true')`,
+      [ORG],
+    );
+    const tokenRes = await pg.query<{ id: string }>(
+      `INSERT INTO pos_tokens (id, organization_id, device_name) VALUES (gen_random_uuid(), $1, 'Caja DC2') RETURNING id`,
+      [ORG],
+    );
+    const tokenId = tokenRes.rows[0]!.id;
+    await pg.query(
+      `INSERT INTO cash_sessions (id, organization_id, pos_token_id, opened_by, opening_amount, status, closed_at, counted_amount)
+       VALUES ($1, $2, $3, 'cajero', '0', 'closed', now(), '100.00')`,
+      [SES_DC, ORG, tokenId],
+    );
+    // Seed transito account and handover movement (full handover of 100)
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    await makeHandover(pending.id, SES_DC, 100);
+
+    const accounts = await getTreasuryPosition(db, ORG);
+    const caja = accounts.find(a => a.type === 'caja');
+
+    // Caja contribution: counted(100) − handover(100) = 0, not double-counted
+    expect(caja?.balance).toBe(0);
+  });
+});
+
+// ── PR4: getRemainingForHandover tenant-scope ──────────────────────────────────
+
+describe('getRemainingForHandover — tenant scoping', () => {
+  const SES_TS1 = '00000000-0000-0000-ff02-000000000001';
+
+  it('rejects a foreign-org handoverId by returning 0 (not the real remaining)', async () => {
+    // Set up handover for ORG
+    await makeSession(SES_TS1);
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    const handoverId = await makeHandover(pending.id, SES_TS1, 500000);
+
+    // Call with wrong org — must return 0 (no visible remaining for foreign org)
+    const remaining = await getRemainingForHandover(db, handoverId, 'other-org');
+
+    expect(remaining).toBe(0);
+  });
+
+  it('returns the correct remaining for the owner org', async () => {
+    await makeSession(SES_TS1);
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    const handoverId = await makeHandover(pending.id, SES_TS1, 500000);
+
+    const remaining = await getRemainingForHandover(db, handoverId, ORG);
+
+    expect(remaining).toBe(500000);
+  });
+});
+
+// ── PR4: getOpeningExpected post-handover ──────────────────────────────────────
+
+describe('getOpeningExpected — post-handover adjustment', () => {
+  const SES_OE = '00000000-0000-0000-ff03-000000000001';
+  const TOKEN_OE = '00000000-0000-0000-ff03-000000000002';
+
+  beforeEach(async () => {
+    await pg.query(
+      `INSERT INTO pos_tokens (id, organization_id, device_name) VALUES ($1, $2, 'Caja OE')`,
+      [TOKEN_OE, ORG],
+    );
+    await pg.query(
+      `INSERT INTO cash_sessions (id, organization_id, pos_token_id, opened_by, opening_amount, status, closed_at, counted_amount)
+       VALUES ($1, $2, $3, 'cajero', '0', 'closed', now(), '1000.00')`,
+      [SES_OE, ORG, TOKEN_OE],
+    );
+  });
+
+  it('returns counted as expected when no handover exists (Option A carry-over unchanged)', async () => {
+    const result = await getOpeningExpected(db, ORG, TOKEN_OE);
+
+    expect(result.expected).toBe(1000);
+    expect(result.priorCloseExists).toBe(true);
+  });
+
+  it('returns expected=0 and priorCloseExists=false when session was fully handed over', async () => {
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    await makeHandover(pending.id, SES_OE, 1000); // fully handed: handover = counted
+
+    const result = await getOpeningExpected(db, ORG, TOKEN_OE);
+
+    expect(result.expected).toBe(0);
+    expect(result.priorCloseExists).toBe(false);
+  });
+
+  it('returns expected = counted − handover when session was partially handed over', async () => {
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    await makeHandover(pending.id, SES_OE, 400); // partial: 400 out of 1000
+
+    const result = await getOpeningExpected(db, ORG, TOKEN_OE);
+
+    expect(result.expected).toBe(600); // 1000 − 400
+    expect(result.priorCloseExists).toBe(true);
   });
 });

@@ -1,6 +1,6 @@
 import type { TreasuryAccount } from '@/libs/treasury';
 import { describe, expect, it } from 'vitest';
-import { classifyTimelineDirection, sumBancos, sumEfectivo } from './utils';
+import { classifyTimelineDirection, sumBancos, sumEfectivo, sumTransito, wasSessionHandedOver } from './utils';
 
 function acct(type: TreasuryAccount['type'], balance: number): TreasuryAccount {
   return { key: `${type}:${balance}`, name: type, type, balance };
@@ -39,11 +39,58 @@ describe('sumBancos', () => {
   });
 });
 
-describe('efectivo + bancos buckets', () => {
-  it('partition the whole position with no overlap and no dropped type', () => {
-    const total = mixed.reduce((acc, a) => acc + a.balance, 0);
+describe('sumTransito', () => {
+  it('sums only transito balances (Pendiente de ubicar)', () => {
+    const accts = [acct('caja', 1_000), acct('transito', 3_000_000), acct('transito', 500_000)];
 
-    expect(sumEfectivo(mixed) + sumBancos(mixed)).toBe(total);
+    expect(sumTransito(accts)).toBe(3_500_000);
+  });
+
+  it('returns 0 when there are no transito accounts', () => {
+    expect(sumTransito(mixed)).toBe(0);
+  });
+});
+
+describe('efectivo + bancos + transito buckets', () => {
+  it('partition the whole position with no overlap and no dropped type', () => {
+    const withTransito = [...mixed, acct('transito', 3_000_000)];
+    const total = withTransito.reduce((acc, a) => acc + a.balance, 0);
+
+    expect(
+      sumEfectivo(withTransito) + sumBancos(withTransito) + sumTransito(withTransito),
+    ).toBe(total);
+  });
+});
+
+describe('wasSessionHandedOver', () => {
+  it('returns true when account is caja, sessionId is set, and map says true', () => {
+    const account: Pick<TreasuryAccount, 'type' | 'sessionId'> = { type: 'caja', sessionId: 'ses-1' };
+
+    expect(wasSessionHandedOver(account, { 'ses-1': true })).toBe(true);
+  });
+
+  it('returns false when account is caja but map says false', () => {
+    const account: Pick<TreasuryAccount, 'type' | 'sessionId'> = { type: 'caja', sessionId: 'ses-1' };
+
+    expect(wasSessionHandedOver(account, { 'ses-1': false })).toBe(false);
+  });
+
+  it('returns false when account type is not caja (e.g. caja_fuerte)', () => {
+    const account: Pick<TreasuryAccount, 'type' | 'sessionId'> = { type: 'caja_fuerte', sessionId: 'ses-1' };
+
+    expect(wasSessionHandedOver(account, { 'ses-1': true })).toBe(false);
+  });
+
+  it('returns false when sessionId is undefined', () => {
+    const account: Pick<TreasuryAccount, 'type' | 'sessionId'> = { type: 'caja', sessionId: undefined };
+
+    expect(wasSessionHandedOver(account, { 'ses-1': true })).toBe(false);
+  });
+
+  it('returns false when no map is provided (default OFF)', () => {
+    const account: Pick<TreasuryAccount, 'type' | 'sessionId'> = { type: 'caja', sessionId: 'ses-1' };
+
+    expect(wasSessionHandedOver(account)).toBe(false);
   });
 });
 

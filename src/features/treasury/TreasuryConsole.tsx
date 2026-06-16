@@ -2,11 +2,16 @@
 
 import type { ReactNode } from 'react';
 import type { PaymentMethodRow } from '@/actions/payment-methods';
-import type { TreasuryAccount, TreasuryAccountRow } from '@/libs/treasury';
+import type { PendingHandover, TreasuryAccount, TreasuryAccountRow } from '@/libs/treasury';
 import { ChevronDown, Coins, Landmark, Lock, Plus, Wallet } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import { createBanco, createCajaFuerte } from '@/actions/treasury';
+import {
+  placeHandoverAsGasto,
+  placeHandoverToBanco,
+  placeHandoverToCajaFuerte,
+} from '@/actions/treasury-placement';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
 import { cashInputCls, money } from '@/features/cash/cash-ui';
@@ -14,11 +19,13 @@ import { Consignar } from './Consignar';
 import { GastoForm } from './GastoForm';
 import { MoneyTree } from './MoneyTree';
 import { MoverDineroForm } from './MoverDineroForm';
+import { wasSessionHandedOver } from './utils';
 
 const GROUPS: { type: TreasuryAccount['type']; label: string }[] = [
   { type: 'caja', label: 'Cajas' },
   { type: 'caja_fuerte', label: 'Caja fuerte' },
   { type: 'banco', label: 'Cuentas bancarias' },
+  { type: 'transito', label: 'Pendiente de ubicar' },
 ];
 
 function sum(items: TreasuryAccount[]): number {
@@ -275,6 +282,196 @@ function AgregarBancoForm({
   );
 }
 
+// ── Placement panel (drain Pendiente to final destination) ────────────────────
+
+type PlacementDestination = 'banco' | 'caja_fuerte' | 'gasto';
+
+/**
+ * Single handover placement row — lets the owner place the full remaining
+ * balance of one handover to a chosen destination.
+ * Mirrors the Consignar.tsx UX pattern.
+ */
+function HandoverPlacementRow(props: {
+  handover: PendingHandover;
+  bankAccounts: TreasuryAccountRow[];
+  cajaFuerteAccounts: TreasuryAccountRow[];
+}) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [pending, startTransition] = useTransition();
+  const [destination, setDestination] = useState<PlacementDestination>('banco');
+  const [destAccountId, setDestAccountId] = useState('');
+  const [amount, setAmount] = useState(String(props.handover.remaining));
+  const [error, setError] = useState<string | null>(null);
+
+  const bankOptions = props.bankAccounts.map(a => ({ value: a.id, label: a.name }));
+  const vaultOptions = props.cajaFuerteAccounts.map(a => ({ value: a.id, label: a.name }));
+
+  const destinationOptions: { value: PlacementDestination; label: string }[] = [
+    ...(props.bankAccounts.length > 0 ? [{ value: 'banco' as const, label: 'Banco' }] : []),
+    ...(props.cajaFuerteAccounts.length > 0 ? [{ value: 'caja_fuerte' as const, label: 'Caja fuerte' }] : []),
+    { value: 'gasto' as const, label: 'Gasto (salida de tesorería)' },
+  ];
+
+  function submit() {
+    setError(null);
+    startTransition(async () => {
+      try {
+        let res;
+        if (destination === 'banco') {
+          if (!destAccountId) {
+            setError('Seleccioná un banco destino');
+            return;
+          }
+          res = await placeHandoverToBanco(props.handover.id, destAccountId, amount);
+        } else if (destination === 'caja_fuerte') {
+          if (!destAccountId) {
+            setError('Seleccioná una caja fuerte destino');
+            return;
+          }
+          res = await placeHandoverToCajaFuerte(props.handover.id, destAccountId, amount);
+        } else {
+          res = await placeHandoverAsGasto(props.handover.id, amount);
+        }
+        if (!res.ok) {
+          setError(res.error);
+          return;
+        }
+        setOpen(false);
+        setAmount('');
+        setDestAccountId('');
+        router.refresh();
+      } catch {
+        setError('Ocurrió un error inesperado. Volvé a intentar.');
+      }
+    });
+  }
+
+  const dateLabel = props.handover.createdAt.toLocaleDateString('es-CO', {
+    day: 'numeric',
+    month: 'short',
+  });
+
+  if (!open) {
+    return (
+      <div className="flex items-center justify-between gap-2 py-1.5">
+        <div className="min-w-0">
+          <span className="text-xs text-muted-foreground">{dateLabel}</span>
+          <span className="ml-2 text-xs font-medium tabular-nums">
+            {money(props.handover.remaining)}
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="
+            shrink-0 text-xs font-medium text-primary
+            hover:underline
+          "
+        >
+          Ubicar
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2 rounded-md border border-border bg-muted/30 p-2">
+      <div className="text-xs text-muted-foreground">
+        Cierre del
+        {' '}
+        {dateLabel}
+        {' '}
+        —
+        {' '}
+        {money(props.handover.remaining)}
+        {' '}
+        pendiente
+      </div>
+      <Select
+        value={destination}
+        onValueChange={(v) => {
+          setDestination(v as PlacementDestination);
+          setDestAccountId('');
+        }}
+        options={destinationOptions}
+        placeholder="¿Dónde va el dinero?"
+      />
+      {destination === 'banco' && bankOptions.length > 0 && (
+        <Select
+          value={destAccountId}
+          onValueChange={setDestAccountId}
+          options={bankOptions}
+          placeholder="¿A qué banco?"
+        />
+      )}
+      {destination === 'caja_fuerte' && vaultOptions.length > 0 && (
+        <Select
+          value={destAccountId}
+          onValueChange={setDestAccountId}
+          options={vaultOptions}
+          placeholder="¿A qué caja fuerte?"
+        />
+      )}
+      <input
+        className={cashInputCls}
+        type="number"
+        inputMode="decimal"
+        min="0"
+        max={props.handover.remaining}
+        value={amount}
+        onChange={e => setAmount(e.target.value)}
+      />
+      {error && <div className="text-xs text-destructive">{error}</div>}
+      <div className="flex gap-2">
+        <Button size="sm" disabled={pending || amount === ''} onClick={submit}>
+          Ubicar
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={pending}
+          onClick={() => {
+            setOpen(false);
+            setError(null);
+          }}
+        >
+          Cancelar
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Container for the Pendiente card: shows the list of pending handovers
+ * each with its own placement row.
+ */
+function PlacementQueue(props: {
+  pendingHandovers: PendingHandover[];
+  bankAccounts: TreasuryAccountRow[];
+  cajaFuerteAccounts: TreasuryAccountRow[];
+}) {
+  if (props.pendingHandovers.length === 0) {
+    return null;
+  }
+  return (
+    <div className="mt-2 space-y-1 border-t border-border pt-2">
+      <div className="text-[11px] font-medium text-muted-foreground">
+        Cierres pendientes
+      </div>
+      {props.pendingHandovers.map(h => (
+        <HandoverPlacementRow
+          key={h.id}
+          handover={h}
+          bankAccounts={props.bankAccounts}
+          cajaFuerteAccounts={props.cajaFuerteAccounts}
+        />
+      ))}
+    </div>
+  );
+}
+
 // ── Empty state ────────────────────────────────────────────────────────────────
 
 function EmptyTreasuryState({
@@ -341,12 +538,23 @@ function ActionsToolbar({
 //
 // transferMethods: transfer-type payment methods (fetched in page.tsx) needed
 // by the "Agregar cuenta bancaria" form.
+//
+// pendingHandovers: outstanding handover list from listPendingHandovers.
+// When provided, shows the placement queue for the transito card.
 export function TreasuryConsole(props: {
   accounts: TreasuryAccount[];
   accountRows?: TreasuryAccountRow[];
   transferMethods?: PaymentMethodRow[];
   /** Total balance override (e.g. from tesoreria page with all accounts). */
   totalOverride?: number;
+  /** Outstanding Pendiente handovers list for the placement queue. */
+  pendingHandovers?: PendingHandover[];
+  /**
+   * R7: Map of sessionId → boolean indicating whether that session had a handover
+   * movement (type='handover', cash_session_id=sessionId). Used to show the
+   * "entregado" badge on caja cards.
+   */
+  handoverStatusBySessions?: Record<string, boolean>;
 }) {
   const [showDetail, setShowDetail] = useState(false);
 
@@ -372,11 +580,14 @@ export function TreasuryConsole(props: {
   // All active banco rows — passed to every vault's Consignar so the owner can
   // pick the destination bank from a list of real account UUIDs.
   const bankRows = accountRows.filter(r => r.type === 'banco');
+  const cajaFuerteRows = accountRows.filter(r => r.type === 'caja_fuerte');
 
   const cajas = props.accounts.filter(a => a.type === 'caja');
   const safe = props.accounts.filter(a => a.type === 'caja_fuerte');
   const banco = props.accounts.filter(a => a.type === 'banco');
+  const transito = props.accounts.filter(a => a.type === 'transito');
   const total = props.totalOverride ?? sum(props.accounts);
+  const pendingHandovers = props.pendingHandovers ?? [];
 
   return (
     <div className="rounded-xl border border-border bg-card p-5 shadow-xs">
@@ -443,6 +654,16 @@ export function TreasuryConsole(props: {
             hint={countLabel(banco.length, 'cuenta', 'cuentas')}
           />
         )}
+        {transito.length > 0 && (
+          <SummaryCard
+            icon={<Coins className="size-3.5" />}
+            label="Sin ubicar"
+            amount={sum(transito)}
+            hint={pendingHandovers.length > 0
+              ? `${pendingHandovers.length} ${pendingHandovers.length === 1 ? 'cierre pendiente' : 'cierres pendientes'}`
+              : undefined}
+          />
+        )}
       </div>
 
       {showDetail && (
@@ -473,6 +694,10 @@ export function TreasuryConsole(props: {
                         ? accountRows.find(r => r.type === 'caja_fuerte' && r.name === a.name)
                         : undefined;
 
+                    // R7: "entregado" label — shown on a caja card when the
+                    // last closed session had a handover movement (Option B opt-in).
+                    const wasHandedOver = wasSessionHandedOver(a, props.handoverStatusBySessions);
+
                     return (
                       <div
                         key={a.key}
@@ -489,6 +714,16 @@ export function TreasuryConsole(props: {
                         >
                           {money(a.balance)}
                         </div>
+                        {wasHandedOver && (
+                          <div className="
+                            mt-1 inline-block rounded-full bg-emerald-100 px-2
+                            py-0.5 text-[11px] font-medium text-emerald-700
+                            dark:bg-emerald-900/30 dark:text-emerald-400
+                          "
+                          >
+                            entregado
+                          </div>
+                        )}
                         {a.note && (
                           <div className="
                             mt-0.5 text-[11px] text-muted-foreground
@@ -501,6 +736,13 @@ export function TreasuryConsole(props: {
                           <Consignar
                             vaultAccountId={vaultRow.id}
                             bankAccounts={bankRows}
+                          />
+                        )}
+                        {a.type === 'transito' && pendingHandovers.length > 0 && (
+                          <PlacementQueue
+                            pendingHandovers={pendingHandovers}
+                            bankAccounts={bankRows}
+                            cajaFuerteAccounts={cajaFuerteRows}
                           />
                         )}
                       </div>

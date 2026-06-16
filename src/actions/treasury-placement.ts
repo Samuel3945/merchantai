@@ -1,0 +1,230 @@
+'use server';
+
+import type { ActionResult } from '@/libs/action-result';
+import { currentUser } from '@clerk/nextjs/server';
+import { revalidatePath } from 'next/cache';
+import { toMoney } from '@/libs/cash-helpers';
+import { db } from '@/libs/DB';
+import { requirePanelModule } from '@/libs/panel-session';
+import {
+  getHandoverStatusForSessions,
+  getOrCreatePendingAccount,
+  recordBankConsignacion,
+  recordContainerTransfer,
+  recordGastoOutflow,
+} from '@/libs/treasury';
+
+const TESORERIA_PATH = '/dashboard/tesoreria';
+const CASH_PATH = '/dashboard/cash';
+
+async function getActorName(fallback: string): Promise<string> {
+  try {
+    const user = await currentUser();
+    const candidate
+      = user?.fullName
+        || [user?.firstName, user?.lastName].filter(Boolean).join(' ').trim()
+        || user?.username
+        || user?.primaryEmailAddress?.emailAddress;
+    return candidate && candidate.length > 0 ? candidate : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * Places money from the org's Pendiente de ubicar (transito) account to a
+ * banco account. Reuses recordBankConsignacion which already enforces the
+ * per-account balance guard. The placement is tagged with the originating
+ * handover movement id so per-handover attribution is preserved.
+ *
+ * Gated by requirePanelModule('cash') — owner always passes.
+ */
+export async function placeHandoverToBanco(
+  handoverMovementId: string,
+  toBankAccountId: string,
+  amount: number | string,
+): Promise<ActionResult<null>> {
+  const { userId, orgId } = await requirePanelModule('cash');
+
+  if (!handoverMovementId) {
+    return { ok: false, error: 'handoverMovementId es requerido' };
+  }
+  if (!toBankAccountId) {
+    return { ok: false, error: 'Cuenta bancaria de destino es requerida' };
+  }
+  const amt = toMoney(amount);
+  if (Number.parseFloat(amt) <= 0) {
+    return { ok: false, error: 'El monto debe ser mayor a 0' };
+  }
+
+  const actor = await getActorName(userId);
+
+  try {
+    await db.transaction(async (tx) => {
+      const pending = await getOrCreatePendingAccount(tx, orgId, actor);
+      await recordBankConsignacion(tx, {
+        organizationId: orgId,
+        fromAccountId: pending.id,
+        toBankAccountId,
+        amount: amt,
+        createdBy: actor,
+        handoverMovementId,
+      });
+    });
+    revalidatePath(TESORERIA_PATH);
+    revalidatePath(CASH_PATH);
+    return { ok: true, data: null };
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Error al ubicar en banco',
+    };
+  }
+}
+
+/**
+ * Places money from the org's Pendiente de ubicar (transito) account to a
+ * caja fuerte container. Reuses recordContainerTransfer (balance guard included).
+ *
+ * Gated by requirePanelModule('cash') — owner always passes.
+ */
+export async function placeHandoverToCajaFuerte(
+  handoverMovementId: string,
+  toCajaFuerteAccountId: string,
+  amount: number | string,
+): Promise<ActionResult<null>> {
+  const { userId, orgId } = await requirePanelModule('cash');
+
+  if (!handoverMovementId) {
+    return { ok: false, error: 'handoverMovementId es requerido' };
+  }
+  if (!toCajaFuerteAccountId) {
+    return { ok: false, error: 'Caja fuerte de destino es requerida' };
+  }
+  const amt = toMoney(amount);
+  if (Number.parseFloat(amt) <= 0) {
+    return { ok: false, error: 'El monto debe ser mayor a 0' };
+  }
+
+  const actor = await getActorName(userId);
+
+  try {
+    await db.transaction(async (tx) => {
+      const pending = await getOrCreatePendingAccount(tx, orgId, actor);
+      await recordContainerTransfer(tx, {
+        organizationId: orgId,
+        fromAccountId: pending.id,
+        toAccountId: toCajaFuerteAccountId,
+        amount: amt,
+        createdBy: actor,
+        handoverMovementId,
+      });
+    });
+    revalidatePath(TESORERIA_PATH);
+    revalidatePath(CASH_PATH);
+    return { ok: true, data: null };
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Error al ubicar en caja fuerte',
+    };
+  }
+}
+
+/**
+ * Places money from the org's Pendiente de ubicar (transito) account as a
+ * gasto (expense, out-of-treasury). Reuses recordGastoOutflow (balance guard
+ * included). Category defaults to 'tesoreria' for placement-origin gastos.
+ *
+ * Gated by requirePanelModule('cash') — owner always passes.
+ */
+export async function placeHandoverAsGasto(
+  handoverMovementId: string,
+  amount: number | string,
+  description?: string | null,
+): Promise<ActionResult<null>> {
+  const { userId, orgId } = await requirePanelModule('cash');
+
+  if (!handoverMovementId) {
+    return { ok: false, error: 'handoverMovementId es requerido' };
+  }
+  const amt = toMoney(amount);
+  if (Number.parseFloat(amt) <= 0) {
+    return { ok: false, error: 'El monto debe ser mayor a 0' };
+  }
+
+  const actor = await getActorName(userId);
+
+  try {
+    await db.transaction(async (tx) => {
+      const pending = await getOrCreatePendingAccount(tx, orgId, actor);
+      await recordGastoOutflow(tx, {
+        organizationId: orgId,
+        fromAccountId: pending.id,
+        amount: amt,
+        category: 'tesoreria',
+        description: description ?? null,
+        incurredOn: new Date().toISOString().slice(0, 10),
+        createdBy: actor,
+        handoverMovementId,
+      });
+    });
+    revalidatePath(TESORERIA_PATH);
+    revalidatePath(CASH_PATH);
+    return { ok: true, data: null };
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Error al registrar como gasto',
+    };
+  }
+}
+
+/**
+ * Returns count and total outstanding Pendiente balance for the dashboard badge.
+ * Gated by requirePanelModule('cash').
+ */
+export async function getPendingHandoversOverview(): Promise<
+  ActionResult<{ count: number; total: number }>
+> {
+  const { orgId } = await requirePanelModule('cash');
+  const { countPendingHandovers } = await import('@/libs/treasury');
+  const overview = await countPendingHandovers(db, orgId);
+  return { ok: true, data: overview };
+}
+
+/**
+ * Returns the list of pending handovers with remaining balances.
+ * Used by the TreasuryConsole placement queue.
+ * Gated by requirePanelModule('cash').
+ */
+export async function listPendingHandoversAction(): Promise<
+  ActionResult<import('@/libs/treasury').PendingHandover[]>
+> {
+  const { orgId } = await requirePanelModule('cash');
+  const { listPendingHandovers } = await import('@/libs/treasury');
+  const handovers = await listPendingHandovers(db, orgId);
+  return { ok: true, data: handovers };
+}
+
+/**
+ * For each session ID in the input array, returns whether a handover movement
+ * row exists for that session (R7 — "entregado" label on caja cards).
+ * Returns a plain object { [sessionId]: boolean } (serializable from server action).
+ * Non-fatal: returns empty object on error.
+ * Gated by requirePanelModule('cash').
+ */
+export async function getHandoverStatusForSessionsAction(
+  sessionIds: string[],
+): Promise<ActionResult<Record<string, boolean>>> {
+  if (sessionIds.length === 0) {
+    return { ok: true, data: {} };
+  }
+  const { orgId } = await requirePanelModule('cash');
+  const statusMap = await getHandoverStatusForSessions(db, orgId, sessionIds);
+  const result: Record<string, boolean> = {};
+  for (const [id, v] of statusMap) {
+    result[id] = v;
+  }
+  return { ok: true, data: result };
+}
