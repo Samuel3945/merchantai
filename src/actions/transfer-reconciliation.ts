@@ -169,12 +169,18 @@ async function tryDepositConfirmedTransfer(
     });
     return null;
   } catch (e) {
+    // Drizzle wraps the driver error as "Failed query: ... params: ...". The
+    // ACTUAL Postgres reason (e.g. `column "..." does not exist`) lives on the
+    // cause — surface it so the failure is self-explanatory, not just the SQL.
     const message = e instanceof Error ? e.message : String(e);
+    const cause
+      = e instanceof Error && e.cause instanceof Error ? e.cause.message : '';
+    const full = cause ? `${cause} — ${message}` : message;
     console.error(
       '[transfer-reconciliation] bank deposit failed (transfer stays confirmed):',
-      message,
+      full,
     );
-    return message;
+    return full;
   }
 }
 
