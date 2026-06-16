@@ -1,6 +1,6 @@
 import type { TreasuryAccount } from '@/libs/treasury';
 import { describe, expect, it } from 'vitest';
-import { classifyTimelineDirection, sumBancos, sumEfectivo, wasSessionHandedOver } from './utils';
+import { classifyTimelineDirection, sumBancos, sumEfectivo, sumTransito, wasSessionHandedOver } from './utils';
 
 function acct(type: TreasuryAccount['type'], balance: number): TreasuryAccount {
   return { key: `${type}:${balance}`, name: type, type, balance };
@@ -39,11 +39,26 @@ describe('sumBancos', () => {
   });
 });
 
-describe('efectivo + bancos buckets', () => {
-  it('partition the whole position with no overlap and no dropped type', () => {
-    const total = mixed.reduce((acc, a) => acc + a.balance, 0);
+describe('sumTransito', () => {
+  it('sums only transito balances (Pendiente de ubicar)', () => {
+    const accts = [acct('caja', 1_000), acct('transito', 3_000_000), acct('transito', 500_000)];
 
-    expect(sumEfectivo(mixed) + sumBancos(mixed)).toBe(total);
+    expect(sumTransito(accts)).toBe(3_500_000);
+  });
+
+  it('returns 0 when there are no transito accounts', () => {
+    expect(sumTransito(mixed)).toBe(0);
+  });
+});
+
+describe('efectivo + bancos + transito buckets', () => {
+  it('partition the whole position with no overlap and no dropped type', () => {
+    const withTransito = [...mixed, acct('transito', 3_000_000)];
+    const total = withTransito.reduce((acc, a) => acc + a.balance, 0);
+
+    expect(
+      sumEfectivo(withTransito) + sumBancos(withTransito) + sumTransito(withTransito),
+    ).toBe(total);
   });
 });
 
