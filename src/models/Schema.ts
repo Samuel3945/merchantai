@@ -378,6 +378,11 @@ export const cashSessionsSchema = pgTable(
     difference: numeric('difference', { precision: 12, scale: 2 }),
     status: cashSessionStatusEnum('status').default('open').notNull(),
     notes: text('notes'),
+    // Open-time carry-over fields (Phase 3 — arqueo carryover). All nullable so
+    // historical rows and not-yet-shipped device sessions remain valid.
+    openingExpected: numeric('opening_expected', { precision: 12, scale: 2 }),
+    openingDifference: numeric('opening_difference', { precision: 12, scale: 2 }),
+    openingExplanation: text('opening_explanation'),
   },
   table => [
     // One open session per POS device (caja). Each register operates its own till.

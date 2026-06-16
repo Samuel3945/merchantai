@@ -10,6 +10,86 @@ import {
   salesSchema,
 } from '@/models/Schema';
 
+// ── Carry-over helper (extracted from treasury.ts#cajaBalance ELSE branch) ────
+
+/**
+ * Returns the carry-over expected amount for a POS session: the `countedAmount`
+ * of the most recent CLOSED session for the given pos token, plus a boolean that
+ * distinguishes "first open ever" from "last close was 0".
+ *
+ * The priorCloseExists flag is load-bearing: it drives explanation enforcement
+ * in the open route — a legitimate prior close of 0 must still trigger enforcement
+ * when the new count differs.
+ */
+// ── Open-time carry-over validation (pure) ───────────────────────────────────
+
+/**
+ * Validates whether a cash-session open request satisfies carry-over rules.
+ *
+ * Enforces explanation ONLY when:
+ *   priorCloseExists === true AND counted !== expected AND explanation is blank.
+ *
+ * Returns either:
+ *   { valid: true,  difference: number }   — proceed with insert
+ *   { valid: false, code: 422, message: string } — reject request
+ *
+ * difference = counted − expected (signed: negative = shortfall, positive = surplus).
+ */
+export type ValidateOpenCarryoverInput = {
+  priorCloseExists: boolean;
+  counted: number;
+  expected: number;
+  explanation?: string | null;
+};
+
+export type ValidateOpenCarryoverResult =
+  | { valid: true; difference: number }
+  | { valid: false; code: 422; message: string };
+
+export function validateOpenCarryover(
+  input: ValidateOpenCarryoverInput,
+): ValidateOpenCarryoverResult {
+  const { priorCloseExists, counted, expected, explanation } = input;
+  const difference = counted - expected;
+
+  if (priorCloseExists && counted !== expected && !explanation?.trim()) {
+    return {
+      valid: false,
+      code: 422,
+      message: 'Explica la diferencia de apertura (opening_explanation requerida)',
+    };
+  }
+
+  return { valid: true, difference };
+}
+
+export async function getOpeningExpected(
+  executor: typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0],
+  organizationId: string,
+  posTokenId: string,
+): Promise<{ expected: number; priorCloseExists: boolean }> {
+  const [last] = await executor
+    .select({ counted: cashSessionsSchema.countedAmount })
+    .from(cashSessionsSchema)
+    .where(
+      and(
+        eq(cashSessionsSchema.organizationId, organizationId),
+        eq(cashSessionsSchema.posTokenId, posTokenId),
+        eq(cashSessionsSchema.status, 'closed'),
+      ),
+    )
+    .orderBy(desc(cashSessionsSchema.closedAt))
+    .limit(1);
+
+  if (!last) {
+    return { expected: 0, priorCloseExists: false };
+  }
+  return {
+    expected: Number.parseFloat(last.counted ?? '0') || 0,
+    priorCloseExists: true,
+  };
+}
+
 export type CashSession = typeof cashSessionsSchema.$inferSelect;
 export type CashMovement = typeof cashMovementsSchema.$inferSelect;
 export type CashMovementType
@@ -33,6 +113,10 @@ export type PosCashSessionWire = {
   difference: number | null;
   status: 'open' | 'closed';
   notes: string | null;
+  // Open-time carry-over fields (Phase 3). Null for legacy sessions.
+  opening_expected: number | null;
+  opening_difference: number | null;
+  opening_explanation: string | null;
 };
 
 export function toPosCashSession(s: CashSession): PosCashSessionWire {
@@ -48,6 +132,9 @@ export function toPosCashSession(s: CashSession): PosCashSessionWire {
     difference: s.difference == null ? null : Number(s.difference),
     status: s.status,
     notes: s.notes,
+    opening_expected: s.openingExpected == null ? null : Number(s.openingExpected),
+    opening_difference: s.openingDifference == null ? null : Number(s.openingDifference),
+    opening_explanation: s.openingExplanation ?? null,
   };
 }
 

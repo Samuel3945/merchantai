@@ -3,6 +3,7 @@ import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import {
   computeCashBreakdown,
   findOpenSession,
+  getOpeningExpected,
   toMoney,
 } from '@/libs/cash-helpers';
 import {
@@ -42,21 +43,26 @@ async function cajaBalance(
     const { expected } = await computeCashBreakdown(executor, open);
     return expected;
   }
-  const [last] = await executor
-    .select({ counted: cashSessionsSchema.countedAmount })
-    .from(cashSessionsSchema)
-    .where(
-      and(
-        eq(cashSessionsSchema.organizationId, organizationId),
-        posTokenId === null
-          ? isNull(cashSessionsSchema.posTokenId)
-          : eq(cashSessionsSchema.posTokenId, posTokenId),
-        eq(cashSessionsSchema.status, 'closed'),
-      ),
-    )
-    .orderBy(desc(cashSessionsSchema.closedAt))
-    .limit(1);
-  return last ? Number.parseFloat(last.counted ?? '0') || 0 : 0;
+  // No open session: fall back to the last close count (carry-over).
+  // When posTokenId is null (admin/legacy session), query manually because
+  // getOpeningExpected only handles device sessions (non-null posTokenId).
+  if (posTokenId === null) {
+    const [last] = await executor
+      .select({ counted: cashSessionsSchema.countedAmount })
+      .from(cashSessionsSchema)
+      .where(
+        and(
+          eq(cashSessionsSchema.organizationId, organizationId),
+          isNull(cashSessionsSchema.posTokenId),
+          eq(cashSessionsSchema.status, 'closed'),
+        ),
+      )
+      .orderBy(desc(cashSessionsSchema.closedAt))
+      .limit(1);
+    return last ? Number.parseFloat(last.counted ?? '0') || 0 : 0;
+  }
+  const { expected } = await getOpeningExpected(executor, organizationId, posTokenId);
+  return expected;
 }
 
 // Phase 2C treasury position — CUTOVER.
@@ -86,14 +92,6 @@ export async function getTreasuryPosition(
     })),
   );
   accounts.push(...cajas);
-
-  // Office drawer — movements from the panel (no device). UNCHANGED from Phase 1.
-  accounts.push({
-    key: 'caja:oficina',
-    name: 'Caja oficina',
-    type: 'caja',
-    balance: await cajaBalance(executor, organizationId, null),
-  });
 
   // Vault (caja_fuerte) + banco accounts — READ FROM LEDGER (Phase 2C cutover).
   // Fetch all non-caja treasury_accounts for this org.
