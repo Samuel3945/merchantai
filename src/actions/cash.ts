@@ -4,7 +4,7 @@ import type { ActionResult } from '@/libs/action-result';
 import type { CashBreakdown, CashMovement, CashMovementType, CashSession, CollectionsByMethod } from '@/libs/cash-helpers';
 import type { CashRiskLevel } from '@/libs/cash-security-policy';
 import { auth, currentUser } from '@clerk/nextjs/server';
-import { and, desc, eq, getTableColumns, gte, isNotNull, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, gte, isNotNull, lt, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { ActionValidationError } from '@/libs/action-result';
 import { logAction } from '@/libs/audit-log';
@@ -31,6 +31,7 @@ import {
   cashMovementsSchema,
   cashSecurityThresholdCacheSchema,
   cashSessionsSchema,
+  paymentMethodsSchema,
   posTokensSchema,
   suppliersSchema,
   treasuryAccountsSchema,
@@ -843,6 +844,89 @@ export async function getTodayCashKpis(): Promise<TodayCashKpis> {
     pagosProveedores: num(row.pagos_proveedores),
     gastosOperativos: num(row.gastos_operativos),
   };
+}
+
+export type MethodCollection = { name: string; amount: number };
+export type TodayCollections = { methods: MethodCollection[]; total: number };
+
+/**
+ * Today's collections (sales + fiado abonos) bucketed by the org's REAL payment
+ * methods — not a fixed Efectivo/Nequi/Daviplata list. If the business does not
+ * have a Nequi method, Nequi never shows. Amounts are matched to each configured
+ * method by name (case-insensitive); the cash method also absorbs the generic
+ * "efectivo"/"cash" strings. Window = today in America/Bogota.
+ */
+export async function getTodayCollectionsByMethod(): Promise<TodayCollections> {
+  const { orgId } = await requireOrg();
+
+  const [methods, collected] = await Promise.all([
+    db
+      .select({
+        name: paymentMethodsSchema.name,
+        type: paymentMethodsSchema.type,
+      })
+      .from(paymentMethodsSchema)
+      .where(
+        and(
+          eq(paymentMethodsSchema.organizationId, orgId),
+          eq(paymentMethodsSchema.active, true),
+        ),
+      )
+      .orderBy(asc(paymentMethodsSchema.sortOrder)),
+    db.execute(sql`
+      SELECT lower(trim(method)) AS method, SUM(amount)::float8 AS amount
+      FROM (
+        SELECT sp.method AS method, sp.amount AS amount
+        FROM sale_payments sp
+        JOIN sales s ON s.id = sp.sale_id
+        WHERE s.organization_id = ${orgId}
+          AND sp.method NOT ILIKE '%fiado%'
+          AND (sp.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
+              = (now() AT TIME ZONE 'America/Bogota')::date
+        UNION ALL
+        SELECT fm.method AS method, fm.amount AS amount
+        FROM fiado_movements fm
+        WHERE fm.organization_id = ${orgId}
+          AND fm.type = 'payment'
+          AND (fm.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
+              = (now() AT TIME ZONE 'America/Bogota')::date
+      ) t
+      GROUP BY lower(trim(method))
+    `),
+  ]);
+
+  const byMethod = new Map<string, number>();
+  for (const r of collected.rows ?? []) {
+    const row = r as { method?: unknown; amount?: unknown };
+    const key = String(row.method ?? '').trim();
+    if (!key) {
+      continue;
+    }
+    byMethod.set(key, (byMethod.get(key) ?? 0) + (Number(row.amount) || 0));
+  }
+
+  const round2 = (n: number) => Number.parseFloat(n.toFixed(2));
+  const result: MethodCollection[] = [];
+  let total = 0;
+  for (const m of methods) {
+    // Fiado/credit is a debt, not money into a method — never a collection bucket.
+    if (m.type === 'credit') {
+      continue;
+    }
+    const nameKey = m.name.trim().toLowerCase();
+    let amount = byMethod.get(nameKey) ?? 0;
+    if (m.type === 'cash') {
+      for (const generic of ['efectivo', 'cash']) {
+        if (generic !== nameKey) {
+          amount += byMethod.get(generic) ?? 0;
+        }
+      }
+    }
+    result.push({ name: m.name, amount: round2(amount) });
+    total += amount;
+  }
+
+  return { methods: result, total: round2(total) };
 }
 
 export type CashSecurityStatus = {
