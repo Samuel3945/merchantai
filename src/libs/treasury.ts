@@ -740,7 +740,12 @@ export async function listTreasuryTimeline(
         name: treasuryAccountsSchema.name,
       })
       .from(treasuryAccountsSchema)
-      .where(inArray(treasuryAccountsSchema.id, accountIds));
+      .where(
+        and(
+          inArray(treasuryAccountsSchema.id, accountIds),
+          eq(treasuryAccountsSchema.organizationId, organizationId),
+        ),
+      );
 
     for (const a of accounts) {
       nameMap.set(a.id, a.name);
