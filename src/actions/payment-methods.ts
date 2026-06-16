@@ -1,7 +1,7 @@
 'use server';
 
 import { auth } from '@clerk/nextjs/server';
-import { and, asc, eq, notInArray } from 'drizzle-orm';
+import { and, asc, eq, ne, notInArray, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { db } from '@/libs/DB';
 import { ensurePaymentMethodAccounts } from '@/libs/treasury';
@@ -93,6 +93,33 @@ export async function listPaymentMethods(
     .orderBy(asc(paymentMethodsSchema.sortOrder));
 }
 
+// Treasury attributes a confirmed transfer by matching the free-text
+// sale_payments.method against the payment method name (resolveBancoForMethod,
+// case-insensitive, exactly ONE active transfer). Two methods sharing a name make
+// that match ambiguous, so the bank deposit silently never lands. Enforce unique
+// names (case-insensitive, per org) at the source so attribution stays reliable.
+async function assertNameAvailable(
+  orgId: string,
+  name: string,
+  excludeId?: string,
+) {
+  const conditions = [
+    eq(paymentMethodsSchema.organizationId, orgId),
+    sql`lower(${paymentMethodsSchema.name}) = lower(${name})`,
+  ];
+  if (excludeId) {
+    conditions.push(ne(paymentMethodsSchema.id, excludeId));
+  }
+  const [clash] = await db
+    .select({ id: paymentMethodsSchema.id })
+    .from(paymentMethodsSchema)
+    .where(and(...conditions))
+    .limit(1);
+  if (clash) {
+    throw new Error('Ya existe un método de pago con ese nombre');
+  }
+}
+
 export type CreatePaymentMethodInput = {
   name: string;
   type: PaymentMethodType;
@@ -114,6 +141,8 @@ export async function createPaymentMethod(
   if (!input.type) {
     throw new Error('type is required');
   }
+
+  await assertNameAvailable(orgId, name);
 
   const [row] = await db
     .insert(paymentMethodsSchema)
@@ -167,6 +196,7 @@ export async function updatePaymentMethod(
     if (!name) {
       throw new Error('name cannot be empty');
     }
+    await assertNameAvailable(orgId, name, input.id);
     patch.name = name;
   }
   if (input.type !== undefined) {
