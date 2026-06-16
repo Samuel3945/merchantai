@@ -56,13 +56,15 @@ export function MoverDineroForm({
     return null;
   }
 
+  // Clears the input fields only. Deliberately does NOT touch `success`, so the
+  // confirmation message survives the post-submit field clear (setting success
+  // true and then resetting it in the same React batch would swallow the toast).
   function reset() {
     setFromId('');
     setToId('');
     setAmount('');
     setReason('');
     setError(null);
-    setSuccess(false);
   }
 
   function submit() {
@@ -178,6 +180,7 @@ export function MoverDineroForm({
           onClick={() => {
             setOpen(false);
             reset();
+            setSuccess(false);
           }}
         >
           Cancelar
