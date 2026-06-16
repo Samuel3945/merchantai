@@ -1,17 +1,8 @@
 'use client';
 
-import type {
-  CashSecurityStatus,
-  GetCurrentCashResult,
-  OpenCaja,
-  TodayCashKpis,
-} from '@/actions/cash';
-import type { CashMovement, CashSession } from '@/libs/cash-helpers';
-import type { TreasuryAccountRow } from '@/libs/treasury';
+import type { GetCurrentCashResult } from '@/actions/cash';
 import { cn } from '@/utils/Helpers';
 import { money } from './cash-ui';
-import { CashClosuresHistory } from './CashClosuresHistory';
-import { CashHistory } from './CashHistory';
 
 type FraudAlert = {
   kind: string;
@@ -33,11 +24,7 @@ function Card(props: { children: React.ReactNode; className?: string }) {
   );
 }
 
-function StatCard(props: {
-  label: string;
-  value: string;
-  tone?: 'in' | 'out';
-}) {
+function StatCard(props: { label: string; value: string; tone?: 'in' | 'out' }) {
   return (
     <Card className="p-4">
       <div className="text-xs font-medium text-muted-foreground">
@@ -55,21 +42,12 @@ function StatCard(props: {
   );
 }
 
-// Caja (admin) — SUPERVISION + VERIFICATION ONLY. The owner does NOT operate a
-// till here: there is no own-session hero, no entrada/salida, no cierre. Each
-// cashier opens/closes/moves cash on its own POS; the supervision of those cajas
-// lives in CajasSupervision (top of the page). This screen answers "what
-// happened across the business today" — KPIs, collections by method, and the
-// permanent arqueo + movement history for audit.
+// Secondary section of the Caja module (the cajas list is the hero). Shows the
+// fraud alerts and how money came in today by method. Closures and the movement
+// ledger are NOT here — they live inside each caja's detail, filtered to it.
 export function CashClient(props: {
   current: GetCurrentCashResult;
-  sessions: CashSession[];
   alerts: FraudAlert[];
-  kpis: TodayCashKpis;
-  security: CashSecurityStatus;
-  history: CashMovement[];
-  openCajas: OpenCaja[];
-  treasuryAccounts?: TreasuryAccountRow[];
 }) {
   const { collections } = props.current;
 
@@ -94,29 +72,6 @@ export function CashClient(props: {
         </div>
       )}
 
-      {/* Resumen financiero del día — derivado del ledger, solo lectura */}
-      <div>
-        <div className="mb-2 text-sm font-semibold text-muted-foreground">
-          Resumen del día
-        </div>
-        <div className="
-          grid grid-cols-2 gap-3
-          lg:grid-cols-4
-        "
-        >
-          <StatCard label="Gastos hoy" value={money(props.kpis.gastosHoy)} />
-          <StatCard label="Retiros hoy" value={money(props.kpis.retirosHoy)} />
-          <StatCard
-            label="Pagos a proveedores"
-            value={money(props.kpis.pagosProveedores)}
-          />
-          <StatCard
-            label="Gastos operativos"
-            value={money(props.kpis.gastosOperativos)}
-          />
-        </div>
-      </div>
-
       {/* Cobros por método — cómo entró la plata hoy (ventas + abonos). */}
       <div className="space-y-2">
         <div className="text-sm font-medium">
@@ -139,12 +94,6 @@ export function CashClient(props: {
           <StatCard label="Total general" value={money(collections.total)} tone="in" />
         </div>
       </div>
-
-      {/* Historial de cierres — arqueos permanentes con filtros */}
-      <CashClosuresHistory sessions={props.sessions} />
-
-      {/* Historial completo — ledger permanente con filtros */}
-      <CashHistory movements={props.history} />
     </div>
   );
 }

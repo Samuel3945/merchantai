@@ -4,7 +4,7 @@ import type { ActionResult } from '@/libs/action-result';
 import type { CashBreakdown, CashMovement, CashMovementType, CashSession, CollectionsByMethod } from '@/libs/cash-helpers';
 import type { CashRiskLevel } from '@/libs/cash-security-policy';
 import { auth, currentUser } from '@clerk/nextjs/server';
-import { and, desc, eq, gte, isNotNull, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, getTableColumns, gte, isNotNull, lt, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { ActionValidationError } from '@/libs/action-result';
 import { logAction } from '@/libs/audit-log';
@@ -472,6 +472,9 @@ export type OpenCaja = {
   openingAmount: number;
   expected: number;
   movementCount: number;
+  // Timestamp of the most recent movement in the session, or openedAt when the
+  // session has no movements yet. Drives "última actividad" on the caja card.
+  lastActivityAt: string;
 };
 
 /**
@@ -515,10 +518,14 @@ export async function listOpenCajas(): Promise<OpenCaja[]> {
           openingAmount: r.openingAmount,
         }),
         db
-          .select({ c: sql<number>`count(*)::int` })
+          .select({
+            c: sql<number>`count(*)::int`,
+            lastAt: sql<string | null>`max(${cashMovementsSchema.createdAt})`,
+          })
           .from(cashMovementsSchema)
           .where(eq(cashMovementsSchema.sessionId, r.id)),
       ]);
+      const lastAt = countRows[0]?.lastAt;
       return {
         id: r.id,
         posTokenId: r.posTokenId,
@@ -528,9 +535,122 @@ export async function listOpenCajas(): Promise<OpenCaja[]> {
         openingAmount: Number(r.openingAmount),
         expected,
         movementCount: countRows[0]?.c ?? 0,
+        lastActivityAt: lastAt
+          ? new Date(lastAt).toISOString()
+          : r.openedAt.toISOString(),
       };
     }),
   );
+}
+
+export type CajaDetail = {
+  posTokenId: string;
+  deviceName: string | null;
+  status: 'open' | 'closed';
+  responsable: string | null;
+  openedAt: string | null;
+  expected: number;
+  lastActivityAt: string | null;
+  movements: CashMovement[];
+  closures: CashSession[];
+};
+
+/**
+ * Per-caja (POS device) detail for the supervision drill-down. Returns the
+ * device's current open session header plus its FULL ledger — every movement and
+ * every past closure for that device, filtered to this caja only. Returns null
+ * when the device does not belong to the caller's org.
+ */
+export async function getCajaDetail(
+  posTokenId: string,
+): Promise<CajaDetail | null> {
+  const { orgId } = await requireOrg();
+
+  const [device] = await db
+    .select({
+      id: posTokensSchema.id,
+      deviceName: posTokensSchema.deviceName,
+    })
+    .from(posTokensSchema)
+    .where(
+      and(
+        eq(posTokensSchema.id, posTokenId),
+        eq(posTokensSchema.organizationId, orgId),
+      ),
+    )
+    .limit(1);
+  if (!device) {
+    return null;
+  }
+
+  const [openSession, movements, closures] = await Promise.all([
+    db
+      .select()
+      .from(cashSessionsSchema)
+      .where(
+        and(
+          eq(cashSessionsSchema.organizationId, orgId),
+          eq(cashSessionsSchema.posTokenId, posTokenId),
+          eq(cashSessionsSchema.status, 'open'),
+        ),
+      )
+      .orderBy(desc(cashSessionsSchema.openedAt))
+      .limit(1),
+    // Full movement ledger for this caja, across all its sessions.
+    db
+      .select(getTableColumns(cashMovementsSchema))
+      .from(cashMovementsSchema)
+      .innerJoin(
+        cashSessionsSchema,
+        eq(cashSessionsSchema.id, cashMovementsSchema.sessionId),
+      )
+      .where(
+        and(
+          eq(cashSessionsSchema.organizationId, orgId),
+          eq(cashSessionsSchema.posTokenId, posTokenId),
+        ),
+      )
+      .orderBy(desc(cashMovementsSchema.createdAt))
+      .limit(1000),
+    // Past closures (arqueos) of this caja.
+    db
+      .select()
+      .from(cashSessionsSchema)
+      .where(
+        and(
+          eq(cashSessionsSchema.organizationId, orgId),
+          eq(cashSessionsSchema.posTokenId, posTokenId),
+          eq(cashSessionsSchema.status, 'closed'),
+        ),
+      )
+      .orderBy(desc(cashSessionsSchema.openedAt))
+      .limit(200),
+  ]);
+
+  const session = openSession[0] ?? null;
+  const expected = session
+    ? await computeExpectedAmount(db, {
+        id: session.id,
+        openingAmount: session.openingAmount,
+      })
+    : 0;
+
+  const lastMovementAt = movements[0]?.createdAt ?? null;
+  const lastActivityAt = lastMovementAt
+    ? new Date(lastMovementAt).toISOString()
+    : session?.openedAt.toISOString() ?? null;
+
+  return {
+    posTokenId,
+    deviceName: device.deviceName,
+    status: session ? 'open' : 'closed',
+    responsable: session?.openedBy ?? null,
+    openedAt: session?.openedAt.toISOString() ?? null,
+    expected,
+    lastActivityAt,
+    movements,
+    closures,
+  };
 }
 
 export async function listCashSessions(limit = 30): Promise<CashSession[]> {

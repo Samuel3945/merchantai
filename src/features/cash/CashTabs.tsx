@@ -1,7 +1,6 @@
 'use client';
 
 import type { TransferReconciliation } from '@/libs/transfer-reconciliation';
-import type { TreasuryAccountRow } from '@/libs/treasury';
 import { useState } from 'react';
 import { cn } from '@/utils/Helpers';
 import { CashClient } from './CashClient';
@@ -44,15 +43,13 @@ export function CashTabs(props: {
   investigating: TransferReconciliation[];
   pendingTransfers: { count: number; total: number };
   transferCounts: { pending: number; confirmedToday: number; notArrived: number };
-  // 2C: treasury accounts for container selector in MovementModal.
-  treasuryAccounts?: TreasuryAccountRow[];
 }) {
   const [view, setView] = useState<View>('arqueo');
 
   // No transfer payment methods → no transfers to reconcile. Skip the tab
-  // entirely; the owner only sees the cash arqueo.
+  // entirely; the owner only sees the collections summary.
   if (!props.hasTransferMethods) {
-    return <CashClient {...props.cash} treasuryAccounts={props.treasuryAccounts} />;
+    return <CashClient {...props.cash} />;
   }
 
   return (
@@ -62,7 +59,7 @@ export function CashTabs(props: {
       "
       >
         <TabButton active={view === 'arqueo'} onClick={() => setView('arqueo')}>
-          Arqueo de efectivo
+          Resumen
         </TabButton>
         <TabButton
           active={view === 'transferencias'}
@@ -82,7 +79,7 @@ export function CashTabs(props: {
       </div>
 
       {view === 'arqueo'
-        ? <CashClient {...props.cash} treasuryAccounts={props.treasuryAccounts} />
+        ? <CashClient {...props.cash} />
         : (
             <TransferReconciliationPanel
               reconciliations={props.reconciliations}

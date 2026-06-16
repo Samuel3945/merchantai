@@ -1,12 +1,8 @@
 import type { TransferReconciliation } from '@/libs/transfer-reconciliation';
 import { setRequestLocale } from 'next-intl/server';
 import {
-  getCashSecurityStatus,
   getCurrentCash,
   getFraudAlerts,
-  getTodayCashKpis,
-  listAllCashMovements,
-  listCashSessions,
   listOpenCajas,
 } from '@/actions/cash';
 import { listPaymentMethods } from '@/actions/payment-methods';
@@ -15,7 +11,6 @@ import {
   getTransferStatusCounts,
   listTransferReconciliations,
 } from '@/actions/transfer-reconciliation';
-import { listTreasuryAccounts } from '@/actions/treasury';
 import { CajasSupervision } from '@/features/cash/CajasSupervision';
 import { CashTabs } from '@/features/cash/CashTabs';
 import { TitleBar } from '@/features/dashboard/TitleBar';
@@ -26,27 +21,11 @@ export default async function DashboardCashPage(props: {
   const { locale } = await props.params;
   setRequestLocale(locale);
 
-  const [
-    current,
-    sessions,
-    alerts,
-    kpis,
-    security,
-    history,
-    openCajas,
-    methods,
-    treasuryAccountRows,
-  ] = await Promise.all([
+  const [current, alerts, openCajas, methods] = await Promise.all([
     getCurrentCash(),
-    listCashSessions(2000),
     getFraudAlerts(14).catch(() => []),
-    getTodayCashKpis(),
-    getCashSecurityStatus(),
-    listAllCashMovements(1000),
     listOpenCajas().catch(() => []),
     listPaymentMethods({ activeOnly: true }).catch(() => []),
-    // Full account rows (with UUIDs) needed by the caja movement modal.
-    listTreasuryAccounts().catch(() => []),
   ]);
 
   // No transfer payment methods → the org doesn't deal with transfers at all, so
@@ -73,46 +52,22 @@ export default async function DashboardCashPage(props: {
     transferCounts = countsResult?.ok ? countsResult.data : transferCounts;
   }
 
-  // Today's net cash difference across sessions closed today (America/Bogota),
-  // the same calendar day the closures history groups by.
-  const bogotaDay = (value: Date | string) =>
-    new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Bogota' }).format(
-      new Date(value),
-    );
-  const today = bogotaDay(new Date());
-  const diferenciasHoy = sessions
-    .filter(s => s.status === 'closed' && s.closedAt && bogotaDay(s.closedAt) === today)
-    .reduce((sum, s) => sum + (Number.parseFloat(s.difference ?? '0') || 0), 0);
-
   return (
     <>
       <TitleBar
         title="Caja"
-        description="Supervisión de puntos de cobro: estado de cada caja, arqueos y diferencias."
+        description="Supervisión de los puntos de cobro: tocá una caja para ver su detalle, movimientos y cierres."
       />
       <div className="mb-6">
-        <CajasSupervision
-          openCajas={openCajas}
-          diferenciasHoy={diferenciasHoy}
-          pendingCount={pendingTransfers.count}
-        />
+        <CajasSupervision openCajas={openCajas} />
       </div>
       <CashTabs
-        cash={{
-          current,
-          sessions,
-          alerts,
-          kpis,
-          security,
-          history,
-          openCajas,
-        }}
+        cash={{ current, alerts }}
         hasTransferMethods={hasTransferMethods}
         reconciliations={reconciliations}
         investigating={investigating}
         pendingTransfers={pendingTransfers}
         transferCounts={transferCounts}
-        treasuryAccounts={treasuryAccountRows}
       />
     </>
   );

@@ -1,43 +1,23 @@
 import type { OpenCaja } from '@/actions/cash';
-import { Clock, DoorOpen, Scale, User } from 'lucide-react';
-import { cn } from '@/utils/Helpers';
-import { money, stamp } from './cash-ui';
+import { Clock, User } from 'lucide-react';
+import Link from 'next/link';
+import { money, relativeTime } from './cash-ui';
 
-// Top-of-screen supervision view: the Caja screen answers "what happened at each
-// point of sale" — who is open, today's difference, and how many payments are
-// still pending confirmation. It does NOT hold money (that's Tesorería) and does
-// NOT confirm payments (that's the Pagos module).
-
-type Tone = 'default' | 'success' | 'destructive';
-
-function SummaryCard(props: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  tone?: Tone;
-}) {
-  return (
-    <div className="rounded-xl border border-border bg-card p-4 shadow-xs">
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        {props.icon}
-        <span className="font-medium">{props.label}</span>
-      </div>
-      <div
-        className={cn(
-          'mt-2 font-display text-2xl font-semibold tabular-nums',
-          props.tone === 'success' && 'text-success',
-          props.tone === 'destructive' && 'text-destructive',
-        )}
-      >
-        {props.value}
-      </div>
-    </div>
-  );
-}
+// THE main section of the Caja module: the list of active cajas. Each caja is a
+// clickable card that drills into its own detail (movements + closures filtered
+// to that caja). Cajas come first — movements, history and stats are secondary
+// and live inside the detail, not here.
 
 function CajaCard({ caja }: { caja: OpenCaja }) {
   return (
-    <div className="rounded-xl border border-border bg-card p-4 shadow-xs">
+    <Link
+      href={`/dashboard/cash/${caja.posTokenId}`}
+      className="
+        group block rounded-xl border border-border bg-card p-4 shadow-xs
+        transition-colors
+        hover:border-primary/50 hover:bg-accent/30
+      "
+    >
       <div className="flex items-center justify-between gap-2">
         <span className="font-display font-semibold">
           {caja.deviceName || 'Caja sin nombre'}
@@ -52,10 +32,14 @@ function CajaCard({ caja }: { caja: OpenCaja }) {
         </span>
       </div>
 
-      <div className="mt-3 space-y-2 text-sm">
+      <div className="mt-3 space-y-1.5 text-sm">
         <div className="flex items-center gap-2 text-muted-foreground">
           <User className="size-3.5" />
-          <span>{caja.openedBy}</span>
+          <span>
+            Responsable:
+            {' '}
+            <span className="text-foreground">{caja.openedBy}</span>
+          </span>
         </div>
         <div className="flex items-center justify-between">
           <span className="text-muted-foreground">Efectivo esperado</span>
@@ -66,73 +50,57 @@ function CajaCard({ caja }: { caja: OpenCaja }) {
         <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <Clock className="size-3" />
           <span>
-            {caja.movementCount}
+            Última actividad:
             {' '}
-            movimiento
-            {caja.movementCount === 1 ? '' : 's'}
-            {' · abierta '}
-            {stamp(caja.openedAt)}
+            {relativeTime(caja.lastActivityAt)}
           </span>
         </div>
       </div>
-    </div>
+
+      <div className="
+        mt-3 text-sm font-medium text-primary
+        group-hover:underline
+      "
+      >
+        Ver detalles →
+      </div>
+    </Link>
   );
 }
 
-export function CajasSupervision(props: {
-  openCajas: OpenCaja[];
-  diferenciasHoy: number;
-  pendingCount: number;
-}) {
-  const diffTone: Tone
-    = props.diferenciasHoy === 0
-      ? 'default'
-      : props.diferenciasHoy > 0
-        ? 'success'
-        : 'destructive';
-
+export function CajasSupervision(props: { openCajas: OpenCaja[] }) {
   return (
     <section className="space-y-4">
-      <div className="
-        grid grid-cols-1 gap-4
-        sm:grid-cols-3
-      "
-      >
-        <SummaryCard
-          icon={<DoorOpen className="size-4" />}
-          label="Cajas abiertas"
-          value={String(props.openCajas.length)}
-        />
-        <SummaryCard
-          icon={<Scale className="size-4" />}
-          label="Diferencias de hoy"
-          value={`${props.diferenciasHoy > 0 ? '+' : ''}${money(props.diferenciasHoy)}`}
-          tone={diffTone}
-        />
-        <SummaryCard
-          icon={<Clock className="size-4" />}
-          label="Pagos pendientes"
-          value={String(props.pendingCount)}
-        />
+      <div>
+        <h2 className="text-lg font-semibold">Cajas activas</h2>
+        <p className="text-sm text-muted-foreground">
+          Cada caja opera por separado. Tocá una para ver su detalle, sus
+          movimientos y sus cierres.
+        </p>
       </div>
 
-      {props.openCajas.length > 0 && (
-        <div className="space-y-3">
-          <h2 className="text-sm font-medium text-muted-foreground">
-            Cajas activas
-          </h2>
-          <div className="
-            grid grid-cols-1 gap-4
-            sm:grid-cols-2
-            lg:grid-cols-3
-          "
-          >
-            {props.openCajas.map(caja => (
-              <CajaCard key={caja.id} caja={caja} />
-            ))}
-          </div>
-        </div>
-      )}
+      {props.openCajas.length === 0
+        ? (
+            <div className="
+              rounded-xl border border-dashed border-border p-8 text-center
+              text-sm text-muted-foreground
+            "
+            >
+              No hay cajas abiertas en este momento.
+            </div>
+          )
+        : (
+            <div className="
+              grid grid-cols-1 gap-4
+              sm:grid-cols-2
+              lg:grid-cols-3
+            "
+            >
+              {props.openCajas.map(caja => (
+                <CajaCard key={caja.id} caja={caja} />
+              ))}
+            </div>
+          )}
     </section>
   );
 }
