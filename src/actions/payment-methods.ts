@@ -4,6 +4,7 @@ import { auth } from '@clerk/nextjs/server';
 import { and, asc, eq, notInArray } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { db } from '@/libs/DB';
+import { ensurePaymentMethodAccounts } from '@/libs/treasury';
 import { paymentMethodsSchema } from '@/models/Schema';
 
 export type PaymentMethodType = 'cash' | 'transfer' | 'card' | 'credit' | 'other';
@@ -154,6 +155,11 @@ export async function createPaymentMethod(
   if (!row) {
     throw new Error('Failed to create payment method');
   }
+
+  // Creating a payment method "opens it in treasury": a money-holding method
+  // (transfer/card/other) gets a linked banco account so transfers have a
+  // destination. Best-effort — a failure here must not fail method creation.
+  await ensurePaymentMethodAccounts(db, orgId, 'Sistema').catch(() => {});
 
   revalidatePath('/dashboard/settings');
   return row;
