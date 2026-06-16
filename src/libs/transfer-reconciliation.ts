@@ -294,7 +294,8 @@ export async function markReconciliationMismatch(
 }
 
 // The happy path: confirm every pending transfer in the period (or a given
-// subset of ids). Returns how many rows were confirmed.
+// subset of ids). Returns the confirmed rows so the caller can bridge each one
+// into a bank deposit (Slice E).
 export async function bulkConfirmPending(
   executor: Executor,
   args: {
@@ -304,7 +305,7 @@ export async function bulkConfirmPending(
     from?: Date;
     to?: Date;
   },
-): Promise<number> {
+): Promise<TransferReconciliation[]> {
   const conds = [
     eq(transferReconciliationsSchema.organizationId, args.organizationId),
     eq(transferReconciliationsSchema.status, 'pending'),
@@ -327,8 +328,8 @@ export async function bulkConfirmPending(
       reconciledAt: new Date(),
     })
     .where(and(...conds))
-    .returning({ id: transferReconciliationsSchema.id });
-  return updated.length;
+    .returning();
+  return updated;
 }
 
 // ── Investigation + resolution (F3) ──────────────────────────────────────────

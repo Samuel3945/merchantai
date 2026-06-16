@@ -2048,6 +2048,12 @@ export const treasuryMovementsSchema = pgTable(
     expenseId: uuid('expense_id').references(() => expensesSchema.id, {
       onDelete: 'restrict',
     }),
+    // Set on the 'entrada' deposit created when a customer transfer is confirmed.
+    // The unique index makes confirming a transfer credit its bank exactly once.
+    transferReconciliationId: uuid('transfer_reconciliation_id').references(
+      () => transferReconciliationsSchema.id,
+      { onDelete: 'restrict' },
+    ),
     createdBy: text('created_by').notNull(),
     createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
   },
@@ -2055,6 +2061,10 @@ export const treasuryMovementsSchema = pgTable(
     index('treasury_movements_org_idx').on(t.organizationId),
     index('treasury_movements_from_idx').on(t.fromAccountId),
     index('treasury_movements_to_idx').on(t.toAccountId),
+    // One deposit per confirmed transfer (NULLs allowed for all other movements).
+    uniqueIndex('treasury_movements_transfer_recon_unique').on(
+      t.transferReconciliationId,
+    ),
   ],
 );
 

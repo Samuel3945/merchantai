@@ -186,7 +186,7 @@ describe('bulkConfirmPending', () => {
       reconciledBy: USER,
     });
 
-    expect(confirmed).toBe(2);
+    expect(confirmed).toHaveLength(2);
 
     const all = await listReconciliations(db, { organizationId: ORG });
 
@@ -204,7 +204,7 @@ describe('bulkConfirmPending', () => {
       ids: [target],
     });
 
-    expect(confirmed).toBe(1);
+    expect(confirmed).toHaveLength(1);
 
     const all = await listReconciliations(db, { organizationId: ORG });
 
@@ -221,7 +221,7 @@ describe('bulkConfirmPending', () => {
       reconciledBy: USER,
     });
 
-    expect(confirmed).toBe(1);
+    expect(confirmed).toHaveLength(1);
 
     const other = await listReconciliations(db, { organizationId: OTHER });
 

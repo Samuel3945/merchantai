@@ -30,6 +30,7 @@ import {
   recordCashierExplanation,
   setReconciliationResolution,
 } from '@/libs/transfer-reconciliation';
+import { depositConfirmedTransfer } from '@/libs/treasury';
 
 // Transfer reconciliation is the digital counterpart of the cash arqueo, so it
 // lives under the Caja ('cash') module. The owner (org:admin) passes the gate
@@ -37,6 +38,7 @@ import {
 // device — gated by canConfirmTransfers — is a separate, later surface.)
 const MODULE = 'cash';
 const CASH_PATH = '/dashboard/cash';
+const TESORERIA_PATH = '/dashboard/tesoreria';
 
 async function getActorName(fallback: string): Promise<string> {
   try {
@@ -97,11 +99,26 @@ export async function confirmTransfer(
 ): Promise<ActionResult<TransferReconciliation>> {
   const { userId, orgId } = await requirePanelModule(MODULE);
   const actor = await getActorName(userId);
-  const row = await confirmReconciliation(db, {
-    id,
-    organizationId: orgId,
-    reconciledBy: actor,
-    arrivedAmount,
+  // Confirm and bridge the bank deposit atomically: the money must appear in
+  // Tesorería the instant the transfer is confirmed, or neither happens.
+  const row = await db.transaction(async (tx) => {
+    const confirmed = await confirmReconciliation(tx, {
+      id,
+      organizationId: orgId,
+      reconciledBy: actor,
+      arrivedAmount,
+    });
+    if (!confirmed) {
+      return null;
+    }
+    await depositConfirmedTransfer(tx, {
+      organizationId: orgId,
+      reconciliationId: confirmed.id,
+      method: confirmed.method,
+      amount: confirmed.arrivedAmount ?? confirmed.expectedAmount,
+      createdBy: actor,
+    });
+    return confirmed;
   });
   if (!row) {
     return { ok: false, error: 'Transferencia no encontrada' };
@@ -115,6 +132,7 @@ export async function confirmTransfer(
     after: { status: row.status, arrivedAmount: row.arrivedAmount },
   });
   revalidatePath(CASH_PATH);
+  revalidatePath(TESORERIA_PATH);
   return { ok: true, data: row };
 }
 
@@ -183,11 +201,25 @@ export async function confirmAllPendingTransfers(
 ): Promise<ActionResult<{ confirmed: number }>> {
   const { userId, orgId } = await requirePanelModule(MODULE);
   const actor = await getActorName(userId);
-  const confirmed = await bulkConfirmPending(db, {
-    organizationId: orgId,
-    reconciledBy: actor,
-    ...period,
+  // Confirm the batch and bridge each one to its bank deposit in one transaction.
+  const confirmedRows = await db.transaction(async (tx) => {
+    const rows = await bulkConfirmPending(tx, {
+      organizationId: orgId,
+      reconciledBy: actor,
+      ...period,
+    });
+    for (const r of rows) {
+      await depositConfirmedTransfer(tx, {
+        organizationId: orgId,
+        reconciliationId: r.id,
+        method: r.method,
+        amount: r.arrivedAmount ?? r.expectedAmount,
+        createdBy: actor,
+      });
+    }
+    return rows;
   });
+  const confirmed = confirmedRows.length;
   await logAction({
     organizationId: orgId,
     actor: { type: 'user', id: userId },
@@ -197,6 +229,7 @@ export async function confirmAllPendingTransfers(
     after: { confirmed },
   });
   revalidatePath(CASH_PATH);
+  revalidatePath(TESORERIA_PATH);
   return { ok: true, data: { confirmed } };
 }
 

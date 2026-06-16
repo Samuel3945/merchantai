@@ -9,6 +9,7 @@ import {
   cashMovementsSchema,
   cashSessionsSchema,
   expensesSchema,
+  paymentMethodsSchema,
   posTokensSchema,
   transferReconciliationsSchema,
   treasuryAccountsSchema,
@@ -760,4 +761,81 @@ export async function listTreasuryTimeline(
     toAccount: m.toAccountId ? (nameMap.get(m.toAccountId) ?? null) : null,
     amount: Number.parseFloat(m.amount ?? '0') || 0,
   }));
+}
+
+// ── Slice E: confirmed-transfer → bank deposit bridge ─────────────────────────
+// A confirmed customer transfer must land in a bank treasury account, so the
+// company total reflects it ("the money never disappears"). The only link from a
+// transfer to a method is the free-text `method` string (sale_payments has no
+// payment_method FK), so we resolve the bank by name.
+
+// Maps a transfer method label to its bank treasury account. Returns the account
+// id ONLY when the method resolves to exactly ONE active bank — ambiguous or no
+// match returns null so the caller skips the deposit (never guess where money
+// lands). Match is case-insensitive against the configured transfer method name.
+export async function resolveBancoForMethod(
+  executor: Executor,
+  args: { organizationId: string; method: string },
+): Promise<string | null> {
+  const rows = await executor
+    .select({ id: treasuryAccountsSchema.id })
+    .from(treasuryAccountsSchema)
+    .innerJoin(
+      paymentMethodsSchema,
+      eq(paymentMethodsSchema.id, treasuryAccountsSchema.paymentMethodId),
+    )
+    .where(
+      and(
+        eq(treasuryAccountsSchema.organizationId, args.organizationId),
+        eq(treasuryAccountsSchema.type, 'banco'),
+        eq(treasuryAccountsSchema.active, true),
+        eq(paymentMethodsSchema.type, 'transfer'),
+        sql`lower(${paymentMethodsSchema.name}) = lower(${args.method})`,
+      ),
+    )
+    .limit(2);
+
+  return rows.length === 1 ? (rows[0]?.id ?? null) : null;
+}
+
+// Records the bank deposit for a confirmed transfer, idempotently. The unique
+// index on transfer_reconciliation_id means a second confirm (or a bulk confirm
+// that re-touches the row) cannot double-credit the bank — the conflicting insert
+// is a no-op. Returns whether a NEW deposit row was written. When the method does
+// not resolve to a bank, no deposit is made (deposited=false) and confirming is
+// NOT blocked. Run inside the same transaction as the status change for atomicity.
+export async function depositConfirmedTransfer(
+  executor: Executor,
+  args: {
+    organizationId: string;
+    reconciliationId: string;
+    method: string;
+    amount: number | string;
+    createdBy: string;
+  },
+): Promise<{ deposited: boolean }> {
+  const bancoId = await resolveBancoForMethod(executor, {
+    organizationId: args.organizationId,
+    method: args.method,
+  });
+  if (!bancoId) {
+    return { deposited: false };
+  }
+
+  const inserted = await executor
+    .insert(treasuryMovementsSchema)
+    .values({
+      organizationId: args.organizationId,
+      fromAccountId: null,
+      toAccountId: bancoId,
+      amount: toMoney(args.amount),
+      type: 'entrada',
+      reason: 'Transferencia confirmada',
+      transferReconciliationId: args.reconciliationId,
+      createdBy: args.createdBy,
+    })
+    .onConflictDoNothing()
+    .returning({ id: treasuryMovementsSchema.id });
+
+  return { deposited: inserted.length > 0 };
 }
