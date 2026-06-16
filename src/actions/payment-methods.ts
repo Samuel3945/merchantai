@@ -49,24 +49,6 @@ async function requireAdminOrg() {
   return { userId, orgId };
 }
 
-function validateHourRange(input: {
-  startHour?: number | null;
-  endHour?: number | null;
-}) {
-  const { startHour, endHour } = input;
-  for (const [label, value] of [
-    ['startHour', startHour],
-    ['endHour', endHour],
-  ] as const) {
-    if (value === null || value === undefined) {
-      continue;
-    }
-    if (!Number.isInteger(value) || value < 0 || value > 23) {
-      throw new Error(`${label} must be an integer between 0 and 23`);
-    }
-  }
-}
-
 async function seedIfEmpty(orgId: string) {
   const existing = await db
     .select({ id: paymentMethodsSchema.id })
@@ -115,8 +97,6 @@ export type CreatePaymentMethodInput = {
   name: string;
   type: PaymentMethodType;
   icon?: string | null;
-  startHour?: number | null;
-  endHour?: number | null;
   sortOrder?: number;
   details?: Record<string, unknown>;
   description?: string | null;
@@ -135,8 +115,6 @@ export async function createPaymentMethod(
     throw new Error('type is required');
   }
 
-  validateHourRange(input);
-
   const [row] = await db
     .insert(paymentMethodsSchema)
     .values({
@@ -144,8 +122,6 @@ export async function createPaymentMethod(
       name,
       type: input.type,
       icon: input.icon ?? null,
-      startHour: input.startHour ?? null,
-      endHour: input.endHour ?? null,
       sortOrder: input.sortOrder ?? 0,
       details: input.details ?? {},
       description: input.description ?? null,
@@ -171,8 +147,6 @@ export type UpdatePaymentMethodInput = {
   type?: PaymentMethodType;
   icon?: string | null;
   active?: boolean;
-  startHour?: number | null;
-  endHour?: number | null;
   sortOrder?: number;
   details?: Record<string, unknown>;
   description?: string | null;
@@ -186,8 +160,6 @@ export async function updatePaymentMethod(
   if (!input.id) {
     throw new Error('id is required');
   }
-
-  validateHourRange(input);
 
   const patch: Partial<typeof paymentMethodsSchema.$inferInsert> = {};
   if (input.name !== undefined) {
@@ -205,12 +177,6 @@ export async function updatePaymentMethod(
   }
   if (input.active !== undefined) {
     patch.active = input.active;
-  }
-  if (input.startHour !== undefined) {
-    patch.startHour = input.startHour;
-  }
-  if (input.endHour !== undefined) {
-    patch.endHour = input.endHour;
   }
   if (input.sortOrder !== undefined) {
     patch.sortOrder = input.sortOrder;
