@@ -177,7 +177,6 @@ export function TransferReconciliationPanel(props: {
   investigating: TransferReconciliation[]; // not_arrived
   history: TransferReconciliation[]; // confirmed + mismatch
   pendingCount: number;
-  pendingTotal: number;
   counts: { pending: number; confirmedToday: number; notArrived: number };
 }) {
   const router = useRouter();
@@ -250,7 +249,29 @@ export function TransferReconciliationPanel(props: {
   ];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 className="font-display text-lg font-semibold">
+            ¿Las transferencias cuadran?
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            El cajero marca cada transferencia que entra. Acá verificás que todo
+            aparezca.
+          </p>
+        </div>
+        {props.pendingCount > 0 && (
+          <Button
+            disabled={pending}
+            onClick={() => run(() => confirmAllPendingTransfers())}
+          >
+            Confirmar todo (
+            {props.pendingCount}
+            )
+          </Button>
+        )}
+      </div>
+
       <div className="
         grid grid-cols-1 gap-3
         sm:grid-cols-3
@@ -275,39 +296,6 @@ export function TransferReconciliationPanel(props: {
           tone="destructive"
         />
       </div>
-
-      <Card className="border-primary/30 bg-primary/5 p-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className="text-sm font-semibold">
-              Conciliación de transferencias
-            </div>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Compará contra tu cuenta (Nequi, banco). Confirmá todo y marcá solo
-              las que no cuadran.
-            </p>
-          </div>
-          <div className="text-right">
-            <div className="text-xs text-muted-foreground">Monto pendiente</div>
-            <div className="font-display text-xl font-medium tabular-nums">
-              {money(props.pendingTotal)}
-            </div>
-          </div>
-        </div>
-
-        {props.pendingCount > 0 && (
-          <Button
-            size="lg"
-            className="mt-4 w-full"
-            disabled={pending}
-            onClick={() => run(() => confirmAllPendingTransfers())}
-          >
-            Confirmar todo (
-            {props.pendingCount}
-            )
-          </Button>
-        )}
-      </Card>
 
       {error && (
         <div className="

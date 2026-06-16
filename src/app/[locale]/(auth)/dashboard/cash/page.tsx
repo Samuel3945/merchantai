@@ -12,7 +12,8 @@ import {
   listTransferReconciliations,
 } from '@/actions/transfer-reconciliation';
 import { CajasSupervision } from '@/features/cash/CajasSupervision';
-import { CashTabs } from '@/features/cash/CashTabs';
+import { CashClient } from '@/features/cash/CashClient';
+import { TransferReconciliationPanel } from '@/features/cash/TransferReconciliationPanel';
 import { TitleBar } from '@/features/dashboard/TitleBar';
 
 export default async function DashboardCashPage(props: {
@@ -74,21 +75,22 @@ export default async function DashboardCashPage(props: {
         title="Caja"
         description="Supervisión de los puntos de cobro: tocá una caja para ver su detalle, movimientos y cierres."
       />
-      <div className="mb-6">
+      <div className="space-y-8">
         <CajasSupervision
           openCajas={openCajas}
           notArrivedCount={transferCounts.notArrived}
         />
+        <CashClient collections={collections} alerts={alerts} />
+        {hasTransferMethods && (
+          <TransferReconciliationPanel
+            reconciliations={reconciliations}
+            investigating={investigating}
+            history={history}
+            pendingCount={pendingTransfers.count}
+            counts={transferCounts}
+          />
+        )}
       </div>
-      <CashTabs
-        cash={{ collections, alerts }}
-        hasTransferMethods={hasTransferMethods}
-        reconciliations={reconciliations}
-        investigating={investigating}
-        history={history}
-        pendingTransfers={pendingTransfers}
-        transferCounts={transferCounts}
-      />
     </>
   );
 }
