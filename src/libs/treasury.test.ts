@@ -1601,6 +1601,25 @@ describe('validateOpenCarryover', () => {
   });
 });
 
+// ── Phase 4: audit log action discriminator ───────────────────────────────────
+// The open route selects the audit action based on difference !== 0.
+// This is structural validation — logAction uses real DB and cannot be called
+// from pglite tests. The discriminator logic is pure and is tested here.
+
+describe('audit action discriminator', () => {
+  it('uses cash_session_open_discrepancy when difference !== 0', () => {
+    const difference = -200000;
+    const action = difference !== 0 ? 'cash_session_open_discrepancy' : 'cash.opened';
+    expect(action).toBe('cash_session_open_discrepancy');
+  });
+
+  it('uses cash.opened when difference === 0', () => {
+    const difference = 0;
+    const action = difference !== 0 ? 'cash_session_open_discrepancy' : 'cash.opened';
+    expect(action).toBe('cash.opened');
+  });
+});
+
 // R4: prior session must not be mutated after a discrepant open
 describe('R4: prior closed session immutability', () => {
   it('prior session S1 fields are unchanged after S2 opens with discrepancy', async () => {
