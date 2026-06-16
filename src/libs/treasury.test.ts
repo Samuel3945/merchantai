@@ -53,7 +53,10 @@ const DDL = `
     counted_amount numeric(12, 2),
     difference numeric(12, 2),
     status "cash_session_status" DEFAULT 'open' NOT NULL,
-    notes text
+    notes text,
+    opening_expected numeric(12, 2),
+    opening_difference numeric(12, 2),
+    opening_explanation text
   );
 
   CREATE TABLE cash_movements (
@@ -232,7 +235,9 @@ describe('getTreasuryPosition', () => {
     const balances = byKey(accounts);
 
     expect(balances[`caja:${TOKEN}`]).toBe(70);
-    expect(balances['caja:oficina']).toBe(0);
+    // The Phase-1 synthetic "Caja oficina" node is gone — the panel is the
+    // treasury console (caja fuerte / banco), never a caja.
+    expect(balances['caja:oficina']).toBeUndefined();
 
     // S-1: key is now caja_fuerte:<id>; look up by type instead of literal key.
     const vaultEntry = accounts.find(a => a.type === 'caja_fuerte');
