@@ -73,10 +73,6 @@ export function CajasSupervision(props: { openCajas: OpenCaja[] }) {
     <section className="space-y-4">
       <div>
         <h2 className="text-lg font-semibold">Cajas activas</h2>
-        <p className="text-sm text-muted-foreground">
-          Cada caja opera por separado. Tocá una para ver su detalle, sus
-          movimientos y sus cierres.
-        </p>
       </div>
 
       {props.openCajas.length === 0
