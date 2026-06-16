@@ -1,7 +1,7 @@
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { getOpeningExpected } from '@/libs/cash-helpers';
+import { getOpeningExpected, validateOpenCarryover } from '@/libs/cash-helpers';
 import {
   balanceForAccount,
   createTreasuryAccount,
@@ -1499,5 +1499,143 @@ describe('getOpeningExpected', () => {
 
     expect(result.expected).toBe(2500000);
     expect(result.priorCloseExists).toBe(true);
+  });
+});
+
+// ── Phase 3: open-route carry-over validation logic ───────────────────────────
+
+// validateOpenCarryover enforces explanation when priorCloseExists && counted ≠ expected.
+// This is a pure function — no DB needed for these tests.
+describe('validateOpenCarryover', () => {
+  // R3: prior close + counted ≠ expected + no explanation → 422
+  it('R3: rejects when prior close exists, counted ≠ expected, explanation missing', () => {
+    const result = validateOpenCarryover({
+      priorCloseExists: true,
+      counted: 2800000,
+      expected: 3000000,
+      explanation: undefined,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.code).toBe(422);
+  });
+
+  it('R3: rejects when explanation is blank whitespace', () => {
+    const result = validateOpenCarryover({
+      priorCloseExists: true,
+      counted: 2800000,
+      expected: 3000000,
+      explanation: '   ',
+    });
+    expect(result.valid).toBe(false);
+    expect(result.code).toBe(422);
+  });
+
+  // R3: prior close + counted ≠ expected + explanation provided → OK
+  it('R3: accepts when prior close exists, counted ≠ expected, explanation provided', () => {
+    const result = validateOpenCarryover({
+      priorCloseExists: true,
+      counted: 2800000,
+      expected: 3000000,
+      explanation: 'El supervisor retiró fondos antes del turno',
+    });
+    expect(result.valid).toBe(true);
+    expect(result.difference).toBe(-200000);
+  });
+
+  // R3: prior close + counted == expected + no explanation → OK
+  it('R3: accepts when counted equals expected (no explanation required)', () => {
+    const result = validateOpenCarryover({
+      priorCloseExists: true,
+      counted: 3000000,
+      expected: 3000000,
+      explanation: undefined,
+    });
+    expect(result.valid).toBe(true);
+    expect(result.difference).toBe(0);
+  });
+
+  // R2: no prior close → always OK regardless of explanation
+  it('R2: accepts when no prior close exists, even without explanation', () => {
+    const result = validateOpenCarryover({
+      priorCloseExists: false,
+      counted: 200000,
+      expected: 0,
+      explanation: undefined,
+    });
+    expect(result.valid).toBe(true);
+    expect(result.difference).toBe(200000);
+  });
+
+  // R5: legacy open omitting countedAtOpen (treated as 0) — prior close exists
+  // If expected=3_000_000 and counted=0 → difference=-3_000_000 → needs explanation
+  it('R5: legacy open (counted=0) with prior close triggers enforcement on mismatch', () => {
+    const result = validateOpenCarryover({
+      priorCloseExists: true,
+      counted: 0,
+      expected: 3000000,
+      explanation: undefined,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.code).toBe(422);
+  });
+
+  // R6: difference sign — negative = shortfall
+  it('R6: difference is negative when counted < expected (shortfall)', () => {
+    const result = validateOpenCarryover({
+      priorCloseExists: true,
+      counted: 2800000,
+      expected: 3000000,
+      explanation: 'valid explanation',
+    });
+    expect(result.difference).toBe(-200000);
+  });
+
+  it('R6: difference is positive when counted > expected (surplus)', () => {
+    const result = validateOpenCarryover({
+      priorCloseExists: true,
+      counted: 3200000,
+      expected: 3000000,
+      explanation: 'valid explanation',
+    });
+    expect(result.difference).toBe(200000);
+  });
+});
+
+// R4: prior session must not be mutated after a discrepant open
+describe('R4: prior closed session immutability', () => {
+  it('prior session S1 fields are unchanged after S2 opens with discrepancy', async () => {
+    await pg.query(
+      `INSERT INTO pos_tokens (id, organization_id, device_name) VALUES ($1, $2, 'Caja D')`,
+      [TOKEN_B, ORG],
+    );
+    // Prior closed session S1
+    await pg.query(
+      `INSERT INTO cash_sessions (id, organization_id, pos_token_id, opened_by, opening_amount, status, closed_at, counted_amount)
+       VALUES ($1, $2, $3, 'cajero', '0', 'closed', now() - interval '1 day', '3000000.00')`,
+      [SESSION_A, ORG, TOKEN_B],
+    );
+    // Open a new discrepant session S2 — simulating what the route does
+    await pg.query(
+      `INSERT INTO cash_sessions (id, organization_id, pos_token_id, opened_by, opening_amount, status, opening_expected, opening_difference, opening_explanation)
+       VALUES ($1, $2, $3, 'cajero', '2800000', 'open', '3000000.00', '-200000.00', 'El supervisor retiró fondos')`,
+      [SESSION_B, ORG, TOKEN_B],
+    );
+
+    // Verify S1 is unchanged
+    const s1 = await pg.query<{ counted_amount: string; opening_difference: string | null }>(
+      `SELECT counted_amount, opening_difference FROM cash_sessions WHERE id = $1`,
+      [SESSION_A],
+    );
+    expect(Number(s1.rows[0]!.counted_amount)).toBe(3000000);
+    expect(s1.rows[0]!.opening_difference).toBeNull();
+
+    // Verify S2 has the 3 new fields
+    const s2 = await pg.query<{ opening_expected: string; opening_difference: string; opening_explanation: string }>(
+      `SELECT opening_expected, opening_difference, opening_explanation FROM cash_sessions WHERE id = $1`,
+      [SESSION_B],
+    );
+    expect(Number(s2.rows[0]!.opening_expected)).toBe(3000000);
+    expect(Number(s2.rows[0]!.opening_difference)).toBe(-200000);
+    expect(s2.rows[0]!.opening_explanation).toBe('El supervisor retiró fondos');
   });
 });
