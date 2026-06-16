@@ -7,6 +7,7 @@ import { toMoney } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import { requirePanelModule } from '@/libs/panel-session';
 import {
+  getHandoverStatusForSessions,
   getOrCreatePendingAccount,
   recordBankConsignacion,
   recordContainerTransfer,
@@ -204,4 +205,26 @@ export async function listPendingHandoversAction(): Promise<
   const { listPendingHandovers } = await import('@/libs/treasury');
   const handovers = await listPendingHandovers(db, orgId);
   return { ok: true, data: handovers };
+}
+
+/**
+ * For each session ID in the input array, returns whether a handover movement
+ * row exists for that session (R7 — "entregado" label on caja cards).
+ * Returns a plain object { [sessionId]: boolean } (serializable from server action).
+ * Non-fatal: returns empty object on error.
+ * Gated by requirePanelModule('cash').
+ */
+export async function getHandoverStatusForSessionsAction(
+  sessionIds: string[],
+): Promise<ActionResult<Record<string, boolean>>> {
+  if (sessionIds.length === 0) {
+    return { ok: true, data: {} };
+  }
+  const { orgId } = await requirePanelModule('cash');
+  const statusMap = await getHandoverStatusForSessions(db, orgId, sessionIds);
+  const result: Record<string, boolean> = {};
+  for (const [id, v] of statusMap) {
+    result[id] = v;
+  }
+  return { ok: true, data: result };
 }

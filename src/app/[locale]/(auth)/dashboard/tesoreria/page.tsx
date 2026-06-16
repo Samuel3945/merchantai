@@ -2,6 +2,7 @@ import { setRequestLocale } from 'next-intl/server';
 import { listPaymentMethods } from '@/actions/payment-methods';
 import { getTimeline, getTreasury, listTreasuryAccounts } from '@/actions/treasury';
 import {
+  getHandoverStatusForSessionsAction,
   getPendingHandoversOverview,
   listPendingHandoversAction,
 } from '@/actions/treasury-placement';
@@ -29,14 +30,24 @@ export default async function TesoreriaPage(props: {
   // Pending handovers: only fetch when there is a transito balance (fast-path).
   const hasTransito = treasury.some(a => a.type === 'transito' && a.balance > 0);
 
-  const [pendingHandoversResult, pendingOverview] = await Promise.all([
+  // Collect session IDs from caja entries for the R7 "entregado" label query.
+  const cajaSessionIds = treasury
+    .filter(a => a.type === 'caja' && a.sessionId)
+    .map(a => a.sessionId!);
+
+  const [pendingHandoversResult, pendingOverview, handoverStatusResult] = await Promise.all([
     hasTransito
       ? listPendingHandoversAction().catch(() => ({ ok: false as const, error: '' }))
       : Promise.resolve({ ok: true as const, data: [] }),
     getPendingHandoversOverview().catch(() => ({ ok: false as const, error: '' })),
+    cajaSessionIds.length > 0
+      ? getHandoverStatusForSessionsAction(cajaSessionIds).catch(() => ({ ok: false as const, error: '' }))
+      : Promise.resolve({ ok: true as const, data: {} as Record<string, boolean> }),
   ]);
 
   const pendingHandovers = pendingHandoversResult.ok ? pendingHandoversResult.data : [];
+  const handoverStatusBySessions: Record<string, boolean>
+    = handoverStatusResult.ok ? handoverStatusResult.data : {};
 
   const pendingBadgeTotal
     = pendingOverview.ok && pendingOverview.data.total > 0
@@ -105,6 +116,7 @@ export default async function TesoreriaPage(props: {
         transferMethods={methods}
         totalOverride={totalEmpresa}
         pendingHandovers={pendingHandovers}
+        handoverStatusBySessions={handoverStatusBySessions}
       />
 
       {/* Slice C: Financial timeline — read-only movement history */}

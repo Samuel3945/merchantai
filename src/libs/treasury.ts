@@ -28,6 +28,12 @@ export type TreasuryAccount = {
   type: TreasuryAccountType;
   balance: number;
   note?: string;
+  /**
+   * For type='caja' only: the ID of the last closed cash session for this drawer.
+   * Used by the TreasuryConsole to look up whether the session had a handover
+   * (R7 "entregado" label). Absent when there is no closed session for the drawer.
+   */
+  sessionId?: string;
 };
 
 // A drawer's current cash: the open session's expected, or — if closed — the
@@ -83,12 +89,39 @@ export async function getTreasuryPosition(
     .select({ id: posTokensSchema.id, name: posTokensSchema.deviceName })
     .from(posTokensSchema)
     .where(eq(posTokensSchema.organizationId, organizationId));
+
+  // Batch-fetch the most recent closed session ID per pos_token (for R7 "entregado" label).
+  // One query for all tokens avoids N+1. Result: Map<posTokenId, sessionId>.
+  const lastSessionIds = new Map<string, string>();
+  if (tokens.length > 0) {
+    const sessionRows = await executor
+      .select({
+        posTokenId: sql<string>`pos_token_id::text`,
+        sessionId: sql<string>`id::text`,
+      })
+      .from(
+        sql`(
+          SELECT DISTINCT ON (pos_token_id)
+            id, pos_token_id
+          FROM cash_sessions
+          WHERE organization_id = ${organizationId}
+            AND status = 'closed'
+            AND pos_token_id IS NOT NULL
+          ORDER BY pos_token_id, closed_at DESC
+        ) latest_sessions`,
+      );
+    for (const r of sessionRows) {
+      lastSessionIds.set(r.posTokenId, r.sessionId);
+    }
+  }
+
   const cajas = await Promise.all(
     tokens.map(async t => ({
       key: `caja:${t.id}`,
       name: t.name,
       type: 'caja' as const,
       balance: await cajaBalance(executor, organizationId, t.id),
+      sessionId: lastSessionIds.get(t.id),
     })),
   );
   accounts.push(...cajas);
@@ -530,6 +563,16 @@ export async function recordContainerTransfer(
     );
   }
 
+  // Per-handover guard (ADR-5 C2): re-check inside executor.
+  if (input.handoverMovementId) {
+    const remaining = await getRemainingForHandover(executor, input.handoverMovementId);
+    if (amt > remaining + 0.005) {
+      throw new Error(
+        `excede el saldo pendiente del cierre: remaining ${remaining.toFixed(2)}, requested ${amt.toFixed(2)}`,
+      );
+    }
+  }
+
   const [row] = await executor
     .insert(treasuryMovementsSchema)
     .values({
@@ -618,6 +661,17 @@ export async function recordBankConsignacion(
     throw new Error(
       `saldo insuficiente: balance ${currentBalance.toFixed(2)}, requested ${amt.toFixed(2)}`,
     );
+  }
+
+  // Per-handover guard (ADR-5 C2): when this placement is attributed to a specific
+  // handover, re-check inside the executor that amt ≤ handover's remaining balance.
+  if (input.handoverMovementId) {
+    const remaining = await getRemainingForHandover(executor, input.handoverMovementId);
+    if (amt > remaining + 0.005) {
+      throw new Error(
+        `excede el saldo pendiente del cierre: remaining ${remaining.toFixed(2)}, requested ${amt.toFixed(2)}`,
+      );
+    }
   }
 
   const [row] = await executor
@@ -712,6 +766,16 @@ export async function recordGastoOutflow(
     throw new Error(
       `saldo insuficiente: balance ${currentBalance.toFixed(2)}, requested ${amt.toFixed(2)}`,
     );
+  }
+
+  // Per-handover guard (ADR-5 C2): re-check inside executor.
+  if (input.handoverMovementId) {
+    const remaining = await getRemainingForHandover(executor, input.handoverMovementId);
+    if (amt > remaining + 0.005) {
+      throw new Error(
+        `excede el saldo pendiente del cierre: remaining ${remaining.toFixed(2)}, requested ${amt.toFixed(2)}`,
+      );
+    }
   }
 
   const doInserts = async (tx: Executor): Promise<string> => {
@@ -1031,6 +1095,80 @@ export async function depositConfirmedTransfer(
     .returning({ id: treasuryMovementsSchema.id });
 
   return { deposited: inserted.length > 0 };
+}
+
+// ── Phase 3 PR3: per-handover remaining + settled state ───────────────────────
+
+/**
+ * Returns the remaining unplaced amount for a specific handover movement row.
+ * remaining = handover.amount − Σ(amount WHERE handover_movement_id = handoverId)
+ *
+ * Used inside placement transactions to enforce the per-handover over-place guard
+ * (ADR-5 C2, two-level guard). Must be called inside a transaction with a lock
+ * on the handover row to prevent races.
+ */
+export async function getRemainingForHandover(
+  executor: Executor,
+  handoverId: string,
+): Promise<number> {
+  // Single correlated subquery: handover.amount − Σ(placements tagged to it)
+  const [row] = await executor
+    .select({
+      remaining: sql<string>`(
+        tm.amount - COALESCE((
+          SELECT SUM(p.amount)
+          FROM treasury_movements p
+          WHERE p.handover_movement_id = tm.id
+        ), 0)
+      )::text`,
+    })
+    .from(sql`treasury_movements tm`)
+    .where(sql`tm.id = ${handoverId}`);
+
+  return Number.parseFloat(row?.remaining ?? '0') || 0;
+}
+
+/**
+ * For each session ID in the input array, returns whether a handover movement
+ * row exists for that session (type='handover', cash_session_id = sessionId).
+ * Used by the caja card to show the "entregado" label.
+ *
+ * Scoped to the org to prevent cross-org leaks.
+ * Returns a Map<sessionId, boolean> with false as default for sessions without handovers.
+ */
+export async function getHandoverStatusForSessions(
+  executor: Executor,
+  organizationId: string,
+  sessionIds: string[],
+): Promise<Map<string, boolean>> {
+  const result = new Map<string, boolean>();
+  if (sessionIds.length === 0) {
+    return result;
+  }
+
+  // Initialize all to false
+  for (const id of sessionIds) {
+    result.set(id, false);
+  }
+
+  const rows = await executor
+    .select({
+      cashSessionId: sql<string>`cash_session_id::text`,
+    })
+    .from(treasuryMovementsSchema)
+    .where(
+      sql`organization_id = ${organizationId}
+        AND type = 'handover'
+        AND cash_session_id = ANY(ARRAY[${sql.join(sessionIds.map(id => sql`${id}::uuid`), sql`, `)}])`,
+    );
+
+  for (const row of rows) {
+    if (row.cashSessionId) {
+      result.set(row.cashSessionId, true);
+    }
+  }
+
+  return result;
 }
 
 // ── Phase 3 PR2: placement helpers + badge counter ────────────────────────────
