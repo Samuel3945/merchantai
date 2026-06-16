@@ -6,15 +6,13 @@ import type { TreasuryAccount, TreasuryAccountRow } from '@/libs/treasury';
 import { ChevronDown, Coins, Landmark, Lock, Plus, Wallet } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
-import {
-  createBanco,
-  createCajaFuerte,
-  transferEntreCajas,
-} from '@/actions/treasury';
+import { createBanco, createCajaFuerte } from '@/actions/treasury';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
 import { cashInputCls, money } from '@/features/cash/cash-ui';
 import { Consignar } from './Consignar';
+import { MoneyTree } from './MoneyTree';
+import { MoverDineroForm } from './MoverDineroForm';
 
 const GROUPS: { type: TreasuryAccount['type']; label: string }[] = [
   { type: 'caja', label: 'Cajas' },
@@ -276,159 +274,6 @@ function AgregarBancoForm({
   );
 }
 
-// ── Inline form: Mover plata (transferEntreCajas / consignarDesde) ────────────
-// Routes:
-//   caja_fuerte → banco        = consignarDesde (already in Consignar.tsx per-card)
-//   caja_fuerte ↔ caja_fuerte  = transferEntreCajas
-//   caja_fuerte → caja_fuerte  = transferEntreCajas
-//   (caja ↔ caja is Phase 3; not offered here)
-
-function MoverPlataForm({ accountRows }: { accountRows: TreasuryAccountRow[] }) {
-  const router = useRouter();
-  const [open, setOpen] = useState(false);
-  const [pending, startTransition] = useTransition();
-  const [fromId, setFromId] = useState('');
-  const [toId, setToId] = useState('');
-  const [amount, setAmount] = useState('');
-  const [reason, setReason] = useState('');
-  const [error, setError] = useState<string | null>(null);
-
-  // Only offer non-caja accounts as origin/destination for explicit transfers.
-  // Cajas → caja_fuerte dual-write is handled by the existing retiro_seguridad
-  // path in MovementModal (not here). Phase 3 handles caja↔caja native ledger.
-  const eligibleAccounts = accountRows.filter(
-    a => a.type === 'caja_fuerte' || a.type === 'banco',
-  );
-
-  const fromOptions = eligibleAccounts.map(a => ({
-    value: a.id,
-    label: `${a.name} (${a.type === 'caja_fuerte' ? 'caja fuerte' : 'banco'})`,
-  }));
-
-  const toOptions = eligibleAccounts
-    .filter(a => a.id !== fromId)
-    .map(a => ({
-      value: a.id,
-      label: `${a.name} (${a.type === 'caja_fuerte' ? 'caja fuerte' : 'banco'})`,
-    }));
-
-  if (eligibleAccounts.length < 2) {
-    return null;
-  }
-
-  function submit() {
-    setError(null);
-    if (!fromId || !toId) {
-      setError('Seleccioná origen y destino');
-      return;
-    }
-    if (fromId === toId) {
-      setError('El origen y el destino deben ser diferentes');
-      return;
-    }
-    const amt = Number.parseFloat(amount);
-    if (!Number.isFinite(amt) || amt <= 0) {
-      setError('Ingresá un monto mayor a cero');
-      return;
-    }
-
-    startTransition(async () => {
-      try {
-        const res = await transferEntreCajas(fromId, toId, amount, reason || null);
-        if (!res.ok) {
-          setError(res.error);
-          return;
-        }
-        setOpen(false);
-        setFromId('');
-        setToId('');
-        setAmount('');
-        setReason('');
-        router.refresh();
-      } catch {
-        setError('Ocurrió un error inesperado. Volvé a intentar.');
-      }
-    });
-  }
-
-  if (!open) {
-    return (
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="
-          text-xs font-medium text-primary
-          hover:underline
-        "
-      >
-        Mover plata
-      </button>
-    );
-  }
-
-  return (
-    <div className="
-      mt-3 space-y-2 rounded-lg border border-border bg-muted/30 p-3
-    "
-    >
-      <p className="text-xs font-medium">Mover plata entre contenedores</p>
-      <Select
-        value={fromId}
-        onValueChange={(v) => {
-          setFromId(v);
-          if (v === toId) {
-            setToId('');
-          }
-        }}
-        options={fromOptions}
-        placeholder="Origen"
-      />
-      <Select
-        value={toId}
-        onValueChange={setToId}
-        options={toOptions}
-        placeholder="Destino"
-      />
-      <input
-        className={cashInputCls}
-        type="number"
-        inputMode="decimal"
-        min="0"
-        placeholder="Monto"
-        value={amount}
-        onChange={e => setAmount(e.target.value)}
-      />
-      <input
-        className={cashInputCls}
-        placeholder="Nota (opcional)"
-        value={reason}
-        onChange={e => setReason(e.target.value)}
-      />
-      {error && <div className="text-xs text-destructive">{error}</div>}
-      <div className="flex gap-2">
-        <Button
-          size="sm"
-          disabled={pending || !fromId || !toId || amount === ''}
-          onClick={submit}
-        >
-          Transferir
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={pending}
-          onClick={() => {
-            setOpen(false);
-            setError(null);
-          }}
-        >
-          Cancelar
-        </Button>
-      </div>
-    </div>
-  );
-}
-
 // ── Empty state ────────────────────────────────────────────────────────────────
 
 function EmptyTreasuryState({
@@ -474,7 +319,7 @@ function ActionsToolbar({
         {transferMethods.length > 0 && (
           <AgregarBancoForm transferMethods={transferMethods} onDone={() => {}} />
         )}
-        <MoverPlataForm accountRows={accountRows} />
+        <MoverDineroForm accountRows={accountRows} />
       </div>
     </div>
   );
@@ -599,6 +444,9 @@ export function TreasuryConsole(props: {
 
       {showDetail && (
         <div className="mt-4 space-y-4 border-t border-border pt-4">
+          {/* Slice B: hierarchical money tree — groups accounts by type */}
+          <MoneyTree accounts={props.accounts} />
+
           {GROUPS.map((g) => {
             const items = props.accounts.filter(a => a.type === g.type);
             if (items.length === 0) {
