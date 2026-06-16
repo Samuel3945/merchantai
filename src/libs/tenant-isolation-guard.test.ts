@@ -52,6 +52,7 @@ const RAW_DB_ALLOWLIST = new Set<string>([
   'pos/payment-methods/route.ts',
   'pos/sales/route.ts',
   'pos/sales/[saleId]/return/route.ts',
+  'pos/suppliers/route.ts',
   'pos/sync/route.ts',
 ]);
 
