@@ -796,23 +796,23 @@ export async function getOrCreatePendingAccount(
       createdBy,
     });
   } catch (err: unknown) {
-    // Race condition: another concurrent close already created the row.
-    // Re-select and return it — NEVER throw out of a close transaction.
-    const msg = err instanceof Error ? err.message : '';
-    if (msg.includes('ya existe una cuenta con el nombre')) {
-      const [raceRow] = await executor
-        .select()
-        .from(treasuryAccountsSchema)
-        .where(
-          and(
-            eq(treasuryAccountsSchema.organizationId, organizationId),
-            sql`${treasuryAccountsSchema.type} = 'transito'`,
-          ),
-        )
-        .limit(1);
-      if (raceRow) {
-        return raceRow;
-      }
+    // Race condition: a concurrent close may have created the transito account
+    // between our SELECT and INSERT. Re-select on ANY creation failure — no
+    // message/code matching, so it stays robust to translation or error-wrapper
+    // changes — and use the row if it appeared. Only propagate if it still isn't
+    // there. NEVER throw out of a close transaction for a benign race.
+    const [raceRow] = await executor
+      .select()
+      .from(treasuryAccountsSchema)
+      .where(
+        and(
+          eq(treasuryAccountsSchema.organizationId, organizationId),
+          sql`${treasuryAccountsSchema.type} = 'transito'`,
+        ),
+      )
+      .limit(1);
+    if (raceRow) {
+      return raceRow;
     }
     throw err;
   }
