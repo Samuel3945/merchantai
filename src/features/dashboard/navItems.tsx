@@ -18,6 +18,7 @@ import {
   UserCog,
   UserRound,
   Users,
+  Vault,
   Wallet,
 } from 'lucide-react';
 import { requiredModuleForPath } from '@/libs/permissions';
@@ -45,6 +46,7 @@ export const navGroups: NavGroup[] = [
       { href: '/dashboard/mi-dia', label: 'Mi día', icon: Sun },
       { href: '/dashboard', label: 'Resumen', icon: LayoutDashboard },
       { href: '/dashboard/cash', label: 'Caja', icon: Wallet },
+      { href: '/dashboard/tesoreria', label: 'Tesorería', icon: Vault },
       { href: '/dashboard/sales', label: 'Ventas', icon: Receipt },
       { href: '/dashboard/pos-cajeros', label: 'Cajas POS', icon: ShoppingCart },
       { href: '/dashboard/delivery', label: 'Domicilios', icon: Bike },
