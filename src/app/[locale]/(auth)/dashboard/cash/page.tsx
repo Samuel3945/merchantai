@@ -16,8 +16,8 @@ import {
 } from '@/actions/transfer-reconciliation';
 import { getTreasury, listTreasuryAccounts } from '@/actions/treasury';
 import { CashTabs } from '@/features/cash/CashTabs';
-import { TreasuryConsole } from '@/features/cash/TreasuryConsole';
 import { TitleBar } from '@/features/dashboard/TitleBar';
+import { TreasuryConsole } from '@/features/treasury/TreasuryConsole';
 
 export default async function DashboardCashPage(props: {
   params: Promise<{ locale: string }>;

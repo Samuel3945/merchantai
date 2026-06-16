@@ -1,13 +1,13 @@
 'use client';
 
 import type { Direction } from './cash-ui';
-import type { MovementSubmit } from './MovementModal';
 import type {
   CashSecurityStatus,
   GetCurrentCashResult,
   OpenCaja,
   TodayCashKpis,
 } from '@/actions/cash';
+import type { MovementSubmit } from '@/features/treasury/MovementModal';
 import type { ActionResult } from '@/libs/action-result';
 import type { CashMovement, CashSession } from '@/libs/cash-helpers';
 import type { TreasuryAccountRow } from '@/libs/treasury';
@@ -15,6 +15,7 @@ import { useRouter } from 'next/navigation';
 import { useMemo, useState, useTransition } from 'react';
 import { addCashMovement, closeCashSession } from '@/actions/cash';
 import { Button } from '@/components/ui/button';
+import { MovementModal } from '@/features/treasury/MovementModal';
 import { cn } from '@/utils/Helpers';
 import { ActivityFeed } from './ActivityFeed';
 import { cashInputCls, money, relativeTime } from './cash-ui';
@@ -22,7 +23,6 @@ import { CashClosuresHistory } from './CashClosuresHistory';
 import { CashHistory } from './CashHistory';
 import { CashSecurityAlert } from './CashSecurityAlert';
 import { DenominationCounter } from './DenominationCounter';
-import { MovementModal } from './MovementModal';
 
 type FraudAlert = {
   kind: string;

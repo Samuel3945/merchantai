@@ -6,7 +6,7 @@ import { useState, useTransition } from 'react';
 import { consignarDesde } from '@/actions/treasury';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
-import { cashInputCls } from './cash-ui';
+import { cashInputCls } from '@/features/cash/cash-ui';
 
 // Move cash from a vault (caja_fuerte) to a bank account.
 // Calls the 2B treasury_movements path (consignarDesde) so the write is

@@ -13,7 +13,7 @@ import {
 } from '@/actions/treasury';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
-import { cashInputCls, money } from './cash-ui';
+import { cashInputCls, money } from '@/features/cash/cash-ui';
 import { Consignar } from './Consignar';
 
 const GROUPS: { type: TreasuryAccount['type']; label: string }[] = [
@@ -497,6 +497,8 @@ export function TreasuryConsole(props: {
   accounts: TreasuryAccount[];
   accountRows?: TreasuryAccountRow[];
   transferMethods?: PaymentMethodRow[];
+  /** Total balance override (e.g. from tesoreria page with all accounts). */
+  totalOverride?: number;
 }) {
   const [showDetail, setShowDetail] = useState(false);
 
@@ -526,7 +528,7 @@ export function TreasuryConsole(props: {
   const cajas = props.accounts.filter(a => a.type === 'caja');
   const safe = props.accounts.filter(a => a.type === 'caja_fuerte');
   const banco = props.accounts.filter(a => a.type === 'banco');
-  const total = sum(props.accounts);
+  const total = props.totalOverride ?? sum(props.accounts);
 
   return (
     <div className="rounded-xl border border-border bg-card p-5 shadow-xs">
