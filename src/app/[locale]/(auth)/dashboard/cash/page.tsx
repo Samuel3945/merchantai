@@ -1,8 +1,8 @@
 import type { TransferReconciliation } from '@/libs/transfer-reconciliation';
 import { setRequestLocale } from 'next-intl/server';
 import {
-  getCurrentCash,
   getFraudAlerts,
+  getTodayCollectionsByMethod,
   listOpenCajas,
 } from '@/actions/cash';
 import { listPaymentMethods } from '@/actions/payment-methods';
@@ -21,8 +21,8 @@ export default async function DashboardCashPage(props: {
   const { locale } = await props.params;
   setRequestLocale(locale);
 
-  const [current, alerts, openCajas, methods] = await Promise.all([
-    getCurrentCash(),
+  const [collections, alerts, openCajas, methods] = await Promise.all([
+    getTodayCollectionsByMethod(),
     getFraudAlerts(14).catch(() => []),
     listOpenCajas().catch(() => []),
     listPaymentMethods({ activeOnly: true }).catch(() => []),
@@ -62,7 +62,7 @@ export default async function DashboardCashPage(props: {
         <CajasSupervision openCajas={openCajas} />
       </div>
       <CashTabs
-        cash={{ current, alerts }}
+        cash={{ collections, alerts }}
         hasTransferMethods={hasTransferMethods}
         reconciliations={reconciliations}
         investigating={investigating}

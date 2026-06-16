@@ -1,6 +1,6 @@
 'use client';
 
-import type { GetCurrentCashResult } from '@/actions/cash';
+import type { TodayCollections } from '@/actions/cash';
 import { cn } from '@/utils/Helpers';
 import { money } from './cash-ui';
 
@@ -43,13 +43,14 @@ function StatCard(props: { label: string; value: string; tone?: 'in' | 'out' }) 
 }
 
 // Secondary section of the Caja module (the cajas list is the hero). Shows the
-// fraud alerts and how money came in today by method. Closures and the movement
-// ledger are NOT here — they live inside each caja's detail, filtered to it.
+// fraud alerts and how money came in today, bucketed by the business's REAL
+// payment methods. Closures and the movement ledger are NOT here — they live
+// inside each caja's detail, filtered to it.
 export function CashClient(props: {
-  current: GetCurrentCashResult;
+  collections: TodayCollections;
   alerts: FraudAlert[];
 }) {
-  const { collections } = props.current;
+  const { collections } = props;
 
   return (
     <div className="space-y-6">
@@ -72,27 +73,38 @@ export function CashClient(props: {
         </div>
       )}
 
-      {/* Cobros por método — cómo entró la plata hoy (ventas + abonos). */}
+      {/* Cobros por método — cómo entró la plata hoy (ventas + abonos), solo por
+          los métodos de pago reales del negocio. */}
       <div className="space-y-2">
         <div className="text-sm font-medium">
           Cobros por método
           <span className="ml-1 text-xs font-normal text-muted-foreground">
-            · ventas + abonos
+            · hoy · ventas + abonos
           </span>
         </div>
-        <div className="
-          grid grid-cols-2 gap-3
-          sm:grid-cols-3
-          lg:grid-cols-6
-        "
-        >
-          <StatCard label="Efectivo" value={money(collections.efectivo)} tone="in" />
-          <StatCard label="Transferencia" value={money(collections.transferencia)} />
-          <StatCard label="Nequi" value={money(collections.nequi)} />
-          <StatCard label="Daviplata" value={money(collections.daviplata)} />
-          <StatCard label="Otros" value={money(collections.otros)} />
-          <StatCard label="Total general" value={money(collections.total)} tone="in" />
-        </div>
+        {collections.methods.length === 0
+          ? (
+              <div className="
+                rounded-lg border border-dashed border-border p-4 text-sm
+                text-muted-foreground
+              "
+              >
+                No hay métodos de pago configurados.
+              </div>
+            )
+          : (
+              <div className="
+                grid grid-cols-2 gap-3
+                sm:grid-cols-3
+                lg:grid-cols-6
+              "
+              >
+                {collections.methods.map(m => (
+                  <StatCard key={m.name} label={m.name} value={money(m.amount)} />
+                ))}
+                <StatCard label="Total" value={money(collections.total)} tone="in" />
+              </div>
+            )}
       </div>
     </div>
   );
