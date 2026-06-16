@@ -70,14 +70,3 @@ export function riskLevelForRatio(ratio: number): CashRiskLevel {
   }
   return 'normal';
 }
-
-const LEVEL_LABEL: Record<CashRiskLevel, string> = {
-  normal: 'Normal',
-  preventivo: 'Preventivo',
-  alto: 'Alto',
-  critico: 'Crítico',
-};
-
-export function riskLevelLabel(level: CashRiskLevel): string {
-  return LEVEL_LABEL[level];
-}
