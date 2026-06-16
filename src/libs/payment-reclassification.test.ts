@@ -38,7 +38,10 @@ const DDL = `
     counted_amount numeric(12, 2),
     difference numeric(12, 2),
     status "cash_session_status" DEFAULT 'open' NOT NULL,
-    notes text
+    notes text,
+    opening_expected numeric(12, 2),
+    opening_difference numeric(12, 2),
+    opening_explanation text
   );
 
   CREATE TABLE sales (
