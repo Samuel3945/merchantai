@@ -761,6 +761,11 @@ export async function getFraudAlerts(days = 14): Promise<FraudAlert[]> {
         eq(cashSessionsSchema.organizationId, orgId),
         eq(cashSessionsSchema.status, 'open'),
         lt(cashSessionsSchema.openedAt, sql`now() - interval '24 hours'`),
+        // Only REAL POS-device cajas count. The admin/panel session
+        // (pos_token_id = null) is an implicit movement container the owner
+        // never opens by hand — it stays open by design, so it must not raise a
+        // "caja abierta hace más de 24 horas" alert. Mirrors listOpenCajas.
+        isNotNull(cashSessionsSchema.posTokenId),
       ),
     );
   const longSessions = Number(longRow?.count ?? 0);
