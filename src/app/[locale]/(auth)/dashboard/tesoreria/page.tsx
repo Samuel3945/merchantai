@@ -1,9 +1,10 @@
 import { setRequestLocale } from 'next-intl/server';
 import { listPaymentMethods } from '@/actions/payment-methods';
-import { getTreasury, listTreasuryAccounts } from '@/actions/treasury';
+import { getTimeline, getTreasury, listTreasuryAccounts } from '@/actions/treasury';
 import { TitleBar } from '@/features/dashboard/TitleBar';
 import { SummaryCards } from '@/features/treasury/SummaryCards';
 import { TreasuryConsole } from '@/features/treasury/TreasuryConsole';
+import { TreasuryTimeline } from '@/features/treasury/TreasuryTimeline';
 
 export default async function TesoreriaPage(props: {
   params: Promise<{ locale: string }>;
@@ -11,10 +12,11 @@ export default async function TesoreriaPage(props: {
   const { locale } = await props.params;
   setRequestLocale(locale);
 
-  const [treasury, treasuryAccountRows, methods] = await Promise.all([
+  const [treasury, treasuryAccountRows, methods, timelineEntries] = await Promise.all([
     getTreasury().catch(() => []),
     listTreasuryAccounts().catch(() => []),
     listPaymentMethods({ activeOnly: true }).catch(() => []),
+    getTimeline(50).catch(() => []),
   ]);
 
   // Header total = Σ all balances from the single getTreasuryPosition call.
@@ -57,6 +59,11 @@ export default async function TesoreriaPage(props: {
         transferMethods={methods}
         totalOverride={totalEmpresa}
       />
+
+      {/* Slice C: Financial timeline — read-only movement history */}
+      <div className="mt-8">
+        <TreasuryTimeline entries={timelineEntries} />
+      </div>
     </>
   );
 }

@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
 import { cashInputCls, money } from '@/features/cash/cash-ui';
 import { Consignar } from './Consignar';
+import { GastoForm } from './GastoForm';
 import { MoneyTree } from './MoneyTree';
 import { MoverDineroForm } from './MoverDineroForm';
 
@@ -320,6 +321,8 @@ function ActionsToolbar({
           <AgregarBancoForm transferMethods={transferMethods} onDone={() => {}} />
         )}
         <MoverDineroForm accountRows={accountRows} />
+        {/* Slice C: register expense debited from a specific container */}
+        <GastoForm accountRows={accountRows} />
       </div>
     </div>
   );
