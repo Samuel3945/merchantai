@@ -12,6 +12,7 @@ import {
   getHandoverStatusForSessions,
   getOrCreatePendingAccount,
   getRemainingForHandover,
+  getTreasuryHandoverEnabled,
   getTreasuryPosition,
   listTreasuryAccounts,
   recordBankConsignacion,
@@ -40,6 +41,14 @@ const ENUMS = [
 ];
 
 const DDL = `
+  CREATE TABLE app_settings (
+    organization_id text NOT NULL,
+    key text NOT NULL,
+    value text DEFAULT '' NOT NULL,
+    updated_at timestamp DEFAULT now() NOT NULL,
+    PRIMARY KEY (organization_id, key)
+  );
+
   CREATE TABLE pos_tokens (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     organization_id text NOT NULL,
@@ -197,6 +206,7 @@ beforeEach(async () => {
   await pg.exec('DELETE FROM cash_movements');
   await pg.exec('DELETE FROM cash_sessions');
   await pg.exec('DELETE FROM pos_tokens');
+  await pg.exec('DELETE FROM app_settings');
 });
 
 function byKey(accounts: Awaited<ReturnType<typeof getTreasuryPosition>>) {
@@ -2085,7 +2095,7 @@ describe('getRemainingForHandover', () => {
     const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
     const handoverId = await makeHandover(pending.id, SES_R, 3000000);
 
-    const remaining = await getRemainingForHandover(db, handoverId);
+    const remaining = await getRemainingForHandover(db, handoverId, ORG);
 
     expect(remaining).toBe(3000000);
   });
@@ -2103,7 +2113,7 @@ describe('getRemainingForHandover', () => {
       [ORG, pending.id, bancoId, handoverId],
     );
 
-    const remaining = await getRemainingForHandover(db, handoverId);
+    const remaining = await getRemainingForHandover(db, handoverId, ORG);
 
     expect(remaining).toBeCloseTo(2000000, 0);
   });
@@ -2121,7 +2131,7 @@ describe('getRemainingForHandover', () => {
       [ORG, pending.id, bancoId, handoverId],
     );
 
-    const remaining = await getRemainingForHandover(db, handoverId);
+    const remaining = await getRemainingForHandover(db, handoverId, ORG);
 
     expect(remaining).toBe(0);
   });
@@ -2234,7 +2244,7 @@ describe('split drain to zero — settled state', () => {
       handoverMovementId: handoverId,
     });
 
-    const remaining = await getRemainingForHandover(db, handoverId);
+    const remaining = await getRemainingForHandover(db, handoverId, ORG);
 
     expect(remaining).toBe(0);
 
@@ -2313,8 +2323,8 @@ describe('multi-handover independence', () => {
       handoverMovementId: h1Id,
     });
 
-    const r1 = await getRemainingForHandover(db, h1Id);
-    const r2 = await getRemainingForHandover(db, h2Id);
+    const r1 = await getRemainingForHandover(db, h1Id, ORG);
+    const r2 = await getRemainingForHandover(db, h2Id, ORG);
 
     expect(r1).toBeCloseTo(500000, 0); // H1: 2M − 1.5M
     expect(r2).toBe(1000000); // H2: untouched
@@ -2362,5 +2372,177 @@ describe('getHandoverStatusForSessions', () => {
     const result = await getHandoverStatusForSessions(db, 'other-org', [SES_H1]);
 
     expect(result.get(SES_H1)).toBe(false);
+  });
+});
+
+// ── PR4: opt-in config flag ────────────────────────────────────────────────────
+
+describe('getTreasuryHandoverEnabled', () => {
+  it('returns false (default) when no setting row exists for the org', async () => {
+    const enabled = await getTreasuryHandoverEnabled(db, ORG);
+
+    expect(enabled).toBe(false);
+  });
+
+  it('returns true when the org has the flag set to "true"', async () => {
+    await pg.query(
+      `INSERT INTO app_settings (organization_id, key, value) VALUES ($1, 'treasuryHandoverEnabled', 'true')`,
+      [ORG],
+    );
+
+    const enabled = await getTreasuryHandoverEnabled(db, ORG);
+
+    expect(enabled).toBe(true);
+  });
+
+  it('returns false when the org has the flag set to "false"', async () => {
+    await pg.query(
+      `INSERT INTO app_settings (organization_id, key, value) VALUES ($1, 'treasuryHandoverEnabled', 'false')`,
+      [ORG],
+    );
+
+    const enabled = await getTreasuryHandoverEnabled(db, ORG);
+
+    expect(enabled).toBe(false);
+  });
+
+  it('is scoped per org — flag off for org2 does not affect org1', async () => {
+    await pg.query(
+      `INSERT INTO app_settings (organization_id, key, value) VALUES ($1, 'treasuryHandoverEnabled', 'true')`,
+      [ORG],
+    );
+
+    const enabledOrg1 = await getTreasuryHandoverEnabled(db, ORG);
+    const enabledOrg2 = await getTreasuryHandoverEnabled(db, 'org-2');
+
+    expect(enabledOrg1).toBe(true);
+    expect(enabledOrg2).toBe(false);
+  });
+});
+
+// ── PR4: double-count fix in getTreasuryPosition ───────────────────────────────
+
+describe('getTreasuryPosition — caja contribution subtracts handover when flag ON', () => {
+  const SES_DC = '00000000-0000-0000-ff01-000000000001';
+
+  it('caja balance stays at counted when flag OFF (no handover rows — Option A unchanged)', async () => {
+    // Setup: token + closed session with counted=100
+    const tokenRes = await pg.query<{ id: string }>(
+      `INSERT INTO pos_tokens (id, organization_id, device_name) VALUES (gen_random_uuid(), $1, 'Caja DC') RETURNING id`,
+      [ORG],
+    );
+    const tokenId = tokenRes.rows[0]!.id;
+    await pg.query(
+      `INSERT INTO cash_sessions (id, organization_id, pos_token_id, opened_by, opening_amount, status, closed_at, counted_amount)
+       VALUES ($1, $2, $3, 'cajero', '0', 'closed', now(), '100.00')`,
+      [SES_DC, ORG, tokenId],
+    );
+    // No handover rows; flag OFF (no app_settings row).
+    const accounts = await getTreasuryPosition(db, ORG);
+    const caja = accounts.find(a => a.type === 'caja');
+
+    // Carry-over: caja balance = last counted = 100
+    expect(caja?.balance).toBe(100);
+  });
+
+  it('caja contribution subtracts handover when flag ON and handover exists for last session', async () => {
+    // Enable the flag
+    await pg.query(
+      `INSERT INTO app_settings (organization_id, key, value) VALUES ($1, 'treasuryHandoverEnabled', 'true')`,
+      [ORG],
+    );
+    const tokenRes = await pg.query<{ id: string }>(
+      `INSERT INTO pos_tokens (id, organization_id, device_name) VALUES (gen_random_uuid(), $1, 'Caja DC2') RETURNING id`,
+      [ORG],
+    );
+    const tokenId = tokenRes.rows[0]!.id;
+    await pg.query(
+      `INSERT INTO cash_sessions (id, organization_id, pos_token_id, opened_by, opening_amount, status, closed_at, counted_amount)
+       VALUES ($1, $2, $3, 'cajero', '0', 'closed', now(), '100.00')`,
+      [SES_DC, ORG, tokenId],
+    );
+    // Seed transito account and handover movement (full handover of 100)
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    await makeHandover(pending.id, SES_DC, 100);
+
+    const accounts = await getTreasuryPosition(db, ORG);
+    const caja = accounts.find(a => a.type === 'caja');
+
+    // Caja contribution: counted(100) − handover(100) = 0, not double-counted
+    expect(caja?.balance).toBe(0);
+  });
+});
+
+// ── PR4: getRemainingForHandover tenant-scope ──────────────────────────────────
+
+describe('getRemainingForHandover — tenant scoping', () => {
+  const SES_TS1 = '00000000-0000-0000-ff02-000000000001';
+
+  it('rejects a foreign-org handoverId by returning 0 (not the real remaining)', async () => {
+    // Set up handover for ORG
+    await makeSession(SES_TS1);
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    const handoverId = await makeHandover(pending.id, SES_TS1, 500000);
+
+    // Call with wrong org — must return 0 (no visible remaining for foreign org)
+    const remaining = await getRemainingForHandover(db, handoverId, 'other-org');
+
+    expect(remaining).toBe(0);
+  });
+
+  it('returns the correct remaining for the owner org', async () => {
+    await makeSession(SES_TS1);
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    const handoverId = await makeHandover(pending.id, SES_TS1, 500000);
+
+    const remaining = await getRemainingForHandover(db, handoverId, ORG);
+
+    expect(remaining).toBe(500000);
+  });
+});
+
+// ── PR4: getOpeningExpected post-handover ──────────────────────────────────────
+
+describe('getOpeningExpected — post-handover adjustment', () => {
+  const SES_OE = '00000000-0000-0000-ff03-000000000001';
+  const TOKEN_OE = '00000000-0000-0000-ff03-000000000002';
+
+  beforeEach(async () => {
+    await pg.query(
+      `INSERT INTO pos_tokens (id, organization_id, device_name) VALUES ($1, $2, 'Caja OE')`,
+      [TOKEN_OE, ORG],
+    );
+    await pg.query(
+      `INSERT INTO cash_sessions (id, organization_id, pos_token_id, opened_by, opening_amount, status, closed_at, counted_amount)
+       VALUES ($1, $2, $3, 'cajero', '0', 'closed', now(), '1000.00')`,
+      [SES_OE, ORG, TOKEN_OE],
+    );
+  });
+
+  it('returns counted as expected when no handover exists (Option A carry-over unchanged)', async () => {
+    const result = await getOpeningExpected(db, ORG, TOKEN_OE);
+
+    expect(result.expected).toBe(1000);
+    expect(result.priorCloseExists).toBe(true);
+  });
+
+  it('returns expected=0 and priorCloseExists=false when session was fully handed over', async () => {
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    await makeHandover(pending.id, SES_OE, 1000); // fully handed: handover = counted
+
+    const result = await getOpeningExpected(db, ORG, TOKEN_OE);
+
+    expect(result.expected).toBe(0);
+    expect(result.priorCloseExists).toBe(false);
+  });
+
+  it('returns expected = counted − handover when session was partially handed over', async () => {
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    await makeHandover(pending.id, SES_OE, 400); // partial: 400 out of 1000
+
+    const result = await getOpeningExpected(db, ORG, TOKEN_OE);
+
+    expect(result.expected).toBe(600); // 1000 − 400
+    expect(result.priorCloseExists).toBe(true);
   });
 });

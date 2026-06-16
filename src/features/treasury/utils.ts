@@ -42,6 +42,24 @@ export function groupByType(accounts: TreasuryAccount[]): MoneyTree {
 }
 
 /**
+ * Determines whether a caja account's last session was handed over (Option B opt-in).
+ * Returns true only when: type is 'caja', sessionId is non-null, and the session
+ * appears in the handoverStatusBySessions map as true.
+ *
+ * Pure function — testable without a DOM or DB.
+ */
+export function wasSessionHandedOver(
+  account: Pick<TreasuryAccount, 'type' | 'sessionId'>,
+  handoverStatusBySessions?: Record<string, boolean>,
+): boolean {
+  return (
+    account.type === 'caja'
+    && account.sessionId != null
+    && (handoverStatusBySessions?.[account.sessionId] ?? false)
+  );
+}
+
+/**
  * Direction of a timeline entry from the company-wide perspective:
  *   - 'in':      money entered the company (only a destination)
  *   - 'out':     money left the company (only a source)

@@ -8,6 +8,7 @@ import {
   fiadoMovementsSchema,
   salePaymentsSchema,
   salesSchema,
+  treasuryMovementsSchema,
 } from '@/models/Schema';
 
 // ── Carry-over helper (extracted from treasury.ts#cajaBalance ELSE branch) ────
@@ -69,7 +70,7 @@ export async function getOpeningExpected(
   posTokenId: string,
 ): Promise<{ expected: number; priorCloseExists: boolean }> {
   const [last] = await executor
-    .select({ counted: cashSessionsSchema.countedAmount })
+    .select({ id: cashSessionsSchema.id, counted: cashSessionsSchema.countedAmount })
     .from(cashSessionsSchema)
     .where(
       and(
@@ -84,10 +85,37 @@ export async function getOpeningExpected(
   if (!last) {
     return { expected: 0, priorCloseExists: false };
   }
-  return {
-    expected: Number.parseFloat(last.counted ?? '0') || 0,
-    priorCloseExists: true,
-  };
+
+  const counted = Number.parseFloat(last.counted ?? '0') || 0;
+
+  // PR4: when the last session was handed over (Option B opt-in), subtract the
+  // handover from the carry-over expectation so the open enforcement doesn't
+  // demand cash that was already credited to the transito account.
+  // When flag is OFF (no handover rows), the SUM = 0 → unchanged (Option A safe).
+  const [handoverRow] = await executor
+    .select({ total: sql<string>`COALESCE(SUM(${treasuryMovementsSchema.amount}), '0')::text` })
+    .from(treasuryMovementsSchema)
+    .where(
+      and(
+        eq(treasuryMovementsSchema.organizationId, organizationId),
+        sql`${treasuryMovementsSchema.type} = 'handover'`,
+        eq(treasuryMovementsSchema.cashSessionId, last.id),
+      ),
+    );
+
+  const handoverSum = Number.parseFloat(handoverRow?.total ?? '0') || 0;
+
+  if (handoverSum >= counted) {
+    // Fully handed over: no carry-over expected, fresh start (no enforcement).
+    return { expected: 0, priorCloseExists: false };
+  }
+
+  if (handoverSum > 0) {
+    // Partially handed over: only the remainder is expected in the drawer.
+    return { expected: counted - handoverSum, priorCloseExists: true };
+  }
+
+  return { expected: counted, priorCloseExists: true };
 }
 
 export type CashSession = typeof cashSessionsSchema.$inferSelect;

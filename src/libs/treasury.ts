@@ -7,6 +7,7 @@ import {
   toMoney,
 } from '@/libs/cash-helpers';
 import {
+  appSettingsSchema,
   cashMovementsSchema,
   cashSessionsSchema,
   expensesSchema,
@@ -115,14 +116,53 @@ export async function getTreasuryPosition(
     }
   }
 
+  // PR4 double-count fix: when the handover flag is ON, the caja's contribution
+  // to the total must subtract any handover already in-transit (credit to transito)
+  // so the total counts the cash exactly once (in transito, not in both).
+  // When OFF (default), no handover rows exist → subtract 0 → Option A unchanged.
+  const handoverFlag = await getTreasuryHandoverEnabled(executor, organizationId);
+  const handoverBySession = new Map<string, number>();
+  if (handoverFlag && lastSessionIds.size > 0) {
+    const sessionIds = [...lastSessionIds.values()];
+    const handoverRows = await executor
+      .select({
+        cashSessionId: sql<string>`cash_session_id::text`,
+        total: sql<string>`SUM(amount)::text`,
+      })
+      .from(treasuryMovementsSchema)
+      .where(
+        sql`organization_id = ${organizationId}
+          AND type = 'handover'
+          AND cash_session_id = ANY(ARRAY[${sql.join(sessionIds.map(id => sql`${id}::uuid`), sql`, `)}])`,
+      )
+      .groupBy(sql`cash_session_id`);
+    for (const r of handoverRows) {
+      if (r.cashSessionId) {
+        handoverBySession.set(r.cashSessionId, Number.parseFloat(r.total) || 0);
+      }
+    }
+  }
+
   const cajas = await Promise.all(
-    tokens.map(async t => ({
-      key: `caja:${t.id}`,
-      name: t.name,
-      type: 'caja' as const,
-      balance: await cajaBalance(executor, organizationId, t.id),
-      sessionId: lastSessionIds.get(t.id),
-    })),
+    tokens.map(async (t) => {
+      const sessionId = lastSessionIds.get(t.id);
+      const rawBalance = await cajaBalance(executor, organizationId, t.id);
+      // Subtract the handover for the last closed session (when flag ON).
+      // This removes the double-count: the same counted amount is in both
+      // caja carry-over (rawBalance) AND transito. After subtraction, the
+      // caja contribution is the POST-handover in-drawer expectation (0 if
+      // fully handed, partial otherwise). Universally safe: no handover rows
+      // → subtract 0 → rawBalance unchanged.
+      const handoverSubtraction = sessionId ? (handoverBySession.get(sessionId) ?? 0) : 0;
+      const balance = Math.max(0, rawBalance - handoverSubtraction);
+      return {
+        key: `caja:${t.id}`,
+        name: t.name,
+        type: 'caja' as const,
+        balance,
+        sessionId,
+      };
+    }),
   );
   accounts.push(...cajas);
 
@@ -565,7 +605,7 @@ export async function recordContainerTransfer(
 
   // Per-handover guard (ADR-5 C2): re-check inside executor.
   if (input.handoverMovementId) {
-    const remaining = await getRemainingForHandover(executor, input.handoverMovementId);
+    const remaining = await getRemainingForHandover(executor, input.handoverMovementId, input.organizationId);
     if (amt > remaining + 0.005) {
       throw new Error(
         `excede el saldo pendiente del cierre: remaining ${remaining.toFixed(2)}, requested ${amt.toFixed(2)}`,
@@ -666,7 +706,7 @@ export async function recordBankConsignacion(
   // Per-handover guard (ADR-5 C2): when this placement is attributed to a specific
   // handover, re-check inside the executor that amt ≤ handover's remaining balance.
   if (input.handoverMovementId) {
-    const remaining = await getRemainingForHandover(executor, input.handoverMovementId);
+    const remaining = await getRemainingForHandover(executor, input.handoverMovementId, input.organizationId);
     if (amt > remaining + 0.005) {
       throw new Error(
         `excede el saldo pendiente del cierre: remaining ${remaining.toFixed(2)}, requested ${amt.toFixed(2)}`,
@@ -770,7 +810,7 @@ export async function recordGastoOutflow(
 
   // Per-handover guard (ADR-5 C2): re-check inside executor.
   if (input.handoverMovementId) {
-    const remaining = await getRemainingForHandover(executor, input.handoverMovementId);
+    const remaining = await getRemainingForHandover(executor, input.handoverMovementId, input.organizationId);
     if (amt > remaining + 0.005) {
       throw new Error(
         `excede el saldo pendiente del cierre: remaining ${remaining.toFixed(2)}, requested ${amt.toFixed(2)}`,
@@ -827,6 +867,37 @@ export async function recordGastoOutflow(
     return (executor as typeof import('@/libs/DB').db).transaction(tx => doInserts(tx as unknown as Executor));
   }
   return doInserts(executor);
+}
+
+// ── Phase 3 PR4: opt-in config flag ──────────────────────────────────────────
+
+/**
+ * App-settings key for the per-org opt-in handover flag.
+ * Value is the string 'true' or 'false'. Default (absent row) → false.
+ * Mirrors the smartStockEnabled pattern from src/libs/smart-stock.ts.
+ */
+export const TREASURY_HANDOVER_SETTING_KEY = 'treasuryHandoverEnabled';
+
+/**
+ * Reads the per-org `treasuryHandoverEnabled` flag from `app_settings`.
+ * Returns false when no row exists (default OFF — carry-over behavior unchanged).
+ * Safe to call inside a transaction (takes an Executor).
+ */
+export async function getTreasuryHandoverEnabled(
+  executor: Executor,
+  organizationId: string,
+): Promise<boolean> {
+  const [row] = await executor
+    .select({ value: appSettingsSchema.value })
+    .from(appSettingsSchema)
+    .where(
+      and(
+        eq(appSettingsSchema.organizationId, organizationId),
+        eq(appSettingsSchema.key, TREASURY_HANDOVER_SETTING_KEY),
+      ),
+    )
+    .limit(1);
+  return row?.value === 'true';
 }
 
 // ── Phase 3: Handover ledger foundation ──────────────────────────────────────
@@ -1103,15 +1174,20 @@ export async function depositConfirmedTransfer(
  * Returns the remaining unplaced amount for a specific handover movement row.
  * remaining = handover.amount − Σ(amount WHERE handover_movement_id = handoverId)
  *
- * Used inside placement transactions to enforce the per-handover over-place guard
- * (ADR-5 C2, two-level guard). Must be called inside a transaction with a lock
- * on the handover row to prevent races.
+ * Must be called INSIDE a transaction. Takes a `FOR UPDATE` lock on the handover
+ * row so that concurrent placements cannot both read the same remaining and both
+ * pass the guard (serialises the per-handover guard writes).
+ *
+ * `organizationId` is mandatory — cross-org access returns 0, preventing a caller
+ * from passing another org's handoverId and attributing placements to it.
  */
 export async function getRemainingForHandover(
   executor: Executor,
   handoverId: string,
+  organizationId: string,
 ): Promise<number> {
-  // Single correlated subquery: handover.amount − Σ(placements tagged to it)
+  // Lock the handover row + compute remaining in one query.
+  // The FOR UPDATE prevents concurrent placements from racing past the guard.
   const [row] = await executor
     .select({
       remaining: sql<string>`(
@@ -1123,7 +1199,7 @@ export async function getRemainingForHandover(
       )::text`,
     })
     .from(sql`treasury_movements tm`)
-    .where(sql`tm.id = ${handoverId}`);
+    .where(sql`tm.id = ${handoverId} AND tm.organization_id = ${organizationId} FOR UPDATE`);
 
   return Number.parseFloat(row?.remaining ?? '0') || 0;
 }

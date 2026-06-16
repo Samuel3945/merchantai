@@ -12,13 +12,16 @@ import {
   createTreasuryAccount,
   deactivateTreasuryAccount,
   ensurePaymentMethodAccounts,
+  getTreasuryHandoverEnabled,
   getTreasuryPosition,
   listTreasuryAccounts as listTreasuryAccountsLib,
   listTreasuryTimeline as listTreasuryTimelineLib,
   recordBankConsignacion,
   recordContainerTransfer,
   recordGastoOutflow,
+  TREASURY_HANDOVER_SETTING_KEY,
 } from '@/libs/treasury';
+import { appSettingsSchema } from '@/models/Schema';
 
 const CASH_PATH = '/dashboard/cash';
 const TESORERIA_PATH = '/dashboard/tesoreria';
@@ -360,4 +363,61 @@ export async function getTimeline(
 ): Promise<TreasuryTimelineEntry[]> {
   const { orgId } = await requirePanelModule('cash');
   return listTreasuryTimelineLib(db, orgId, limit);
+}
+
+// ── PR4: Treasury handover opt-in toggle (owner-only) ────────────────────────
+
+/**
+ * Reads the per-org treasury handover opt-in flag.
+ * Returns false (default) when no setting row exists.
+ * Any panel member can read; only the owner can toggle it.
+ */
+export async function getTreasuryHandoverSettings(): Promise<{ enabled: boolean }> {
+  const { orgId } = await requirePanelModule('cash');
+  const enabled = await getTreasuryHandoverEnabled(db, orgId);
+  return { enabled };
+}
+
+/**
+ * Toggles the treasury handover opt-in flag for the org.
+ * Owner-only — throws when called by a non-admin.
+ *
+ * ON:  close sessions will emit handover movements into the Pendiente transito
+ *      account. The placement queue becomes the primary way to settle cash.
+ * OFF: default carry-over behavior (Option A) — no handover, no double-count.
+ */
+export async function setTreasuryHandoverEnabled(
+  enabled: boolean,
+): Promise<ActionResult<{ enabled: boolean }>> {
+  const { userId, orgId, orgRole } = await auth();
+  if (!userId || !orgId) {
+    return { ok: false, error: 'Not authenticated' };
+  }
+  if (orgRole !== 'org:admin') {
+    return { ok: false, error: 'Solo el dueño puede cambiar la configuración de tesorería' };
+  }
+
+  await db
+    .insert(appSettingsSchema)
+    .values({
+      organizationId: orgId,
+      key: TREASURY_HANDOVER_SETTING_KEY,
+      value: enabled ? 'true' : 'false',
+    })
+    .onConflictDoUpdate({
+      target: [appSettingsSchema.organizationId, appSettingsSchema.key],
+      set: { value: enabled ? 'true' : 'false' },
+    });
+
+  await logAction({
+    organizationId: orgId,
+    actor: { type: 'user', id: userId },
+    action: 'treasury.handover_toggle',
+    entityType: 'app_setting',
+    entityId: TREASURY_HANDOVER_SETTING_KEY,
+    after: { enabled },
+  });
+
+  revalidatePath(TESORERIA_PATH);
+  return { ok: true, data: { enabled } };
 }

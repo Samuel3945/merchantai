@@ -19,6 +19,7 @@ import { Consignar } from './Consignar';
 import { GastoForm } from './GastoForm';
 import { MoneyTree } from './MoneyTree';
 import { MoverDineroForm } from './MoverDineroForm';
+import { wasSessionHandedOver } from './utils';
 
 const GROUPS: { type: TreasuryAccount['type']; label: string }[] = [
   { type: 'caja', label: 'Cajas' },
@@ -693,6 +694,10 @@ export function TreasuryConsole(props: {
                         ? accountRows.find(r => r.type === 'caja_fuerte' && r.name === a.name)
                         : undefined;
 
+                    // R7: "entregado" label — shown on a caja card when the
+                    // last closed session had a handover movement (Option B opt-in).
+                    const wasHandedOver = wasSessionHandedOver(a, props.handoverStatusBySessions);
+
                     return (
                       <div
                         key={a.key}
@@ -709,6 +714,16 @@ export function TreasuryConsole(props: {
                         >
                           {money(a.balance)}
                         </div>
+                        {wasHandedOver && (
+                          <div className="
+                            mt-1 inline-block rounded-full bg-emerald-100 px-2
+                            py-0.5 text-[11px] font-medium text-emerald-700
+                            dark:bg-emerald-900/30 dark:text-emerald-400
+                          "
+                          >
+                            entregado
+                          </div>
+                        )}
                         {a.note && (
                           <div className="
                             mt-0.5 text-[11px] text-muted-foreground
