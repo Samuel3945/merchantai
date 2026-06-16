@@ -1,6 +1,6 @@
 'use client';
 
-import type { TreasuryTimelineEntry } from '@/actions/treasury';
+import type { TreasuryTimelineEntry } from '@/libs/treasury';
 import { ArrowRight, Clock } from 'lucide-react';
 import { money } from '@/features/cash/cash-ui';
 
