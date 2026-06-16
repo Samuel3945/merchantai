@@ -1,4 +1,5 @@
 import type { CashMovementType } from '@/libs/cash-helpers';
+import { and, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import {
   EXPENSE_MOVEMENT_TYPES,
@@ -8,7 +9,7 @@ import {
 } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import { requirePosAuth } from '@/libs/pos-auth';
-import { cashMovementsSchema } from '@/models/Schema';
+import { cashMovementsSchema, suppliersSchema } from '@/models/Schema';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -17,6 +18,10 @@ type MovementBody = {
   type?: string;
   amount?: number | string;
   reason?: string;
+  // Optional: links a "Pago a proveedor" movement to a supplier. The device
+  // sends the supplier id chosen from /pos/suppliers; it is validated against
+  // the caja's org before being persisted to cash_movements.supplier_id.
+  supplierId?: string | null;
 };
 
 const ALLOWED_TYPES: CashMovementType[] = [
@@ -61,6 +66,29 @@ export async function POST(req: Request): Promise<NextResponse> {
     );
   }
 
+  // Optional supplier link (Pago a proveedor). Must be a real, active supplier
+  // of this caja's org — guards against stale or cross-tenant ids from the device.
+  const supplierId = body.supplierId ?? null;
+  if (supplierId) {
+    const [supplier] = await db
+      .select({ id: suppliersSchema.id })
+      .from(suppliersSchema)
+      .where(
+        and(
+          eq(suppliersSchema.id, supplierId),
+          eq(suppliersSchema.organizationId, ctx.organizationId),
+          eq(suppliersSchema.status, 'active'),
+        ),
+      )
+      .limit(1);
+    if (!supplier) {
+      return NextResponse.json(
+        { error: 'El proveedor seleccionado no existe o está archivado' },
+        { status: 400 },
+      );
+    }
+  }
+
   try {
     const movement = await db.transaction(async (tx) => {
       const open = await findOpenSession(tx, ctx.organizationId, ctx.tokenId);
@@ -76,6 +104,7 @@ export async function POST(req: Request): Promise<NextResponse> {
           type,
           amount,
           reason,
+          supplierId,
           createdBy: ctx.cashierName || 'Cajero',
         })
         .returning();
