@@ -15,6 +15,7 @@ import {
   listTransferReconciliations,
 } from '@/actions/transfer-reconciliation';
 import { listTreasuryAccounts } from '@/actions/treasury';
+import { CajasSupervision } from '@/features/cash/CajasSupervision';
 import { CashTabs } from '@/features/cash/CashTabs';
 import { TitleBar } from '@/features/dashboard/TitleBar';
 
@@ -67,12 +68,30 @@ export default async function DashboardCashPage(props: {
       : { count: 0, total: 0 };
   }
 
+  // Today's net cash difference across sessions closed today (America/Bogota),
+  // the same calendar day the closures history groups by.
+  const bogotaDay = (value: Date | string) =>
+    new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Bogota' }).format(
+      new Date(value),
+    );
+  const today = bogotaDay(new Date());
+  const diferenciasHoy = sessions
+    .filter(s => s.status === 'closed' && s.closedAt && bogotaDay(s.closedAt) === today)
+    .reduce((sum, s) => sum + (Number.parseFloat(s.difference ?? '0') || 0), 0);
+
   return (
     <>
       <TitleBar
         title="Caja"
-        description="Abre y cierra la caja, registra movimientos y haz el arqueo del día."
+        description="Supervisión de puntos de cobro: estado de cada caja, arqueos y diferencias."
       />
+      <div className="mb-6">
+        <CajasSupervision
+          openCajas={openCajas}
+          diferenciasHoy={diferenciasHoy}
+          pendingCount={pendingTransfers.count}
+        />
+      </div>
       <CashTabs
         cash={{
           current,
