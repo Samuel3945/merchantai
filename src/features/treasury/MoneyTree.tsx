@@ -1,7 +1,7 @@
 'use client';
 
 import type { TreasuryAccount } from '@/libs/treasury';
-import { ChevronDown, ChevronRight, Coins, Landmark } from 'lucide-react';
+import { ChevronDown, ChevronRight, CircleDashed, Coins, Landmark } from 'lucide-react';
 import { useState } from 'react';
 import { money } from '@/features/cash/cash-ui';
 import { groupByType } from './utils';
@@ -113,6 +113,12 @@ export function MoneyTree({ accounts }: { accounts: TreasuryAccount[] }) {
         label="Bancos"
         icon={<Landmark className="size-3.5" />}
         accounts={tree.bancos}
+        defaultOpen
+      />
+      <Branch
+        label="Sin ubicar"
+        icon={<CircleDashed className="size-3.5" />}
+        accounts={tree.transito}
         defaultOpen
       />
     </div>

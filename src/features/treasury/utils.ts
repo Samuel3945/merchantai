@@ -21,6 +21,17 @@ export function sumBancos(accounts: TreasuryAccount[]): number {
 }
 
 /**
+ * Computes the SIN UBICAR bucket: Σ balances where type = 'transito'
+ * (Pendiente de ubicar — cash handed over at close, not yet placed; Option B opt-in).
+ * Pure function — testable without a DB.
+ */
+export function sumTransito(accounts: TreasuryAccount[]): number {
+  return accounts
+    .filter(a => a.type === 'transito')
+    .reduce((acc, a) => acc + a.balance, 0);
+}
+
+/**
  * Groups a flat TreasuryAccount[] into the hierarchical EMPRESA tree:
  *   EMPRESA → EFECTIVO (caja + caja_fuerte) + BANCOS (banco)
  *
@@ -32,12 +43,15 @@ export type MoneyTree = {
   efectivo: TreasuryAccount[];
   /** BANCOS branch: all banco accounts */
   bancos: TreasuryAccount[];
+  /** SIN UBICAR branch: all transito (Pendiente de ubicar) accounts */
+  transito: TreasuryAccount[];
 };
 
 export function groupByType(accounts: TreasuryAccount[]): MoneyTree {
   return {
     efectivo: accounts.filter(a => a.type === 'caja' || a.type === 'caja_fuerte'),
     bancos: accounts.filter(a => a.type === 'banco'),
+    transito: accounts.filter(a => a.type === 'transito'),
   };
 }
 

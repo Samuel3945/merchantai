@@ -3,7 +3,7 @@
 import type { TreasuryAccount } from '@/libs/treasury';
 import { ArrowLeftRight, Coins, Landmark } from 'lucide-react';
 import { money } from '@/features/cash/cash-ui';
-import { sumBancos, sumEfectivo } from './utils';
+import { sumBancos, sumEfectivo, sumTransito } from './utils';
 
 type CardProps = {
   icon: React.ReactNode;
@@ -37,19 +37,16 @@ function Card({ icon, label, amount, hint, note }: CardProps) {
  * Three summary cards derived from the SAME TreasuryAccount[] that drives the
  * header total. No additional data fetch permitted (spec: Single Source).
  *
- * - EFECTIVO: Σ type ∈ {caja, caja_fuerte}
- * - BANCOS:   Σ type = banco
- * - EN TRÁNSITO: $0 placeholder until migration 0049 ships (Slice E).
- *   // TODO(slice E): replace with Σ transfer_reconciliations WHERE
- *   // status='confirmed' AND deposit_movement_id IS NULL
+ * - EFECTIVO:   Σ type ∈ {caja, caja_fuerte}
+ * - BANCOS:     Σ type = banco
+ * - SIN UBICAR: Σ type = transito (Pendiente de ubicar — handover at close, opt-in)
  */
 export function SummaryCards({ accounts }: { accounts: TreasuryAccount[] }) {
   const efectivo = sumEfectivo(accounts);
   const bancos = sumBancos(accounts);
-
-  // TODO(slice E): wire real EN TRÁNSITO value from getEnTransito() once
-  // migration 0049 adds deposit_movement_id to transfer_reconciliations.
-  const enTransito = 0;
+  // Cash handed over at close (Pendiente de ubicar), not yet placed. 0 unless the
+  // org enabled the handover flow, so OFF stores see an empty card.
+  const sinUbicar = sumTransito(accounts);
 
   return (
     <div className="
@@ -71,9 +68,9 @@ export function SummaryCards({ accounts }: { accounts: TreasuryAccount[] }) {
       />
       <Card
         icon={<ArrowLeftRight className="size-4" />}
-        label="En tránsito"
-        amount={enTransito}
-        note="Disponible en Slice E"
+        label="Sin ubicar"
+        amount={sinUbicar}
+        hint="Pendiente de ubicar"
       />
     </div>
   );
