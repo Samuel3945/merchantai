@@ -68,20 +68,6 @@ const TYPE_OPTIONS: ReadonlyArray<{ value: PaymentMethodType; label: string }> =
   { value: 'other', label: 'Otro' },
 ];
 
-function formatHour(h: number | null): string {
-  if (h === null || h === undefined) {
-    return '';
-  }
-  return h.toString().padStart(2, '0');
-}
-
-function formatSchedule(start: number | null, end: number | null): string {
-  if (start === null && end === null) {
-    return 'Sin horario';
-  }
-  return `${formatHour(start ?? 0)}:00 – ${formatHour(end ?? 23)}:00`;
-}
-
 export function PaymentMethodsClient({
   initialMethods,
   fiadoEnabled: initialFiado,
@@ -262,15 +248,13 @@ export function PaymentMethodsClient({
 
       <div className="overflow-hidden rounded-md border bg-background">
         <div className="
-          grid grid-cols-[40px_1fr_120px_140px_120px_180px] gap-2 border-b
-          bg-muted/50 px-3 py-2 text-xs font-medium text-muted-foreground
-          uppercase
+          grid grid-cols-[40px_1fr_120px_120px_180px] gap-2 border-b bg-muted/50
+          px-3 py-2 text-xs font-medium text-muted-foreground uppercase
         "
         >
           <div />
           <div>Nombre</div>
           <div>Tipo</div>
-          <div>Horario</div>
           <div>Activo</div>
           <div className="text-right">Acciones</div>
         </div>
@@ -355,8 +339,8 @@ function SortableRow({
       ref={setNodeRef}
       style={style}
       className={`
-        grid grid-cols-[40px_1fr_120px_140px_120px_180px] items-center gap-2
-        border-b px-3 py-2 text-sm
+        grid grid-cols-[40px_1fr_120px_120px_180px] items-center gap-2 border-b
+        px-3 py-2 text-sm
         last:border-b-0
         ${row.active ? '' : 'opacity-60'}
       `}
@@ -386,9 +370,6 @@ function SortableRow({
         </div>
       </div>
       <div className="text-xs text-muted-foreground uppercase">{row.type}</div>
-      <div className="text-xs text-muted-foreground">
-        {formatSchedule(row.startHour, row.endHour)}
-      </div>
       <div className="flex items-center gap-2">
         <Switch
           checked={row.active}
@@ -434,25 +415,11 @@ function EditModal({
   );
   const setDetail = (patch: Partial<TransferDetails>) =>
     setDetails(d => ({ ...d, ...patch }));
-  const [hasSchedule, setHasSchedule] = useState(
-    initial?.startHour !== null && initial?.startHour !== undefined,
-  );
-  const [startHour, setStartHour] = useState<string>(
-    initial?.startHour !== null && initial?.startHour !== undefined
-      ? String(initial.startHour)
-      : '8',
-  );
-  const [endHour, setEndHour] = useState<string>(
-    initial?.endHour !== null && initial?.endHour !== undefined
-      ? String(initial.endHour)
-      : '20',
-  );
   const [description, setDescription] = useState(initial?.description ?? '');
   const [showAdvanced, setShowAdvanced] = useState(
     Boolean(
       initial?.icon
       || initial?.description
-      || (initial?.startHour !== null && initial?.startHour !== undefined)
       || (initial?.details as TransferDetails | undefined)?.holder_id,
     ),
   );
@@ -462,9 +429,6 @@ function EditModal({
     e.preventDefault();
     setSubmitting(true);
     try {
-      const parsedStart = hasSchedule ? Number(startHour) : null;
-      const parsedEnd = hasSchedule ? Number(endHour) : null;
-
       // Only persist banking details for transfer accounts; other types clear them.
       const cleanDetails: Record<string, unknown>
         = type === 'transfer'
@@ -480,8 +444,6 @@ function EditModal({
           name,
           type,
           icon: icon.trim() || null,
-          startHour: parsedStart,
-          endHour: parsedEnd,
           description: description.trim() || null,
           details: cleanDetails,
         });
@@ -490,8 +452,6 @@ function EditModal({
           name,
           type,
           icon: icon.trim() || null,
-          startHour: parsedStart,
-          endHour: parsedEnd,
           description: description.trim() || null,
           details: cleanDetails,
         });
@@ -656,49 +616,6 @@ function EditModal({
                   placeholder="💸"
                   className={inputCls}
                 />
-              </div>
-
-              <div className="space-y-2">
-                <div className="flex items-center gap-2 text-sm">
-                  <Switch
-                    checked={hasSchedule}
-                    onCheckedChange={setHasSchedule}
-                    aria-label="Restringir por horario"
-                  />
-                  <span>Restringir por horario</span>
-                </div>
-                {hasSchedule && (
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label htmlFor="pm-start" className={labelCls}>
-                        Desde (0–23)
-                      </label>
-                      <input
-                        id="pm-start"
-                        type="number"
-                        min={0}
-                        max={23}
-                        value={startHour}
-                        onChange={e => setStartHour(e.target.value)}
-                        className={inputCls}
-                      />
-                    </div>
-                    <div>
-                      <label htmlFor="pm-end" className={labelCls}>
-                        Hasta (0–23)
-                      </label>
-                      <input
-                        id="pm-end"
-                        type="number"
-                        min={0}
-                        max={23}
-                        value={endHour}
-                        onChange={e => setEndHour(e.target.value)}
-                        className={inputCls}
-                      />
-                    </div>
-                  </div>
-                )}
               </div>
 
               <div>

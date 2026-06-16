@@ -17,8 +17,7 @@ export async function GET(req: Request): Promise<NextResponse> {
 
   try {
     const result = await db.execute(
-      sql`SELECT id, name, type, icon, active, sort_order, details, description,
-                 start_hour, end_hour
+      sql`SELECT id, name, type, icon, active, sort_order, details, description
           FROM payment_methods
           WHERE organization_id = ${ctx.organizationId} AND active = true
           ORDER BY sort_order`,
