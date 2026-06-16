@@ -3,6 +3,7 @@
 import type { TreasuryTimelineEntry } from '@/libs/treasury';
 import { ArrowRight, Clock } from 'lucide-react';
 import { money } from '@/features/cash/cash-ui';
+import { classifyTimelineDirection } from './utils';
 
 // Human-readable label per movement type.
 const TYPE_LABELS: Record<string, string> = {
@@ -25,9 +26,16 @@ function formatDate(date: Date): string {
   }).format(date);
 }
 
+// Sign + color per company-wide direction. Internal moves (both ends) are
+// neutral: they don't change the company total, so no +/− sign is shown.
+const SIGN: Record<ReturnType<typeof classifyTimelineDirection>, string> = {
+  in: '+',
+  out: '−',
+  neutral: '',
+};
+
 function TimelineRow({ entry }: { entry: TreasuryTimelineEntry }) {
-  // Expenses (gasto) are negative outflows from the source container.
-  const isOutflow = entry.type === 'gasto' || entry.type === 'salida';
+  const direction = classifyTimelineDirection(entry);
 
   return (
     <div className="
@@ -49,10 +57,10 @@ function TimelineRow({ entry }: { entry: TreasuryTimelineEntry }) {
           <span
             className={`
               font-display text-sm font-semibold tabular-nums
-              ${isOutflow ? 'text-destructive' : 'text-foreground'}
+              ${direction === 'out' ? 'text-destructive' : 'text-foreground'}
             `}
           >
-            {isOutflow ? '−' : '+'}
+            {SIGN[direction]}
             {money(entry.amount)}
           </span>
         </div>

@@ -1,6 +1,6 @@
 import type { TreasuryAccount } from '@/libs/treasury';
 import { describe, expect, it } from 'vitest';
-import { sumBancos, sumEfectivo } from './utils';
+import { classifyTimelineDirection, sumBancos, sumEfectivo } from './utils';
 
 function acct(type: TreasuryAccount['type'], balance: number): TreasuryAccount {
   return { key: `${type}:${balance}`, name: type, type, balance };
@@ -44,5 +44,31 @@ describe('efectivo + bancos buckets', () => {
     const total = mixed.reduce((acc, a) => acc + a.balance, 0);
 
     expect(sumEfectivo(mixed) + sumBancos(mixed)).toBe(total);
+  });
+});
+
+describe('classifyTimelineDirection', () => {
+  it('is neutral when money moves between two internal containers (transfer/consignación)', () => {
+    expect(
+      classifyTimelineDirection({ fromAccount: 'Caja POS', toAccount: 'Caja Fuerte' }),
+    ).toBe('neutral');
+  });
+
+  it('is an inflow when there is only a destination (entrada/deposito)', () => {
+    expect(
+      classifyTimelineDirection({ fromAccount: null, toAccount: 'Bancolombia' }),
+    ).toBe('in');
+  });
+
+  it('is an outflow when there is only a source (gasto/salida)', () => {
+    expect(
+      classifyTimelineDirection({ fromAccount: 'Caja Fuerte', toAccount: null }),
+    ).toBe('out');
+  });
+
+  it('is neutral when neither end is present', () => {
+    expect(
+      classifyTimelineDirection({ fromAccount: null, toAccount: null }),
+    ).toBe('neutral');
   });
 });

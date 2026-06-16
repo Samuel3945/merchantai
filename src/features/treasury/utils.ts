@@ -40,3 +40,35 @@ export function groupByType(accounts: TreasuryAccount[]): MoneyTree {
     bancos: accounts.filter(a => a.type === 'banco'),
   };
 }
+
+/**
+ * Direction of a timeline entry from the company-wide perspective:
+ *   - 'in':      money entered the company (only a destination)
+ *   - 'out':     money left the company (only a source)
+ *   - 'neutral': money moved between two internal containers (both ends) and
+ *                so does NOT change the company total — e.g. transfer,
+ *                consignación.
+ *
+ * Derived from the presence of origin/destination rather than the movement
+ * `type`, so it stays correct for future types (e.g. a `deposito` lands only on
+ * a destination → 'in'). Pure function — testable without a DB.
+ */
+export type TimelineDirection = 'in' | 'out' | 'neutral';
+
+export function classifyTimelineDirection(entry: {
+  fromAccount: string | null;
+  toAccount: string | null;
+}): TimelineDirection {
+  const hasFrom = entry.fromAccount != null;
+  const hasTo = entry.toAccount != null;
+  if (hasFrom && hasTo) {
+    return 'neutral';
+  }
+  if (hasTo) {
+    return 'in';
+  }
+  if (hasFrom) {
+    return 'out';
+  }
+  return 'neutral';
+}
