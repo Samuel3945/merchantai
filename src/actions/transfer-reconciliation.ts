@@ -7,6 +7,7 @@ import type {
   TransferReconciliation,
 } from '@/libs/transfer-reconciliation';
 import { currentUser } from '@clerk/nextjs/server';
+import { and, eq, isNull } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { ActionValidationError } from '@/libs/action-result';
 import { logAction } from '@/libs/audit-log';
@@ -31,6 +32,10 @@ import {
   setReconciliationResolution,
 } from '@/libs/transfer-reconciliation';
 import { depositConfirmedTransfer } from '@/libs/treasury';
+import {
+  transferReconciliationsSchema,
+  treasuryMovementsSchema,
+} from '@/models/Schema';
 
 // Transfer reconciliation is the digital counterpart of the cash arqueo, so it
 // lives under the Caja ('cash') module. The owner (org:admin) passes the gate
@@ -60,6 +65,8 @@ export async function listTransferReconciliations(filter?: {
   to?: Date;
 }): Promise<ActionResult<TransferReconciliation[]>> {
   const { orgId } = await requirePanelModule(MODULE);
+  // Lazily catch up any confirmed-but-undeposited transfers (best-effort).
+  await backfillConfirmedTransferDeposits(orgId);
   const rows = await listReconciliations(db, { organizationId: orgId, ...filter });
   return { ok: true, data: rows };
 }
@@ -145,7 +152,12 @@ export async function confirmTransfer(
 async function tryDepositConfirmedTransfer(
   orgId: string,
   actor: string,
-  confirmed: TransferReconciliation,
+  confirmed: {
+    id: string;
+    method: string;
+    arrivedAmount: string | null;
+    expectedAmount: string;
+  },
 ): Promise<string | null> {
   try {
     await depositConfirmedTransfer(db, {
@@ -163,6 +175,48 @@ async function tryDepositConfirmedTransfer(
       message,
     );
     return message;
+  }
+}
+
+// Self-healing deposit backfill: re-applies the idempotent bank deposit for any
+// confirmed transfer that never got one — e.g. transfers confirmed while the
+// treasury column was still missing in prod. Runs lazily when the panel loads,
+// so the money lands automatically once the schema catches up. Best-effort: the
+// leftJoin touches transfer_reconciliation_id, so before that column exists the
+// query throws and is swallowed. depositConfirmedTransfer is idempotent (unique
+// index), so re-running can never double-credit.
+async function backfillConfirmedTransferDeposits(orgId: string): Promise<void> {
+  try {
+    const stuck = await db
+      .select({
+        id: transferReconciliationsSchema.id,
+        method: transferReconciliationsSchema.method,
+        arrivedAmount: transferReconciliationsSchema.arrivedAmount,
+        expectedAmount: transferReconciliationsSchema.expectedAmount,
+      })
+      .from(transferReconciliationsSchema)
+      .leftJoin(
+        treasuryMovementsSchema,
+        eq(
+          treasuryMovementsSchema.transferReconciliationId,
+          transferReconciliationsSchema.id,
+        ),
+      )
+      .where(
+        and(
+          eq(transferReconciliationsSchema.organizationId, orgId),
+          eq(transferReconciliationsSchema.status, 'confirmed'),
+          isNull(treasuryMovementsSchema.id),
+        ),
+      );
+    for (const r of stuck) {
+      await tryDepositConfirmedTransfer(orgId, 'Sistema', r);
+    }
+  } catch (e) {
+    console.error(
+      '[transfer-reconciliation] deposit backfill skipped:',
+      e instanceof Error ? e.message : e,
+    );
   }
 }
 
