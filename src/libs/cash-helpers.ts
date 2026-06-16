@@ -42,9 +42,9 @@ export type ValidateOpenCarryoverInput = {
   explanation?: string | null;
 };
 
-export type ValidateOpenCarryoverResult =
-  | { valid: true; difference: number }
-  | { valid: false; code: 422; message: string };
+export type ValidateOpenCarryoverResult
+  = | { valid: true; difference: number }
+    | { valid: false; code: 422; message: string };
 
 export function validateOpenCarryover(
   input: ValidateOpenCarryoverInput,
@@ -56,7 +56,7 @@ export function validateOpenCarryover(
     return {
       valid: false,
       code: 422,
-      message: 'Explica la diferencia de apertura (opening_explanation requerida)',
+      message: 'Explica la diferencia con lo que cerraste la última vez',
     };
   }
 
