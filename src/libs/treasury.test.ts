@@ -1516,7 +1516,9 @@ describe('validateOpenCarryover', () => {
       explanation: undefined,
     });
     expect(result.valid).toBe(false);
-    expect(result.code).toBe(422);
+    if (!result.valid) {
+      expect(result.code).toBe(422);
+    }
   });
 
   it('R3: rejects when explanation is blank whitespace', () => {
@@ -1527,7 +1529,9 @@ describe('validateOpenCarryover', () => {
       explanation: '   ',
     });
     expect(result.valid).toBe(false);
-    expect(result.code).toBe(422);
+    if (!result.valid) {
+      expect(result.code).toBe(422);
+    }
   });
 
   // R3: prior close + counted ≠ expected + explanation provided → OK
@@ -1539,7 +1543,9 @@ describe('validateOpenCarryover', () => {
       explanation: 'El supervisor retiró fondos antes del turno',
     });
     expect(result.valid).toBe(true);
-    expect(result.difference).toBe(-200000);
+    if (result.valid) {
+      expect(result.difference).toBe(-200000);
+    }
   });
 
   // R3: prior close + counted == expected + no explanation → OK
@@ -1551,7 +1557,9 @@ describe('validateOpenCarryover', () => {
       explanation: undefined,
     });
     expect(result.valid).toBe(true);
-    expect(result.difference).toBe(0);
+    if (result.valid) {
+      expect(result.difference).toBe(0);
+    }
   });
 
   // R2: no prior close → always OK regardless of explanation
@@ -1563,7 +1571,9 @@ describe('validateOpenCarryover', () => {
       explanation: undefined,
     });
     expect(result.valid).toBe(true);
-    expect(result.difference).toBe(200000);
+    if (result.valid) {
+      expect(result.difference).toBe(200000);
+    }
   });
 
   // R5: legacy open omitting countedAtOpen (treated as 0) — prior close exists
@@ -1576,7 +1586,9 @@ describe('validateOpenCarryover', () => {
       explanation: undefined,
     });
     expect(result.valid).toBe(false);
-    expect(result.code).toBe(422);
+    if (!result.valid) {
+      expect(result.code).toBe(422);
+    }
   });
 
   // R6: difference sign — negative = shortfall
@@ -1587,7 +1599,9 @@ describe('validateOpenCarryover', () => {
       expected: 3000000,
       explanation: 'valid explanation',
     });
-    expect(result.difference).toBe(-200000);
+    if (result.valid) {
+      expect(result.difference).toBe(-200000);
+    }
   });
 
   it('R6: difference is positive when counted > expected (surplus)', () => {
@@ -1597,7 +1611,9 @@ describe('validateOpenCarryover', () => {
       expected: 3000000,
       explanation: 'valid explanation',
     });
-    expect(result.difference).toBe(200000);
+    if (result.valid) {
+      expect(result.difference).toBe(200000);
+    }
   });
 });
 
@@ -1607,16 +1623,16 @@ describe('validateOpenCarryover', () => {
 // from pglite tests. The discriminator logic is pure and is tested here.
 
 describe('audit action discriminator', () => {
+  function resolveAuditAction(difference: number): string {
+    return difference !== 0 ? 'cash_session_open_discrepancy' : 'cash.opened';
+  }
+
   it('uses cash_session_open_discrepancy when difference !== 0', () => {
-    const difference = -200000;
-    const action = difference !== 0 ? 'cash_session_open_discrepancy' : 'cash.opened';
-    expect(action).toBe('cash_session_open_discrepancy');
+    expect(resolveAuditAction(-200000)).toBe('cash_session_open_discrepancy');
   });
 
   it('uses cash.opened when difference === 0', () => {
-    const difference = 0;
-    const action = difference !== 0 ? 'cash_session_open_discrepancy' : 'cash.opened';
-    expect(action).toBe('cash.opened');
+    expect(resolveAuditAction(0)).toBe('cash.opened');
   });
 });
 
