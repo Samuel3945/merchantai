@@ -20,7 +20,7 @@ import {
 
 type Executor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-export type TreasuryAccountType = 'caja' | 'caja_fuerte' | 'banco';
+export type TreasuryAccountType = 'caja' | 'caja_fuerte' | 'banco' | 'transito';
 
 export type TreasuryAccount = {
   key: string;
@@ -101,7 +101,7 @@ export async function getTreasuryPosition(
     .where(
       and(
         eq(treasuryAccountsSchema.organizationId, organizationId),
-        sql`${treasuryAccountsSchema.type} IN ('caja_fuerte', 'banco')`,
+        sql`${treasuryAccountsSchema.type} IN ('caja_fuerte', 'banco', 'transito')`,
       ),
     )
     .orderBy(treasuryAccountsSchema.type, treasuryAccountsSchema.name);
@@ -152,8 +152,13 @@ export async function getTreasuryPosition(
       const opening = Number.parseFloat(acct.openingBalance ?? '0') || 0;
       const credits = creditsMap.get(acct.id) ?? 0;
       const debits = debitsMap.get(acct.id) ?? 0;
+      const key = acct.type === 'caja_fuerte'
+        ? `caja_fuerte:${acct.id}`
+        : acct.type === 'transito'
+          ? `transito:${acct.id}`
+          : `banco:${acct.name}`;
       accounts.push({
-        key: acct.type === 'caja_fuerte' ? `caja_fuerte:${acct.id}` : `banco:${acct.name}`,
+        key,
         name: acct.name,
         type: acct.type as TreasuryAccountType,
         balance: balanceForAccount(opening, credits, debits),
@@ -170,7 +175,7 @@ export type TreasuryAccountRow = typeof treasuryAccountsSchema.$inferSelect;
 
 export type CreateTreasuryAccountInput = {
   organizationId: string;
-  type: 'caja' | 'caja_fuerte' | 'banco';
+  type: 'caja' | 'caja_fuerte' | 'banco' | 'transito';
   name: string;
   openingBalance: string | number;
   paymentMethodId?: string | null;
@@ -749,6 +754,109 @@ export async function recordGastoOutflow(
     return (executor as typeof import('@/libs/DB').db).transaction(tx => doInserts(tx as unknown as Executor));
   }
   return doInserts(executor);
+}
+
+// ── Phase 3: Handover ledger foundation ──────────────────────────────────────
+
+/**
+ * Lazy-seeds ONE `transito` (Pendiente de ubicar) treasury account per org.
+ * Safe to call inside a transaction — idempotent on re-entry (race-safe via
+ * the unique org+name constraint: on conflict it re-selects the existing row
+ * rather than throwing, so a close-tx is never aborted by a race here).
+ */
+export async function getOrCreatePendingAccount(
+  executor: Executor,
+  organizationId: string,
+  createdBy: string,
+): Promise<TreasuryAccountRow> {
+  // SELECT the existing transito account first (common path after first close).
+  const [existing] = await executor
+    .select()
+    .from(treasuryAccountsSchema)
+    .where(
+      and(
+        eq(treasuryAccountsSchema.organizationId, organizationId),
+        sql`${treasuryAccountsSchema.type} = 'transito'`,
+        eq(treasuryAccountsSchema.active, true),
+      ),
+    )
+    .limit(1);
+
+  if (existing) {
+    return existing;
+  }
+
+  // First close for this org — create the account.
+  try {
+    return await createTreasuryAccount(executor, {
+      organizationId,
+      type: 'transito',
+      name: 'Pendiente de ubicar',
+      openingBalance: 0,
+      createdBy,
+    });
+  } catch (err: unknown) {
+    // Race condition: another concurrent close already created the row.
+    // Re-select and return it — NEVER throw out of a close transaction.
+    const msg = err instanceof Error ? err.message : '';
+    if (msg.includes('ya existe una cuenta con el nombre')) {
+      const [raceRow] = await executor
+        .select()
+        .from(treasuryAccountsSchema)
+        .where(
+          and(
+            eq(treasuryAccountsSchema.organizationId, organizationId),
+            sql`${treasuryAccountsSchema.type} = 'transito'`,
+          ),
+        )
+        .limit(1);
+      if (raceRow) {
+        return raceRow;
+      }
+    }
+    throw err;
+  }
+}
+
+type HandoverMovementInput = {
+  organizationId: string;
+  toAccountId: string;
+  amount: number | string;
+  createdBy: string;
+  cashSessionId: string;
+  reason?: string | null;
+};
+
+/**
+ * Inserts a type='handover' movement: from=NULL → to=transito account.
+ * Called inside the close transaction AFTER the session UPDATE.
+ * Carries cash_session_id so the caja card can identify the session's handover.
+ *
+ * NEVER call this when amount === 0 — guard the caller with:
+ *   if (Number.parseFloat(counted) > 0) { await recordHandoverMovement(...) }
+ */
+export async function recordHandoverMovement(
+  executor: Executor,
+  input: HandoverMovementInput,
+): Promise<TreasuryMovementRow> {
+  const [row] = await executor
+    .insert(treasuryMovementsSchema)
+    .values({
+      organizationId: input.organizationId,
+      fromAccountId: null,
+      toAccountId: input.toAccountId,
+      amount: toMoney(input.amount),
+      type: 'handover',
+      reason: input.reason ?? null,
+      cashSessionId: input.cashSessionId,
+      createdBy: input.createdBy,
+    })
+    .returning();
+
+  if (!row) {
+    throw new Error('treasury_movements: handover insert returned no row');
+  }
+  return row;
 }
 
 // ── Slice C: Financial Timeline ───────────────────────────────────────────────

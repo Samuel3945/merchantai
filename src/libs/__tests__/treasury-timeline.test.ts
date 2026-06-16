@@ -17,8 +17,8 @@ const ENUMS = [
   `CREATE TYPE "cash_movement_type" AS ENUM('sale', 'deposit', 'expense', 'salary', 'inventory_purchase', 'withdrawal', 'adjustment', 'advance', 'fiado_payment', 'reclassification')`,
   `CREATE TYPE "transfer_reconciliation_status" AS ENUM('pending', 'confirmed', 'not_arrived', 'mismatch')`,
   `CREATE TYPE "transfer_resolution_type" AS ENUM('receivable', 'loss', 'cashier_liability')`,
-  `CREATE TYPE "treasury_account_type" AS ENUM('caja','caja_fuerte','banco')`,
-  `CREATE TYPE "treasury_movement_type" AS ENUM('transfer','consignacion','entrada','salida','gasto','adjustment')`,
+  `CREATE TYPE "treasury_account_type" AS ENUM('caja','caja_fuerte','banco','transito')`,
+  `CREATE TYPE "treasury_movement_type" AS ENUM('transfer','consignacion','entrada','salida','gasto','adjustment','handover')`,
 ];
 
 const DDL = `
@@ -135,13 +135,15 @@ const DDL = `
     category text,
     reason text,
     expense_id uuid REFERENCES expenses(id) ON DELETE RESTRICT,
+    handover_movement_id uuid REFERENCES treasury_movements(id) ON DELETE RESTRICT,
+    cash_session_id uuid REFERENCES cash_sessions(id) ON DELETE SET NULL,
     created_by text NOT NULL,
     created_at timestamp DEFAULT now() NOT NULL,
     CONSTRAINT treasury_mov_one_external CHECK (
       num_nonnulls(from_account_id, to_account_id) = 2
       OR (
         num_nonnulls(from_account_id, to_account_id) = 1
-        AND type IN ('entrada', 'salida', 'gasto', 'consignacion', 'adjustment')
+        AND type IN ('entrada', 'salida', 'gasto', 'consignacion', 'adjustment', 'handover')
       )
     )
   );

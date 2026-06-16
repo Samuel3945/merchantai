@@ -9,6 +9,7 @@ import {
 } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import { requirePosAuth } from '@/libs/pos-auth';
+import { getOrCreatePendingAccount, recordHandoverMovement } from '@/libs/treasury';
 import { cashSessionsSchema, posTokensSchema } from '@/models/Schema';
 
 export const runtime = 'nodejs';
@@ -91,6 +92,20 @@ export async function POST(req: Request): Promise<NextResponse> {
       if (!closed) {
         throw new Error('No se pudo cerrar la caja');
       }
+
+      // Phase 3: record handover movement into the transito (Pendiente) account.
+      // Skip when the drawer was empty (no cash to hand over — avoids zero-amount noise).
+      if (Number.parseFloat(counted) > 0) {
+        const pending = await getOrCreatePendingAccount(tx, ctx.organizationId, attribution);
+        await recordHandoverMovement(tx, {
+          organizationId: ctx.organizationId,
+          toAccountId: pending.id,
+          amount: counted,
+          createdBy: attribution,
+          cashSessionId: closed.id,
+        });
+      }
+
       return closed;
     });
 

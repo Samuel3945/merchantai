@@ -365,6 +365,20 @@
       "when": 1781700000002,
       "tag": "0051_arqueo_carryover",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1781700000003,
+      "tag": "0052_treasury_handover_enums",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1781700000004,
+      "tag": "0053_treasury_handover_movements",
+      "breakpoints": true
     }
   ]
 }
