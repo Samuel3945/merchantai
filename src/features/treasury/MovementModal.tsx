@@ -1,22 +1,22 @@
 'use client';
 
-import type { Direction, EntryMotivo, ExitMotivo } from './cash-ui';
+import type { Direction, EntryMotivo, ExitMotivo } from '@/features/cash/cash-ui';
 import type { Supplier, SupplierOption } from '@/features/suppliers/actions';
 import type { CashMovementType } from '@/libs/cash-helpers';
 import type { TreasuryAccountRow } from '@/libs/treasury';
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { listSuppliersForSelect } from '@/features/suppliers/actions';
-import { SupplierModal } from '@/features/suppliers/SupplierModal';
-import { SupplierSelect } from '@/features/suppliers/SupplierSelect';
-import { cn } from '@/utils/Helpers';
 import {
   cashInputCls,
   ENTRY_MOTIVOS,
   entryTypeFor,
   EXIT_MOTIVOS,
   exitTypeFor,
-} from './cash-ui';
+} from '@/features/cash/cash-ui';
+import { listSuppliersForSelect } from '@/features/suppliers/actions';
+import { SupplierModal } from '@/features/suppliers/SupplierModal';
+import { SupplierSelect } from '@/features/suppliers/SupplierSelect';
+import { cn } from '@/utils/Helpers';
 
 export type MovementSubmit = {
   type: CashMovementType;
