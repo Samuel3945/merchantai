@@ -4,7 +4,7 @@ import type { ActionResult } from '@/libs/action-result';
 import type { CashBreakdown, CashMovement, CashMovementType, CashSession, CollectionsByMethod } from '@/libs/cash-helpers';
 import type { CashRiskLevel } from '@/libs/cash-security-policy';
 import { auth, currentUser } from '@clerk/nextjs/server';
-import { and, desc, eq, gte, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, isNotNull, lt, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { ActionValidationError } from '@/libs/action-result';
 import { logAction } from '@/libs/audit-log';
@@ -475,9 +475,11 @@ export type OpenCaja = {
 };
 
 /**
- * Every currently-open till: one per POS device (caja) plus the dashboard/admin
- * session. Read-only overview so the owner can watch each cashier's caja without
- * touching it — the open/close/movement actions stay scoped to the admin session.
+ * Every currently-open POS-device till (one per caja). Read-only overview so the
+ * owner can watch each cashier's caja without touching it. The dashboard/admin
+ * session (posTokenId = null) is intentionally excluded — it is a movement
+ * container the owner opens implicitly, NOT a real point of sale, so it must not
+ * surface as a "caja" in the supervision view.
  */
 export async function listOpenCajas(): Promise<OpenCaja[]> {
   const { orgId } = await requireOrg();
@@ -499,6 +501,8 @@ export async function listOpenCajas(): Promise<OpenCaja[]> {
       and(
         eq(cashSessionsSchema.organizationId, orgId),
         eq(cashSessionsSchema.status, 'open'),
+        // Only POS-device cajas — never the implicit dashboard/admin session.
+        isNotNull(cashSessionsSchema.posTokenId),
       ),
     )
     .orderBy(desc(cashSessionsSchema.openedAt));

@@ -53,6 +53,27 @@ export const EXIT_MOTIVOS: { value: ExitMotivo; label: string }[] = [
   { value: 'otro', label: 'Otro' },
 ];
 
+/**
+ * Quick-pick reason presets per motivo, mirroring the POS cashier flow. Tapping a
+ * chip fills the free-text description; the user can always override it. Motivos
+ * without presets (e.g. "Otro", "Pago a proveedor" which carries the supplier)
+ * simply render the free-text field with no chips.
+ */
+export const REASON_PRESETS: Partial<
+  Record<EntryMotivo | ExitMotivo, string[]>
+> = {
+  // Entradas
+  fondo_caja: ['Fondo inicial del turno', 'Reposición de fondo'],
+  reposicion_caja_chica: ['Reposición de caja chica'],
+  correccion_error: ['Corrección de conteo', 'Error de cobro'],
+  aporte_capital: ['Aporte del dueño', 'Préstamo de socio'],
+  // Salidas
+  retiro_seguridad: ['Retiro a caja fuerte', 'Consignación al banco'],
+  gasto_menor: ['Papelería', 'Aseo', 'Transporte / fletes', 'Refrigerios'],
+  devolucion_cliente: ['Devolución de venta', 'Reembolso de seña'],
+  vale_empleado: ['Adelanto de salario', 'Préstamo a empleado'],
+};
+
 export const EXPENSE_CATEGORIES: { value: ExpenseCategory; label: string }[] = [
   { value: 'nomina', label: 'Nómina' },
   { value: 'servicios', label: 'Servicios públicos' },
