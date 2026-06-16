@@ -1,5 +1,5 @@
 import type { db } from '@/libs/DB';
-import { and, desc, eq, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import {
   computeCashBreakdown,
   findOpenSession,
@@ -672,4 +672,87 @@ export async function recordGastoOutflow(
     return (executor as typeof import('@/libs/DB').db).transaction(tx => doInserts(tx as unknown as Executor));
   }
   return doInserts(executor);
+}
+
+// ── Slice C: Financial Timeline ───────────────────────────────────────────────
+
+export type TreasuryTimelineEntry = {
+  id: string;
+  createdAt: Date;
+  type: string;
+  fromAccount: string | null;
+  toAccount: string | null;
+  amount: number;
+};
+
+/**
+ * Returns treasury movements in reverse-chronological order for the timeline.
+ * Each entry resolves fromAccount and toAccount names from treasury_accounts.
+ *
+ * Reads treasury_movements only (ordered by created_at DESC). The timeline is
+ * read-only — no writes occur here.
+ *
+ * @param executor - DB executor (real db or transaction)
+ * @param organizationId - org to scope results
+ * @param limit - max rows to return (default 100)
+ */
+export async function listTreasuryTimeline(
+  executor: Executor,
+  organizationId: string,
+  limit = 100,
+): Promise<TreasuryTimelineEntry[]> {
+  // Fetch movements ordered newest-first.
+  const movements = await executor
+    .select({
+      id: treasuryMovementsSchema.id,
+      createdAt: treasuryMovementsSchema.createdAt,
+      type: treasuryMovementsSchema.type,
+      fromAccountId: treasuryMovementsSchema.fromAccountId,
+      toAccountId: treasuryMovementsSchema.toAccountId,
+      amount: treasuryMovementsSchema.amount,
+    })
+    .from(treasuryMovementsSchema)
+    .where(eq(treasuryMovementsSchema.organizationId, organizationId))
+    .orderBy(desc(treasuryMovementsSchema.createdAt))
+    .limit(limit);
+
+  if (movements.length === 0) {
+    return [];
+  }
+
+  // Collect unique account IDs to resolve names in a single query.
+  const accountIdSet = new Set<string>();
+  for (const m of movements) {
+    if (m.fromAccountId) {
+      accountIdSet.add(m.fromAccountId);
+    }
+    if (m.toAccountId) {
+      accountIdSet.add(m.toAccountId);
+    }
+  }
+
+  const nameMap = new Map<string, string>();
+  if (accountIdSet.size > 0) {
+    const accountIds = [...accountIdSet];
+    const accounts = await executor
+      .select({
+        id: treasuryAccountsSchema.id,
+        name: treasuryAccountsSchema.name,
+      })
+      .from(treasuryAccountsSchema)
+      .where(inArray(treasuryAccountsSchema.id, accountIds));
+
+    for (const a of accounts) {
+      nameMap.set(a.id, a.name);
+    }
+  }
+
+  return movements.map(m => ({
+    id: m.id,
+    createdAt: m.createdAt,
+    type: m.type,
+    fromAccount: m.fromAccountId ? (nameMap.get(m.fromAccountId) ?? null) : null,
+    toAccount: m.toAccountId ? (nameMap.get(m.toAccountId) ?? null) : null,
+    amount: Number.parseFloat(m.amount ?? '0') || 0,
+  }));
 }
