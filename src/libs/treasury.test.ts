@@ -5,11 +5,13 @@ import {
   balanceForAccount,
   createTreasuryAccount,
   deactivateTreasuryAccount,
+  depositConfirmedTransfer,
   getTreasuryPosition,
   listTreasuryAccounts,
   recordBankConsignacion,
   recordContainerTransfer,
   recordGastoOutflow,
+  resolveBancoForMethod,
   seedOpeningBalance,
 } from '@/libs/treasury';
 
@@ -142,6 +144,7 @@ const DDL = `
     category text,
     reason text,
     expense_id uuid REFERENCES expenses(id) ON DELETE RESTRICT,
+    transfer_reconciliation_id uuid REFERENCES transfer_reconciliations(id) ON DELETE RESTRICT,
     created_by text NOT NULL,
     created_at timestamp DEFAULT now() NOT NULL,
     CONSTRAINT treasury_mov_one_external CHECK (
@@ -150,7 +153,8 @@ const DDL = `
         num_nonnulls(from_account_id, to_account_id) = 1
         AND type IN ('entrada', 'salida', 'gasto', 'consignacion', 'adjustment')
       )
-    )
+    ),
+    CONSTRAINT treasury_mov_transfer_recon_unique UNIQUE (transfer_reconciliation_id)
   );
 `;
 
@@ -1195,5 +1199,158 @@ describe('2D: recordBankConsignacion is the sole consignacion write path', () =>
     );
 
     expect(transferRows.rows).toHaveLength(0);
+  });
+});
+
+// ── Slice E: confirmed-transfer → bank deposit bridge ─────────────────────────
+
+describe('resolveBancoForMethod', () => {
+  const METHOD = '00000000-0000-0000-0000-0000000000c1';
+  const BANCO = '00000000-0000-0000-0000-0000000000d1';
+
+  async function seedBanco(opts?: { name?: string; active?: boolean }) {
+    await pg.query(
+      `INSERT INTO payment_methods (id, organization_id, name, type) VALUES ($1, $2, $3, 'transfer')`,
+      [METHOD, ORG, opts?.name ?? 'Nequi'],
+    );
+    await pg.query(
+      `INSERT INTO treasury_accounts (id, organization_id, type, name, payment_method_id, active)
+       VALUES ($1, $2, 'banco', 'Banco Nequi', $3, $4)`,
+      [BANCO, ORG, METHOD, opts?.active ?? true],
+    );
+  }
+
+  it('resolves the bank for a matching transfer method (case-insensitive)', async () => {
+    await seedBanco({ name: 'Nequi' });
+
+    expect(
+      await resolveBancoForMethod(db, { organizationId: ORG, method: 'nequi' }),
+    ).toBe(BANCO);
+  });
+
+  it('returns null when no method matches', async () => {
+    await seedBanco({ name: 'Nequi' });
+
+    expect(
+      await resolveBancoForMethod(db, { organizationId: ORG, method: 'Daviplata' }),
+    ).toBeNull();
+  });
+
+  it('returns null when the bank is inactive', async () => {
+    await seedBanco({ name: 'Nequi', active: false });
+
+    expect(
+      await resolveBancoForMethod(db, { organizationId: ORG, method: 'Nequi' }),
+    ).toBeNull();
+  });
+
+  it('does not resolve a bank from another org (tenant isolation)', async () => {
+    await seedBanco({ name: 'Nequi' });
+
+    expect(
+      await resolveBancoForMethod(db, { organizationId: 'org-2', method: 'Nequi' }),
+    ).toBeNull();
+  });
+});
+
+describe('depositConfirmedTransfer', () => {
+  const METHOD = '00000000-0000-0000-0000-0000000000c2';
+  const BANCO = '00000000-0000-0000-0000-0000000000d2';
+  const RECON = '00000000-0000-0000-0000-0000000000e2';
+
+  async function seedBank() {
+    await pg.query(
+      `INSERT INTO payment_methods (id, organization_id, name, type) VALUES ($1, $2, 'Nequi', 'transfer')`,
+      [METHOD, ORG],
+    );
+    await pg.query(
+      `INSERT INTO treasury_accounts (id, organization_id, type, name, payment_method_id)
+       VALUES ($1, $2, 'banco', 'Banco Nequi', $3)`,
+      [BANCO, ORG, METHOD],
+    );
+  }
+
+  async function seedTransfer(method: string) {
+    await pg.query(
+      `INSERT INTO transfer_reconciliations (id, organization_id, method, expected_amount, status)
+       VALUES ($1, $2, $3, '100.00', 'confirmed')`,
+      [RECON, ORG, method],
+    );
+  }
+
+  it('credits the bank with one entrada movement', async () => {
+    await seedBank();
+    await seedTransfer('Nequi');
+
+    const res = await depositConfirmedTransfer(db, {
+      organizationId: ORG,
+      reconciliationId: RECON,
+      method: 'Nequi',
+      amount: 100,
+      createdBy: 'Dueño',
+    });
+
+    expect(res.deposited).toBe(true);
+
+    const rows = await pg.query(
+      `SELECT type, to_account_id, from_account_id FROM treasury_movements WHERE transfer_reconciliation_id = $1`,
+      [RECON],
+    );
+
+    expect(rows.rows).toHaveLength(1);
+    expect((rows.rows[0] as any).type).toBe('entrada');
+    expect((rows.rows[0] as any).to_account_id).toBe(BANCO);
+    expect((rows.rows[0] as any).from_account_id).toBeNull();
+  });
+
+  it('is idempotent: a second deposit for the same transfer is a no-op', async () => {
+    await seedBank();
+    await seedTransfer('Nequi');
+
+    const first = await depositConfirmedTransfer(db, {
+      organizationId: ORG,
+      reconciliationId: RECON,
+      method: 'Nequi',
+      amount: 100,
+      createdBy: 'Dueño',
+    });
+    const second = await depositConfirmedTransfer(db, {
+      organizationId: ORG,
+      reconciliationId: RECON,
+      method: 'Nequi',
+      amount: 100,
+      createdBy: 'Dueño',
+    });
+
+    expect(first.deposited).toBe(true);
+    expect(second.deposited).toBe(false);
+
+    const rows = await pg.query(
+      `SELECT id FROM treasury_movements WHERE transfer_reconciliation_id = $1`,
+      [RECON],
+    );
+
+    expect(rows.rows).toHaveLength(1);
+  });
+
+  it('does not deposit when the method has no bank (confirm is not blocked)', async () => {
+    await seedTransfer('Efectivo');
+
+    const res = await depositConfirmedTransfer(db, {
+      organizationId: ORG,
+      reconciliationId: RECON,
+      method: 'Efectivo',
+      amount: 100,
+      createdBy: 'Dueño',
+    });
+
+    expect(res.deposited).toBe(false);
+
+    const rows = await pg.query(
+      `SELECT id FROM treasury_movements WHERE organization_id = $1`,
+      [ORG],
+    );
+
+    expect(rows.rows).toHaveLength(0);
   });
 });
