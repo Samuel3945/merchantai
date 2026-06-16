@@ -128,14 +128,14 @@ export async function POST(req: Request): Promise<NextResponse> {
         openingAmount: session.openingAmount,
         openedBy: session.openedBy,
         notes: session.notes,
-        openingExpected: expected,
-        openingDifference: difference,
+        openingExpected: toMoney(expected),
+        openingDifference: toMoney(difference),
         openingExplanation: session.openingExplanation,
       },
       metadata: {
         cashierName: ctx.cashierName,
         source: ctx.source,
-        ...(hasDiscrepancy && { openingDifference: difference }),
+        ...(hasDiscrepancy && { openingDifference: toMoney(difference) }),
       },
       ip:
         req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
