@@ -123,5 +123,30 @@ export function actorLabel(createdBy: string): string {
   return createdBy.startsWith('user_') ? 'Sistema' : createdBy;
 }
 
+const rtf = new Intl.RelativeTimeFormat('es', { numeric: 'auto' });
+
+/** Bank-app style relative time, e.g. "hace 5 minutos". */
+export function relativeTime(value: Date | string | null | undefined): string {
+  if (!value) {
+    return '—';
+  }
+  const then = new Date(value).getTime();
+  if (!Number.isFinite(then)) {
+    return '—';
+  }
+  const diffSec = Math.round((then - Date.now()) / 1000);
+  const abs = Math.abs(diffSec);
+  if (abs < 60) {
+    return 'Hace un momento';
+  }
+  if (abs < 3600) {
+    return rtf.format(Math.round(diffSec / 60), 'minute');
+  }
+  if (abs < 86_400) {
+    return rtf.format(Math.round(diffSec / 3600), 'hour');
+  }
+  return rtf.format(Math.round(diffSec / 86_400), 'day');
+}
+
 export const cashInputCls
   = 'flex h-11 w-full rounded-lg border border-input bg-card px-3 text-base outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring/30 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none [&[type=number]]:[-moz-appearance:textfield]';
