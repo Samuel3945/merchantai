@@ -111,6 +111,14 @@ const SCHEMA = `
       )
     )
   );
+
+  CREATE TABLE app_settings (
+    organization_id text NOT NULL,
+    key text NOT NULL,
+    value text DEFAULT '' NOT NULL,
+    updated_at timestamp DEFAULT now() NOT NULL,
+    PRIMARY KEY (organization_id, key)
+  );
 `;
 
 let pg: PGlite;
@@ -136,8 +144,16 @@ beforeAll(async () => {
   h.db = drizzle(pg);
 });
 
+async function enableHandoverFlag(): Promise<void> {
+  await pg.query(
+    `INSERT INTO app_settings (organization_id, key, value) VALUES ($1, 'treasuryHandoverEnabled', 'true')
+     ON CONFLICT (organization_id, key) DO UPDATE SET value = 'true'`,
+    [ORG],
+  );
+}
+
 beforeEach(async () => {
-  await pg.exec('TRUNCATE cash_sessions; TRUNCATE cash_movements; TRUNCATE treasury_movements; TRUNCATE treasury_accounts; TRUNCATE pos_tokens;');
+  await pg.exec('TRUNCATE treasury_movements; TRUNCATE treasury_accounts; TRUNCATE cash_movements; TRUNCATE cash_sessions; TRUNCATE pos_tokens; TRUNCATE app_settings;');
   await pg.query(
     `INSERT INTO pos_tokens (id, organization_id, device_name) VALUES ($1, $2, 'Caja 1')`,
     [TOKEN, ORG],
@@ -151,8 +167,28 @@ beforeEach(async () => {
   };
 });
 
-describe('POST /api/pos/cash/close — handover into the transito account (W1/W2)', () => {
+describe('POST /api/pos/cash/close — flag OFF (default carry-over, no handover)', () => {
+  it('does NOT emit a handover movement when the flag is off (default)', async () => {
+    await seedOpenSession(SESSION);
+    // No app_settings row → flag = false
+
+    const res = await POST(closeRequest(3000000));
+
+    expect(res.status).toBe(200);
+
+    const movements = await pg.query(`SELECT 1 FROM treasury_movements WHERE type = 'handover'`);
+
+    expect(movements.rows.length).toBe(0);
+
+    const accounts = await pg.query(`SELECT 1 FROM treasury_accounts WHERE type = 'transito'`);
+
+    expect(accounts.rows.length).toBe(0);
+  });
+});
+
+describe('POST /api/pos/cash/close — handover into the transito account (flag ON)', () => {
   it('emits a handover movement to a lazy-seeded transito account when counted > 0', async () => {
+    await enableHandoverFlag();
     await seedOpenSession(SESSION);
 
     const res = await POST(closeRequest(3000000));
@@ -183,6 +219,7 @@ describe('POST /api/pos/cash/close — handover into the transito account (W1/W2
   });
 
   it('does NOT emit a handover (nor seed transito) when the drawer is empty (counted = 0)', async () => {
+    await enableHandoverFlag();
     await seedOpenSession(SESSION);
 
     const res = await POST(closeRequest(0));
@@ -199,6 +236,7 @@ describe('POST /api/pos/cash/close — handover into the transito account (W1/W2
   });
 
   it('reuses the single org transito account across multiple closes (idempotent seed)', async () => {
+    await enableHandoverFlag();
     await seedOpenSession(SESSION);
     await POST(closeRequest(1000000));
 

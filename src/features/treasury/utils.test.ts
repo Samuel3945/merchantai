@@ -1,6 +1,6 @@
 import type { TreasuryAccount } from '@/libs/treasury';
 import { describe, expect, it } from 'vitest';
-import { classifyTimelineDirection, sumBancos, sumEfectivo } from './utils';
+import { classifyTimelineDirection, sumBancos, sumEfectivo, wasSessionHandedOver } from './utils';
 
 function acct(type: TreasuryAccount['type'], balance: number): TreasuryAccount {
   return { key: `${type}:${balance}`, name: type, type, balance };
@@ -44,6 +44,38 @@ describe('efectivo + bancos buckets', () => {
     const total = mixed.reduce((acc, a) => acc + a.balance, 0);
 
     expect(sumEfectivo(mixed) + sumBancos(mixed)).toBe(total);
+  });
+});
+
+describe('wasSessionHandedOver', () => {
+  it('returns true when account is caja, sessionId is set, and map says true', () => {
+    const account: Pick<TreasuryAccount, 'type' | 'sessionId'> = { type: 'caja', sessionId: 'ses-1' };
+
+    expect(wasSessionHandedOver(account, { 'ses-1': true })).toBe(true);
+  });
+
+  it('returns false when account is caja but map says false', () => {
+    const account: Pick<TreasuryAccount, 'type' | 'sessionId'> = { type: 'caja', sessionId: 'ses-1' };
+
+    expect(wasSessionHandedOver(account, { 'ses-1': false })).toBe(false);
+  });
+
+  it('returns false when account type is not caja (e.g. caja_fuerte)', () => {
+    const account: Pick<TreasuryAccount, 'type' | 'sessionId'> = { type: 'caja_fuerte', sessionId: 'ses-1' };
+
+    expect(wasSessionHandedOver(account, { 'ses-1': true })).toBe(false);
+  });
+
+  it('returns false when sessionId is undefined', () => {
+    const account: Pick<TreasuryAccount, 'type' | 'sessionId'> = { type: 'caja', sessionId: undefined };
+
+    expect(wasSessionHandedOver(account, { 'ses-1': true })).toBe(false);
+  });
+
+  it('returns false when no map is provided (default OFF)', () => {
+    const account: Pick<TreasuryAccount, 'type' | 'sessionId'> = { type: 'caja', sessionId: 'ses-1' };
+
+    expect(wasSessionHandedOver(account)).toBe(false);
   });
 });
 

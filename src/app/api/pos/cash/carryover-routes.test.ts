@@ -33,6 +33,7 @@ const TOKEN = '11111111-1111-1111-1111-111111111111';
 
 const SCHEMA = `
   CREATE TYPE "cash_session_status" AS ENUM('open', 'closed');
+  CREATE TYPE "treasury_movement_type" AS ENUM('transfer','consignacion','entrada','salida','gasto','adjustment','handover');
   CREATE TABLE pos_tokens (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     organization_id text NOT NULL,
@@ -55,6 +56,25 @@ const SCHEMA = `
     opening_expected numeric(12, 2),
     opening_difference numeric(12, 2),
     opening_explanation text
+  );
+  -- Minimal stub: getOpeningExpected queries this table to compute post-handover
+  -- carry-over. No FKs needed here — the test seeds no handover rows, so the
+  -- JOIN returns NULL → handoverSum=0 → carry-over unchanged (Option A safe).
+  CREATE TABLE treasury_movements (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+    organization_id text NOT NULL,
+    from_account_id uuid,
+    to_account_id uuid,
+    amount numeric(12,2) NOT NULL,
+    type "treasury_movement_type" NOT NULL,
+    category text,
+    reason text,
+    expense_id uuid,
+    transfer_reconciliation_id uuid,
+    handover_movement_id uuid,
+    cash_session_id uuid,
+    created_by text NOT NULL,
+    created_at timestamp DEFAULT now() NOT NULL
   );
 `;
 
@@ -83,7 +103,7 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
-  await pg.exec('TRUNCATE cash_sessions; TRUNCATE pos_tokens;');
+  await pg.exec('TRUNCATE treasury_movements; TRUNCATE cash_sessions; TRUNCATE pos_tokens;');
   await pg.query(
     `INSERT INTO pos_tokens (id, organization_id, device_name) VALUES ($1, $2, 'Caja 1')`,
     [TOKEN, ORG],
