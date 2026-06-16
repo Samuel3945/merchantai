@@ -11,41 +11,36 @@ type FraudAlert = {
   message: string;
 };
 
-function Card(props: { children: React.ReactNode; className?: string }) {
+// How money came in today, bucketed by the business's REAL payment methods
+// (ventas + abonos). Plus the fraud alerts. Part of the single Caja supervision
+// page — closures and the movement ledger live inside each caja's detail.
+
+function isCashMethod(name: string): boolean {
+  return /efectivo|cash/i.test(name);
+}
+
+function CollectionCard(props: { name: string; amount: number }) {
+  const zero = props.amount === 0;
   return (
-    <div
-      className={cn(
-        'rounded-xl border border-border bg-card shadow-xs',
-        props.className,
-      )}
-    >
-      {props.children}
+    <div className="rounded-xl border border-border bg-card p-5 shadow-xs">
+      <div className="text-sm font-semibold text-muted-foreground">
+        {props.name}
+      </div>
+      <div className="text-xs text-muted-foreground/80">
+        {isCashMethod(props.name) ? 'plata en mano' : 'transferencias'}
+      </div>
+      <div
+        className={cn(
+          'mt-3 font-display text-3xl font-semibold tabular-nums',
+          zero ? 'text-muted-foreground' : 'text-foreground',
+        )}
+      >
+        {money(props.amount)}
+      </div>
     </div>
   );
 }
 
-function StatCard(props: { label: string; value: string; tone?: 'in' | 'out' }) {
-  return (
-    <Card className="p-4">
-      <div className="text-xs font-medium text-muted-foreground">
-        {props.label}
-      </div>
-      <div
-        className={cn(
-          'mt-1.5 font-display text-xl font-medium tracking-tight tabular-nums',
-          props.tone === 'in' && 'text-success',
-        )}
-      >
-        {props.value}
-      </div>
-    </Card>
-  );
-}
-
-// Secondary section of the Caja module (the cajas list is the hero). Shows the
-// fraud alerts and how money came in today, bucketed by the business's REAL
-// payment methods. Closures and the movement ledger are NOT here — they live
-// inside each caja's detail, filtered to it.
 export function CashClient(props: {
   collections: TodayCollections;
   alerts: FraudAlert[];
@@ -73,15 +68,16 @@ export function CashClient(props: {
         </div>
       )}
 
-      {/* Cobros por método — cómo entró la plata hoy (ventas + abonos), solo por
-          los métodos de pago reales del negocio. */}
-      <div className="space-y-2">
-        <div className="text-sm font-medium">
-          Cobros por método
-          <span className="ml-1 text-xs font-normal text-muted-foreground">
-            · hoy · ventas + abonos
-          </span>
+      <section className="space-y-3">
+        <div>
+          <h2 className="font-display text-lg font-semibold">
+            ¿Cuánta plata entró hoy?
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            Suma de todo lo que cobraron hoy en todas las cajas.
+          </p>
         </div>
+
         {collections.methods.length === 0
           ? (
               <div className="
@@ -94,18 +90,36 @@ export function CashClient(props: {
             )
           : (
               <div className="
-                grid grid-cols-2 gap-3
-                sm:grid-cols-3
-                lg:grid-cols-6
+                grid grid-cols-1 gap-4
+                sm:grid-cols-2
+                lg:grid-cols-3
               "
               >
                 {collections.methods.map(m => (
-                  <StatCard key={m.name} label={m.name} value={money(m.amount)} />
+                  <CollectionCard key={m.name} name={m.name} amount={m.amount} />
                 ))}
-                <StatCard label="Total" value={money(collections.total)} tone="in" />
+                <div className="
+                  rounded-xl border border-primary/20 bg-brand-soft p-5
+                  shadow-xs
+                "
+                >
+                  <div className="text-sm font-semibold text-primary">
+                    Total del día
+                  </div>
+                  <div className="text-xs text-primary/70">
+                    efectivo + transferencias
+                  </div>
+                  <div className="
+                    mt-3 font-display text-3xl font-semibold text-brand-ink
+                    tabular-nums
+                  "
+                  >
+                    {money(collections.total)}
+                  </div>
+                </div>
               </div>
             )}
-      </div>
+      </section>
     </div>
   );
 }
