@@ -99,28 +99,21 @@ export async function confirmTransfer(
 ): Promise<ActionResult<TransferReconciliation>> {
   const { userId, orgId } = await requirePanelModule(MODULE);
   const actor = await getActorName(userId);
-  // Confirm and bridge the bank deposit atomically: the money must appear in
-  // Tesorería the instant the transfer is confirmed, or neither happens.
-  const row = await db.transaction(async (tx) => {
-    const confirmed = await confirmReconciliation(tx, {
+  // Confirm the reconciliation first, then bridge the bank deposit best-effort.
+  // The cashier's confirmation must NEVER be blocked by the treasury bookkeeping:
+  // if the deposit fails (e.g. a not-yet-migrated treasury column), the transfer
+  // stays confirmed and the deposit is idempotent, so it can be re-applied once
+  // the cause is fixed. We still surface the deposit error so the money is not
+  // silently lost from Tesorería.
+  const confirmed = await db.transaction(async tx =>
+    confirmReconciliation(tx, {
       id,
       organizationId: orgId,
       reconciledBy: actor,
       arrivedAmount,
-    });
-    if (!confirmed) {
-      return null;
-    }
-    await depositConfirmedTransfer(tx, {
-      organizationId: orgId,
-      reconciliationId: confirmed.id,
-      method: confirmed.method,
-      amount: confirmed.arrivedAmount ?? confirmed.expectedAmount,
-      createdBy: actor,
-    });
-    return confirmed;
-  });
-  if (!row) {
+    }),
+  );
+  if (!confirmed) {
     return { ok: false, error: 'Transferencia no encontrada' };
   }
   await logAction({
@@ -128,12 +121,49 @@ export async function confirmTransfer(
     actor: { type: 'user', id: userId },
     action: 'transfer.confirmed',
     entityType: 'transfer_reconciliation',
-    entityId: row.id,
-    after: { status: row.status, arrivedAmount: row.arrivedAmount },
+    entityId: confirmed.id,
+    after: { status: confirmed.status, arrivedAmount: confirmed.arrivedAmount },
   });
+
+  const depositError = await tryDepositConfirmedTransfer(orgId, actor, confirmed);
+
   revalidatePath(CASH_PATH);
   revalidatePath(TESORERIA_PATH);
-  return { ok: true, data: row };
+
+  if (depositError) {
+    return {
+      ok: false,
+      error: `Transferencia confirmada, pero no se registró en Tesorería: ${depositError}`,
+    };
+  }
+  return { ok: true, data: confirmed };
+}
+
+// Best-effort bank deposit for a confirmed transfer. Returns the error message
+// when it fails (so the caller can surface it) instead of throwing, so a
+// bookkeeping failure never rolls back or 500s the confirmation itself.
+async function tryDepositConfirmedTransfer(
+  orgId: string,
+  actor: string,
+  confirmed: TransferReconciliation,
+): Promise<string | null> {
+  try {
+    await depositConfirmedTransfer(db, {
+      organizationId: orgId,
+      reconciliationId: confirmed.id,
+      method: confirmed.method,
+      amount: confirmed.arrivedAmount ?? confirmed.expectedAmount,
+      createdBy: actor,
+    });
+    return null;
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.error(
+      '[transfer-reconciliation] bank deposit failed (transfer stays confirmed):',
+      message,
+    );
+    return message;
+  }
 }
 
 export async function markTransferNotArrived(
@@ -201,24 +231,20 @@ export async function confirmAllPendingTransfers(
 ): Promise<ActionResult<{ confirmed: number }>> {
   const { userId, orgId } = await requirePanelModule(MODULE);
   const actor = await getActorName(userId);
-  // Confirm the batch and bridge each one to its bank deposit in one transaction.
-  const confirmedRows = await db.transaction(async (tx) => {
-    const rows = await bulkConfirmPending(tx, {
+  // Confirm the batch first, then bridge each deposit best-effort (same rule as
+  // the single confirm: bookkeeping must never block or 500 the confirmation).
+  const confirmedRows = await db.transaction(async tx =>
+    bulkConfirmPending(tx, {
       organizationId: orgId,
       reconciledBy: actor,
       ...period,
-    });
-    for (const r of rows) {
-      await depositConfirmedTransfer(tx, {
-        organizationId: orgId,
-        reconciliationId: r.id,
-        method: r.method,
-        amount: r.arrivedAmount ?? r.expectedAmount,
-        createdBy: actor,
-      });
-    }
-    return rows;
-  });
+    }),
+  );
+  let depositError: string | null = null;
+  for (const r of confirmedRows) {
+    const err = await tryDepositConfirmedTransfer(orgId, actor, r);
+    depositError = depositError ?? err;
+  }
   const confirmed = confirmedRows.length;
   await logAction({
     organizationId: orgId,
@@ -230,6 +256,12 @@ export async function confirmAllPendingTransfers(
   });
   revalidatePath(CASH_PATH);
   revalidatePath(TESORERIA_PATH);
+  if (depositError) {
+    return {
+      ok: false,
+      error: `${confirmed} transferencia(s) confirmada(s), pero no se registraron en Tesorería: ${depositError}`,
+    };
+  }
   return { ok: true, data: { confirmed } };
 }
 
