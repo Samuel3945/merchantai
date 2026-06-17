@@ -356,19 +356,26 @@ describe('S-05: FIADO resolution — customer capture and link', () => {
     expect(rows.rows[0]?.resolution_type).toBe('receivable');
   });
 
-  it('rejects when no customerName is provided for receivable resolution', async () => {
+  it('falls back to a legacy fiado with null customer_id when no customerName is given', async () => {
     const { resolveTransfer } = await import('./transfer-reconciliation');
     const { reconId } = await seedReconWithSale();
 
+    // Backward compatibility: the current panel button calls without customer
+    // data. It must still resolve (no throw) and create a legacy fiado whose
+    // customer_id is null until the View B capture UI is wired.
     const result = await resolveTransfer(reconId, 'receivable', {
       customerName: '',
     });
 
-    expect(result.ok).toBe(false);
+    expect(result.ok).toBe(true);
 
-    if (!result.ok) {
-      expect(result.error).toMatch(/nombre|cliente/i);
-    }
+    const fiados = await pg.query<{ customer_id: string | null }>(
+      `SELECT customer_id FROM fiados WHERE organization_id = $1`,
+      [ORG],
+    );
+
+    expect(fiados.rows).toHaveLength(1);
+    expect(fiados.rows[0]?.customer_id).toBeNull();
   });
 });
 

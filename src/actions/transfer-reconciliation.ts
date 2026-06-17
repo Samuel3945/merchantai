@@ -466,8 +466,8 @@ export async function recordTransferExplanation(
 }
 
 // Input for the captured customer when resolving as 'receivable'.
-// PR3 replaces the old parseClient(sale.notes) path with explicit capture.
-// The cashier supplies name + at least one contact (whatsapp or documentId).
+// When supplied (by the View B capture UI), the cashier gives a name + at least
+// one contact (whatsapp or documentId) and a real customers row is found-or-created.
 export type FiadoCustomerInput = {
   customerName: string;
   whatsapp?: string | null;
@@ -475,10 +475,11 @@ export type FiadoCustomerInput = {
 };
 
 // Closes the investigation of a not_arrived / mismatch transfer with an outcome.
-// 'receivable' requires customerInput (name + contact) — a real customers row is
-// found-or-created and the fiado is linked to it (customer_id NOT null).
-// PR3: parseClient(sale.notes) is retired from this path; customer data is now
-// captured explicitly at the panel UI before the cashier calls this action.
+// 'receivable' accepts an OPTIONAL customerInput: when a name is provided, a real
+// customers row is found-or-created and the fiado is linked to it (customer_id set);
+// when it is absent (the current panel button), it falls back to a legacy fiado
+// with a null customer_id so the existing flow keeps working until the capture UI
+// is wired in the View B redesign.
 // 'loss' and 'cashier_liability' just record the outcome; the audit trail is the
 // fraud signal (alerts are computed, not stored).
 export async function resolveTransfer(
@@ -520,15 +521,6 @@ export async function resolveTransfer(
           );
         }
 
-        // Validate captured customer data (replaces old parseClient path).
-        // The panel UI must collect name + contact before calling this action.
-        const capturedName = customerInput?.customerName?.trim() ?? '';
-        if (!capturedName) {
-          throw new ActionValidationError(
-            'El nombre del cliente es obligatorio para registrar el fiado',
-          );
-        }
-
         const sale = await getReconciliationSale(tx, row.salePaymentId);
         if (!sale) {
           throw new ActionValidationError(
@@ -541,24 +533,31 @@ export async function resolveTransfer(
           throw new ActionValidationError('No hay saldo pendiente para cobrar');
         }
 
-        // Find or create the customer using the captured contact data.
-        // ADR-7: dedup on whatsapp first, then documentId, else create.
-        const customer = await findOrCreateCustomer(tx, {
-          orgId,
-          name: capturedName,
-          whatsapp: customerInput?.whatsapp ?? null,
-          documentId: customerInput?.documentId ?? null,
-          createdBy: actor,
-        });
+        // Customer capture is optional for backward compatibility. When the
+        // caller passes explicit customer data (the View B capture modal),
+        // find-or-create a real customers row and link it (ADR-7: dedup on
+        // whatsapp first, then documentId). When it is absent (the current
+        // panel button), fall back to a legacy fiado with a null customer_id so
+        // the existing flow keeps working until the capture UI is wired.
+        let customerId: string | null = null;
+        const capturedName = customerInput?.customerName?.trim() ?? '';
+        if (capturedName) {
+          const customer = await findOrCreateCustomer(tx, {
+            orgId,
+            name: capturedName,
+            whatsapp: customerInput?.whatsapp ?? null,
+            documentId: customerInput?.documentId ?? null,
+            createdBy: actor,
+          });
+          customerId = customer.id;
+        }
 
-        // Create the fiado linked to the real customers row.
-        // customer_id is NOT null — this is the invariant that PR3 enforces.
         const fiado = await createFiado(tx, {
           organizationId: orgId,
           saleId: sale.saleId,
           originalAmount: owed,
           createdBy: actor,
-          customerId: customer.id,
+          customerId,
           notes: sale.notes,
         });
         if (!fiado) {
