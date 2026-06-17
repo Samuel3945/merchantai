@@ -20,7 +20,7 @@ let db: Executor;
 const ENUMS = [
   `CREATE TYPE "cash_session_status" AS ENUM('open', 'closed')`,
   `CREATE TYPE "cash_movement_type" AS ENUM('sale', 'deposit', 'expense', 'salary', 'inventory_purchase', 'withdrawal', 'adjustment', 'advance', 'fiado_payment', 'reclassification')`,
-  `CREATE TYPE "transfer_reconciliation_status" AS ENUM('pending', 'confirmed', 'not_arrived', 'mismatch')`,
+  `CREATE TYPE "transfer_reconciliation_status" AS ENUM('pending', 'confirmed', 'not_arrived', 'mismatch', 'resolved')`,
   `CREATE TYPE "transfer_resolution_type" AS ENUM('receivable', 'loss', 'cashier_liability')`,
 ];
 
@@ -97,6 +97,9 @@ const DDL = `
     resolved_by text,
     resolved_at timestamp,
     resolution_fiado_id uuid,
+    claim_open boolean DEFAULT false NOT NULL,
+    recovery_of_id uuid,
+    remainder_reconciliation_id uuid,
     cashier_explanation text,
     cashier_explained_by text,
     cashier_explained_at timestamp,

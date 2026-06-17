@@ -415,6 +415,9 @@ export async function recordCashierExplanation(
 
 // Closes the investigation with an outcome. The fiado for 'receivable' is created
 // by the caller (action layer) and passed in as resolutionFiadoId.
+// `status` MUST be supplied by the action layer: 'resolved' for all loss/fiado/
+// cashier-liability paths; 'confirmed' for late-arrival (reuses confirmReconciliation).
+// `claimOpen` is only set for PÉRDIDA+RECLAMO (loss + active claim).
 export async function setReconciliationResolution(
   executor: Executor,
   args: {
@@ -422,16 +425,20 @@ export async function setReconciliationResolution(
     organizationId: string;
     resolutionType: ResolutionType;
     resolvedBy: string;
+    status: 'resolved' | 'confirmed';
     resolutionFiadoId?: string | null;
+    claimOpen?: boolean;
   },
 ): Promise<TransferReconciliation | null> {
   const [row] = await executor
     .update(transferReconciliationsSchema)
     .set({
+      status: args.status,
       resolutionType: args.resolutionType,
       resolvedBy: args.resolvedBy,
       resolvedAt: new Date(),
       resolutionFiadoId: args.resolutionFiadoId ?? null,
+      claimOpen: args.claimOpen ?? false,
     })
     .where(
       and(

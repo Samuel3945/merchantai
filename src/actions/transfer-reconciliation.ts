@@ -520,6 +520,7 @@ export async function resolveTransfer(
         organizationId: orgId,
         resolutionType,
         resolvedBy: actor,
+        status: 'resolved',
         resolutionFiadoId,
       });
       if (!updated) {
