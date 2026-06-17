@@ -1,9 +1,12 @@
 'use server';
 
+import type { TopProductRow } from '@/actions/reports';
 import { auth } from '@clerk/nextjs/server';
-import { sql } from 'drizzle-orm';
+import { and, eq, gt, sql } from 'drizzle-orm';
+import { getTopProducts } from '@/actions/reports';
 import { db } from '@/libs/DB';
 import { getCurrentPanelUser } from '@/libs/panel-session';
+import { productsSchema } from '@/models/Schema';
 
 export type PeriodStats = {
   total: number;
@@ -42,6 +45,16 @@ export type DashboardMetrics = {
   cashFlow: CashFlowStats;
   inventory: InventoryStats;
   salesByDay: SalesByDayRow[];
+  // Best sellers over the selected range — feeds the "Más vendidos" panel.
+  topProducts: TopProductRow[];
+};
+
+// Products at or below their minimum stock — the "Stock crítico" reorder list.
+// Current state (not range-dependent), so the page fetches it once.
+export type LowStockRow = {
+  name: string;
+  stock: number;
+  minStock: number;
 };
 
 async function requireOrg() {
@@ -252,6 +265,7 @@ export async function getMetrics(
     net,
     prevNet,
     cashFlow,
+    topProducts,
   ] = await Promise.all([
     periodStats(orgId, s, e),
     inventoryStats(orgId),
@@ -260,6 +274,7 @@ export async function getMetrics(
     netRevenue(orgId, s, e),
     hasCompare && cs && ce ? netRevenue(orgId, cs, ce) : Promise.resolve(null),
     cashFlowStats(orgId, s, e),
+    getTopProducts(s, e),
   ]);
 
   return {
@@ -272,7 +287,37 @@ export async function getMetrics(
     cashFlow,
     inventory,
     salesByDay: byDay,
+    topProducts: topProducts.slice(0, 5),
   };
+}
+
+// Products at or below their minimum stock, most-urgent (biggest deficit) first.
+export async function getLowStockItems(limit = 6): Promise<LowStockRow[]> {
+  const { orgId } = await requireOrg();
+  const rows = await db
+    .select({
+      name: productsSchema.name,
+      stock: productsSchema.stock,
+      minStock: productsSchema.minStock,
+    })
+    .from(productsSchema)
+    .where(
+      and(
+        eq(productsSchema.organizationId, orgId),
+        eq(productsSchema.deleted, false),
+        eq(productsSchema.status, 'published'),
+        gt(productsSchema.minStock, 0),
+        sql`${productsSchema.stock} <= ${productsSchema.minStock}`,
+      ),
+    )
+    .orderBy(sql`${productsSchema.minStock} - ${productsSchema.stock} DESC`)
+    .limit(limit);
+
+  return rows.map(r => ({
+    name: r.name,
+    stock: r.stock,
+    minStock: r.minStock,
+  }));
 }
 
 export type MyDay = {

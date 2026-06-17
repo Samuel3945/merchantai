@@ -1,6 +1,7 @@
 'use client';
 
-import type { DashboardMetrics } from '@/actions/dashboard';
+import type { DashboardMetrics, LowStockRow } from '@/actions/dashboard';
+import type { FiadosOverview } from '@/libs/fiados';
 import type { RangePreset } from '@/utils/DateRange';
 import Link from 'next/link';
 import {
@@ -171,7 +172,15 @@ function KpiCard({
   );
 }
 
-export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
+export function DashboardClient({
+  initial,
+  fiado,
+  lowStock,
+}: {
+  initial: DashboardMetrics;
+  fiado: FiadosOverview;
+  lowStock: LowStockRow[];
+}) {
   const [data, setData] = useState<DashboardMetrics>(initial);
   const [start, setStart] = useState(initial.range.start);
   const [end, setEnd] = useState(initial.range.end);
@@ -317,48 +326,226 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
         />
       </div>
 
-      {/* Hero chart — revenue trend over the selected range */}
-      <div className="rounded-lg border bg-background p-4 shadow-xs">
-        <div className="mb-3 flex items-center justify-between">
-          <div className="text-sm font-semibold">Ingresos por día</div>
-          <Link
-            href="/dashboard/reports"
-            className="
-              text-xs text-muted-foreground
-              hover:text-primary hover:underline
+      {/* Main grid — revenue chart beside the best sellers */}
+      <div className="
+        grid gap-6
+        lg:grid-cols-3
+      "
+      >
+        <div className="
+          rounded-lg border bg-background p-4 shadow-xs
+          lg:col-span-2
+        "
+        >
+          <div className="mb-3 flex items-center justify-between">
+            <div className="
+              text-[11px] font-semibold tracking-[0.08em] text-muted-foreground
+              uppercase
             "
-          >
-            Ver todos los reportes →
-          </Link>
+            >
+              Ingresos por día
+            </div>
+            <Link
+              href="/dashboard/reports"
+              className="
+                text-xs text-muted-foreground
+                hover:text-primary hover:underline
+              "
+            >
+              Ver reportes →
+            </Link>
+          </div>
+          <div className="h-72 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={salesByDayLabeled}>
+                <defs>
+                  <linearGradient id="revFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#0F766E" stopOpacity={0.25} />
+                    <stop offset="100%" stopColor="#0F766E" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+                <XAxis dataKey="label" fontSize={12} />
+                <YAxis
+                  fontSize={12}
+                  tickFormatter={v => compactFmt.format(Number(v))}
+                />
+                <Tooltip
+                  formatter={value => [formatMoney(Number(value)), 'Ingresos']}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="total"
+                  name="Ingresos"
+                  stroke="#0F766E"
+                  strokeWidth={2}
+                  fill="url(#revFill)"
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
         </div>
-        <div className="h-72 w-full">
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={salesByDayLabeled}>
-              <defs>
-                <linearGradient id="revFill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#0F766E" stopOpacity={0.25} />
-                  <stop offset="100%" stopColor="#0F766E" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
-              <XAxis dataKey="label" fontSize={12} />
-              <YAxis
-                fontSize={12}
-                tickFormatter={v => compactFmt.format(Number(v))}
-              />
-              <Tooltip
-                formatter={value => [formatMoney(Number(value)), 'Ingresos']}
-              />
-              <Area
-                type="monotone"
-                dataKey="total"
-                name="Ingresos"
-                stroke="#0F766E"
-                strokeWidth={2}
-                fill="url(#revFill)"
-              />
-            </AreaChart>
-          </ResponsiveContainer>
+
+        {/* Best sellers over the selected range */}
+        <div className="rounded-lg border bg-background p-4 shadow-xs">
+          <div className="
+            mb-1 text-[11px] font-semibold tracking-[0.08em]
+            text-muted-foreground uppercase
+          "
+          >
+            Más vendidos
+          </div>
+          {data.topProducts.length === 0
+            ? (
+                <p className="py-6 text-center text-xs text-muted-foreground">
+                  Sin ventas en el período.
+                </p>
+              )
+            : (
+                <ul className="divide-y">
+                  {data.topProducts.map(p => (
+                    <li
+                      key={p.name}
+                      className="flex items-center justify-between gap-3 py-2.5"
+                    >
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium">
+                          {p.name}
+                        </div>
+                        <div className="
+                          text-xs text-muted-foreground tabular-nums
+                        "
+                        >
+                          {p.qty}
+                          {' '}
+                          uds
+                        </div>
+                      </div>
+                      <div className="
+                        shrink-0 text-sm font-semibold tabular-nums
+                      "
+                      >
+                        {formatMoney(p.revenue)}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+        </div>
+      </div>
+
+      {/* Bottom row — outstanding fiado and the reorder list */}
+      <div className="
+        grid gap-6
+        lg:grid-cols-2
+      "
+      >
+        <div className="rounded-lg border bg-background p-4 shadow-xs">
+          <div className="flex items-center justify-between">
+            <div className="
+              text-[11px] font-semibold tracking-[0.08em] text-muted-foreground
+              uppercase
+            "
+            >
+              Fiado pendiente
+            </div>
+            <Link
+              href="/dashboard/fiados"
+              className="
+                text-xs text-muted-foreground
+                hover:text-primary hover:underline
+              "
+            >
+              Muro de fiados →
+            </Link>
+          </div>
+          <div className="mt-1 font-display text-2xl font-medium tabular-nums">
+            {formatMoney(fiado.clients.reduce((sum, c) => sum + c.balance, 0))}
+          </div>
+          <div className="text-xs text-muted-foreground">
+            {fiado.clients.length}
+            {' '}
+            {fiado.clients.length === 1 ? 'persona con fiado' : 'personas con fiado'}
+          </div>
+          {fiado.clients.length > 0 && (
+            <ul className="mt-3 divide-y">
+              {fiado.clients.slice(0, 4).map(c => (
+                <li
+                  key={c.clientKey}
+                  className="flex items-center justify-between gap-3 py-2.5"
+                >
+                  <div className="min-w-0 truncate text-sm font-medium">
+                    {c.name}
+                  </div>
+                  <div className="shrink-0 text-sm font-semibold tabular-nums">
+                    {formatMoney(c.balance)}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div className="rounded-lg border bg-background p-4 shadow-xs">
+          <div className="flex items-center justify-between">
+            <div className="
+              text-[11px] font-semibold tracking-[0.08em] text-muted-foreground
+              uppercase
+            "
+            >
+              Stock crítico
+            </div>
+            <Link
+              href="/dashboard/inventory"
+              className="
+                text-xs text-muted-foreground
+                hover:text-primary hover:underline
+              "
+            >
+              Inventario →
+            </Link>
+          </div>
+          {lowStock.length === 0
+            ? (
+                <p className="py-6 text-center text-xs text-muted-foreground">
+                  Todo con stock suficiente.
+                </p>
+              )
+            : (
+                <ul className="mt-2 divide-y">
+                  {lowStock.map(p => (
+                    <li
+                      key={p.name}
+                      className="flex items-center justify-between gap-3 py-2.5"
+                    >
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className="h-8 w-1 shrink-0 rounded-sm bg-red-500" />
+                        <div className="truncate text-sm font-medium">
+                          {p.name}
+                        </div>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <div className="
+                          text-sm font-semibold text-red-600 tabular-nums
+                        "
+                        >
+                          {p.stock}
+                          {' '}
+                          uds
+                        </div>
+                        <div className="
+                          text-xs text-muted-foreground tabular-nums
+                        "
+                        >
+                          mín
+                          {' '}
+                          {p.minStock}
+                        </div>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
         </div>
       </div>
     </div>
