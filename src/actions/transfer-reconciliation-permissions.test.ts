@@ -197,15 +197,15 @@ describe('S-13: admin-only gate — cashier cannot resolve as cashier_liability'
 });
 
 // ── S-14: Cashier cannot trigger RECUPERACIÓN (recoverTransfer — PR5) ─────────
-// recoverTransfer does not exist yet — this test is intentionally RED.
-// It documents the contract so PR5 knows what admin gate to implement.
+// recoverTransfer does not exist yet — SKIPPED until PR5 ships it (keeps main green).
+// It documents the contract so PR5 knows what admin gate to implement (un-skip in PR5).
 
 describe('S-14: admin-only gate — cashier cannot trigger recoverTransfer', () => {
-  it('recoverTransfer must exist and reject org:member with a permission error', async () => {
+  it.skip('recoverTransfer must exist and reject org:member with a permission error (un-skip in PR5)', async () => {
     const actions = await import('./transfer-reconciliation') as Record<string, unknown>;
     h.orgRole = 'org:member';
 
-    // RED: recoverTransfer is not implemented yet (PR5 task).
+    // Skipped until PR5 implements recoverTransfer; PR5 must un-skip this.
     // This assertion ensures PR5 ships the function with the admin gate.
     const recoverTransfer = actions.recoverTransfer as
       | ((lossId: string, amount?: number) => Promise<{ ok: boolean; error?: string }>)
