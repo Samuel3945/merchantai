@@ -80,15 +80,13 @@ function formatDelta(current: number, previous: number) {
   return `${sign}${percentFmt.format(delta)}`;
 }
 
-function deltaTone(current: number, previous: number, invert = false) {
-  if (previous === 0 && current === 0) {
-    return 'text-muted-foreground';
-  }
-  const better = invert ? current < previous : current > previous;
+// Direction of a delta for the KPI badge: true = improved, false = worsened,
+// null = flat (rendered as a neutral chip, no arrow).
+function deltaUp(current: number, previous: number, invert = false): boolean | null {
   if (current === previous) {
-    return 'text-muted-foreground';
+    return null;
   }
-  return better ? 'text-emerald-600' : 'text-red-600';
+  return invert ? current < previous : current > previous;
 }
 
 function formatDayLabel(day: string) {
@@ -112,14 +110,14 @@ function KpiCard({
   value,
   hint,
   delta,
-  deltaClass,
+  deltaPositive,
   accent,
 }: {
   title: string;
   value: string;
   hint?: string;
   delta?: string;
-  deltaClass?: string;
+  deltaPositive?: boolean | null;
   accent?: boolean;
 }) {
   return (
@@ -128,17 +126,47 @@ function KpiCard({
       accent && 'border-primary/40 bg-primary/5',
     )}
     >
-      <div className="text-xs font-medium text-muted-foreground">{title}</div>
+      <div className="flex items-center justify-between gap-2">
+        <div className="
+          text-[11px] font-semibold tracking-[0.08em] text-muted-foreground
+          uppercase
+        "
+        >
+          {title}
+        </div>
+        {delta && (
+          <span className={cn(
+            `
+              inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5
+              text-[11px] font-medium tabular-nums
+            `,
+            deltaPositive == null
+              ? 'bg-muted text-muted-foreground'
+              : deltaPositive
+                ? `
+                  bg-emerald-50 text-emerald-700
+                  dark:bg-emerald-950/60 dark:text-emerald-400
+                `
+                : `
+                  bg-red-50 text-red-700
+                  dark:bg-red-950/60 dark:text-red-400
+                `,
+          )}
+          >
+            {deltaPositive != null && (deltaPositive ? '▲' : '▼')}
+            {delta}
+          </span>
+        )}
+      </div>
       <div className="
         mt-2 font-display text-3xl font-medium tracking-tight tabular-nums
       "
       >
         {value}
       </div>
-      <div className="mt-1 flex items-center gap-2 text-xs">
-        {delta && <span className={cn('font-medium', deltaClass)}>{delta}</span>}
-        {hint && <span className="text-muted-foreground">{hint}</span>}
-      </div>
+      {hint && (
+        <div className="mt-1 text-xs text-muted-foreground">{hint}</div>
+      )}
     </div>
   );
 }
@@ -259,9 +287,9 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
               ? formatDelta(data.netRevenue, data.prevNetRevenue)
               : undefined
           }
-          deltaClass={
+          deltaPositive={
             data.prevNetRevenue !== null
-              ? deltaTone(data.netRevenue, data.prevNetRevenue)
+              ? deltaUp(data.netRevenue, data.prevNetRevenue)
               : undefined
           }
           hint="ya restando devoluciones"
@@ -270,13 +298,13 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
           title="Ganancia bruta"
           value={formatMoney(data.period.profit)}
           delta={prev ? formatDelta(data.period.profit, prev.profit) : undefined}
-          deltaClass={prev ? deltaTone(data.period.profit, prev.profit) : undefined}
+          deltaPositive={prev ? deltaUp(data.period.profit, prev.profit) : undefined}
           hint={`margen ${data.period.margin.toFixed(1)}%`}
         />
         <KpiCard
           title="Flujo de caja neto"
           value={formatMoney(data.cashFlow.net)}
-          deltaClass={data.cashFlow.net >= 0 ? 'text-emerald-600' : 'text-red-600'}
+          deltaPositive={data.cashFlow.net >= 0}
           delta={data.cashFlow.net >= 0 ? 'positivo' : 'negativo'}
           hint={`gastos ${formatMoney(data.cashFlow.expenses)}`}
         />
@@ -284,7 +312,7 @@ export function DashboardClient({ initial }: { initial: DashboardMetrics }) {
           title="Ventas"
           value={String(data.period.count)}
           delta={prev ? formatDelta(data.period.count, prev.count) : undefined}
-          deltaClass={prev ? deltaTone(data.period.count, prev.count) : undefined}
+          deltaPositive={prev ? deltaUp(data.period.count, prev.count) : undefined}
           hint={`ticket ${formatMoney(data.period.avgTicket)}`}
         />
       </div>

@@ -11,6 +11,7 @@ import { fiadoAmountFor } from '@/libs/fiados-math';
 import { consumeFifoExits } from '@/libs/fifo-cogs';
 import { requirePosAuth } from '@/libs/pos-auth';
 import { assignNextSaleNumber } from '@/libs/sale-number';
+import { resolveOccurredAt } from '@/libs/sale-occurred-at';
 import { recordSaleTransferReconciliations } from '@/libs/transfer-reconciliation';
 import { wholesaleUnitPrice } from '@/libs/wholesale';
 import {
@@ -40,6 +41,9 @@ type CreateSaleBody = {
   // Optional manual due date ('YYYY-MM-DD') for fiado sales; org default term
   // applies when omitted.
   dueDate?: string | null;
+  // Optional real sale time (ISO) for offline-capable clients. Omitted by the
+  // always-online web POS, in which case the server stamps the current time.
+  occurredAt?: string | null;
 };
 
 export async function POST(req: Request): Promise<NextResponse> {
@@ -64,6 +68,8 @@ export async function POST(req: Request): Promise<NextResponse> {
   }
 
   const paymentType = body.paymentType?.trim() || 'Efectivo';
+  // Real business time of the sale (clamped). Web POS omits it → stamps now().
+  const occurredAt = resolveOccurredAt(body.occurredAt, new Date());
 
   // Regla portada de Tiendademo (pos.service.webSale): una venta que mueve
   // efectivo exige una caja abierta. Los pagos 100% fiado no afectan la caja,
@@ -187,6 +193,7 @@ export async function POST(req: Request): Promise<NextResponse> {
           notes: body.notes ?? null,
           cashierId: ctx.cashierId,
           posTokenId: ctx.source === 'token' ? ctx.tokenId : null,
+          occurredAt,
         })
         .returning();
 

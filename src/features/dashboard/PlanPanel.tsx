@@ -1,7 +1,7 @@
 import type { AgentKind } from '@/actions/plans';
 import type { PosDeviceQuota } from '@/actions/pos-tokens';
 import type { SaturationReport } from '@/actions/sales';
-import { Sparkles } from 'lucide-react';
+import { Banknote, Sparkles } from 'lucide-react';
 import Link from 'next/link';
 import { getCashierQuota } from '@/actions/employees';
 import { currentPlan } from '@/actions/plans';
@@ -75,34 +75,57 @@ function QuotaTile({ label, used, limit }: QuotaTileProps) {
   );
 }
 
-// Picks the message + CTA for a saturated caja. The action is honest about
-// quota: if the plan still has a free caja slot, the fix is to ACTIVATE the one
-// already paid for — not to buy another.
+// Picks the headline + body + CTA for a saturated caja. The action stays honest
+// about quota: if the plan still has a free caja slot, the fix is to ACTIVATE
+// the one already paid for; only when the plan is maxed do we suggest upgrading.
 function saturationNotice(
   saturation: SaturationReport,
   posQuota: PosDeviceQuota | null,
-): { message: string; cta: string; href: string } | null {
+): { title: string; body: string; cta: string; href: string } | null {
   if (!saturation.saturated) {
     return null;
   }
 
   const saturatedCajas = saturation.cajas.filter(c => c.saturated);
-  const onlyOne = saturatedCajas.length === 1 ? saturatedCajas[0] : undefined;
-  const message
-    = onlyOne?.deviceName
-      ? `Tu caja "${onlyOne.deviceName}" está al límite.`
-      : 'Una de tus cajas está al límite.';
+  const named = (s: string | null): s is string => Boolean(s);
+  // Only pinpoint a sede when the business actually runs more than one branch —
+  // otherwise "Tu sede Centro" is noise for a single-location store.
+  const allSedes = new Set(saturation.cajas.map(c => c.sede).filter(named));
+  const saturatedSedes = [...new Set(saturatedCajas.map(c => c.sede).filter(named))];
+  const isMultiBranch = allSedes.size > 1;
+  const oneSede = isMultiBranch && saturatedSedes.length === 1
+    ? saturatedSedes[0]
+    : null;
 
+  let title: string;
+  if (oneSede) {
+    title = `Tu sede ${oneSede} ya no da abasto`;
+  } else if (isMultiBranch && saturatedSedes.length > 1) {
+    title = 'Varias sedes ya no dan abasto';
+  } else if (saturatedCajas.length > 1) {
+    title = 'Tus cajas ya no dan abasto';
+  } else {
+    title = 'Una sola caja ya no da abasto';
+  }
+
+  // Anchor the explanation to the saturated sede when we can name one.
+  const where = oneSede ? ` en ${oneSede}` : '';
   const hasFreeSlot = posQuota != null && posQuota.remaining > 0;
 
   return hasFreeSlot
     ? {
-        message,
-        cta: 'Activá otra caja (ya incluida) →',
+        title,
+        body:
+          `Las ventas${where} entran casi sin pausa entre una y otra. Abrí otra `
+          + 'caja para atender más rápido y evitar filas.',
+        cta: 'Abrir otra caja →',
         href: '/dashboard/pos-cajeros',
       }
     : {
-        message,
+        title,
+        body:
+          `Las ventas${where} entran casi sin pausa entre una y otra. Tu plan `
+          + 'llegó al máximo de cajas — sumá un cajero para abrir otra.',
         cta: 'Sumá un cajero a tu plan →',
         href: '/dashboard/plans',
       };
@@ -198,22 +221,40 @@ export async function PlanPanel() {
       )}
 
       {notice && (
-        <div className="
-          mb-4 flex items-center justify-between gap-3 rounded-md border
-          border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700
-        "
+        <Link
+          href={notice.href}
+          className="
+            mb-4 flex items-center gap-3 rounded-xl border border-amber-700
+            bg-[#FCF1DE] px-3.5 py-[13px] text-foreground transition-shadow
+            hover:shadow-sm
+            dark:border-amber-400 dark:bg-[#2E2410]
+          "
         >
-          <span>{notice.message}</span>
-          <Link
-            href={notice.href}
-            className="
-              shrink-0 font-semibold
-              hover:underline
-            "
+          <span className="
+            inline-flex size-[34px] shrink-0 items-center justify-center
+            rounded-[10px] bg-amber-700 text-white
+            dark:bg-amber-400
+          "
+          >
+            <Banknote className="size-[17px]" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[13.5px] font-semibold">
+              {notice.title}
+            </span>
+            <span className="mt-px block text-xs text-muted-foreground">
+              {notice.body}
+            </span>
+          </span>
+          <span className="
+            inline-flex h-[34px] shrink-0 items-center rounded-md bg-amber-700
+            px-3 text-sm font-semibold whitespace-nowrap text-white
+            dark:bg-amber-400
+          "
           >
             {notice.cta}
-          </Link>
-        </div>
+          </span>
+        </Link>
       )}
 
       {lowAny && (
