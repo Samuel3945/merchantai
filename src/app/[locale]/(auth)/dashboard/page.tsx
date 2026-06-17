@@ -1,7 +1,8 @@
 import { auth } from '@clerk/nextjs/server';
 import { setRequestLocale } from 'next-intl/server';
 import { redirect } from 'next/navigation';
-import { getMetrics } from '@/actions/dashboard';
+import { getLowStockItems, getMetrics } from '@/actions/dashboard';
+import { fetchFiadosOverview } from '@/actions/fiados';
 import { DashboardClient } from '@/features/dashboard/DashboardClient';
 import { PlanPanel } from '@/features/dashboard/PlanPanel';
 
@@ -45,11 +46,17 @@ export default async function DashboardIndexPage(props: {
   const prevEnd = addDays(start, -1);
   const prevStart = addDays(prevEnd, -29);
 
-  const metrics = await getMetrics(start, end, prevStart, prevEnd);
+  // Range metrics drive the chart/KPIs/top-sellers; the fiado + low-stock lists
+  // are current state, fetched once here (not in the client's range re-fetch).
+  const [metrics, fiado, lowStock] = await Promise.all([
+    getMetrics(start, end, prevStart, prevEnd),
+    fetchFiadosOverview(),
+    getLowStockItems(),
+  ]);
 
   return (
     <>
-      <DashboardClient initial={metrics} />
+      <DashboardClient initial={metrics} fiado={fiado} lowStock={lowStock} />
       <div className="mt-6">
         <PlanPanel />
       </div>
