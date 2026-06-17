@@ -116,45 +116,21 @@ export async function getTreasuryPosition(
     }
   }
 
-  // PR4 double-count fix: when the handover flag is ON, the caja's contribution
-  // to the total must subtract any handover already in-transit (credit to transito)
-  // so the total counts the cash exactly once (in transito, not in both).
-  // When OFF (default), no handover rows exist → subtract 0 → Option A unchanged.
-  const handoverFlag = await getTreasuryHandoverEnabled(executor, organizationId);
-  const handoverBySession = new Map<string, number>();
-  if (handoverFlag && lastSessionIds.size > 0) {
-    const sessionIds = [...lastSessionIds.values()];
-    const handoverRows = await executor
-      .select({
-        cashSessionId: sql<string>`cash_session_id::text`,
-        total: sql<string>`SUM(amount)::text`,
-      })
-      .from(treasuryMovementsSchema)
-      .where(
-        sql`organization_id = ${organizationId}
-          AND type = 'handover'
-          AND cash_session_id = ANY(ARRAY[${sql.join(sessionIds.map(id => sql`${id}::uuid`), sql`, `)}])`,
-      )
-      .groupBy(sql`cash_session_id`);
-    for (const r of handoverRows) {
-      if (r.cashSessionId) {
-        handoverBySession.set(r.cashSessionId, Number.parseFloat(r.total) || 0);
-      }
-    }
-  }
+  // treasury-sweep-model slice 1 — the handoverBySession subtraction here has
+  // been retired. Double-count prevention is now handled by two paths:
+  //   1. getOpeningExpected already subtracts handover rows from the carryover base
+  //      (for the closed-caja path in cajaBalance), so the raw balance is already
+  //      the post-handover expectation.
+  //   2. For open sessions, computeCashBreakdown returns the physical opening amount
+  //      (what the cashier counted), which is the actual in-drawer balance.
+  // In both paths, cajaBalance() returns the correct net balance without any
+  // additional subtraction. The transito account independently accumulates the
+  // swept amount. No further correction is needed here. ADR-1 sub-decision.
 
   const cajas = await Promise.all(
     tokens.map(async (t) => {
       const sessionId = lastSessionIds.get(t.id);
-      const rawBalance = await cajaBalance(executor, organizationId, t.id);
-      // Subtract the handover for the last closed session (when flag ON).
-      // This removes the double-count: the same counted amount is in both
-      // caja carry-over (rawBalance) AND transito. After subtraction, the
-      // caja contribution is the POST-handover in-drawer expectation (0 if
-      // fully handed, partial otherwise). Universally safe: no handover rows
-      // → subtract 0 → rawBalance unchanged.
-      const handoverSubtraction = sessionId ? (handoverBySession.get(sessionId) ?? 0) : 0;
-      const balance = Math.max(0, rawBalance - handoverSubtraction);
+      const balance = await cajaBalance(executor, organizationId, t.id);
       return {
         key: `caja:${t.id}`,
         name: t.name,

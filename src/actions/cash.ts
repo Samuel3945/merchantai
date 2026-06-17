@@ -27,7 +27,8 @@ import {
   riskLevelForRatio,
 } from '@/libs/cash-security-policy';
 import { db } from '@/libs/DB';
-import { getOrCreatePendingAccount, getTreasuryHandoverEnabled, recordHandoverMovement } from '@/libs/treasury';
+// treasury-sweep-model slice 1: getTreasuryHandoverEnabled / recordHandoverMovement
+// removed from close flow. Imports removed; flag/function cleanup finishes in slice 2.
 import {
   cashMovementsSchema,
   cashSecurityThresholdCacheSchema,
@@ -111,21 +112,9 @@ export async function closeCashSession(
         throw new Error('Failed to close cash session');
       }
 
-      // Phase 3 PR4: record handover movement into the transito (Pendiente) account,
-      // but ONLY when the org has opted into the handover flow (treasuryHandoverEnabled=true).
-      // Default is OFF — carry-over behavior (Option A) is unchanged and no double-count occurs.
-      // Skip when the drawer was empty (avoids zero-amount ledger noise).
-      const handoverEnabled = await getTreasuryHandoverEnabled(tx, orgId);
-      if (handoverEnabled && Number.parseFloat(counted) > 0) {
-        const pending = await getOrCreatePendingAccount(tx, orgId, actor);
-        await recordHandoverMovement(tx, {
-          organizationId: orgId,
-          toAccountId: pending.id,
-          amount: counted,
-          createdBy: actor,
-          cashSessionId: closed.id,
-        });
-      }
+      // treasury-sweep-model slice 1: at-close handover emission removed.
+      // The sweep now fires at OPEN time (api/pos/cash/open/route.ts).
+      // getTreasuryHandoverEnabled import kept alive; full cleanup in slice 2.
 
       return closed;
     });
