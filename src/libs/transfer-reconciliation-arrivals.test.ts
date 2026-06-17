@@ -62,6 +62,13 @@ const DDL = `
     cashier_explained_at timestamp,
     created_at timestamp DEFAULT now() NOT NULL
   );
+
+  -- Mirror the REAL schema's partial unique index (Schema.ts:1300-1302).
+  -- One reconciliation row per sale payment — the split must never put two
+  -- LIVE rows on the same sale_payment_id.
+  CREATE UNIQUE INDEX transfer_reconciliations_sale_payment_idx
+    ON transfer_reconciliations (sale_payment_id)
+    WHERE sale_payment_id IS NOT NULL;
 `;
 
 const ORG = 'org-arrivals';
@@ -309,6 +316,39 @@ describe('S-03: Partial arrival — splitPartialArrival', () => {
     });
 
     expect(result.remainder.salePaymentId).toBe(salePaymentId);
+  });
+
+  // ── FIX 1: sale-sourced partial must NOT violate the partial UNIQUE index ────
+  // The REAL schema has UNIQUE(sale_payment_id) WHERE sale_payment_id IS NOT NULL
+  // (one ACTIVE reconciliation per sale_payment). The split must leave exactly
+  // ONE live row holding the sale_payment_id: the resolved arrived row RELEASES
+  // it, the live not_arrived remainder KEEPS it.
+  it('sale-sourced partial: original releases sale_payment_id, remainder keeps it', async () => {
+    const salePaymentId = UUID(777);
+    const id = await seed({
+      status: 'not_arrived',
+      expectedAmount: '100.00',
+      salePaymentId,
+    });
+
+    const result = await splitPartialArrival(db, {
+      id,
+      organizationId: ORG,
+      reconciledBy: USER,
+      arrivedAmount: 30,
+    });
+
+    // The resolved arrived row no longer holds the sale_payment_id...
+    expect(result.original.salePaymentId).toBeNull();
+    // ...the live remainder is the SINGLE row carrying it.
+    expect(result.remainder.salePaymentId).toBe(salePaymentId);
+
+    // Exactly one live (non-null) row holds the sale_payment_id (index intent).
+    const allForPayment = await listReconciliations(db, { organizationId: ORG });
+    const holders = allForPayment.filter(r => r.salePaymentId === salePaymentId);
+
+    expect(holders).toHaveLength(1);
+    expect(holders[0]?.id).toBe(result.remainder.id);
   });
 
   it('does not touch another org row (tenant isolation)', async () => {

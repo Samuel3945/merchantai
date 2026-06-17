@@ -130,6 +130,10 @@ const SETUP_SQL = `
     cashier_explained_at timestamp,
     created_at timestamp DEFAULT now() NOT NULL
   );
+
+  CREATE UNIQUE INDEX transfer_reconciliations_sale_payment_idx
+    ON transfer_reconciliations (sale_payment_id)
+    WHERE sale_payment_id IS NOT NULL;
 `;
 
 const ORG = 'org-arrivals-action';
@@ -147,6 +151,21 @@ async function seedNotArrived(expectedAmount = '100.00'): Promise<string> {
        (id, organization_id, method, expected_amount, status)
      VALUES ($1, $2, 'Transferencia', $3, 'not_arrived')`,
     [id, ORG, expectedAmount],
+  );
+  return id;
+}
+
+async function seedWithStatus(
+  status: string,
+  expectedAmount = '100.00',
+): Promise<string> {
+  counter++;
+  const id = UUID(counter);
+  await pg.query(
+    `INSERT INTO transfer_reconciliations
+       (id, organization_id, method, expected_amount, status)
+     VALUES ($1, $2, 'Transferencia', $3, $4)`,
+    [id, ORG, expectedAmount, status],
   );
   return id;
 }
@@ -366,5 +385,102 @@ describe('S-03b: partialTransferArrival — invalid amounts', () => {
     const result = await partialTransferArrival(id, -10);
 
     expect(result.ok).toBe(false);
+  });
+});
+
+// ── FIX 2: current-status guard on arrival actions ────────────────────────────
+// Arrival actions may only act on an investigable row (not_arrived / mismatch).
+// A replayed call on a terminal `resolved` row, or a duplicate confirm on an
+// already-`confirmed` row, must be rejected — never silently re-mutate.
+
+describe('FIX 2: confirmLateTransfer rejects non-investigable statuses', () => {
+  it('rejects a resolved (terminal) row', async () => {
+    const { confirmLateTransfer } = await import('./transfer-reconciliation');
+    const id = await seedWithStatus('resolved');
+
+    const result = await confirmLateTransfer(id);
+
+    expect(result.ok).toBe(false);
+  });
+
+  it('rejects an already-confirmed row (replay)', async () => {
+    const { confirmLateTransfer } = await import('./transfer-reconciliation');
+    const id = await seedWithStatus('confirmed');
+
+    const result = await confirmLateTransfer(id);
+
+    expect(result.ok).toBe(false);
+  });
+
+  it('still allows a mismatch row', async () => {
+    const { confirmLateTransfer } = await import('./transfer-reconciliation');
+    const id = await seedWithStatus('mismatch');
+
+    const result = await confirmLateTransfer(id);
+
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe('FIX 2: partialTransferArrival rejects non-investigable statuses', () => {
+  it('rejects a resolved (terminal) row', async () => {
+    const { partialTransferArrival } = await import('./transfer-reconciliation');
+    const id = await seedWithStatus('resolved');
+
+    const result = await partialTransferArrival(id, 60);
+
+    expect(result.ok).toBe(false);
+  });
+
+  it('rejects an already-confirmed row', async () => {
+    const { partialTransferArrival } = await import('./transfer-reconciliation');
+    const id = await seedWithStatus('confirmed');
+
+    const result = await partialTransferArrival(id, 60);
+
+    expect(result.ok).toBe(false);
+  });
+});
+
+// ── FIX 3: partial-arrival deposit durability (atomic) ────────────────────────
+// The arrived row ends `resolved`, which backfillConfirmedTransferDeposits does
+// NOT retry (it only covers `confirmed`). A best-effort post-commit deposit could
+// therefore be silently dropped. The deposit must post INSIDE the split tx, so a
+// deposit failure rolls the whole split back and the arrived $X is never lost.
+
+describe('FIX 3: partial-arrival deposit is atomic with the split', () => {
+  it('rolls back the split when the treasury deposit fails (no orphaned resolved row)', async () => {
+    const { partialTransferArrival } = await import('./transfer-reconciliation');
+    const { depositConfirmedTransfer } = await import('@/libs/treasury');
+    const id = await seedNotArrived('100.00');
+
+    // Make the deposit throw to simulate a transient treasury failure.
+    (depositConfirmedTransfer as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('treasury unavailable'),
+    );
+
+    const result = await partialTransferArrival(id, 60);
+
+    expect(result.ok).toBe(false);
+
+    // The original must NOT have been resolved, and NO remainder row created —
+    // the whole operation rolled back so the arrived $X can be retried.
+    const rows = await pg.query<{ status: string }>(
+      `SELECT status FROM transfer_reconciliations`,
+    );
+
+    expect(rows.rows).toHaveLength(1);
+    expect(rows.rows[0]?.status).toBe('not_arrived');
+  });
+
+  it('posts the deposit inside the transaction for the arrived amount', async () => {
+    const { partialTransferArrival } = await import('./transfer-reconciliation');
+    const id = await seedNotArrived('100.00');
+
+    const result = await partialTransferArrival(id, 60);
+
+    expect(result.ok).toBe(true);
+    expect(h.depositCalls).toHaveLength(1);
+    expect(Number(h.depositCalls[0]?.amount)).toBeCloseTo(60, 2);
   });
 });

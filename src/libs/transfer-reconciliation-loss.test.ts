@@ -65,6 +65,10 @@ const DDL = `
     created_at timestamp DEFAULT now() NOT NULL
   );
 
+  CREATE UNIQUE INDEX transfer_reconciliations_sale_payment_idx
+    ON transfer_reconciliations (sale_payment_id)
+    WHERE sale_payment_id IS NOT NULL;
+
   CREATE TABLE treasury_movements (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     organization_id text NOT NULL,
@@ -427,5 +431,38 @@ describe('S-22: createRecoveryReconciliation rejects non-loss rows', () => {
         createdBy: USER,
       }),
     ).rejects.toThrow();
+  });
+
+  // ── FIX 4: org-scoping on the loss-source guard ───────────────────────────
+  // The loss-check SELECT must be scoped by organizationId. A loss row that
+  // belongs to ANOTHER org must NOT be a valid recovery source at the lib level.
+  it('throws when recovery_of_id is a loss row from a DIFFERENT org', async () => {
+    counter++;
+    const foreignLossId = UUID(counter);
+    await pg.query(
+      `INSERT INTO transfer_reconciliations
+         (id, organization_id, method, expected_amount, status, resolution_type, resolved_by, resolved_at)
+       VALUES ($1, 'org-OTHER', 'Transferencia', '100.00', 'resolved', 'loss', $2, now())`,
+      [foreignLossId, USER],
+    );
+
+    await expect(
+      createRecoveryReconciliation(db, {
+        organizationId: ORG,
+        recoveryOfId: foreignLossId,
+        method: 'Transferencia',
+        amount: 100,
+        createdBy: USER,
+      }),
+    ).rejects.toThrow();
+
+    // And NO recovery row was created for ORG.
+    const created = await pg.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM transfer_reconciliations
+       WHERE organization_id = $1 AND recovery_of_id = $2`,
+      [ORG, foreignLossId],
+    );
+
+    expect(Number(created.rows[0]?.count ?? '0')).toBe(0);
   });
 });

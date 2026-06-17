@@ -49,6 +49,17 @@ import {
 // unconditionally; a panel member needs the module. (Confirming from a POS
 // device — gated by canConfirmTransfers — is a separate, later surface.)
 const MODULE = 'cash';
+
+// Statuses an investigation/arrival action may act on. `confirmed` and
+// `resolved` are terminal for these paths: re-resolving or re-confirming one
+// would silently re-mutate a row the owner already closed (a replay) or flip a
+// confirmed row to a loss WITHOUT clawing back its bank deposit. Those must go
+// through correctConfirmedTransfer / recoverTransfer instead.
+const INVESTIGABLE_STATUSES: ReconciliationStatus[] = ['not_arrived', 'mismatch'];
+
+function isInvestigable(status: ReconciliationStatus): boolean {
+  return INVESTIGABLE_STATUSES.includes(status);
+}
 const CASH_PATH = '/dashboard/cash';
 const TESORERIA_PATH = '/dashboard/tesoreria';
 
@@ -253,6 +264,22 @@ export async function markTransferNotArrived(
   if (defaultResolution === 'direct_loss') {
     try {
       const resolved = await db.transaction(async (tx) => {
+        // Guard: only a still-pending transfer can be auto-resolved to loss.
+        // Without this, a replayed or non-UI call could flip a confirmed
+        // (already deposited) row to loss with no bank clawback — the same harm
+        // the resolve-path status guard prevents (see isInvestigable).
+        const current = await getReconciliationById(tx, {
+          id,
+          organizationId: orgId,
+        });
+        if (!current) {
+          throw new ActionValidationError('Transferencia no encontrada');
+        }
+        if (current.status !== 'pending') {
+          throw new ActionValidationError(
+            'Solo una transferencia pendiente puede resolverse como pérdida automática',
+          );
+        }
         const resolvedRow = await setReconciliationResolution(tx, {
           id,
           organizationId: orgId,
@@ -574,6 +601,13 @@ export async function resolveTransfer(
       if (!row) {
         throw new ActionValidationError('Transferencia no encontrada');
       }
+      if (!isInvestigable(row.status)) {
+        throw new ActionValidationError(
+          row.status === 'resolved'
+            ? 'Esta transferencia ya fue resuelta'
+            : 'Solo se puede resolver una transferencia en investigación; usá la corrección para una transferencia confirmada',
+        );
+      }
 
       let resolutionFiadoId: string | null = null;
       if (resolutionType === 'receivable') {
@@ -675,14 +709,36 @@ export async function confirmLateTransfer(
   const { userId, orgId } = await requirePanelModule(MODULE);
   const actor = await getActorName(userId);
 
-  const confirmed = await db.transaction(async tx =>
-    confirmReconciliation(tx, {
-      id,
-      organizationId: orgId,
-      reconciledBy: actor,
-      arrivedAmount,
-    }),
-  );
+  let confirmed: TransferReconciliation | null;
+  try {
+    confirmed = await db.transaction(async (tx) => {
+      // Current-status guard: a late arrival only makes sense for a row still
+      // under investigation. Re-confirming a `confirmed` row (replay) or a
+      // terminal `resolved` row would silently re-mutate it.
+      const row = await getReconciliationById(tx, { id, organizationId: orgId });
+      if (!row) {
+        throw new ActionValidationError('Transferencia no encontrada');
+      }
+      if (!isInvestigable(row.status)) {
+        throw new ActionValidationError(
+          row.status === 'confirmed'
+            ? 'Esta transferencia ya fue confirmada'
+            : 'Solo se puede confirmar la llegada de una transferencia en investigación',
+        );
+      }
+      return confirmReconciliation(tx, {
+        id,
+        organizationId: orgId,
+        reconciledBy: actor,
+        arrivedAmount,
+      });
+    });
+  } catch (err) {
+    if (err instanceof ActionValidationError) {
+      return { ok: false, error: err.message };
+    }
+    throw err;
+  }
 
   if (!confirmed) {
     return { ok: false, error: 'Transferencia no encontrada' };
@@ -729,14 +785,30 @@ export async function partialTransferArrival(
   const actor = await getActorName(userId);
 
   try {
-    const result = await db.transaction(async tx =>
-      splitPartialArrival(tx, {
+    // The split AND its treasury credit run in ONE transaction. The arrived row
+    // ends `resolved`, which backfillConfirmedTransferDeposits does NOT retry
+    // (it only covers `confirmed` rows). A best-effort post-commit deposit could
+    // therefore be silently dropped, losing the arrived $X from Tesorería. Posting
+    // the deposit inside the split tx makes it atomic: if the deposit fails, the
+    // whole split rolls back so the cashier simply retries — the money is durable.
+    const result = await db.transaction(async (tx) => {
+      const split = await splitPartialArrival(tx, {
         id,
         organizationId: orgId,
         reconciledBy: actor,
         arrivedAmount,
-      }),
-    );
+      });
+      // Treasury credit for the arrived portion only (keyed by the row id, which
+      // is idempotent via the unique index on transfer_reconciliation_id).
+      await depositConfirmedTransfer(tx, {
+        organizationId: orgId,
+        reconciliationId: split.original.id,
+        method: split.original.method,
+        amount: split.original.arrivedAmount ?? split.original.expectedAmount,
+        createdBy: actor,
+      });
+      return split;
+    });
 
     await logAction({
       organizationId: orgId,
@@ -751,25 +823,8 @@ export async function partialTransferArrival(
       },
     });
 
-    // Treasury credit for the arrived portion only. Best-effort (same as
-    // confirmTransfer): if the deposit fails, the transfer stays resolved and
-    // the deposit can be re-applied once the cause is fixed.
-    const depositError = await tryDepositConfirmedTransfer(orgId, actor, {
-      id: result.original.id,
-      method: result.original.method,
-      arrivedAmount: result.original.arrivedAmount,
-      expectedAmount: result.original.expectedAmount,
-    });
-
     revalidatePath(CASH_PATH);
     revalidatePath(TESORERIA_PATH);
-
-    if (depositError) {
-      return {
-        ok: false,
-        error: `Transferencia parcial registrada, pero no se contabilizó en Tesorería: ${depositError}`,
-      };
-    }
 
     return { ok: true, data: result };
   } catch (err) {

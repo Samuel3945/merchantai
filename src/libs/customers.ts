@@ -1,5 +1,5 @@
 import type { Executor as FiadoExecutor } from '@/libs/fiados';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, or } from 'drizzle-orm';
 import { customersSchema } from '@/models/Schema';
 
 // Re-use the shared Executor type (db | tx) defined in fiados.ts which already
@@ -101,22 +101,28 @@ export async function findOrCreateCustomer(
     return inserted;
   }
 
-  // onConflictDoNothing fired — another session won the race. Re-select.
-  const filters = [
-    eq(customersSchema.organizationId, args.orgId),
-    eq(customersSchema.deleted, false),
-  ];
-
+  // onConflictDoNothing fired — the conflict can be on EITHER unique index
+  // (whatsapp or documentId). Re-select matching on whatsapp OR documentId so a
+  // documentId collision with a brand-new whatsapp still finds the existing row
+  // instead of throwing (latent 500).
+  const matchers = [];
   if (whatsapp) {
-    filters.push(eq(customersSchema.whatsapp, whatsapp));
-  } else if (documentId) {
-    filters.push(eq(customersSchema.documentId, documentId));
+    matchers.push(eq(customersSchema.whatsapp, whatsapp));
+  }
+  if (documentId) {
+    matchers.push(eq(customersSchema.documentId, documentId));
   }
 
   const [winner] = await executor
     .select({ id: customersSchema.id, name: customersSchema.name })
     .from(customersSchema)
-    .where(and(...filters))
+    .where(
+      and(
+        eq(customersSchema.organizationId, args.orgId),
+        eq(customersSchema.deleted, false),
+        matchers.length > 1 ? or(...matchers) : matchers[0],
+      ),
+    )
     .limit(1);
 
   if (!winner) {

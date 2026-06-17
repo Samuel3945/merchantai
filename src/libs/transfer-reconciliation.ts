@@ -484,6 +484,18 @@ export async function splitPartialArrival(
     throw new Error('Transferencia no encontrada o no pertenece a esta organización');
   }
 
+  // Current-status guard: a partial arrival only applies to a row still under
+  // investigation. A terminal `resolved` row (replay) or an already-`confirmed`
+  // row must never be re-split — that would create a second live remainder or
+  // post a credit for money already booked.
+  if (original.status !== 'not_arrived' && original.status !== 'mismatch') {
+    throw new Error(
+      original.status === 'resolved'
+        ? 'Esta transferencia ya fue resuelta'
+        : 'Solo se puede registrar un arribo parcial de una transferencia en investigación',
+    );
+  }
+
   const expected = Number.parseFloat(original.expectedAmount) || 0;
   const arrived = Number.parseFloat(String(args.arrivedAmount));
 
@@ -501,11 +513,19 @@ export async function splitPartialArrival(
   );
 
   // 1. Close the original row as resolved with the partial arrived amount.
+  //    The original RELEASES its sale_payment_id (set null): the LIVE
+  //    not_arrived remainder will carry it instead, so the partial UNIQUE index
+  //    `transfer_reconciliations_sale_payment_idx` (one ACTIVE reconciliation
+  //    per sale_payment) is never violated. The deposit for the arrived $X is
+  //    keyed by THIS row's id (not sale_payment_id), so releasing it does NOT
+  //    break the treasury credit. The original→remainder link below keeps the
+  //    audit chain back to the sale.
   const [updatedOriginal] = await executor
     .update(transferReconciliationsSchema)
     .set({
       status: 'resolved',
       arrivedAmount: toMoney(arrived),
+      salePaymentId: null,
       reconciledBy: args.reconciledBy,
       reconciledAt: new Date(),
     })
@@ -522,8 +542,10 @@ export async function splitPartialArrival(
   }
 
   // 2. Insert the remainder row. Inherits org, method, and salePaymentId from
-  //    the original so the investigation list can trace it back. No resolution
-  //    fields (claimOpen stays false by default, recoveryOfId null).
+  //    the original — the remainder is now the SINGLE live row holding that
+  //    sale_payment_id, so backfill idempotency holds and a later FIADO
+  //    resolution can still resolve the sale via getReconciliationSale. No
+  //    resolution fields (claimOpen stays false by default, recoveryOfId null).
   const [remainderRow] = await executor
     .insert(transferReconciliationsSchema)
     .values({
@@ -636,7 +658,9 @@ export async function createRecoveryReconciliation(
     createdBy: string;
   },
 ): Promise<TransferReconciliation> {
-  // Guard: only loss rows can be recovered (S-22 invariant).
+  // Guard: only loss rows can be recovered (S-22 invariant). Scope by
+  // organizationId too (defense-in-depth, S-14): a loss row from another org
+  // must never be a valid recovery source even if the id is guessed/replayed.
   const [sourceRow] = await executor
     .select({
       id: transferReconciliationsSchema.id,
@@ -644,7 +668,12 @@ export async function createRecoveryReconciliation(
       status: transferReconciliationsSchema.status,
     })
     .from(transferReconciliationsSchema)
-    .where(eq(transferReconciliationsSchema.id, args.recoveryOfId))
+    .where(
+      and(
+        eq(transferReconciliationsSchema.id, args.recoveryOfId),
+        eq(transferReconciliationsSchema.organizationId, args.organizationId),
+      ),
+    )
     .limit(1);
 
   if (!sourceRow) {
