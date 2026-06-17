@@ -450,6 +450,111 @@ export async function setReconciliationResolution(
   return row ?? null;
 }
 
+// ── Axis-1: Partial arrival split (F4) ───────────────────────────────────────
+// When a not_arrived transfer partially shows up, we split it into two rows:
+//   • original → resolved, arrivedAmount=$X, remainderReconciliationId set
+//   • new      → not_arrived, expectedAmount=original.expected-$X
+// Conservation law: arrived + remainder.expected === original.expected.
+// Validation: 0 < arrivedAmount < expectedAmount (strict bounds — equals = full).
+// Must run inside a transaction; returns both rows for the action layer to
+// post the treasury credit and build the response.
+
+export type PartialArrivalResult = {
+  original: TransferReconciliation;
+  remainder: TransferReconciliation;
+};
+
+export async function splitPartialArrival(
+  executor: Executor,
+  args: {
+    id: string;
+    organizationId: string;
+    reconciledBy: string;
+    arrivedAmount: number | string;
+  },
+): Promise<PartialArrivalResult> {
+  // Re-read inside the executor so callers can use this in a transaction.
+  const original = await getReconciliationById(executor, {
+    id: args.id,
+    organizationId: args.organizationId,
+  });
+
+  if (!original) {
+    throw new Error('Transferencia no encontrada o no pertenece a esta organización');
+  }
+
+  const expected = Number.parseFloat(original.expectedAmount) || 0;
+  const arrived = Number.parseFloat(String(args.arrivedAmount));
+
+  // Strict bounds: must be > 0 and strictly < expected.
+  if (!Number.isFinite(arrived) || arrived <= 0 || arrived >= expected) {
+    throw new Error(
+      `El monto recibido debe ser mayor a 0 y menor a ${expected} (el esperado). `
+      + `Para registrar un arribo completo usá "llegó tarde completa".`,
+    );
+  }
+
+  // Conservation law: remainder = expected - arrived, rounded to 2 decimal places.
+  const remainder = Number.parseFloat(
+    (expected - arrived).toFixed(2),
+  );
+
+  // 1. Close the original row as resolved with the partial arrived amount.
+  const [updatedOriginal] = await executor
+    .update(transferReconciliationsSchema)
+    .set({
+      status: 'resolved',
+      arrivedAmount: toMoney(arrived),
+      reconciledBy: args.reconciledBy,
+      reconciledAt: new Date(),
+    })
+    .where(
+      and(
+        eq(transferReconciliationsSchema.id, args.id),
+        eq(transferReconciliationsSchema.organizationId, args.organizationId),
+      ),
+    )
+    .returning();
+
+  if (!updatedOriginal) {
+    throw new Error('No se pudo actualizar la transferencia original');
+  }
+
+  // 2. Insert the remainder row. Inherits org, method, and salePaymentId from
+  //    the original so the investigation list can trace it back. No resolution
+  //    fields (claimOpen stays false by default, recoveryOfId null).
+  const [remainderRow] = await executor
+    .insert(transferReconciliationsSchema)
+    .values({
+      organizationId: original.organizationId,
+      salePaymentId: original.salePaymentId ?? null,
+      posTokenId: original.posTokenId ?? null,
+      cashSessionId: original.cashSessionId ?? null,
+      method: original.method,
+      expectedAmount: toMoney(remainder),
+      reference: original.reference ?? null,
+      status: 'not_arrived',
+    })
+    .returning();
+
+  if (!remainderRow) {
+    throw new Error('No se pudo crear la fila de saldo pendiente');
+  }
+
+  // 3. Link original → remainder via remainderReconciliationId.
+  const [linked] = await executor
+    .update(transferReconciliationsSchema)
+    .set({ remainderReconciliationId: remainderRow.id })
+    .where(eq(transferReconciliationsSchema.id, updatedOriginal.id))
+    .returning();
+
+  if (!linked) {
+    throw new Error('No se pudo enlazar el remanente');
+  }
+
+  return { original: linked, remainder: remainderRow };
+}
+
 // ── Reclassification support (F5) ────────────────────────────────────────────
 // When a reclassification moves money INTO a transfer method it creates a row
 // for the new sale payment; when it reduces a transfer payment it syncs that

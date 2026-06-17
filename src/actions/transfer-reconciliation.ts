@@ -30,6 +30,7 @@ import {
   outstandingAmount,
   recordCashierExplanation,
   setReconciliationResolution,
+  splitPartialArrival,
 } from '@/libs/transfer-reconciliation';
 import {
   adjustConfirmedTransferDeposit,
@@ -595,6 +596,122 @@ export async function resolveTransfer(
     return { ok: true, data: resolved };
   } catch (err) {
     if (err instanceof ActionValidationError) {
+      return { ok: false, error: err.message };
+    }
+    throw err;
+  }
+}
+
+// ── Axis-1: Late full arrival ─────────────────────────────────────────────────
+// "Llegó tarde completa": a not_arrived transfer actually showed up in full.
+// Reuses confirmReconciliation (the happy-path lib function) + the idempotent
+// treasury deposit, preserving the same contract as confirmTransfer. Cashier-level.
+export async function confirmLateTransfer(
+  id: string,
+  arrivedAmount?: number | string | null,
+): Promise<ActionResult<TransferReconciliation>> {
+  const { userId, orgId } = await requirePanelModule(MODULE);
+  const actor = await getActorName(userId);
+
+  const confirmed = await db.transaction(async tx =>
+    confirmReconciliation(tx, {
+      id,
+      organizationId: orgId,
+      reconciledBy: actor,
+      arrivedAmount,
+    }),
+  );
+
+  if (!confirmed) {
+    return { ok: false, error: 'Transferencia no encontrada' };
+  }
+
+  await logAction({
+    organizationId: orgId,
+    actor: { type: 'user', id: userId },
+    action: 'transfer.late_arrival',
+    entityType: 'transfer_reconciliation',
+    entityId: confirmed.id,
+    after: { status: confirmed.status, arrivedAmount: confirmed.arrivedAmount },
+  });
+
+  const depositError = await tryDepositConfirmedTransfer(orgId, actor, confirmed);
+
+  revalidatePath(CASH_PATH);
+  revalidatePath(TESORERIA_PATH);
+
+  if (depositError) {
+    return {
+      ok: false,
+      error: `Transferencia confirmada, pero no se registró en Tesorería: ${depositError}`,
+    };
+  }
+  return { ok: true, data: confirmed };
+}
+
+// ── Axis-1: Partial arrival ───────────────────────────────────────────────────
+// "Llegó parcial $X": the transfer partially showed up.
+// • Original row → resolved, arrivedAmount=$X, remainderReconciliationId set.
+// • New remainder row → not_arrived, expectedAmount=original.expected-$X.
+// • Treasury credit posted for $X only (NOT for the remainder).
+// Conservation: arrived + remainder.expected === original.expected.
+// Validation: 0 < arrivedAmount < expectedAmount (strict bounds).
+// Cashier-level permission.
+export async function partialTransferArrival(
+  id: string,
+  arrivedAmount: number | string,
+): Promise<
+  ActionResult<{ original: TransferReconciliation; remainder: TransferReconciliation }>
+> {
+  const { userId, orgId } = await requirePanelModule(MODULE);
+  const actor = await getActorName(userId);
+
+  try {
+    const result = await db.transaction(async tx =>
+      splitPartialArrival(tx, {
+        id,
+        organizationId: orgId,
+        reconciledBy: actor,
+        arrivedAmount,
+      }),
+    );
+
+    await logAction({
+      organizationId: orgId,
+      actor: { type: 'user', id: userId },
+      action: 'transfer.partial_arrival',
+      entityType: 'transfer_reconciliation',
+      entityId: result.original.id,
+      after: {
+        arrivedAmount: result.original.arrivedAmount,
+        remainderId: result.remainder.id,
+        remainderExpected: result.remainder.expectedAmount,
+      },
+    });
+
+    // Treasury credit for the arrived portion only. Best-effort (same as
+    // confirmTransfer): if the deposit fails, the transfer stays resolved and
+    // the deposit can be re-applied once the cause is fixed.
+    const depositError = await tryDepositConfirmedTransfer(orgId, actor, {
+      id: result.original.id,
+      method: result.original.method,
+      arrivedAmount: result.original.arrivedAmount,
+      expectedAmount: result.original.expectedAmount,
+    });
+
+    revalidatePath(CASH_PATH);
+    revalidatePath(TESORERIA_PATH);
+
+    if (depositError) {
+      return {
+        ok: false,
+        error: `Transferencia parcial registrada, pero no se contabilizó en Tesorería: ${depositError}`,
+      };
+    }
+
+    return { ok: true, data: result };
+  } catch (err) {
+    if (err instanceof Error) {
       return { ok: false, error: err.message };
     }
     throw err;
