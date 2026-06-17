@@ -609,3 +609,73 @@ export async function syncPendingReconciliationAmount(
       ),
     );
 }
+
+// ── Axis-2: Cross-period recovery (ADR-8) ────────────────────────────────────
+// When money reappears after a closed-period loss, the admin creates a RECOVERY:
+// a NEW transfer_reconciliations row in the CURRENT period that references the
+// old loss row via recoveryOfId. The old row is NEVER modified (immutability).
+//
+// Invariants enforced:
+//   • recoveryOfId MUST reference a row with resolution_type='loss'. Any other
+//     row (cashier_liability, receivable, not_arrived, confirmed) is rejected.
+//   • The new row status=confirmed + recoveryOfId set. No resolution_type on it
+//     (recovery is a new credit event, not a resolution outcome).
+//   • resolutionType is intentionally null on the recovery row.
+//
+// The caller (action layer) is responsible for posting the treasury credit after
+// this function returns (depositConfirmedTransfer), following the same best-effort
+// pattern as confirmTransfer. MUST run inside the caller's transaction.
+export async function createRecoveryReconciliation(
+  executor: Executor,
+  args: {
+    organizationId: string;
+    recoveryOfId: string;
+    method: string;
+    amount: number | string;
+    createdBy: string;
+  },
+): Promise<TransferReconciliation> {
+  // Guard: only loss rows can be recovered (S-22 invariant).
+  const [sourceRow] = await executor
+    .select({
+      id: transferReconciliationsSchema.id,
+      resolutionType: transferReconciliationsSchema.resolutionType,
+      status: transferReconciliationsSchema.status,
+    })
+    .from(transferReconciliationsSchema)
+    .where(eq(transferReconciliationsSchema.id, args.recoveryOfId))
+    .limit(1);
+
+  if (!sourceRow) {
+    throw new Error(
+      'La transferencia original no fue encontrada. Solo se puede recuperar una transferencia marcada como pérdida.',
+    );
+  }
+
+  if (sourceRow.resolutionType !== 'loss') {
+    throw new Error(
+      `Solo se puede crear una recuperación para una PÉRDIDA. La transferencia seleccionada tiene tipo '${sourceRow.resolutionType ?? sourceRow.status}', no 'loss'.`,
+    );
+  }
+
+  // Insert recovery row: status=confirmed, recoveryOfId set, no resolutionType.
+  const [newRow] = await executor
+    .insert(transferReconciliationsSchema)
+    .values({
+      organizationId: args.organizationId,
+      method: args.method,
+      expectedAmount: toMoney(args.amount),
+      arrivedAmount: toMoney(args.amount),
+      status: 'confirmed',
+      recoveryOfId: args.recoveryOfId,
+      reconciledBy: args.createdBy,
+      reconciledAt: new Date(),
+    })
+    .returning();
+
+  if (!newRow) {
+    throw new Error('No se pudo insertar la fila de recuperación');
+  }
+
+  return newRow;
+}

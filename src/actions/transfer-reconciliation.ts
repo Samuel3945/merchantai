@@ -22,6 +22,7 @@ import {
   confirmReconciliation,
   countPendingReconciliations,
   countReconciliationsByStatus,
+  createRecoveryReconciliation,
   getReconciliationById,
   getReconciliationSale,
   listReconciliations,
@@ -483,10 +484,14 @@ export type FiadoCustomerInput = {
 // is wired in the View B redesign.
 // 'loss' and 'cashier_liability' just record the outcome; the audit trail is the
 // fraud signal (alerts are computed, not stored).
+// claimOpen=true is only meaningful when resolutionType='loss' — it flags
+// PÉRDIDA+RECLAMO (active insurance/legal claim). Same money routing as plain
+// PÉRDIDA; the flag drives future RECOVERY eligibility.
 export async function resolveTransfer(
   id: string,
   resolutionType: ResolutionType,
   customerInput?: FiadoCustomerInput,
+  claimOpen?: boolean,
 ): Promise<ActionResult<TransferReconciliation>> {
   const { userId, orgId } = await requirePanelModule(MODULE);
 
@@ -574,6 +579,7 @@ export async function resolveTransfer(
         resolvedBy: actor,
         status: 'resolved',
         resolutionFiadoId,
+        claimOpen: resolutionType === 'loss' ? (claimOpen ?? false) : false,
       });
       if (!updated) {
         throw new Error('No se pudo resolver la transferencia');
@@ -766,4 +772,103 @@ export async function reclassifySalePayment(
   });
   revalidatePath(CASH_PATH);
   return { ok: true, data: null };
+}
+
+// ── Axis-2: Cross-period recovery (ADR-8) ────────────────────────────────────
+// "Recuperación": the admin registers a recovery when money reappears after a
+// closed-period loss. A NEW transfer_reconciliations row is inserted in the
+// CURRENT period referencing the old loss row via recoveryOfId. The old row is
+// NEVER modified — immutability is the core audit invariant.
+//
+// Admin-only gate: recovery carries the same fraud risk as loss itself — if a
+// cashier could fabricate a recovery, they could book fictitious treasury credits.
+// Gate pattern mirrors treasury.ts:182-190 and resolveTransfer for loss.
+//
+// The lib (createRecoveryReconciliation) validates that the referenced row is a
+// loss row (S-22 invariant). The action posts the treasury credit after insert,
+// best-effort (same pattern as confirmTransfer: bookkeeping failure must not
+// roll back the recovery itself).
+export async function recoverTransfer(
+  lossReconciliationId: string,
+  arrivedAmount: number,
+): Promise<ActionResult<TransferReconciliation>> {
+  const { userId, orgId } = await requirePanelModule(MODULE);
+
+  // Admin-only anti-fraud gate (S-14 invariant).
+  const { orgRole } = await auth();
+
+  if (orgRole !== 'org:admin') {
+    return {
+      ok: false,
+      error: 'Solo el propietario puede registrar una recuperación',
+    };
+  }
+
+  const actor = await getActorName(userId);
+
+  let recovery: TransferReconciliation;
+
+  try {
+    recovery = await db.transaction(async (tx) => {
+      // Read the source row first to copy method/org for the recovery row.
+      // createRecoveryReconciliation validates that it is a loss row (S-22).
+      const sourceRow = await getReconciliationById(tx, {
+        id: lossReconciliationId,
+        organizationId: orgId,
+      });
+
+      if (!sourceRow) {
+        throw new ActionValidationError('Transferencia original no encontrada');
+      }
+
+      return createRecoveryReconciliation(tx, {
+        organizationId: orgId,
+        recoveryOfId: lossReconciliationId,
+        method: sourceRow.method,
+        amount: arrivedAmount,
+        createdBy: actor,
+      });
+    });
+  } catch (err) {
+    if (err instanceof ActionValidationError) {
+      return { ok: false, error: err.message };
+    }
+    if (err instanceof Error) {
+      return { ok: false, error: err.message };
+    }
+    throw err;
+  }
+
+  await logAction({
+    organizationId: orgId,
+    actor: { type: 'user', id: userId },
+    action: 'transfer.recovery',
+    entityType: 'transfer_reconciliation',
+    entityId: recovery.id,
+    after: {
+      recoveryOfId: lossReconciliationId,
+      arrivedAmount,
+    },
+  });
+
+  // Post the treasury credit best-effort. A deposit failure must never roll back
+  // the recovery row — the money is recorded; the bookkeeping catches up later.
+  const depositError = await tryDepositConfirmedTransfer(orgId, actor, {
+    id: recovery.id,
+    method: recovery.method,
+    arrivedAmount: recovery.arrivedAmount,
+    expectedAmount: recovery.expectedAmount,
+  });
+
+  revalidatePath(CASH_PATH);
+  revalidatePath(TESORERIA_PATH);
+
+  if (depositError) {
+    return {
+      ok: false,
+      error: `Recuperación registrada, pero no se contabilizó en Tesorería: ${depositError}`,
+    };
+  }
+
+  return { ok: true, data: recovery };
 }
