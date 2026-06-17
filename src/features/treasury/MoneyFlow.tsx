@@ -2,7 +2,6 @@
 
 import type { TreasuryAccount } from '@/libs/treasury';
 import { ArrowRightLeft, Coins, Landmark, Lock, Monitor, Plus } from 'lucide-react';
-import { useState } from 'react';
 import { money } from '@/features/cash/cash-ui';
 import { groupByType } from './utils';
 
@@ -65,7 +64,7 @@ function PlaceNode({
 }: {
   account: TreasuryAccount;
   accent: { icon: string; bg: string };
-  onMove: () => void;
+  onMove: (key: string) => void;
 }) {
   return (
     <div
@@ -92,7 +91,7 @@ function PlaceNode({
       </div>
       <button
         type="button"
-        onClick={onMove}
+        onClick={() => onMove(account.key)}
         title="Mover desde aquí"
         className="
           flex size-8 shrink-0 items-center justify-center rounded-[9px] border
@@ -137,26 +136,38 @@ type MoneyFlowProps = {
   total: number;
   sinUbicar: number;
   pendingCount: number;
+  /**
+   * Called when the user clicks the move button on a place.
+   * Receives the account key to pre-fill the TransferWizard source.
+   */
+  onMoveFromPlace: (key: string) => void;
+  /**
+   * Called when the user clicks "Agregar lugar" from within the diagram.
+   * Opens the CreateSlideover from the parent.
+   */
+  onAddPlace: () => void;
 };
 
 /**
  * "Dónde está la plata" flow diagram.
  * 3 columns: Total empresa → Efectivo/Bancos/Sin ubicar buckets → individual places.
- * Connectors are dashed SVG lines. Per-place move button opens MoverDineroForm.
+ * Connectors are dashed SVG lines.
+ * Per-place move button calls onMoveFromPlace(key) → opens TransferWizard pre-filled.
+ * "Agregar lugar" button calls onAddPlace() → opens CreateSlideover.
  */
 export function MoneyFlow({
   accounts,
   total,
   sinUbicar,
   pendingCount,
+  onMoveFromPlace,
+  onAddPlace,
 }: MoneyFlowProps) {
-  const [showAdd, setShowAdd] = useState(false);
   const tree = groupByType(accounts);
 
   // Flatten the places for column 3 (efectivo → bancos order)
   const efectivoPlaces = tree.efectivo;
   const bancosPlaces = tree.bancos;
-  const allPlaces = [...efectivoPlaces, ...bancosPlaces];
 
   const numConnectors = Math.max(efectivoPlaces.length, bancosPlaces.length, 1);
 
@@ -191,6 +202,19 @@ export function MoneyFlow({
           Todavía no hay contenedores configurados. Agregá una caja fuerte o
           cuenta bancaria para empezar.
         </p>
+        <button
+          type="button"
+          onClick={onAddPlace}
+          className="
+            mt-4 flex h-10 items-center gap-2 rounded-[10px] border
+            border-dashed border-input px-4 text-[13px] font-semibold
+            text-muted-foreground transition-colors
+            hover:border-primary hover:bg-primary/5 hover:text-primary
+          "
+        >
+          <Plus className="size-4" />
+          Agregar lugar
+        </button>
       </div>
     );
   }
@@ -316,10 +340,7 @@ export function MoneyFlow({
               key={p.key}
               account={p}
               accent={{ icon: 'text-success', bg: 'bg-success/10' }}
-              onMove={() => {
-                // MoverDineroForm is triggered via the action bar below.
-                // Per-place move is a nice-to-have; for slice A it opens the same form.
-              }}
+              onMove={onMoveFromPlace}
             />
           ))}
           {bancosPlaces.map(p => (
@@ -327,40 +348,14 @@ export function MoneyFlow({
               key={p.key}
               account={p}
               accent={{ icon: 'text-chart-5', bg: 'bg-chart-5/10' }}
-              onMove={() => {}}
+              onMove={onMoveFromPlace}
             />
           ))}
 
           {/* Agregar lugar */}
-          {showAdd
-            ? (
-                <div className="rounded-xl border border-border bg-muted/30 p-3">
-                  <p className="
-                    mb-2 text-xs font-medium text-secondary-foreground
-                  "
-                  >
-                    Usá las opciones "Agregar caja fuerte" o "Agregar cuenta bancaria" del panel de acciones de abajo.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => setShowAdd(false)}
-                    className="
-                      text-xs font-medium text-primary
-                      hover:underline
-                    "
-                  >
-                    Cerrar
-                  </button>
-                </div>
-              )
-            : (
-                <AddPlaceButton onClick={() => setShowAdd(true)} />
-              )}
+          <AddPlaceButton onClick={onAddPlace} />
         </div>
       </div>
-
-      {/* Actions: MoverDineroForm + GastoForm inline */}
-      {allPlaces.length === 0 && null}
     </div>
   );
 }

@@ -5,11 +5,9 @@ import {
   getHandoverStatusForSessionsAction,
   listPendingHandoversAction,
 } from '@/actions/treasury-placement';
-import { MoneyFlow } from '@/features/treasury/MoneyFlow';
-import { PorUbicar } from '@/features/treasury/PorUbicar';
-import { TreasuryActions } from '@/features/treasury/TreasuryActions';
 import { TreasuryHero } from '@/features/treasury/TreasuryHero';
 import { TreasuryHistory } from '@/features/treasury/TreasuryHistory';
+import { TreasuryPageClient } from '@/features/treasury/TreasuryPageClient';
 import { sumTransito } from '@/features/treasury/utils';
 
 export default async function TesoreriaPage(props: {
@@ -18,7 +16,7 @@ export default async function TesoreriaPage(props: {
   const { locale } = await props.params;
   setRequestLocale(locale);
 
-  const [treasury, treasuryAccountRows, _methods, timelineEntries] = await Promise.all([
+  const [treasury, treasuryAccountRows, allMethods, timelineEntries] = await Promise.all([
     getTreasury().catch(() => []),
     listTreasuryAccounts().catch(() => []),
     listPaymentMethods({ activeOnly: true }).catch(() => []),
@@ -54,6 +52,9 @@ export default async function TesoreriaPage(props: {
   const bankRows = treasuryAccountRows.filter(r => r.type === 'banco');
   const cajaFuerteRows = treasuryAccountRows.filter(r => r.type === 'caja_fuerte');
 
+  // Payment methods of type 'transfer' for the CreateSlideover banco picker
+  const transferMethods = allMethods.filter(m => m.type === 'transfer');
+
   return (
     <div className="flex flex-col gap-[22px]">
       {/* 1. Hero: title + big total + 3 buckets */}
@@ -63,25 +64,19 @@ export default async function TesoreriaPage(props: {
         pendingCount={pendingCount}
       />
 
-      {/* 2. Plata por ubicar (only when pending > 0) */}
-      {pendingCount > 0 && (
-        <PorUbicar
-          pendingHandovers={pendingHandovers}
-          bankAccounts={bankRows}
-          cajaFuerteAccounts={cajaFuerteRows}
-        />
-      )}
-
-      {/* 3. Dónde está la plata — flow diagram */}
-      <MoneyFlow
+      {/* 2-4. Interactive sections: PorUbicar + MoneyFlow + TreasuryActions */}
+      {/* Wrapped in TreasuryPageClient to share wizard/slideover state */}
+      <TreasuryPageClient
         accounts={treasury}
+        accountRows={treasuryAccountRows}
+        pendingHandovers={pendingHandovers}
+        bankAccounts={bankRows}
+        cajaFuerteAccounts={cajaFuerteRows}
+        transferMethods={transferMethods}
         total={totalEmpresa}
         sinUbicar={sinUbicar}
         pendingCount={pendingCount}
       />
-
-      {/* 4. Action buttons row */}
-      <TreasuryActions accountRows={treasuryAccountRows} />
 
       {/* 5. Historial de tesorería */}
       <TreasuryHistory entries={timelineEntries} />
