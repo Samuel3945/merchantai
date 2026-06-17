@@ -27,6 +27,7 @@ export type SalesByDayRow = {
   day: string;
   count: number;
   total: number;
+  profit: number;
 };
 
 export type CashFlowStats = {
@@ -152,17 +153,36 @@ async function salesByDay(
   end: string,
 ): Promise<SalesByDayRow[]> {
   const result = await db.execute(sql`
+    WITH ps AS (
+      SELECT
+        id,
+        total::numeric AS total,
+        to_char(
+          (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date,
+          'YYYY-MM-DD'
+        ) AS day
+      FROM sales
+      WHERE organization_id = ${orgId}
+        AND status = 'completed'
+        AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
+            BETWEEN ${start}::date AND ${end}::date
+    ),
+    costs AS (
+      SELECT sm.sale_id, SUM(sm.qty * COALESCE(sm.unit_cost, 0)) AS cost
+      FROM stock_movements sm
+      WHERE sm.type = 'exit'
+        AND sm.sale_id IN (SELECT id FROM ps)
+      GROUP BY sm.sale_id
+    )
     SELECT
-      to_char((created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date, 'YYYY-MM-DD') AS day,
-      COUNT(*)::int AS count,
-      SUM(total)::float8 AS total
-    FROM sales
-    WHERE organization_id = ${orgId}
-      AND status = 'completed'
-      AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
-          BETWEEN ${start}::date AND ${end}::date
-    GROUP BY day
-    ORDER BY day
+      ps.day AS day,
+      COUNT(ps.id)::int AS count,
+      COALESCE(SUM(ps.total), 0)::float8 AS total,
+      COALESCE(SUM(ps.total - COALESCE(c.cost, 0)), 0)::float8 AS profit
+    FROM ps
+    LEFT JOIN costs c ON c.sale_id = ps.id
+    GROUP BY ps.day
+    ORDER BY ps.day
   `);
 
   return (result.rows ?? []).map((r) => {
@@ -171,6 +191,7 @@ async function salesByDay(
       day: String(row.day ?? ''),
       count: toInt(row.count),
       total: toNum(row.total),
+      profit: toNum(row.profit),
     };
   });
 }
