@@ -1,4 +1,5 @@
 import { PGlite } from '@electric-sql/pglite';
+import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -23,7 +24,7 @@ let pg: PGlite;
 let db: Executor;
 
 const ENUMS = [
-  `CREATE TYPE "transfer_reconciliation_status" AS ENUM('pending', 'confirmed', 'not_arrived', 'mismatch')`,
+  `CREATE TYPE "transfer_reconciliation_status" AS ENUM('pending', 'confirmed', 'not_arrived', 'mismatch', 'resolved')`,
   `CREATE TYPE "transfer_resolution_type" AS ENUM('receivable', 'loss', 'cashier_liability')`,
 ];
 
@@ -46,6 +47,9 @@ const DDL = `
     resolved_by text,
     resolved_at timestamp,
     resolution_fiado_id uuid,
+    claim_open boolean DEFAULT false NOT NULL,
+    recovery_of_id uuid,
+    remainder_reconciliation_id uuid,
     cashier_explanation text,
     cashier_explained_by text,
     cashier_explained_at timestamp,
@@ -330,6 +334,7 @@ describe('setReconciliationResolution', () => {
       organizationId: ORG,
       resolutionType: 'loss',
       resolvedBy: USER,
+      status: 'resolved',
     });
 
     expect(row?.resolutionType).toBe('loss');
@@ -345,6 +350,7 @@ describe('setReconciliationResolution', () => {
       organizationId: ORG,
       resolutionType: 'receivable',
       resolvedBy: USER,
+      status: 'resolved',
       resolutionFiadoId: fiadoId,
     });
 
@@ -359,6 +365,7 @@ describe('setReconciliationResolution', () => {
       organizationId: OTHER,
       resolutionType: 'loss',
       resolvedBy: USER,
+      status: 'resolved',
     });
 
     expect(row).toBeNull();
@@ -376,5 +383,90 @@ describe('outstandingAmount', () => {
     expect(
       outstandingAmount({ expectedAmount: '100.00', arrivedAmount: '80.00' }),
     ).toBe(20);
+  });
+});
+
+// ── S-01: Resolution closes the row (root-bug fix) ───────────────────────────
+// RED: currently setReconciliationResolution never sets status, so the row
+// stays 'not_arrived' after resolution. These tests must fail until 1.8 is done.
+describe('setReconciliationResolution — status close (S-01)', () => {
+  it('moves status to resolved after marking loss', async () => {
+    const id = await seed({ status: 'not_arrived' });
+    const row = await setReconciliationResolution(db, {
+      id,
+      organizationId: ORG,
+      resolutionType: 'loss',
+      resolvedBy: USER,
+      status: 'resolved',
+    });
+
+    expect(row?.status).toBe('resolved');
+  });
+
+  it('moves status to resolved after marking cashier_liability', async () => {
+    const id = await seed({ status: 'not_arrived' });
+    const row = await setReconciliationResolution(db, {
+      id,
+      organizationId: ORG,
+      resolutionType: 'cashier_liability',
+      resolvedBy: USER,
+      status: 'resolved',
+    });
+
+    expect(row?.status).toBe('resolved');
+  });
+
+  it('clears the row from a not_arrived query after resolution', async () => {
+    const id = await seed({ status: 'not_arrived' });
+    await setReconciliationResolution(db, {
+      id,
+      organizationId: ORG,
+      resolutionType: 'loss',
+      resolvedBy: USER,
+      status: 'resolved',
+    });
+
+    const openInvestigations = await db
+      .select()
+      .from(transferReconciliationsSchema)
+      .where(
+        eq(transferReconciliationsSchema.status, 'not_arrived' as never),
+      );
+
+    expect(openInvestigations).toHaveLength(0);
+  });
+
+  it('sets claimOpen when provided', async () => {
+    const id = await seed({ status: 'not_arrived' });
+    const row = await setReconciliationResolution(db, {
+      id,
+      organizationId: ORG,
+      resolutionType: 'loss',
+      resolvedBy: USER,
+      status: 'resolved',
+      claimOpen: true,
+    });
+
+    expect(row?.claimOpen).toBe(true);
+  });
+});
+
+// ── S-11: Investigation list filter ─────────────────────────────────────────
+// Resolved and confirmed rows MUST NOT appear in a not_arrived query.
+describe('investigation list filter (S-11)', () => {
+  it('shows only not_arrived rows in the investigation queue', async () => {
+    const idA = await seed({ status: 'not_arrived' });
+    await seed({ status: 'resolved', resolutionType: 'loss' } as any);
+    await seed({ status: 'confirmed' } as any);
+
+    const investigations = await db
+      .select()
+      .from(transferReconciliationsSchema)
+      .where(
+        eq(transferReconciliationsSchema.status, 'not_arrived' as never),
+      );
+
+    expect(investigations).toHaveLength(1);
+    expect(investigations[0]?.id).toBe(idA);
   });
 });

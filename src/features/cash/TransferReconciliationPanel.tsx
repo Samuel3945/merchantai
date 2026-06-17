@@ -70,6 +70,11 @@ const STATE_META: Record<
     badge: 'bg-destructive/10 text-destructive',
     dot: 'bg-destructive',
   },
+  resolved: {
+    label: 'Resuelto',
+    badge: 'bg-muted/20 text-muted-foreground',
+    dot: 'bg-muted-foreground',
+  },
 };
 
 function StateBadge({ status }: { status: ReconciliationStatus }) {

@@ -601,7 +601,7 @@ export const treasuryMovementTypeEnum = pgEnum('treasury_movement_type', [
 
 export const transferReconciliationStatusEnum = pgEnum(
   'transfer_reconciliation_status',
-  ['pending', 'confirmed', 'not_arrived', 'mismatch'],
+  ['pending', 'confirmed', 'not_arrived', 'mismatch', 'resolved'],
 );
 
 export const transferResolutionTypeEnum = pgEnum('transfer_resolution_type', [
@@ -1268,6 +1268,22 @@ export const transferReconciliationsSchema = pgTable(
     // error — never for an anonymous sale or a fake comprobante.
     resolutionFiadoId: uuid('resolution_fiado_id').references(
       () => fiadosSchema.id,
+      { onDelete: 'set null' },
+    ),
+    // PÉRDIDA+RECLAMO: true when a loss row has an active legal/insurance claim.
+    // Only meaningful when resolution_type='loss'. Defaults to false for all rows.
+    claimOpen: boolean('claim_open').default(false).notNull(),
+    // Cross-period recovery: set on the NEW confirmed row that represents money
+    // that reappeared after a closed-period loss. Points to the old loss row.
+    // onDelete:'set null' preserves the recovery row even if old row is deleted.
+    recoveryOfId: uuid('recovery_of_id').references(
+      (): any => transferReconciliationsSchema.id,
+      { onDelete: 'set null' },
+    ),
+    // Partial split: set on the ORIGINAL resolved row to link to the new
+    // not_arrived remainder row created for the shortfall amount.
+    remainderReconciliationId: uuid('remainder_reconciliation_id').references(
+      (): any => transferReconciliationsSchema.id,
       { onDelete: 'set null' },
     ),
     // The cashier on duty's explanation of why they confirmed the comprobante,
