@@ -3,6 +3,7 @@ import { setRequestLocale } from 'next-intl/server';
 import { redirect } from 'next/navigation';
 import { getLowStockItems, getMetrics } from '@/actions/dashboard';
 import { fetchFiadosOverview } from '@/actions/fiados';
+import { listWhatsAppChannels } from '@/actions/whatsapp-channels';
 import { DashboardClient } from '@/features/dashboard/DashboardClient';
 import { PlanPanel } from '@/features/dashboard/PlanPanel';
 
@@ -48,15 +49,21 @@ export default async function DashboardIndexPage(props: {
 
   // Range metrics drive the chart/KPIs/top-sellers; the fiado + low-stock lists
   // are current state, fetched once here (not in the client's range re-fetch).
-  const [metrics, fiado, lowStock] = await Promise.all([
+  const [metrics, fiado, lowStock, whatsappChannels] = await Promise.all([
     getMetrics(start, end, prevStart, prevEnd),
     fetchFiadosOverview(),
     getLowStockItems(),
+    listWhatsAppChannels(),
   ]);
 
   return (
     <>
-      <DashboardClient initial={metrics} fiado={fiado} lowStock={lowStock} />
+      <DashboardClient
+        initial={metrics}
+        fiado={fiado}
+        lowStock={lowStock}
+        hasWhatsAppAgent={whatsappChannels.length > 0}
+      />
       <div className="mt-6">
         <PlanPanel />
       </div>

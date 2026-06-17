@@ -3,6 +3,7 @@
 import type { DashboardMetrics, LowStockRow } from '@/actions/dashboard';
 import type { FiadosOverview } from '@/libs/fiados';
 import type { RangePreset } from '@/utils/DateRange';
+import { MessageCircle } from 'lucide-react';
 import Link from 'next/link';
 import {
   useEffect,
@@ -112,21 +113,31 @@ function KpiCard({
   hint,
   delta,
   deltaPositive,
-  accent,
+  selected,
+  onSelect,
 }: {
   title: string;
   value: string;
   hint?: string;
   delta?: string;
   deltaPositive?: boolean | null;
-  accent?: boolean;
+  // When `selected`, the card is the one driving the chart below. `onSelect`
+  // makes it interactive; without it the card is a plain stat (e.g. Flujo, which
+  // has no daily series to chart).
+  selected?: boolean;
+  onSelect?: () => void;
 }) {
-  return (
-    <div className={cn(
-      'rounded-lg border bg-background p-4 shadow-xs',
-      accent && 'border-primary/40 bg-primary/5',
-    )}
-    >
+  const cardClass = cn(
+    'block w-full rounded-lg border bg-background p-4 text-left shadow-xs',
+    selected && 'border-primary/50 bg-primary/5 ring-1 ring-primary/30',
+    onSelect && !selected && `
+      cursor-pointer transition-colors
+      hover:border-primary/30
+    `,
+  );
+
+  const inner = (
+    <>
       <div className="flex items-center justify-between gap-2">
         <div className="
           text-[11px] font-semibold tracking-[0.08em] text-muted-foreground
@@ -168,24 +179,53 @@ function KpiCard({
       {hint && (
         <div className="mt-1 text-xs text-muted-foreground">{hint}</div>
       )}
-    </div>
+    </>
   );
+
+  if (onSelect) {
+    return (
+      <button type="button" onClick={onSelect} className={cardClass}>
+        {inner}
+      </button>
+    );
+  }
+
+  return <div className={cardClass}>{inner}</div>;
 }
+
+// The metrics that have an honest per-day series to drive the chart. Flujo de
+// caja neto is a period aggregate with no daily line, so it stays a plain stat.
+type ChartMetric = 'ingresos' | 'ganancia' | 'ventas';
+
+const METRIC_CONFIG: Record<ChartMetric, {
+  dataKey: 'total' | 'profit' | 'count';
+  color: string;
+  label: string;
+  money: boolean;
+}> = {
+  ingresos: { dataKey: 'total', color: '#0F766E', label: 'Ingresos por día', money: true },
+  ganancia: { dataKey: 'profit', color: '#10B981', label: 'Ganancia por día', money: true },
+  ventas: { dataKey: 'count', color: '#6366F1', label: 'Ventas por día', money: false },
+};
 
 export function DashboardClient({
   initial,
   fiado,
   lowStock,
+  hasWhatsAppAgent,
 }: {
   initial: DashboardMetrics;
   fiado: FiadosOverview;
   lowStock: LowStockRow[];
+  hasWhatsAppAgent: boolean;
 }) {
   const [data, setData] = useState<DashboardMetrics>(initial);
   const [start, setStart] = useState(initial.range.start);
   const [end, setEnd] = useState(initial.range.end);
   const [compare, setCompare] = useState<boolean>(initial.compareRange !== null);
   const [activePreset, setActivePreset] = useState<RangePreset | null>(null);
+  // Which metric the chart shows; selecting a KPI card drives it.
+  const [metric, setMetric] = useState<ChartMetric>('ingresos');
 
   const [pending, startTransition] = useTransition();
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -238,6 +278,17 @@ export function DashboardClient({
     [data.salesByDay],
   );
 
+  // The chart reflects the selected metric: its daily series, color and the
+  // period total shown above it.
+  const chart = METRIC_CONFIG[metric];
+  const chartTotal
+    = metric === 'ingresos'
+      ? data.netRevenue
+      : metric === 'ganancia'
+        ? data.period.profit
+        : data.period.count;
+  const chartValue = chart.money ? formatMoney(chartTotal) : String(chartTotal);
+
   return (
     <div className="space-y-6">
       {/* Page header: identity on the left, period control on the right.
@@ -279,6 +330,43 @@ export function DashboardClient({
         </div>
       </header>
 
+      {/* WhatsApp agent CTA — only while no assistant is configured yet. */}
+      {!hasWhatsAppAgent && (
+        <Link
+          href="/dashboard/ai-agent"
+          className="
+            flex items-center gap-3 rounded-lg border border-emerald-600/30
+            bg-emerald-50 p-4 transition-shadow
+            hover:shadow-sm
+            dark:border-emerald-500/30 dark:bg-emerald-950/30
+          "
+        >
+          <span className="
+            inline-flex size-10 shrink-0 items-center justify-center rounded-xl
+            bg-emerald-600 text-white
+          "
+          >
+            <MessageCircle className="size-5" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-semibold">
+              Activá tu asistente de WhatsApp
+            </div>
+            <div className="text-xs text-muted-foreground">
+              Tu agente IA responde, cobra fiados y avisa de stock por WhatsApp.
+              Configuralo en minutos.
+            </div>
+          </div>
+          <span className="
+            inline-flex h-9 shrink-0 items-center rounded-md bg-emerald-600 px-3
+            text-sm font-semibold whitespace-nowrap text-white
+          "
+          >
+            Configurar →
+          </span>
+        </Link>
+      )}
+
       {/* Hero KPIs — the handful you check every morning */}
       <div className="
         grid grid-cols-1 gap-3
@@ -290,7 +378,8 @@ export function DashboardClient({
         <KpiCard
           title="Ingresos netos"
           value={formatMoney(data.netRevenue)}
-          accent
+          selected={metric === 'ingresos'}
+          onSelect={() => setMetric('ingresos')}
           delta={
             data.prevNetRevenue !== null
               ? formatDelta(data.netRevenue, data.prevNetRevenue)
@@ -306,6 +395,8 @@ export function DashboardClient({
         <KpiCard
           title="Ganancia bruta"
           value={formatMoney(data.period.profit)}
+          selected={metric === 'ganancia'}
+          onSelect={() => setMetric('ganancia')}
           delta={prev ? formatDelta(data.period.profit, prev.profit) : undefined}
           deltaPositive={prev ? deltaUp(data.period.profit, prev.profit) : undefined}
           hint={`margen ${data.period.margin.toFixed(1)}%`}
@@ -320,6 +411,8 @@ export function DashboardClient({
         <KpiCard
           title="Ventas"
           value={String(data.period.count)}
+          selected={metric === 'ventas'}
+          onSelect={() => setMetric('ventas')}
           delta={prev ? formatDelta(data.period.count, prev.count) : undefined}
           deltaPositive={prev ? deltaUp(data.period.count, prev.count) : undefined}
           hint={`ticket ${formatMoney(data.period.avgTicket)}`}
@@ -337,18 +430,30 @@ export function DashboardClient({
           lg:col-span-2
         "
         >
-          <div className="mb-3 flex items-center justify-between">
-            <div className="
-              text-[11px] font-semibold tracking-[0.08em] text-muted-foreground
-              uppercase
-            "
-            >
-              Ingresos por día
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <div>
+              <div className="
+                text-[11px] font-semibold tracking-[0.08em]
+                text-muted-foreground uppercase
+              "
+              >
+                {chart.label}
+              </div>
+              <div className="mt-1 flex items-baseline gap-2">
+                <span className="font-display text-2xl font-medium tabular-nums">
+                  {chartValue}
+                </span>
+                <span className="text-xs text-muted-foreground tabular-nums">
+                  {data.period.count}
+                  {' '}
+                  {data.period.count === 1 ? 'venta' : 'ventas'}
+                </span>
+              </div>
             </div>
             <Link
               href="/dashboard/reports"
               className="
-                text-xs text-muted-foreground
+                shrink-0 text-xs text-muted-foreground
                 hover:text-primary hover:underline
               "
             >
@@ -359,27 +464,33 @@ export function DashboardClient({
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={salesByDayLabeled}>
                 <defs>
-                  <linearGradient id="revFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#0F766E" stopOpacity={0.25} />
-                    <stop offset="100%" stopColor="#0F766E" stopOpacity={0} />
+                  <linearGradient id="metricFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={chart.color} stopOpacity={0.25} />
+                    <stop offset="100%" stopColor={chart.color} stopOpacity={0} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
                 <XAxis dataKey="label" fontSize={12} />
                 <YAxis
                   fontSize={12}
-                  tickFormatter={v => compactFmt.format(Number(v))}
+                  tickFormatter={v =>
+                    chart.money
+                      ? compactFmt.format(Number(v))
+                      : String(Math.round(Number(v)))}
                 />
                 <Tooltip
-                  formatter={value => [formatMoney(Number(value)), 'Ingresos']}
+                  formatter={value => [
+                    chart.money ? formatMoney(Number(value)) : String(value),
+                    chart.label,
+                  ]}
                 />
                 <Area
                   type="monotone"
-                  dataKey="total"
-                  name="Ingresos"
-                  stroke="#0F766E"
+                  dataKey={chart.dataKey}
+                  name={chart.label}
+                  stroke={chart.color}
                   strokeWidth={2}
-                  fill="url(#revFill)"
+                  fill="url(#metricFill)"
                 />
               </AreaChart>
             </ResponsiveContainer>
