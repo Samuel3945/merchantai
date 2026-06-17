@@ -10,6 +10,7 @@ import {
 } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import { requirePosAuth } from '@/libs/pos-auth';
+import { getOrCreatePendingAccount, recordHandoverMovement } from '@/libs/treasury';
 import { cashSessionsSchema, posTokensSchema } from '@/models/Schema';
 
 export const runtime = 'nodejs';
@@ -68,13 +69,16 @@ export async function POST(req: Request): Promise<NextResponse> {
       // Carry-over: get expected opening amount from last closed session.
       // When posTokenId is null (admin/no-device session), skip carry-over logic
       // and set expected to 0 with no prior close.
+      // treasury-sweep-model slice 1: read-then-write ordering — carryover (read)
+      // MUST run before the session insert (write) and before the sweep insert.
       const carryover = ctx.tokenId
         ? await getOpeningExpected(tx, ctx.organizationId, ctx.tokenId)
-        : { expected: 0, priorCloseExists: false };
+        : { expected: 0, priorCloseExists: false, lastClosedSessionId: null };
 
-      const { expected, priorCloseExists } = carryover;
+      const { expected, priorCloseExists, lastClosedSessionId } = carryover;
 
-      // Validate explanation enforcement rule (R3 / R5).
+      // Cashier is never blocked (ADR-2, treasury-sweep-model slice 1).
+      // The open-time sweep handles shortfalls automatically.
       const validation = validateOpenCarryover({
         priorCloseExists,
         counted,
@@ -82,8 +86,8 @@ export async function POST(req: Request): Promise<NextResponse> {
         explanation: body.explanation,
       });
 
+      // validation.valid is always true after slice 1 — kept for type narrowing
       if (!validation.valid) {
-        // Throw with a sentinel so the outer catch can distinguish 422 vs 400.
         const err = new Error(validation.message);
         (err as Error & { statusCode?: number }).statusCode = validation.code;
         throw err;
@@ -105,6 +109,8 @@ export async function POST(req: Request): Promise<NextResponse> {
           // carry-over expectation, so these stay null — it is NOT a discrepancy.
           openingExpected: priorCloseExists ? toMoney(expected) : null,
           openingDifference: priorCloseExists ? toMoney(difference) : null,
+          // Accept and store the legacy explanation field from older POS devices
+          // (ADR-3 backward-compat). Never required — open is never blocked.
           openingExplanation: body.explanation?.trim() || null,
         })
         .returning();
@@ -112,6 +118,27 @@ export async function POST(req: Request): Promise<NextResponse> {
       if (!created) {
         throw new Error('No se pudo abrir la caja');
       }
+
+      // treasury-sweep-model slice 1: open-time shortfall sweep.
+      // Emit a type='handover' movement keyed to the LAST CLOSED session id
+      // (not the newly-opened session) when Δ<0. Amount = |Δ| (the shortfall).
+      // Keying to the last-closed session makes both subtraction paths work:
+      //   • getOpeningExpected subtracts handovers on last.id
+      //   • getTreasuryPosition subtracts handoverBySession on lastSessionIds
+      // Read-then-write ordering is enforced: carryover was read above before
+      // this write, inside the same tx.
+      if (priorCloseExists && lastClosedSessionId && difference < 0) {
+        const sweepAmount = Math.abs(difference);
+        const pendingAccount = await getOrCreatePendingAccount(tx, ctx.organizationId, attribution);
+        await recordHandoverMovement(tx, {
+          organizationId: ctx.organizationId,
+          toAccountId: pendingAccount.id,
+          amount: sweepAmount,
+          cashSessionId: lastClosedSessionId,
+          createdBy: attribution,
+        });
+      }
+
       return { session: created };
     });
 

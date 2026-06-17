@@ -9,7 +9,8 @@ import {
 } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import { requirePosAuth } from '@/libs/pos-auth';
-import { getOrCreatePendingAccount, getTreasuryHandoverEnabled, recordHandoverMovement } from '@/libs/treasury';
+// treasury-sweep-model slice 1: getTreasuryHandoverEnabled / recordHandoverMovement
+// removed from close flow. Imports removed; flag/function cleanup finishes in slice 2.
 import { cashSessionsSchema, posTokensSchema } from '@/models/Schema';
 
 export const runtime = 'nodejs';
@@ -93,19 +94,9 @@ export async function POST(req: Request): Promise<NextResponse> {
         throw new Error('No se pudo cerrar la caja');
       }
 
-      // Phase 3 PR4: record handover movement ONLY when the org opted in.
-      // Default OFF — carry-over (Option A) unchanged, no double-count.
-      const handoverEnabled = await getTreasuryHandoverEnabled(tx, ctx.organizationId);
-      if (handoverEnabled && Number.parseFloat(counted) > 0) {
-        const pending = await getOrCreatePendingAccount(tx, ctx.organizationId, attribution);
-        await recordHandoverMovement(tx, {
-          organizationId: ctx.organizationId,
-          toAccountId: pending.id,
-          amount: counted,
-          createdBy: attribution,
-          cashSessionId: closed.id,
-        });
-      }
+      // treasury-sweep-model slice 1: at-close handover emission removed.
+      // The sweep now fires at OPEN time (api/pos/cash/open/route.ts).
+      // getTreasuryHandoverEnabled import kept alive; full cleanup in slice 2.
 
       return closed;
     });

@@ -1646,11 +1646,12 @@ describe('getOpeningExpected', () => {
 
 // ── Phase 3: open-route carry-over validation logic ───────────────────────────
 
-// validateOpenCarryover enforces explanation when priorCloseExists && counted ≠ expected.
+// validateOpenCarryover — treasury-sweep-model slice 1 (ADR-2): cashier is never
+// blocked. The 422 gate has been retired; shortfalls are auto-swept at open.
 // This is a pure function — no DB needed for these tests.
 describe('validateOpenCarryover', () => {
-  // R3: prior close + counted ≠ expected + no explanation → 422
-  it('R3: rejects when prior close exists, counted ≠ expected, explanation missing', () => {
+  // Slice 1 ADR-2: prior close + shortfall + no explanation → still valid (no 422)
+  it('R3 (slice 1): valid even when prior close exists, counted < expected, no explanation', () => {
     const result = validateOpenCarryover({
       priorCloseExists: true,
       counted: 2800000,
@@ -1658,14 +1659,14 @@ describe('validateOpenCarryover', () => {
       explanation: undefined,
     });
 
-    expect(result.valid).toBe(false);
+    expect(result.valid).toBe(true);
 
-    if (!result.valid) {
-      expect(result.code).toBe(422);
+    if (result.valid) {
+      expect(result.difference).toBe(-200000);
     }
   });
 
-  it('R3: rejects when explanation is blank whitespace', () => {
+  it('R3 (slice 1): valid even when explanation is blank whitespace', () => {
     const result = validateOpenCarryover({
       priorCloseExists: true,
       counted: 2800000,
@@ -1673,10 +1674,10 @@ describe('validateOpenCarryover', () => {
       explanation: '   ',
     });
 
-    expect(result.valid).toBe(false);
+    expect(result.valid).toBe(true);
 
-    if (!result.valid) {
-      expect(result.code).toBe(422);
+    if (result.valid) {
+      expect(result.difference).toBe(-200000);
     }
   });
 
@@ -1728,9 +1729,8 @@ describe('validateOpenCarryover', () => {
     }
   });
 
-  // R5: legacy open omitting countedAtOpen (treated as 0) — prior close exists
-  // If expected=3_000_000 and counted=0 → difference=-3_000_000 → needs explanation
-  it('R5: legacy open (counted=0) with prior close triggers enforcement on mismatch', () => {
+  // R5 (slice 1): legacy open (counted=0) — now always valid, auto-swept at open
+  it('R5 (slice 1): legacy open (counted=0) with prior close is valid (no 422)', () => {
     const result = validateOpenCarryover({
       priorCloseExists: true,
       counted: 0,
@@ -1738,10 +1738,10 @@ describe('validateOpenCarryover', () => {
       explanation: undefined,
     });
 
-    expect(result.valid).toBe(false);
+    expect(result.valid).toBe(true);
 
-    if (!result.valid) {
-      expect(result.code).toBe(422);
+    if (result.valid) {
+      expect(result.difference).toBe(-3000000);
     }
   });
 

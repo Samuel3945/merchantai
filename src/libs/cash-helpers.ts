@@ -25,16 +25,18 @@ import {
 // ── Open-time carry-over validation (pure) ───────────────────────────────────
 
 /**
- * Validates whether a cash-session open request satisfies carry-over rules.
+ * Validates a cash-session open request.
  *
- * Enforces explanation ONLY when:
- *   priorCloseExists === true AND counted !== expected AND explanation is blank.
+ * treasury-sweep-model slice 1: the cashier is NEVER blocked regardless of
+ * counted vs expected. The 422 explanation gate has been retired — shortfalls
+ * are now handled automatically by the open-time sweep.
  *
- * Returns either:
- *   { valid: true,  difference: number }   — proceed with insert
- *   { valid: false, code: 422, message: string } — reject request
+ * Returns { valid: true, difference } always.
  *
  * difference = counted − expected (signed: negative = shortfall, positive = surplus).
+ *
+ * The `explanation` field is still accepted for backward-compat with older POS
+ * devices that send it, but it is never required and never triggers a rejection.
  */
 export type ValidateOpenCarryoverInput = {
   priorCloseExists: boolean;
@@ -50,17 +52,10 @@ export type ValidateOpenCarryoverResult
 export function validateOpenCarryover(
   input: ValidateOpenCarryoverInput,
 ): ValidateOpenCarryoverResult {
-  const { priorCloseExists, counted, expected, explanation } = input;
+  const { counted, expected } = input;
   const difference = counted - expected;
-
-  if (priorCloseExists && counted !== expected && !explanation?.trim()) {
-    return {
-      valid: false,
-      code: 422,
-      message: 'Explica la diferencia con lo que cerraste la última vez',
-    };
-  }
-
+  // Cashier is never blocked (treasury-sweep-model slice 1, ADR-2).
+  // Shortfalls are auto-swept at open; explanation is accepted but never required.
   return { valid: true, difference };
 }
 
@@ -68,7 +63,7 @@ export async function getOpeningExpected(
   executor: typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0],
   organizationId: string,
   posTokenId: string,
-): Promise<{ expected: number; priorCloseExists: boolean }> {
+): Promise<{ expected: number; priorCloseExists: boolean; lastClosedSessionId: string | null }> {
   const [last] = await executor
     .select({ id: cashSessionsSchema.id, counted: cashSessionsSchema.countedAmount })
     .from(cashSessionsSchema)
@@ -83,15 +78,14 @@ export async function getOpeningExpected(
     .limit(1);
 
   if (!last) {
-    return { expected: 0, priorCloseExists: false };
+    return { expected: 0, priorCloseExists: false, lastClosedSessionId: null };
   }
 
   const counted = Number.parseFloat(last.counted ?? '0') || 0;
 
-  // PR4: when the last session was handed over (Option B opt-in), subtract the
-  // handover from the carry-over expectation so the open enforcement doesn't
-  // demand cash that was already credited to the transito account.
-  // When flag is OFF (no handover rows), the SUM = 0 → unchanged (Option A safe).
+  // treasury-sweep-model slice 1: subtract any prior handover from the carry-over
+  // base so the open-time sweep doesn't double-count a partially-placed shortfall.
+  // When no handover rows exist the SUM = 0 → carry-over unchanged (Option A safe).
   const [handoverRow] = await executor
     .select({ total: sql<string>`COALESCE(SUM(${treasuryMovementsSchema.amount}), '0')::text` })
     .from(treasuryMovementsSchema)
@@ -106,16 +100,16 @@ export async function getOpeningExpected(
   const handoverSum = Number.parseFloat(handoverRow?.total ?? '0') || 0;
 
   if (handoverSum >= counted) {
-    // Fully handed over: no carry-over expected, fresh start (no enforcement).
-    return { expected: 0, priorCloseExists: false };
+    // Fully handed over: no carry-over expected, fresh start.
+    return { expected: 0, priorCloseExists: false, lastClosedSessionId: last.id };
   }
 
   if (handoverSum > 0) {
     // Partially handed over: only the remainder is expected in the drawer.
-    return { expected: counted - handoverSum, priorCloseExists: true };
+    return { expected: counted - handoverSum, priorCloseExists: true, lastClosedSessionId: last.id };
   }
 
-  return { expected: counted, priorCloseExists: true };
+  return { expected: counted, priorCloseExists: true, lastClosedSessionId: last.id };
 }
 
 export type CashSession = typeof cashSessionsSchema.$inferSelect;

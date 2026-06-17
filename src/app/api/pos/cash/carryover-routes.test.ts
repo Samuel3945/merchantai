@@ -33,6 +33,7 @@ const TOKEN = '11111111-1111-1111-1111-111111111111';
 
 const SCHEMA = `
   CREATE TYPE "cash_session_status" AS ENUM('open', 'closed');
+  CREATE TYPE "treasury_account_type" AS ENUM('caja','caja_fuerte','banco','transito');
   CREATE TYPE "treasury_movement_type" AS ENUM('transfer','consignacion','entrada','salida','gasto','adjustment','handover');
   CREATE TABLE pos_tokens (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
@@ -57,9 +58,21 @@ const SCHEMA = `
     opening_difference numeric(12, 2),
     opening_explanation text
   );
-  -- Minimal stub: getOpeningExpected queries this table to compute post-handover
-  -- carry-over. No FKs needed here — the test seeds no handover rows, so the
-  -- JOIN returns NULL → handoverSum=0 → carry-over unchanged (Option A safe).
+  -- treasury-sweep-model slice 1: treasury_accounts needed for getOrCreatePendingAccount
+  -- (the open-time sweep lazy-seeds the transito account on first shortfall).
+  CREATE TABLE treasury_accounts (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+    organization_id text NOT NULL,
+    type "treasury_account_type" NOT NULL,
+    name text NOT NULL,
+    opening_balance numeric(12,2) DEFAULT '0' NOT NULL,
+    active boolean DEFAULT true NOT NULL,
+    payment_method_id uuid,
+    pos_token_id uuid,
+    created_at timestamp DEFAULT now() NOT NULL,
+    updated_at timestamp DEFAULT now() NOT NULL,
+    CONSTRAINT treasury_accounts_org_name_unique UNIQUE (organization_id, name)
+  );
   CREATE TABLE treasury_movements (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     organization_id text NOT NULL,
@@ -74,7 +87,14 @@ const SCHEMA = `
     handover_movement_id uuid,
     cash_session_id uuid,
     created_by text NOT NULL,
-    created_at timestamp DEFAULT now() NOT NULL
+    created_at timestamp DEFAULT now() NOT NULL,
+    CONSTRAINT treasury_mov_one_external CHECK (
+      num_nonnulls(from_account_id, to_account_id) = 2
+      OR (
+        num_nonnulls(from_account_id, to_account_id) = 1
+        AND type IN ('entrada', 'salida', 'gasto', 'consignacion', 'adjustment', 'handover')
+      )
+    )
   );
 `;
 
@@ -103,7 +123,7 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
-  await pg.exec('TRUNCATE treasury_movements; TRUNCATE cash_sessions; TRUNCATE pos_tokens;');
+  await pg.exec('TRUNCATE treasury_movements; TRUNCATE treasury_accounts; TRUNCATE cash_sessions; TRUNCATE pos_tokens;');
   await pg.query(
     `INSERT INTO pos_tokens (id, organization_id, device_name) VALUES ($1, $2, 'Caja 1')`,
     [TOKEN, ORG],
@@ -138,17 +158,25 @@ describe('GET /api/pos/cash/current — carry-over expected_opening (W1)', () =>
   });
 });
 
-describe('POST /api/pos/cash/open — carry-over enforcement glue (W2)', () => {
-  it('rejects with 422 when the open count differs and no explanation is given', async () => {
+describe('POST /api/pos/cash/open — carry-over enforcement glue (W2, slice 1 updated)', () => {
+  // treasury-sweep-model slice 1 (ADR-2): 422 gate retired, cashier never blocked.
+  it('opens (201) when the count differs and no explanation is given (no 422)', async () => {
     await seedClosedSession('3000000.00');
 
     const res = await POST(postBody({ openingAmount: 2900000 }));
+    const json = await res.json();
 
-    expect(res.status).toBe(422);
-    expect(vi.mocked(logAction)).not.toHaveBeenCalled();
+    expect(res.status).toBe(201);
+    expect(json.opening_difference).toBe(-100000);
+    // audit-log still fires on discrepancy
+    expect(vi.mocked(logAction)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(logAction).mock.calls[0]?.[0]).toMatchObject({
+      action: 'cash_session_open_discrepancy',
+      entityId: json.id,
+    });
   });
 
-  it('opens and audit-logs a discrepancy when the count differs but an explanation is given', async () => {
+  it('opens and audit-logs a discrepancy when the count differs with an explanation given', async () => {
     await seedClosedSession('3000000.00');
 
     const res = await POST(postBody({ openingAmount: 2900000, explanation: 'Faltaron 100k' }));

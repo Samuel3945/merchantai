@@ -186,8 +186,11 @@ describe('POST /api/pos/cash/close — flag OFF (default carry-over, no handover
   });
 });
 
-describe('POST /api/pos/cash/close — handover into the transito account (flag ON)', () => {
-  it('emits a handover movement to a lazy-seeded transito account when counted > 0', async () => {
+// treasury-sweep-model slice 1: at-close handover emission retired.
+// The sweep now fires at OPEN time. Close route MUST NOT emit any handover
+// regardless of the treasuryHandoverEnabled flag value.
+describe('POST /api/pos/cash/close — handover at close RETIRED (slice 1)', () => {
+  it('does NOT emit a handover movement even when flag=ON and counted > 0 (sweep moved to open)', async () => {
     await enableHandoverFlag();
     await seedOpenSession(SESSION);
 
@@ -195,47 +198,35 @@ describe('POST /api/pos/cash/close — handover into the transito account (flag 
 
     expect(res.status).toBe(200);
 
-    const accounts = await pg.query<{ id: string }>(
-      `SELECT id FROM treasury_accounts WHERE organization_id = $1 AND type = 'transito'`,
-      [ORG],
+    const movements = await pg.query(
+      `SELECT 1 FROM treasury_movements WHERE type = 'handover'`,
     );
-
-    expect(accounts.rows.length).toBe(1);
-
-    const transitoId = accounts.rows[0]!.id;
-
-    const movements = await pg.query<{
-      from_account_id: string | null;
-      to_account_id: string;
-      amount: string;
-      cash_session_id: string;
-    }>(`SELECT from_account_id, to_account_id, amount, cash_session_id FROM treasury_movements WHERE type = 'handover'`);
-
-    expect(movements.rows.length).toBe(1);
-    expect(movements.rows[0]!.from_account_id).toBeNull();
-    expect(movements.rows[0]!.to_account_id).toBe(transitoId);
-    expect(movements.rows[0]!.amount).toBe('3000000.00');
-    expect(movements.rows[0]!.cash_session_id).toBe(SESSION);
-  });
-
-  it('does NOT emit a handover (nor seed transito) when the drawer is empty (counted = 0)', async () => {
-    await enableHandoverFlag();
-    await seedOpenSession(SESSION);
-
-    const res = await POST(closeRequest(0));
-
-    expect(res.status).toBe(200);
-
-    const movements = await pg.query(`SELECT 1 FROM treasury_movements WHERE type = 'handover'`);
 
     expect(movements.rows.length).toBe(0);
 
-    const accounts = await pg.query(`SELECT 1 FROM treasury_accounts WHERE type = 'transito'`);
+    const accounts = await pg.query(
+      `SELECT 1 FROM treasury_accounts WHERE type = 'transito'`,
+    );
 
     expect(accounts.rows.length).toBe(0);
   });
 
-  it('reuses the single org transito account across multiple closes (idempotent seed)', async () => {
+  it('does NOT emit a handover when counted > 0 and flag=OFF (clean close)', async () => {
+    // No app_settings row → flag = false (default)
+    await seedOpenSession(SESSION);
+
+    const res = await POST(closeRequest(3000000));
+
+    expect(res.status).toBe(200);
+
+    const movements = await pg.query(
+      `SELECT 1 FROM treasury_movements WHERE type = 'handover'`,
+    );
+
+    expect(movements.rows.length).toBe(0);
+  });
+
+  it('closes cleanly multiple times without any transito account being seeded', async () => {
     await enableHandoverFlag();
     await seedOpenSession(SESSION);
     await POST(closeRequest(1000000));
@@ -244,12 +235,16 @@ describe('POST /api/pos/cash/close — handover into the transito account (flag 
     await seedOpenSession(SESSION_2);
     await POST(closeRequest(2000000));
 
-    const accounts = await pg.query(`SELECT 1 FROM treasury_accounts WHERE type = 'transito'`);
+    const accounts = await pg.query(
+      `SELECT 1 FROM treasury_accounts WHERE type = 'transito'`,
+    );
 
-    expect(accounts.rows.length).toBe(1);
+    expect(accounts.rows.length).toBe(0);
 
-    const movements = await pg.query(`SELECT 1 FROM treasury_movements WHERE type = 'handover'`);
+    const movements = await pg.query(
+      `SELECT 1 FROM treasury_movements WHERE type = 'handover'`,
+    );
 
-    expect(movements.rows.length).toBe(2);
+    expect(movements.rows.length).toBe(0);
   });
 });
