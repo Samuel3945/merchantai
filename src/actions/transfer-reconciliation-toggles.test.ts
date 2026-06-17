@@ -274,6 +274,32 @@ describe('S-20: Toggle B direct_loss — markTransferNotArrived auto-resolves as
     // Loss never posts a credit — depositConfirmedTransfer must not be called
     expect(vi.mocked(depositConfirmedTransfer)).not.toHaveBeenCalled();
   });
+
+  it('rejects direct_loss on a non-pending (already confirmed) row — no silent flip', async () => {
+    const { markTransferNotArrived } = await import('./transfer-reconciliation');
+    await setSetting('transfer-default-resolution', 'direct_loss');
+    counter++;
+    const id = UUID(counter);
+    await pg.query(
+      `INSERT INTO transfer_reconciliations
+         (id, organization_id, method, expected_amount, status)
+       VALUES ($1, $2, 'Transferencia', '100.00', 'confirmed')`,
+      [id, ORG],
+    );
+
+    const result = await markTransferNotArrived(id);
+
+    expect(result.ok).toBe(false);
+
+    // The confirmed (already deposited) row must NOT be flipped to a loss.
+    const rows = await pg.query<{ status: string; resolution_type: string | null }>(
+      `SELECT status, resolution_type FROM transfer_reconciliations WHERE id = $1`,
+      [id],
+    );
+
+    expect(rows.rows[0]?.status).toBe('confirmed');
+    expect(rows.rows[0]?.resolution_type).toBeNull();
+  });
 });
 
 // ── S-21: Recovery after direct_loss ─────────────────────────────────────────

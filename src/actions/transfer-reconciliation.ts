@@ -264,6 +264,22 @@ export async function markTransferNotArrived(
   if (defaultResolution === 'direct_loss') {
     try {
       const resolved = await db.transaction(async (tx) => {
+        // Guard: only a still-pending transfer can be auto-resolved to loss.
+        // Without this, a replayed or non-UI call could flip a confirmed
+        // (already deposited) row to loss with no bank clawback — the same harm
+        // the resolve-path status guard prevents (see isInvestigable).
+        const current = await getReconciliationById(tx, {
+          id,
+          organizationId: orgId,
+        });
+        if (!current) {
+          throw new ActionValidationError('Transferencia no encontrada');
+        }
+        if (current.status !== 'pending') {
+          throw new ActionValidationError(
+            'Solo una transferencia pendiente puede resolverse como pérdida automática',
+          );
+        }
         const resolvedRow = await setReconciliationResolution(tx, {
           id,
           organizationId: orgId,
