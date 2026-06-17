@@ -847,34 +847,10 @@ export async function recordGastoOutflow(
 
 // ── Phase 3 PR4: opt-in config flag ──────────────────────────────────────────
 
-/**
- * App-settings key for the per-org opt-in handover flag.
- * Value is the string 'true' or 'false'. Default (absent row) → false.
- * Mirrors the smartStockEnabled pattern from src/libs/smart-stock.ts.
- */
-export const TREASURY_HANDOVER_SETTING_KEY = 'treasuryHandoverEnabled';
-
-/**
- * Reads the per-org `treasuryHandoverEnabled` flag from `app_settings`.
- * Returns false when no row exists (default OFF — carry-over behavior unchanged).
- * Safe to call inside a transaction (takes an Executor).
- */
-export async function getTreasuryHandoverEnabled(
-  executor: Executor,
-  organizationId: string,
-): Promise<boolean> {
-  const [row] = await executor
-    .select({ value: appSettingsSchema.value })
-    .from(appSettingsSchema)
-    .where(
-      and(
-        eq(appSettingsSchema.organizationId, organizationId),
-        eq(appSettingsSchema.key, TREASURY_HANDOVER_SETTING_KEY),
-      ),
-    )
-    .limit(1);
-  return row?.value === 'true';
-}
+// treasury-sweep-model slice 2: TREASURY_HANDOVER_SETTING_KEY and
+// getTreasuryHandoverEnabled removed. The at-close handover flag was retired in
+// slice 1 (handoverBySession subtraction decoupled). Sweep destination config
+// uses the new TREASURY_SWEEP_DEFAULT_KEY (resolveSweepDestination above).
 
 // ── Slice 2: per-caja sweep destination resolver ─────────────────────────────
 

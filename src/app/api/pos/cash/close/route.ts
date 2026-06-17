@@ -9,8 +9,7 @@ import {
 } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import { requirePosAuth } from '@/libs/pos-auth';
-// treasury-sweep-model slice 1: getTreasuryHandoverEnabled / recordHandoverMovement
-// removed from close flow. Imports removed; flag/function cleanup finishes in slice 2.
+// treasury-sweep-model: at-close handover retired (slice 1). Flag/toggle retired (slice 2).
 import { cashSessionsSchema, posTokensSchema } from '@/models/Schema';
 
 export const runtime = 'nodejs';
@@ -94,9 +93,7 @@ export async function POST(req: Request): Promise<NextResponse> {
         throw new Error('No se pudo cerrar la caja');
       }
 
-      // treasury-sweep-model slice 1: at-close handover emission removed.
-      // The sweep now fires at OPEN time (api/pos/cash/open/route.ts).
-      // getTreasuryHandoverEnabled import kept alive; full cleanup in slice 2.
+      // treasury-sweep-model: at-close handover retired. Sweep fires at open time.
 
       return closed;
     });

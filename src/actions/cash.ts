@@ -27,8 +27,7 @@ import {
   riskLevelForRatio,
 } from '@/libs/cash-security-policy';
 import { db } from '@/libs/DB';
-// treasury-sweep-model slice 1: getTreasuryHandoverEnabled / recordHandoverMovement
-// removed from close flow. Imports removed; flag/function cleanup finishes in slice 2.
+// treasury-sweep-model: at-close handover retired (slice 1). Flag/toggle retired (slice 2).
 import {
   cashMovementsSchema,
   cashSecurityThresholdCacheSchema,

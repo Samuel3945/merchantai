@@ -13,7 +13,6 @@ import {
   getHandoverStatusForSessions,
   getOrCreatePendingAccount,
   getRemainingForHandover,
-  getTreasuryHandoverEnabled,
   getTreasuryPosition,
   listTreasuryAccounts,
   recordBankConsignacion,
@@ -2497,51 +2496,6 @@ describe('getHandoverStatusForSessions', () => {
     const result = await getHandoverStatusForSessions(db, 'other-org', [SES_H1]);
 
     expect(result.get(SES_H1)).toBe(false);
-  });
-});
-
-// ── PR4: opt-in config flag ────────────────────────────────────────────────────
-
-describe('getTreasuryHandoverEnabled', () => {
-  it('returns false (default) when no setting row exists for the org', async () => {
-    const enabled = await getTreasuryHandoverEnabled(db, ORG);
-
-    expect(enabled).toBe(false);
-  });
-
-  it('returns true when the org has the flag set to "true"', async () => {
-    await pg.query(
-      `INSERT INTO app_settings (organization_id, key, value) VALUES ($1, 'treasuryHandoverEnabled', 'true')`,
-      [ORG],
-    );
-
-    const enabled = await getTreasuryHandoverEnabled(db, ORG);
-
-    expect(enabled).toBe(true);
-  });
-
-  it('returns false when the org has the flag set to "false"', async () => {
-    await pg.query(
-      `INSERT INTO app_settings (organization_id, key, value) VALUES ($1, 'treasuryHandoverEnabled', 'false')`,
-      [ORG],
-    );
-
-    const enabled = await getTreasuryHandoverEnabled(db, ORG);
-
-    expect(enabled).toBe(false);
-  });
-
-  it('is scoped per org — flag off for org2 does not affect org1', async () => {
-    await pg.query(
-      `INSERT INTO app_settings (organization_id, key, value) VALUES ($1, 'treasuryHandoverEnabled', 'true')`,
-      [ORG],
-    );
-
-    const enabledOrg1 = await getTreasuryHandoverEnabled(db, ORG);
-    const enabledOrg2 = await getTreasuryHandoverEnabled(db, 'org-2');
-
-    expect(enabledOrg1).toBe(true);
-    expect(enabledOrg2).toBe(false);
   });
 });
 
