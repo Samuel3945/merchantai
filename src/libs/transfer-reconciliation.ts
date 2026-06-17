@@ -658,7 +658,9 @@ export async function createRecoveryReconciliation(
     createdBy: string;
   },
 ): Promise<TransferReconciliation> {
-  // Guard: only loss rows can be recovered (S-22 invariant).
+  // Guard: only loss rows can be recovered (S-22 invariant). Scope by
+  // organizationId too (defense-in-depth, S-14): a loss row from another org
+  // must never be a valid recovery source even if the id is guessed/replayed.
   const [sourceRow] = await executor
     .select({
       id: transferReconciliationsSchema.id,
@@ -666,7 +668,12 @@ export async function createRecoveryReconciliation(
       status: transferReconciliationsSchema.status,
     })
     .from(transferReconciliationsSchema)
-    .where(eq(transferReconciliationsSchema.id, args.recoveryOfId))
+    .where(
+      and(
+        eq(transferReconciliationsSchema.id, args.recoveryOfId),
+        eq(transferReconciliationsSchema.organizationId, args.organizationId),
+      ),
+    )
     .limit(1);
 
   if (!sourceRow) {
