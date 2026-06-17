@@ -16,7 +16,7 @@ import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { resolveSweepDestination } from '@/libs/treasury';
+import { getTreasuryPosition, resolveSweepDestination } from '@/libs/treasury';
 import { POST } from './open/route';
 
 type TreasuryExecutor = Parameters<typeof resolveSweepDestination>[0];
@@ -261,6 +261,24 @@ describe('POST /api/pos/cash/open — configured cofre auto-route (a)', () => {
     expect(transfer.rows[0]!.from_account_id).toBe(transitoId);
     expect(transfer.rows[0]!.to_account_id).toBe(COFRE_ID);
     expect(transfer.rows[0]!.handover_movement_id).toBe(handover.rows[0]!.id);
+
+    // F3: money-conservation assertions
+    const position = await getTreasuryPosition(h.db as unknown as TreasuryExecutor, ORG);
+    const cofre = position.find(a => a.key.includes(COFRE_ID) || a.type === 'caja_fuerte');
+    const transito2 = position.find(a => a.type === 'transito');
+
+    // Company total conserved (500 counted at last close)
+    const total = position.reduce((sum, a) => sum + a.balance, 0);
+
+    expect(total).toBe(500);
+
+    // Cofre holds the swept 100
+    expect(cofre).toBeDefined();
+    expect(cofre!.balance).toBe(100);
+
+    // Transito nets to 0 (two-step: handover into transito, then immediately placed to cofre)
+    expect(transito2).toBeDefined();
+    expect(transito2!.balance).toBe(0);
   });
 });
 
@@ -342,6 +360,18 @@ describe('POST /api/pos/cash/open — global default destination (c)', () => {
 
     expect(transfer.rows.length).toBe(1);
     expect(transfer.rows[0]!.to_account_id).toBe(COFRE_ID);
+
+    // F3: money-conservation assertions for global default route
+    const position = await getTreasuryPosition(h.db as unknown as TreasuryExecutor, ORG);
+    const cofre = position.find(a => a.type === 'caja_fuerte');
+    const transito2 = position.find(a => a.type === 'transito');
+    const total = position.reduce((sum, a) => sum + a.balance, 0);
+
+    expect(total).toBe(500);
+    expect(cofre).toBeDefined();
+    expect(cofre!.balance).toBe(100);
+    expect(transito2).toBeDefined();
+    expect(transito2!.balance).toBe(0);
   });
 });
 
@@ -385,6 +415,20 @@ describe('POST /api/pos/cash/open — per-caja wins over global (d)', () => {
 
     expect(transfer.rows.length).toBe(1);
     expect(transfer.rows[0]!.to_account_id).toBe(COFRE_B);
+
+    // F3: money-conservation assertions for per-caja override route
+    const position = await getTreasuryPosition(h.db as unknown as TreasuryExecutor, ORG);
+    const cofreB = position.find(
+      a => a.type === 'caja_fuerte' && a.key.includes(COFRE_B),
+    );
+    const transito2 = position.find(a => a.type === 'transito');
+    const total = position.reduce((sum, a) => sum + a.balance, 0);
+
+    expect(total).toBe(500);
+    expect(cofreB).toBeDefined();
+    expect(cofreB!.balance).toBe(100);
+    expect(transito2).toBeDefined();
+    expect(transito2!.balance).toBe(0);
   });
 });
 
@@ -515,15 +559,74 @@ describe('reclassifyAutoSweep — auto-routed sweep can be re-routed (g)', () =>
 
     expect(result.ok).toBe(true);
 
-    // After reclassify, net balance should reflect COFRE_B receives the amount
-    const movements = await pg.query<{ to_account_id: string; type: string }>(
-      `SELECT to_account_id, type FROM treasury_movements ORDER BY created_at`,
+    // F4: conservation assertions after reclassify
+    const position = await getTreasuryPosition(h.db as unknown as TreasuryExecutor, ORG);
+    const cofreA = position.find(
+      a => a.type === 'caja_fuerte' && a.key.includes(COFRE_A),
+    );
+    const cofreB = position.find(
+      a => a.type === 'caja_fuerte' && a.key.includes(COFRE_B),
+    );
+    const transito2 = position.find(a => a.type === 'transito');
+
+    // Cofre A ends at 0 (compensating return took the 100 back)
+    expect(cofreA).toBeDefined();
+    expect(cofreA!.balance).toBe(0);
+
+    // Cofre B ends at the swept amount (100)
+    expect(cofreB).toBeDefined();
+    expect(cofreB!.balance).toBe(100);
+
+    // Transito nets to 0 (return from A + forward to B cancel out)
+    expect(transito2).toBeDefined();
+    expect(transito2!.balance).toBe(0);
+  });
+
+  it('rejects a banco account as reclassify destination (F1 cofre-only guard)', async () => {
+    const { reclassifyAutoSweep } = await import('@/actions/treasury-placement');
+
+    const CLOSED = '77777777-7777-7777-7777-777777777777';
+    await seedClosedSession('500', CLOSED);
+
+    const COFRE_SRC = 'cccccccc-ffff-ffff-ffff-cccccccccccc';
+    await pg.query(
+      `INSERT INTO treasury_accounts (id, organization_id, type, name, opening_balance, active)
+       VALUES ($1, $2, 'caja_fuerte', 'Cofre Src', '0', true)`,
+      [COFRE_SRC, ORG],
+    );
+    await pg.query(
+      `INSERT INTO treasury_accounts (id, organization_id, type, name, opening_balance, active)
+       VALUES ($1, $2, 'banco', 'Banco Dest', '0', true)`,
+      [BANCO_ID, ORG],
     );
 
-    const transferMovements = movements.rows.filter(m => m.type === 'transfer');
+    await pg.query(
+      `UPDATE pos_tokens SET default_sweep_destination_account_id = $1 WHERE id = $2`,
+      [COFRE_SRC, TOKEN],
+    );
 
-    // Should have a compensating pair: original (COFRE_A) + return + new (COFRE_B)
-    expect(transferMovements.length).toBeGreaterThanOrEqual(2);
+    const openRes = await POST(openRequest({ openingAmount: 400 }));
+
+    expect(openRes.status).toBe(201);
+
+    const originalTransfer = await pg.query<{ id: string }>(
+      `SELECT id FROM treasury_movements WHERE type = 'transfer'`,
+    );
+
+    expect(originalTransfer.rows.length).toBe(1);
+
+    const originalTransferId = originalTransfer.rows[0]!.id;
+
+    // Attempt reclassify to banco — must be rejected
+    const result = await reclassifyAutoSweep(originalTransferId, BANCO_ID);
+
+    expect(result.ok).toBe(false);
+
+    if (result.ok) {
+      throw new Error('Expected failure');
+    }
+
+    expect(result.error).toMatch(/caja[s ]?fuerte|cofre/i);
   });
 });
 

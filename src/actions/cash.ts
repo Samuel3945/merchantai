@@ -113,7 +113,6 @@ export async function closeCashSession(
 
       // treasury-sweep-model slice 1: at-close handover emission removed.
       // The sweep now fires at OPEN time (api/pos/cash/open/route.ts).
-      // getTreasuryHandoverEnabled import kept alive; full cleanup in slice 2.
 
       return closed;
     });

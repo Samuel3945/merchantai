@@ -818,6 +818,12 @@ export const posTokensSchema = pgTable(
     // enforced by migration 0054 — not referenced here to avoid the circular
     // initializer TypeScript error (treasuryAccountsSchema.posTokenId already
     // references posTokensSchema creating a mutual dependency).
+    //
+    // WARNING: This column has NO .references() call by design (circular-dep
+    // workaround). The FK constraint pos_tokens_sweep_dest_fk is defined ONLY
+    // in migration 0054. Running `drizzle-kit generate` or `drizzle-kit push`
+    // from this schema would detect a "missing" FK and DROP that constraint in
+    // production. Do NOT regenerate migrations from this column definition.
     defaultSweepDestinationAccountId: uuid(
       'default_sweep_destination_account_id',
     ),

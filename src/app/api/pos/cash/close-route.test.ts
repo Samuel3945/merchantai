@@ -41,7 +41,8 @@ const SCHEMA = `
   CREATE TABLE pos_tokens (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     organization_id text NOT NULL,
-    device_name text NOT NULL
+    device_name text NOT NULL,
+    default_sweep_destination_account_id uuid
   );
 
   CREATE TABLE cash_sessions (

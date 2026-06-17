@@ -1,8 +1,8 @@
 'use server';
 
 import type { ActionResult } from '@/libs/action-result';
-import { currentUser } from '@clerk/nextjs/server';
-import { eq } from 'drizzle-orm';
+import { auth, currentUser } from '@clerk/nextjs/server';
+import { and, eq } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { toMoney } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
@@ -14,7 +14,25 @@ import {
   recordContainerTransfer,
   recordGastoOutflow,
 } from '@/libs/treasury';
-import { treasuryMovementsSchema } from '@/models/Schema';
+import { treasuryAccountsSchema, treasuryMovementsSchema } from '@/models/Schema';
+
+/**
+ * Owner-only (org:admin) gate. Mirrors requireAdminContext in pos-tokens.ts.
+ * reclassifyAutoSweep is owner-callable per the design's owner-only requirement.
+ */
+async function requireOwnerContext(): Promise<{ userId: string; orgId: string }> {
+  const { userId, orgId, orgRole } = await auth();
+  if (!userId) {
+    throw new Error('Not authenticated');
+  }
+  if (!orgId) {
+    throw new Error('No active organization');
+  }
+  if (orgRole !== 'org:admin') {
+    throw new Error('Only organization owners can reclassify auto-sweep transfers');
+  }
+  return { userId, orgId };
+}
 
 const TESORERIA_PATH = '/dashboard/tesoreria';
 const CASH_PATH = '/dashboard/cash';
@@ -247,10 +265,40 @@ export async function reclassifyAutoSweep(
   originalTransferId: string,
   newDestinationAccountId: string,
 ): Promise<ActionResult<{ ok: true }>> {
-  const { userId, orgId } = await requirePanelModule('cash');
+  const { userId, orgId } = await requireOwnerContext();
 
   if (!originalTransferId || !newDestinationAccountId) {
     return { ok: false, error: 'originalTransferId and newDestinationAccountId are required' };
+  }
+
+  // F1: cofre-only guard — newDestinationAccountId must be an ACTIVE caja_fuerte
+  // owned by this org. Mirrors the validation in setPosTokenSweepDestination.
+  const [destAccount] = await db
+    .select({
+      id: treasuryAccountsSchema.id,
+      type: treasuryAccountsSchema.type,
+      active: treasuryAccountsSchema.active,
+    })
+    .from(treasuryAccountsSchema)
+    .where(
+      and(
+        eq(treasuryAccountsSchema.id, newDestinationAccountId),
+        eq(treasuryAccountsSchema.organizationId, orgId),
+      ),
+    )
+    .limit(1);
+
+  if (!destAccount) {
+    return { ok: false, error: 'Cuenta de destino no encontrada' };
+  }
+  if (!destAccount.active) {
+    return { ok: false, error: 'La cuenta de destino está inactiva' };
+  }
+  if (destAccount.type !== 'caja_fuerte') {
+    return {
+      ok: false,
+      error: 'Solo las cajas fuertes (cofres) pueden ser destino del traspaso automático',
+    };
   }
 
   const actor = await getActorName(userId);
@@ -277,7 +325,10 @@ export async function reclassifyAutoSweep(
       if (original.handoverMovementId == null) {
         throw new Error('El movimiento no es un traspaso auto-dirigido (handover_movement_id nulo)');
       }
-      const handoverMovementId = original.handoverMovementId;
+      // handoverMovementId is validated above (non-null) but intentionally not
+      // forwarded to the compensating transfers: the original placement already
+      // consumed it (remaining=0). Forwarding it would incorrectly re-open the
+      // per-handover remaining and break the placement-queue invariant.
       const amount = original.amount;
       const transitoId = original.fromAccountId;
       const oldCofreId = original.toAccountId;
@@ -287,7 +338,6 @@ export async function reclassifyAutoSweep(
       }
 
       const amtNum = Number.parseFloat(String(amount));
-      void handoverMovementId; // used for audit only; the original placement already consumed it
 
       // Step 1: reverse the original placement (cofre A → transito).
       // No handoverMovementId — this is a compensating ledger entry, not a placement.
