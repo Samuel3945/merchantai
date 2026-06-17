@@ -812,6 +812,15 @@ export const posTokensSchema = pgTable(
     lastSyncAt: timestamp('last_sync_at', { mode: 'date' }),
     expiresAt: timestamp('expires_at', { mode: 'date' }),
     createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+    // treasury-sweep-model slice 2: per-caja auto-route destination.
+    // When set, a shortfall at open auto-routes to this cofre (caja_fuerte)
+    // instead of landing in Pendiente de ubicar. FK (ON DELETE SET NULL) is
+    // enforced by migration 0054 — not referenced here to avoid the circular
+    // initializer TypeScript error (treasuryAccountsSchema.posTokenId already
+    // references posTokensSchema creating a mutual dependency).
+    defaultSweepDestinationAccountId: uuid(
+      'default_sweep_destination_account_id',
+    ),
   },
   table => [uniqueIndex('pos_tokens_token_unique_idx').on(table.token)],
 );

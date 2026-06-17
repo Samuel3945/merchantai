@@ -876,6 +876,90 @@ export async function getTreasuryHandoverEnabled(
   return row?.value === 'true';
 }
 
+// ── Slice 2: per-caja sweep destination resolver ─────────────────────────────
+
+export const TREASURY_SWEEP_DEFAULT_KEY = 'treasurySweepDefaultDestinationAccountId';
+
+export type SweepDestination = {
+  accountId: string;
+  isCofre: true;
+};
+
+/**
+ * Resolves the auto-route destination for a caja's open-time sweep.
+ * Priority: per-caja FK column → org-wide KV default → null (Pendiente).
+ *
+ * Only returns a destination when:
+ *   - The resolved account exists in the org
+ *   - It is active
+ *   - It is type='caja_fuerte' (cofre-only rule, ADR-4)
+ *
+ * Returns null on any failure (inactive, wrong type, missing). The open route
+ * uses this as a signal to fall back to Pendiente de ubicar silently.
+ */
+export async function resolveSweepDestination(
+  executor: Executor,
+  organizationId: string,
+  posTokenId: string | null | undefined,
+): Promise<SweepDestination | null> {
+  let candidateId: string | null = null;
+
+  // 1. Per-caja column (highest priority)
+  if (posTokenId) {
+    const [tokenRow] = await executor
+      .select({
+        defaultSweepDestinationAccountId:
+          posTokensSchema.defaultSweepDestinationAccountId,
+      })
+      .from(posTokensSchema)
+      .where(eq(posTokensSchema.id, posTokenId))
+      .limit(1);
+    candidateId = tokenRow?.defaultSweepDestinationAccountId ?? null;
+  }
+
+  // 2. Org-wide KV default (fallback when no per-caja config)
+  if (!candidateId) {
+    const [kvRow] = await executor
+      .select({ value: appSettingsSchema.value })
+      .from(appSettingsSchema)
+      .where(
+        and(
+          eq(appSettingsSchema.organizationId, organizationId),
+          eq(appSettingsSchema.key, TREASURY_SWEEP_DEFAULT_KEY),
+        ),
+      )
+      .limit(1);
+    candidateId = kvRow?.value?.trim() || null;
+  }
+
+  if (!candidateId) {
+    return null;
+  }
+
+  // 3. Validate: must be active + caja_fuerte within this org
+  const [account] = await executor
+    .select({
+      id: treasuryAccountsSchema.id,
+      type: treasuryAccountsSchema.type,
+      active: treasuryAccountsSchema.active,
+    })
+    .from(treasuryAccountsSchema)
+    .where(
+      and(
+        eq(treasuryAccountsSchema.id, candidateId),
+        eq(treasuryAccountsSchema.organizationId, organizationId),
+      ),
+    )
+    .limit(1);
+
+  if (!account || !account.active || account.type !== 'caja_fuerte') {
+    // Inactive, wrong type, or not found — degrade to Pendiente silently
+    return null;
+  }
+
+  return { accountId: account.id, isCofre: true };
+}
+
 // ── Phase 3: Handover ledger foundation ──────────────────────────────────────
 
 /**

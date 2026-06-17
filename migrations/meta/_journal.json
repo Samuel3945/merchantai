@@ -379,6 +379,13 @@
       "when": 1781700000004,
       "tag": "0053_treasury_handover_movements",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1781700000005,
+      "tag": "0054_pos_token_sweep_destination",
+      "breakpoints": true
     }
   ]
 }

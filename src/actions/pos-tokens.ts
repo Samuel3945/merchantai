@@ -9,11 +9,14 @@ import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
 import { getOrgEntitlements, limitOf } from '@/libs/entitlements';
 import { POS_DEVICES_LIMIT_REACHED } from '@/libs/plan-limits';
+import { TREASURY_SWEEP_DEFAULT_KEY } from '@/libs/treasury';
 import {
+  appSettingsSchema,
   orgAddressesSchema,
   planAddonsSchema,
   posTokensSchema,
   posUsersSchema,
+  treasuryAccountsSchema,
 } from '@/models/Schema';
 
 /** Validates an address id belongs to the org. Returns the id or null. */
@@ -586,6 +589,164 @@ export async function touchLastSync(token: string) {
     .where(eq(posTokensSchema.token, token));
 
   return { ok: true as const };
+}
+
+// ── Sweep destination config (treasury-sweep-model slice 2) ──────────────────
+
+/**
+ * Sets or clears the per-caja default sweep destination for a caja.
+ * Owner-only (org:admin). The destination must be an active caja_fuerte owned
+ * by the org. Pass accountId=null to clear the per-caja config (falls back to
+ * global default or Pendiente de ubicar).
+ */
+export async function setPosTokenSweepDestination(
+  posTokenId: string,
+  accountId: string | null,
+): Promise<ActionResult<{ id: string }>> {
+  const { userId, orgId } = await requireAdminContext();
+
+  if (accountId !== null) {
+    // Validate: must be an active caja_fuerte in this org
+    const [account] = await db
+      .select({ id: treasuryAccountsSchema.id, type: treasuryAccountsSchema.type, active: treasuryAccountsSchema.active })
+      .from(treasuryAccountsSchema)
+      .where(
+        and(
+          eq(treasuryAccountsSchema.id, accountId),
+          eq(treasuryAccountsSchema.organizationId, orgId),
+        ),
+      )
+      .limit(1);
+
+    if (!account) {
+      return { ok: false, error: 'Cuenta de destino no encontrada' };
+    }
+    if (!account.active) {
+      return { ok: false, error: 'La cuenta de destino está inactiva' };
+    }
+    if (account.type !== 'caja_fuerte') {
+      return {
+        ok: false,
+        error: 'Solo las cajas fuertes (cofres) pueden ser destino del traspaso automático',
+      };
+    }
+  }
+
+  const [updated] = await db
+    .update(posTokensSchema)
+    .set({ defaultSweepDestinationAccountId: accountId })
+    .where(
+      and(
+        eq(posTokensSchema.id, posTokenId),
+        eq(posTokensSchema.organizationId, orgId),
+      ),
+    )
+    .returning({ id: posTokensSchema.id });
+
+  if (!updated) {
+    return { ok: false, error: 'Caja no encontrada' };
+  }
+
+  await logAction({
+    organizationId: orgId,
+    actor: { type: 'user', id: userId },
+    action: 'pos_token.sweep_destination_changed',
+    entityType: 'pos_token',
+    entityId: posTokenId,
+    after: { defaultSweepDestinationAccountId: accountId },
+  });
+
+  revalidatePath('/dashboard/pos-cajeros');
+  return { ok: true, data: updated };
+}
+
+/**
+ * Sets or clears the org-wide default sweep destination (KV key
+ * `treasurySweepDefaultDestinationAccountId`). Used when no per-caja override
+ * is set. Owner-only. Pass accountId=null to clear.
+ */
+export async function setOrgSweepDefaultDestination(
+  accountId: string | null,
+): Promise<ActionResult<{ accountId: string | null }>> {
+  const { userId, orgId } = await requireAdminContext();
+
+  if (accountId !== null) {
+    const [account] = await db
+      .select({ id: treasuryAccountsSchema.id, type: treasuryAccountsSchema.type, active: treasuryAccountsSchema.active })
+      .from(treasuryAccountsSchema)
+      .where(
+        and(
+          eq(treasuryAccountsSchema.id, accountId),
+          eq(treasuryAccountsSchema.organizationId, orgId),
+        ),
+      )
+      .limit(1);
+
+    if (!account) {
+      return { ok: false, error: 'Cuenta de destino no encontrada' };
+    }
+    if (!account.active) {
+      return { ok: false, error: 'La cuenta de destino está inactiva' };
+    }
+    if (account.type !== 'caja_fuerte') {
+      return {
+        ok: false,
+        error: 'Solo las cajas fuertes (cofres) pueden ser destino del traspaso automático',
+      };
+    }
+  }
+
+  if (accountId === null) {
+    await db
+      .delete(appSettingsSchema)
+      .where(
+        and(
+          eq(appSettingsSchema.organizationId, orgId),
+          eq(appSettingsSchema.key, TREASURY_SWEEP_DEFAULT_KEY),
+        ),
+      );
+  } else {
+    await db
+      .insert(appSettingsSchema)
+      .values({ organizationId: orgId, key: TREASURY_SWEEP_DEFAULT_KEY, value: accountId })
+      .onConflictDoUpdate({
+        target: [appSettingsSchema.organizationId, appSettingsSchema.key],
+        set: { value: accountId },
+      });
+  }
+
+  await logAction({
+    organizationId: orgId,
+    actor: { type: 'user', id: userId },
+    action: 'treasury.sweep_default_destination_changed',
+    entityType: 'app_setting',
+    entityId: TREASURY_SWEEP_DEFAULT_KEY,
+    after: { accountId },
+  });
+
+  revalidatePath('/dashboard/pos-cajeros');
+  return { ok: true, data: { accountId } };
+}
+
+/**
+ * Reads the org-wide default sweep destination account id.
+ * Returns null when not set.
+ */
+export async function getOrgSweepDefaultDestination(): Promise<string | null> {
+  const { orgId } = await requireAdminContext();
+
+  const [row] = await db
+    .select({ value: appSettingsSchema.value })
+    .from(appSettingsSchema)
+    .where(
+      and(
+        eq(appSettingsSchema.organizationId, orgId),
+        eq(appSettingsSchema.key, TREASURY_SWEEP_DEFAULT_KEY),
+      ),
+    )
+    .limit(1);
+
+  return row?.value?.trim() || null;
 }
 
 export async function listOrgCashiers() {
