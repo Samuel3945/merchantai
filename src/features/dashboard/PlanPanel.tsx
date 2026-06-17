@@ -11,7 +11,7 @@ import { cn } from '@/utils/Helpers';
 
 // Mirrors the labels used on the Plans screen so the two views stay in sync.
 const AGENT_LABELS: Record<AgentKind, string> = {
-  sales_manager: 'Sales Manager',
+  sales_manager: 'Créditos inteligentes',
   customer_service: 'Customer Service',
 };
 
