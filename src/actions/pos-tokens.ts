@@ -251,6 +251,7 @@ export async function listPosTokens() {
       addressCity: orgAddressesSchema.city,
       active: posTokensSchema.active,
       createdAt: posTokensSchema.createdAt,
+      defaultSweepDestinationAccountId: posTokensSchema.defaultSweepDestinationAccountId,
     })
     .from(posTokensSchema)
     .leftJoin(

@@ -18,6 +18,7 @@ import {
   RefreshCw,
   Trash2,
   Unlock,
+  Vault,
 } from 'lucide-react';
 import { useCallback, useState, useTransition } from 'react';
 import {
@@ -30,6 +31,7 @@ import {
   regeneratePosToken,
   renamePosToken,
   setPosTokenAddress,
+  setPosTokenSweepDestination,
   unblockPosToken,
 } from '@/actions/pos-tokens';
 import { Button } from '@/components/ui/button';
@@ -53,6 +55,7 @@ import { AddressPicker } from './AddressPicker';
 const TIENDA_CAJERO_URL = 'https://app.pos.mymerchantai.com';
 
 type TokenRow = Awaited<ReturnType<typeof listPosTokens>>[number];
+type CofreOption = { id: string; name: string };
 type CreatedToken = Extract<
   Awaited<ReturnType<typeof createPosToken>>,
   { ok: true }
@@ -124,20 +127,24 @@ export function PosCajerosClient({
   initialTokens,
   initialQuota,
   initialAddresses,
+  initialCofres,
 }: {
   initialTokens: TokenRow[];
   initialQuota: PosDeviceQuota;
   initialAddresses: OrgAddress[];
+  initialCofres: CofreOption[];
 }) {
   const confirm = useConfirm();
   const [tokens, setTokens] = useState(initialTokens);
   const [quota, setQuota] = useState(initialQuota);
   const [addresses, setAddresses] = useState(initialAddresses);
+  const [cofres] = useState(initialCofres);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [activeToken, setActiveToken] = useState<TokenRow | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<TokenRow | null>(null);
   const [renameTarget, setRenameTarget] = useState<TokenRow | null>(null);
   const [addressTarget, setAddressTarget] = useState<TokenRow | null>(null);
+  const [sweepTarget, setSweepTarget] = useState<TokenRow | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [limitError, setLimitError] = useState<LimitErrorPayload | null>(null);
   const [pending, startTransition] = useTransition();
@@ -471,6 +478,12 @@ export function PosCajerosClient({
                           <MapPin className="size-4" />
                           Dirección / sucursal
                         </DropdownMenuItem>
+                        {cofres.length > 0 && (
+                          <DropdownMenuItem onClick={() => setSweepTarget(t)}>
+                            <Vault className="size-4" />
+                            Destino de barrido
+                          </DropdownMenuItem>
+                        )}
                         {t.active && (
                           <>
                             <DropdownMenuItem
@@ -527,6 +540,7 @@ export function PosCajerosClient({
               addressCity: addresses.find(a => a.id === created.addressId)?.city ?? null,
               active: created.active,
               createdAt: created.createdAt,
+              defaultSweepDestinationAccountId: null,
             });
             refresh();
           }}
@@ -578,6 +592,19 @@ export function PosCajerosClient({
           pending={pending}
           onCancel={() => setDeleteTarget(null)}
           onConfirm={handleConfirmDelete}
+        />
+      )}
+
+      {sweepTarget && (
+        <SweepDestinationModal
+          token={sweepTarget}
+          cofres={cofres}
+          onClose={() => setSweepTarget(null)}
+          onSaved={() => {
+            setSweepTarget(null);
+            refresh();
+          }}
+          onError={msg => setError(msg)}
         />
       )}
     </div>
@@ -1051,6 +1078,109 @@ function RenameModal({
             </Button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+}
+
+function SweepDestinationModal({
+  token,
+  cofres,
+  onClose,
+  onSaved,
+  onError,
+}: {
+  token: TokenRow;
+  cofres: CofreOption[];
+  onClose: () => void;
+  onSaved: () => void;
+  onError: (msg: string) => void;
+}) {
+  const [selectedId, setSelectedId] = useState<string | null>(
+    token.defaultSweepDestinationAccountId ?? null,
+  );
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSave = async () => {
+    setSubmitting(true);
+    try {
+      const result = await setPosTokenSweepDestination(token.id, selectedId);
+      if (!result.ok) {
+        onError(result.error);
+        return;
+      }
+      onSaved();
+    } catch {
+      onError('No se pudo guardar el destino de barrido');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="
+      fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4
+    "
+    >
+      <div className="w-full max-w-md rounded-lg bg-background p-6 shadow-lg">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="flex items-center gap-2 text-lg font-semibold">
+            <Vault className="size-5" />
+            Destino de barrido
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="
+              text-muted-foreground
+              hover:text-foreground
+            "
+          >
+            ✕
+          </button>
+        </div>
+
+        <p className="mb-3 text-sm text-muted-foreground">
+          Cuando esta caja abre con menos efectivo del que cerró, la diferencia
+          se registra automáticamente. Elegí a qué cofre va ese monto.
+          Si no elegís ninguno, queda en "Pendiente de ubicar".
+        </p>
+
+        <div className="space-y-2">
+          <label htmlFor={`sweep-dest-${token.id}`} className={labelCls}>
+            Cofre destino
+          </label>
+          <select
+            id={`sweep-dest-${token.id}`}
+            value={selectedId ?? ''}
+            onChange={e => setSelectedId(e.target.value || null)}
+            className={`
+              ${inputCls}
+              cursor-pointer
+            `}
+          >
+            <option value="">Sin destino fijo (Pendiente de ubicar)</option>
+            {cofres.map(c => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="flex justify-end gap-2 pt-4">
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={onClose}
+            disabled={submitting}
+          >
+            Cancelar
+          </Button>
+          <Button type="button" onClick={handleSave} disabled={submitting}>
+            {submitting ? 'Guardando…' : 'Guardar'}
+          </Button>
+        </div>
       </div>
     </div>
   );
