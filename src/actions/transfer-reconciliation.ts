@@ -23,6 +23,8 @@ import {
   countPendingReconciliations,
   countReconciliationsByStatus,
   createRecoveryReconciliation,
+  DEFAULT_RESOLUTION_SETTING_KEY,
+  getDefaultResolution,
   getReconciliationById,
   getReconciliationSale,
   listReconciliations,
@@ -237,6 +239,60 @@ export async function markTransferNotArrived(
 ): Promise<ActionResult<TransferReconciliation>> {
   const { userId, orgId } = await requirePanelModule(MODULE);
   const actor = await getActorName(userId);
+
+  // Toggle B — default-resolution routing.
+  // When the org has set transfer-default-resolution = 'direct_loss', a non-arrival
+  // is auto-resolved as a loss instead of being parked in not_arrived.
+  //
+  // REVIEWER NOTE: direct_loss intentionally bypasses the interactive admin gate
+  // (org:admin check). The admin pre-consented to this behavior by enabling the
+  // setting — enabling it IS the admin action. This is not a missing permission
+  // check. See ADR-5 in design obs #277.
+  const defaultResolution = await getDefaultResolution(db, orgId);
+
+  if (defaultResolution === 'direct_loss') {
+    try {
+      const resolved = await db.transaction(async (tx) => {
+        const resolvedRow = await setReconciliationResolution(tx, {
+          id,
+          organizationId: orgId,
+          resolvedBy: actor,
+          resolutionType: 'loss',
+          status: 'resolved',
+        });
+        if (!resolvedRow) {
+          throw new Error('Transferencia no encontrada');
+        }
+        return resolvedRow;
+      });
+
+      await logAction({
+        organizationId: orgId,
+        actor: { type: 'user', id: userId },
+        action: 'transfer.auto_resolved_loss',
+        entityType: 'transfer_reconciliation',
+        entityId: resolved.id,
+        after: {
+          status: resolved.status,
+          resolutionType: resolved.resolutionType,
+          setting: DEFAULT_RESOLUTION_SETTING_KEY,
+        },
+      });
+
+      revalidatePath(CASH_PATH);
+      return { ok: true, data: resolved };
+    } catch (err) {
+      if (err instanceof ActionValidationError) {
+        return { ok: false, error: err.message };
+      }
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : 'Error al resolver la transferencia',
+      };
+    }
+  }
+
+  // Default path: park as not_arrived for later investigation.
   const row = await markReconciliationNotArrived(db, {
     id,
     organizationId: orgId,

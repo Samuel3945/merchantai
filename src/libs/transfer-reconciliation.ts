@@ -2,6 +2,7 @@ import { and, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
 import { findOpenSession, toMoney } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import {
+  appSettingsSchema,
   salePaymentsSchema,
   salesSchema,
   transferReconciliationsSchema,
@@ -678,4 +679,91 @@ export async function createRecoveryReconciliation(
   }
 
   return newRow;
+}
+
+// ── Org toggle helpers (PR6) ─────────────────────────────────────────────────
+//
+// Two org-level admin-only toggles are stored in `app_settings`:
+//
+// (A) transfer-block-close-on-investigation (bool, default false)
+//     When ON: the POS and panel close paths reject if any not_arrived row
+//     exists for the org. The shared hasOpenInvestigations helper is used by
+//     both surfaces so they always agree.
+//
+// (B) transfer-default-resolution (enum 'investigate'|'direct_loss', default 'investigate')
+//     When 'direct_loss': markTransferNotArrived auto-resolves the row as a
+//     loss instead of parking it in not_arrived. The admin pre-consented via
+//     this setting, so the interactive admin gate is intentionally bypassed.
+//     See ADR-5 in design obs #277.
+//
+// Both helpers are executor-aware so they can run inside transactions.
+
+/** Setting key for toggle A (block close when open investigations exist). */
+export const BLOCK_CLOSE_SETTING_KEY = 'transfer-block-close-on-investigation';
+
+/** Setting key for toggle B (default destination for a non-arrival). */
+export const DEFAULT_RESOLUTION_SETTING_KEY = 'transfer-default-resolution';
+
+/**
+ * Returns true if at least one `not_arrived` row exists for the org.
+ * Cheap SELECT 1 ... LIMIT 1 — safe inside a transaction.
+ */
+export async function hasOpenInvestigations(
+  executor: Executor,
+  organizationId: string,
+): Promise<boolean> {
+  const [row] = await executor
+    .select({ one: sql<number>`1` })
+    .from(transferReconciliationsSchema)
+    .where(
+      and(
+        eq(transferReconciliationsSchema.organizationId, organizationId),
+        eq(transferReconciliationsSchema.status, 'not_arrived'),
+      ),
+    )
+    .limit(1);
+  return row !== undefined;
+}
+
+/**
+ * Returns true when toggle A is explicitly set to 'true' for the org.
+ * Default (absent or empty) is false.
+ */
+export async function getBlockCloseOnInvestigation(
+  executor: Executor,
+  organizationId: string,
+): Promise<boolean> {
+  const [row] = await executor
+    .select({ value: appSettingsSchema.value })
+    .from(appSettingsSchema)
+    .where(
+      and(
+        eq(appSettingsSchema.organizationId, organizationId),
+        eq(appSettingsSchema.key, BLOCK_CLOSE_SETTING_KEY),
+      ),
+    )
+    .limit(1);
+  return (row?.value ?? '') === 'true';
+}
+
+/**
+ * Returns the default resolution mode for toggle B.
+ * Default (absent or empty or 'investigate') is 'investigate'.
+ */
+export async function getDefaultResolution(
+  executor: Executor,
+  organizationId: string,
+): Promise<'investigate' | 'direct_loss'> {
+  const [row] = await executor
+    .select({ value: appSettingsSchema.value })
+    .from(appSettingsSchema)
+    .where(
+      and(
+        eq(appSettingsSchema.organizationId, organizationId),
+        eq(appSettingsSchema.key, DEFAULT_RESOLUTION_SETTING_KEY),
+      ),
+    )
+    .limit(1);
+  const v = row?.value ?? '';
+  return v === 'direct_loss' ? 'direct_loss' : 'investigate';
 }
