@@ -406,6 +406,66 @@ describe('S-10: recoverTransfer after PÉRDIDA+RECLAMO — old claim row immutab
   });
 });
 
+// ── FIX 2: resolveTransfer current-status guard ───────────────────────────────
+// resolveTransfer may only close an investigable row (not_arrived / mismatch).
+// Resolving an already-`resolved` row (replay) or flipping a `confirmed` row to
+// loss WITHOUT clawing back its deposit must be rejected.
+
+describe('FIX 2: resolveTransfer rejects non-investigable statuses', () => {
+  it('rejects resolving an already-resolved (terminal) row', async () => {
+    const { resolveTransfer } = await import('./transfer-reconciliation');
+    h.orgRole = 'org:admin';
+    const id = await seedLossRow();
+
+    const result = await resolveTransfer(id, 'loss');
+
+    expect(result.ok).toBe(false);
+  });
+
+  it('rejects resolving a CONFIRMED row to loss (would not claw back the deposit)', async () => {
+    const { resolveTransfer } = await import('./transfer-reconciliation');
+    h.orgRole = 'org:admin';
+    counter++;
+    const id = UUID(counter);
+    await pg.query(
+      `INSERT INTO transfer_reconciliations
+         (id, organization_id, method, expected_amount, arrived_amount, status)
+       VALUES ($1, $2, 'Transferencia', '100.00', '100.00', 'confirmed')`,
+      [id, ORG],
+    );
+
+    const result = await resolveTransfer(id, 'loss');
+
+    expect(result.ok).toBe(false);
+
+    // The row must remain confirmed — never silently flipped to a loss.
+    const row = await pg.query<{ status: string; resolution_type: string | null }>(
+      `SELECT status, resolution_type FROM transfer_reconciliations WHERE id = $1`,
+      [id],
+    );
+
+    expect(row.rows[0]?.status).toBe('confirmed');
+    expect(row.rows[0]?.resolution_type).toBeNull();
+  });
+
+  it('still allows resolving a mismatch row', async () => {
+    const { resolveTransfer } = await import('./transfer-reconciliation');
+    h.orgRole = 'org:admin';
+    counter++;
+    const id = UUID(counter);
+    await pg.query(
+      `INSERT INTO transfer_reconciliations
+         (id, organization_id, method, expected_amount, arrived_amount, status)
+       VALUES ($1, $2, 'Transferencia', '100.00', '40.00', 'mismatch')`,
+      [id, ORG],
+    );
+
+    const result = await resolveTransfer(id, 'loss');
+
+    expect(result.ok).toBe(true);
+  });
+});
+
 // ── S-22: recoverTransfer on non-loss row — rejected ──────────────────────────
 
 describe('S-22: recoverTransfer rejects non-loss rows in the action layer', () => {

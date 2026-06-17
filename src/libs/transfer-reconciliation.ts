@@ -484,6 +484,18 @@ export async function splitPartialArrival(
     throw new Error('Transferencia no encontrada o no pertenece a esta organización');
   }
 
+  // Current-status guard: a partial arrival only applies to a row still under
+  // investigation. A terminal `resolved` row (replay) or an already-`confirmed`
+  // row must never be re-split — that would create a second live remainder or
+  // post a credit for money already booked.
+  if (original.status !== 'not_arrived' && original.status !== 'mismatch') {
+    throw new Error(
+      original.status === 'resolved'
+        ? 'Esta transferencia ya fue resuelta'
+        : 'Solo se puede registrar un arribo parcial de una transferencia en investigación',
+    );
+  }
+
   const expected = Number.parseFloat(original.expectedAmount) || 0;
   const arrived = Number.parseFloat(String(args.arrivedAmount));
 

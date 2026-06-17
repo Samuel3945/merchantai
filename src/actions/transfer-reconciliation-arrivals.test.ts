@@ -155,6 +155,21 @@ async function seedNotArrived(expectedAmount = '100.00'): Promise<string> {
   return id;
 }
 
+async function seedWithStatus(
+  status: string,
+  expectedAmount = '100.00',
+): Promise<string> {
+  counter++;
+  const id = UUID(counter);
+  await pg.query(
+    `INSERT INTO transfer_reconciliations
+       (id, organization_id, method, expected_amount, status)
+     VALUES ($1, $2, 'Transferencia', $3, $4)`,
+    [id, ORG, expectedAmount, status],
+  );
+  return id;
+}
+
 beforeAll(async () => {
   pg = new PGlite();
   h.db = drizzle(pg);
@@ -368,6 +383,60 @@ describe('S-03b: partialTransferArrival — invalid amounts', () => {
     const id = await seedNotArrived('100.00');
 
     const result = await partialTransferArrival(id, -10);
+
+    expect(result.ok).toBe(false);
+  });
+});
+
+// ── FIX 2: current-status guard on arrival actions ────────────────────────────
+// Arrival actions may only act on an investigable row (not_arrived / mismatch).
+// A replayed call on a terminal `resolved` row, or a duplicate confirm on an
+// already-`confirmed` row, must be rejected — never silently re-mutate.
+
+describe('FIX 2: confirmLateTransfer rejects non-investigable statuses', () => {
+  it('rejects a resolved (terminal) row', async () => {
+    const { confirmLateTransfer } = await import('./transfer-reconciliation');
+    const id = await seedWithStatus('resolved');
+
+    const result = await confirmLateTransfer(id);
+
+    expect(result.ok).toBe(false);
+  });
+
+  it('rejects an already-confirmed row (replay)', async () => {
+    const { confirmLateTransfer } = await import('./transfer-reconciliation');
+    const id = await seedWithStatus('confirmed');
+
+    const result = await confirmLateTransfer(id);
+
+    expect(result.ok).toBe(false);
+  });
+
+  it('still allows a mismatch row', async () => {
+    const { confirmLateTransfer } = await import('./transfer-reconciliation');
+    const id = await seedWithStatus('mismatch');
+
+    const result = await confirmLateTransfer(id);
+
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe('FIX 2: partialTransferArrival rejects non-investigable statuses', () => {
+  it('rejects a resolved (terminal) row', async () => {
+    const { partialTransferArrival } = await import('./transfer-reconciliation');
+    const id = await seedWithStatus('resolved');
+
+    const result = await partialTransferArrival(id, 60);
+
+    expect(result.ok).toBe(false);
+  });
+
+  it('rejects an already-confirmed row', async () => {
+    const { partialTransferArrival } = await import('./transfer-reconciliation');
+    const id = await seedWithStatus('confirmed');
+
+    const result = await partialTransferArrival(id, 60);
 
     expect(result.ok).toBe(false);
   });

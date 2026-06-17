@@ -49,6 +49,17 @@ import {
 // unconditionally; a panel member needs the module. (Confirming from a POS
 // device — gated by canConfirmTransfers — is a separate, later surface.)
 const MODULE = 'cash';
+
+// Statuses an investigation/arrival action may act on. `confirmed` and
+// `resolved` are terminal for these paths: re-resolving or re-confirming one
+// would silently re-mutate a row the owner already closed (a replay) or flip a
+// confirmed row to a loss WITHOUT clawing back its bank deposit. Those must go
+// through correctConfirmedTransfer / recoverTransfer instead.
+const INVESTIGABLE_STATUSES: ReconciliationStatus[] = ['not_arrived', 'mismatch'];
+
+function isInvestigable(status: ReconciliationStatus): boolean {
+  return INVESTIGABLE_STATUSES.includes(status);
+}
 const CASH_PATH = '/dashboard/cash';
 const TESORERIA_PATH = '/dashboard/tesoreria';
 
@@ -574,6 +585,13 @@ export async function resolveTransfer(
       if (!row) {
         throw new ActionValidationError('Transferencia no encontrada');
       }
+      if (!isInvestigable(row.status)) {
+        throw new ActionValidationError(
+          row.status === 'resolved'
+            ? 'Esta transferencia ya fue resuelta'
+            : 'Solo se puede resolver una transferencia en investigación; usá la corrección para una transferencia confirmada',
+        );
+      }
 
       let resolutionFiadoId: string | null = null;
       if (resolutionType === 'receivable') {
@@ -675,14 +693,36 @@ export async function confirmLateTransfer(
   const { userId, orgId } = await requirePanelModule(MODULE);
   const actor = await getActorName(userId);
 
-  const confirmed = await db.transaction(async tx =>
-    confirmReconciliation(tx, {
-      id,
-      organizationId: orgId,
-      reconciledBy: actor,
-      arrivedAmount,
-    }),
-  );
+  let confirmed: TransferReconciliation | null;
+  try {
+    confirmed = await db.transaction(async (tx) => {
+      // Current-status guard: a late arrival only makes sense for a row still
+      // under investigation. Re-confirming a `confirmed` row (replay) or a
+      // terminal `resolved` row would silently re-mutate it.
+      const row = await getReconciliationById(tx, { id, organizationId: orgId });
+      if (!row) {
+        throw new ActionValidationError('Transferencia no encontrada');
+      }
+      if (!isInvestigable(row.status)) {
+        throw new ActionValidationError(
+          row.status === 'confirmed'
+            ? 'Esta transferencia ya fue confirmada'
+            : 'Solo se puede confirmar la llegada de una transferencia en investigación',
+        );
+      }
+      return confirmReconciliation(tx, {
+        id,
+        organizationId: orgId,
+        reconciledBy: actor,
+        arrivedAmount,
+      });
+    });
+  } catch (err) {
+    if (err instanceof ActionValidationError) {
+      return { ok: false, error: err.message };
+    }
+    throw err;
+  }
 
   if (!confirmed) {
     return { ok: false, error: 'Transferencia no encontrada' };
