@@ -769,14 +769,30 @@ export async function partialTransferArrival(
   const actor = await getActorName(userId);
 
   try {
-    const result = await db.transaction(async tx =>
-      splitPartialArrival(tx, {
+    // The split AND its treasury credit run in ONE transaction. The arrived row
+    // ends `resolved`, which backfillConfirmedTransferDeposits does NOT retry
+    // (it only covers `confirmed` rows). A best-effort post-commit deposit could
+    // therefore be silently dropped, losing the arrived $X from Tesorería. Posting
+    // the deposit inside the split tx makes it atomic: if the deposit fails, the
+    // whole split rolls back so the cashier simply retries — the money is durable.
+    const result = await db.transaction(async (tx) => {
+      const split = await splitPartialArrival(tx, {
         id,
         organizationId: orgId,
         reconciledBy: actor,
         arrivedAmount,
-      }),
-    );
+      });
+      // Treasury credit for the arrived portion only (keyed by the row id, which
+      // is idempotent via the unique index on transfer_reconciliation_id).
+      await depositConfirmedTransfer(tx, {
+        organizationId: orgId,
+        reconciliationId: split.original.id,
+        method: split.original.method,
+        amount: split.original.arrivedAmount ?? split.original.expectedAmount,
+        createdBy: actor,
+      });
+      return split;
+    });
 
     await logAction({
       organizationId: orgId,
@@ -791,25 +807,8 @@ export async function partialTransferArrival(
       },
     });
 
-    // Treasury credit for the arrived portion only. Best-effort (same as
-    // confirmTransfer): if the deposit fails, the transfer stays resolved and
-    // the deposit can be re-applied once the cause is fixed.
-    const depositError = await tryDepositConfirmedTransfer(orgId, actor, {
-      id: result.original.id,
-      method: result.original.method,
-      arrivedAmount: result.original.arrivedAmount,
-      expectedAmount: result.original.expectedAmount,
-    });
-
     revalidatePath(CASH_PATH);
     revalidatePath(TESORERIA_PATH);
-
-    if (depositError) {
-      return {
-        ok: false,
-        error: `Transferencia parcial registrada, pero no se contabilizó en Tesorería: ${depositError}`,
-      };
-    }
 
     return { ok: true, data: result };
   } catch (err) {

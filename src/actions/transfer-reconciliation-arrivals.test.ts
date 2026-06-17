@@ -441,3 +441,46 @@ describe('FIX 2: partialTransferArrival rejects non-investigable statuses', () =
     expect(result.ok).toBe(false);
   });
 });
+
+// ── FIX 3: partial-arrival deposit durability (atomic) ────────────────────────
+// The arrived row ends `resolved`, which backfillConfirmedTransferDeposits does
+// NOT retry (it only covers `confirmed`). A best-effort post-commit deposit could
+// therefore be silently dropped. The deposit must post INSIDE the split tx, so a
+// deposit failure rolls the whole split back and the arrived $X is never lost.
+
+describe('FIX 3: partial-arrival deposit is atomic with the split', () => {
+  it('rolls back the split when the treasury deposit fails (no orphaned resolved row)', async () => {
+    const { partialTransferArrival } = await import('./transfer-reconciliation');
+    const { depositConfirmedTransfer } = await import('@/libs/treasury');
+    const id = await seedNotArrived('100.00');
+
+    // Make the deposit throw to simulate a transient treasury failure.
+    (depositConfirmedTransfer as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('treasury unavailable'),
+    );
+
+    const result = await partialTransferArrival(id, 60);
+
+    expect(result.ok).toBe(false);
+
+    // The original must NOT have been resolved, and NO remainder row created —
+    // the whole operation rolled back so the arrived $X can be retried.
+    const rows = await pg.query<{ status: string }>(
+      `SELECT status FROM transfer_reconciliations`,
+    );
+
+    expect(rows.rows).toHaveLength(1);
+    expect(rows.rows[0]?.status).toBe('not_arrived');
+  });
+
+  it('posts the deposit inside the transaction for the arrived amount', async () => {
+    const { partialTransferArrival } = await import('./transfer-reconciliation');
+    const id = await seedNotArrived('100.00');
+
+    const result = await partialTransferArrival(id, 60);
+
+    expect(result.ok).toBe(true);
+    expect(h.depositCalls).toHaveLength(1);
+    expect(Number(h.depositCalls[0]?.amount)).toBeCloseTo(60, 2);
+  });
+});
