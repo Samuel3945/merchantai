@@ -215,7 +215,7 @@ export async function getPendingHandoversOverview(): Promise<
 
 /**
  * Returns the list of pending handovers with remaining balances.
- * Used by the TreasuryConsole placement queue.
+ * Used by the AllocateModal placement queue.
  * Gated by requirePanelModule('cash').
  */
 export async function listPendingHandoversAction(): Promise<
