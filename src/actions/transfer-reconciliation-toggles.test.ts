@@ -127,6 +127,10 @@ const SETUP_SQL = `
     created_at timestamp DEFAULT now() NOT NULL
   );
 
+  CREATE UNIQUE INDEX transfer_reconciliations_sale_payment_idx
+    ON transfer_reconciliations (sale_payment_id)
+    WHERE sale_payment_id IS NOT NULL;
+
   CREATE TABLE app_settings (
     organization_id text NOT NULL,
     key text NOT NULL,

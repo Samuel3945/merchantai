@@ -99,6 +99,10 @@ const SETUP_SQL = `
     cashier_explained_at timestamp,
     created_at timestamp DEFAULT now() NOT NULL
   );
+
+  CREATE UNIQUE INDEX transfer_reconciliations_sale_payment_idx
+    ON transfer_reconciliations (sale_payment_id)
+    WHERE sale_payment_id IS NOT NULL;
 `;
 
 const ORG = 'org-perm-test';

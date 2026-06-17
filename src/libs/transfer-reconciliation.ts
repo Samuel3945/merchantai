@@ -501,11 +501,19 @@ export async function splitPartialArrival(
   );
 
   // 1. Close the original row as resolved with the partial arrived amount.
+  //    The original RELEASES its sale_payment_id (set null): the LIVE
+  //    not_arrived remainder will carry it instead, so the partial UNIQUE index
+  //    `transfer_reconciliations_sale_payment_idx` (one ACTIVE reconciliation
+  //    per sale_payment) is never violated. The deposit for the arrived $X is
+  //    keyed by THIS row's id (not sale_payment_id), so releasing it does NOT
+  //    break the treasury credit. The original→remainder link below keeps the
+  //    audit chain back to the sale.
   const [updatedOriginal] = await executor
     .update(transferReconciliationsSchema)
     .set({
       status: 'resolved',
       arrivedAmount: toMoney(arrived),
+      salePaymentId: null,
       reconciledBy: args.reconciledBy,
       reconciledAt: new Date(),
     })
@@ -522,8 +530,10 @@ export async function splitPartialArrival(
   }
 
   // 2. Insert the remainder row. Inherits org, method, and salePaymentId from
-  //    the original so the investigation list can trace it back. No resolution
-  //    fields (claimOpen stays false by default, recoveryOfId null).
+  //    the original — the remainder is now the SINGLE live row holding that
+  //    sale_payment_id, so backfill idempotency holds and a later FIADO
+  //    resolution can still resolve the sale via getReconciliationSale. No
+  //    resolution fields (claimOpen stays false by default, recoveryOfId null).
   const [remainderRow] = await executor
     .insert(transferReconciliationsSchema)
     .values({
