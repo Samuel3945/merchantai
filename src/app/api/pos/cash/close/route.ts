@@ -9,6 +9,10 @@ import {
 } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import { requirePosAuth } from '@/libs/pos-auth';
+import {
+  getBlockCloseOnInvestigation,
+  hasOpenInvestigations,
+} from '@/libs/transfer-reconciliation';
 // treasury-sweep-model: at-close handover retired (slice 1). Flag/toggle retired (slice 2).
 import { cashSessionsSchema, posTokensSchema } from '@/models/Schema';
 
@@ -62,6 +66,19 @@ export async function POST(req: Request): Promise<NextResponse> {
       const open = await findOpenSession(tx, ctx.organizationId, ctx.tokenId);
       if (!open) {
         throw new Error('No hay caja abierta para cerrar.');
+      }
+
+      // Block-close guard (toggle A): if the org enabled this setting and there
+      // are open investigations (not_arrived rows), reject the close so the
+      // cashier resolves them first.
+      const blockClose = await getBlockCloseOnInvestigation(tx, ctx.organizationId);
+      if (blockClose) {
+        const hasOpen = await hasOpenInvestigations(tx, ctx.organizationId);
+        if (hasOpen) {
+          throw new Error(
+            'Hay transferencias en investigación pendientes. Resuélvelas antes de cerrar la caja.',
+          );
+        }
       }
 
       const expected = await computeExpectedAmount(tx, open);

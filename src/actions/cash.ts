@@ -27,6 +27,10 @@ import {
   riskLevelForRatio,
 } from '@/libs/cash-security-policy';
 import { db } from '@/libs/DB';
+import {
+  getBlockCloseOnInvestigation,
+  hasOpenInvestigations,
+} from '@/libs/transfer-reconciliation';
 // treasury-sweep-model: at-close handover retired (slice 1). Flag/toggle retired (slice 2).
 import {
   cashMovementsSchema,
@@ -80,6 +84,18 @@ export async function closeCashSession(
       const open = await findOpenSession(tx, orgId, null);
       if (!open) {
         throw new ActionValidationError('No hay caja abierta para cerrar');
+      }
+
+      // Block-close guard (toggle A): same rule as the POS route. Both surfaces
+      // use the shared hasOpenInvestigations helper so the check is identical.
+      const blockClose = await getBlockCloseOnInvestigation(tx, orgId);
+      if (blockClose) {
+        const hasOpen = await hasOpenInvestigations(tx, orgId);
+        if (hasOpen) {
+          throw new ActionValidationError(
+            'Hay transferencias en investigación pendientes. Resuélvelas antes de cerrar la caja.',
+          );
+        }
       }
 
       const expected = await computeExpectedAmount(tx, open);
