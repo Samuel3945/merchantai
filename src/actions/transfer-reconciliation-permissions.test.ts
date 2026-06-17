@@ -143,6 +143,7 @@ describe('S-12: admin-only gate — cashier cannot resolve as loss', () => {
     const result = await resolveTransfer(id, 'loss');
 
     expect(result.ok).toBe(false);
+
     if (!result.ok) {
       expect(result.error).toMatch(/propietario|admin/i);
     }
@@ -175,6 +176,7 @@ describe('S-13: admin-only gate — cashier cannot resolve as cashier_liability'
     const result = await resolveTransfer(id, 'cashier_liability');
 
     expect(result.ok).toBe(false);
+
     if (!result.ok) {
       expect(result.error).toMatch(/propietario|admin/i);
     }
@@ -196,17 +198,14 @@ describe('S-13: admin-only gate — cashier cannot resolve as cashier_liability'
   });
 });
 
-// ── S-14: Cashier cannot trigger RECUPERACIÓN (recoverTransfer — PR5) ─────────
-// recoverTransfer does not exist yet — SKIPPED until PR5 ships it (keeps main green).
-// It documents the contract so PR5 knows what admin gate to implement (un-skip in PR5).
+// ── S-14: Cashier cannot trigger RECUPERACIÓN (recoverTransfer) ───────────────
+// Un-skipped in PR5 now that recoverTransfer is implemented with the admin gate.
 
 describe('S-14: admin-only gate — cashier cannot trigger recoverTransfer', () => {
-  it.skip('recoverTransfer must exist and reject org:member with a permission error (un-skip in PR5)', async () => {
+  it('recoverTransfer must exist and reject org:member with a permission error', async () => {
     const actions = await import('./transfer-reconciliation') as Record<string, unknown>;
     h.orgRole = 'org:member';
 
-    // Skipped until PR5 implements recoverTransfer; PR5 must un-skip this.
-    // This assertion ensures PR5 ships the function with the admin gate.
     const recoverTransfer = actions.recoverTransfer as
       | ((lossId: string, amount?: number) => Promise<{ ok: boolean; error?: string }>)
       | undefined;
@@ -236,7 +235,9 @@ describe('S-15: cashier permission — FIADO resolution is cashier-level', () =>
     const result = await resolveTransfer(id, 'receivable');
 
     // Action fails for a business reason (no salePaymentId), NOT permission.
+
     expect(result.ok).toBe(false);
+
     if (!result.ok) {
       // Must NOT be a permission error
       expect(result.error).not.toMatch(/propietario|admin/i);
@@ -253,6 +254,7 @@ describe('S-15: cashier permission — FIADO resolution is cashier-level', () =>
     const result = await resolveTransfer(id, 'receivable');
 
     expect(result.ok).toBe(false);
+
     if (!result.ok) {
       expect(result.error).not.toMatch(/propietario|admin/i);
     }
