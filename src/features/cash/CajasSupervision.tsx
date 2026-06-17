@@ -17,10 +17,8 @@ const PILL: Record<CajaStatus, string> = {
   review: 'bg-warn/10 text-warn',
 };
 
-const NOTE: Record<CajaStatus, string> = {
-  ok: 'bg-success/5 text-foreground',
-  review: 'bg-warn/5 text-foreground',
-};
+// Only a caja that needs review shows a note; "all good" cajas stay quiet.
+const REVIEW_NOTE_CLS = 'bg-warn/5 text-foreground';
 
 const BAR: Record<CajaStatus, string> = {
   ok: 'bg-success',
@@ -49,10 +47,8 @@ function openDuration(openedAt: string): string {
   return `${d} ${d === 1 ? 'día' : 'días'}`;
 }
 
-function cajaNote(caja: OpenCaja): string {
-  return cajaStatus(caja) === 'review'
-    ? `Lleva más de un día abierta. Pedile a ${caja.openedBy} que la cierre cuando termine el turno.`
-    : 'Funcionando normal. No hay nada que hacer.';
+function reviewNote(caja: OpenCaja): string {
+  return `Lleva más de un día abierta. Pedile a ${caja.openedBy} que la cierre cuando termine el turno.`;
 }
 
 function StatusPill({ status }: { status: CajaStatus }) {
@@ -184,17 +180,17 @@ function CajaCard({ caja }: { caja: OpenCaja }) {
           </div>
         </dl>
 
-        <div
-          className={cn(
-            'flex items-start gap-2 rounded-lg px-3 py-2.5 text-sm',
-            NOTE[status],
-          )}
-        >
-          {status === 'ok'
-            ? <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" />
-            : <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warn" />}
-          <span className="leading-snug">{cajaNote(caja)}</span>
-        </div>
+        {status === 'review' && (
+          <div
+            className={cn(
+              'flex items-start gap-2 rounded-lg px-3 py-2.5 text-sm',
+              REVIEW_NOTE_CLS,
+            )}
+          >
+            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warn" />
+            <span className="leading-snug">{reviewNote(caja)}</span>
+          </div>
+        )}
 
         <div className="
           mt-auto flex items-center justify-end gap-1 text-sm font-medium
