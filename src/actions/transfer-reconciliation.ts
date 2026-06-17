@@ -12,9 +12,9 @@ import { revalidatePath } from 'next/cache';
 import { ActionValidationError } from '@/libs/action-result';
 import { logAction } from '@/libs/audit-log';
 import { findOrCreateOpenSession } from '@/libs/cash-helpers';
+import { findOrCreateCustomer } from '@/libs/customers';
 import { db } from '@/libs/DB';
 import { createFiado } from '@/libs/fiados';
-import { parseClient } from '@/libs/fiados-math';
 import { requirePanelModule } from '@/libs/panel-session';
 import { reclassifyPayment } from '@/libs/payment-reclassification';
 import {
@@ -465,14 +465,26 @@ export async function recordTransferExplanation(
   return { ok: true, data: row };
 }
 
+// Input for the captured customer when resolving as 'receivable'.
+// PR3 replaces the old parseClient(sale.notes) path with explicit capture.
+// The cashier supplies name + at least one contact (whatsapp or documentId).
+export type FiadoCustomerInput = {
+  customerName: string;
+  whatsapp?: string | null;
+  documentId?: string | null;
+};
+
 // Closes the investigation of a not_arrived / mismatch transfer with an outcome.
-// 'receivable' is only legal for a sale with a known customer (honest error) and
-// books a fiado for the outstanding amount — atomically with the resolution.
+// 'receivable' requires customerInput (name + contact) — a real customers row is
+// found-or-created and the fiado is linked to it (customer_id NOT null).
+// PR3: parseClient(sale.notes) is retired from this path; customer data is now
+// captured explicitly at the panel UI before the cashier calls this action.
 // 'loss' and 'cashier_liability' just record the outcome; the audit trail is the
 // fraud signal (alerts are computed, not stored).
 export async function resolveTransfer(
   id: string,
   resolutionType: ResolutionType,
+  customerInput?: FiadoCustomerInput,
 ): Promise<ActionResult<TransferReconciliation>> {
   const { userId, orgId } = await requirePanelModule(MODULE);
 
@@ -507,22 +519,46 @@ export async function resolveTransfer(
             'Solo una venta con cliente puede pasar a fiado',
           );
         }
+
+        // Validate captured customer data (replaces old parseClient path).
+        // The panel UI must collect name + contact before calling this action.
+        const capturedName = customerInput?.customerName?.trim() ?? '';
+        if (!capturedName) {
+          throw new ActionValidationError(
+            'El nombre del cliente es obligatorio para registrar el fiado',
+          );
+        }
+
         const sale = await getReconciliationSale(tx, row.salePaymentId);
-        const client = parseClient(sale?.notes ?? null);
-        if (!sale || !client.name) {
+        if (!sale) {
           throw new ActionValidationError(
             'La venta no tiene cliente; marcá pérdida o responsabilidad del cajero',
           );
         }
+
         const owed = outstandingAmount(row);
         if (owed <= 0) {
           throw new ActionValidationError('No hay saldo pendiente para cobrar');
         }
+
+        // Find or create the customer using the captured contact data.
+        // ADR-7: dedup on whatsapp first, then documentId, else create.
+        const customer = await findOrCreateCustomer(tx, {
+          orgId,
+          name: capturedName,
+          whatsapp: customerInput?.whatsapp ?? null,
+          documentId: customerInput?.documentId ?? null,
+          createdBy: actor,
+        });
+
+        // Create the fiado linked to the real customers row.
+        // customer_id is NOT null — this is the invariant that PR3 enforces.
         const fiado = await createFiado(tx, {
           organizationId: orgId,
           saleId: sale.saleId,
           originalAmount: owed,
           createdBy: actor,
+          customerId: customer.id,
           notes: sale.notes,
         });
         if (!fiado) {
