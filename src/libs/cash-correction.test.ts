@@ -52,6 +52,8 @@ const DDL = `
     sale_id uuid,
     supplier_id uuid,
     corrects_session_id uuid REFERENCES cash_sessions(id) ON DELETE SET NULL,
+    origin text,
+    treasury_movement_id uuid,
     created_at timestamp DEFAULT now() NOT NULL
   );
 `;

@@ -936,6 +936,97 @@ export async function resolveSweepDestination(
   return { accountId: account.id, isCofre: true };
 }
 
+// ── Slice 3: Inflows model ────────────────────────────────────────────────────
+
+export type InflowSourceDebitInput = {
+  organizationId: string;
+  fromAccountId: string;
+  amount: number | string;
+  reason: string;
+  createdBy: string;
+};
+
+/**
+ * Records a treasury_movements type='salida' to debit a source container when
+ * a cashier posts an internal-origin entrada (cash coming into a caja FROM a
+ * cofre, banco, or other treasury container).
+ *
+ * fromAccountId = source container (caja_fuerte, banco, transito — active, in-org)
+ * toAccountId   = NULL (the credit side lands in cash_movements, not treasury_accounts)
+ *
+ * Validates:
+ *   - source account exists + is active within this org
+ *   - source has sufficient balance for the requested amount
+ *
+ * Throws descriptive errors that the movement route surfaces directly.
+ */
+export async function recordInflowSourceDebit(
+  executor: Executor,
+  input: InflowSourceDebitInput,
+): Promise<TreasuryMovementRow> {
+  const amt = Number.parseFloat(toMoney(input.amount));
+
+  // Validate source: must be active and belong to this org.
+  const [source] = await executor
+    .select({
+      id: treasuryAccountsSchema.id,
+      active: treasuryAccountsSchema.active,
+      openingBalance: treasuryAccountsSchema.openingBalance,
+    })
+    .from(treasuryAccountsSchema)
+    .where(
+      and(
+        eq(treasuryAccountsSchema.id, input.fromAccountId),
+        eq(treasuryAccountsSchema.organizationId, input.organizationId),
+      ),
+    )
+    .limit(1);
+
+  if (!source || !source.active) {
+    throw new Error(
+      'cuenta de origen inactiva o no encontrada — source container inactive or not found',
+    );
+  }
+
+  // Compute current source balance via movements ledger.
+  const [movRow] = await executor
+    .select({
+      credits: sql<string>`COALESCE(SUM(${treasuryMovementsSchema.amount}) FILTER (WHERE ${treasuryMovementsSchema.toAccountId} = ${input.fromAccountId}), 0)::text`,
+      debits: sql<string>`COALESCE(SUM(${treasuryMovementsSchema.amount}) FILTER (WHERE ${treasuryMovementsSchema.fromAccountId} = ${input.fromAccountId}), 0)::text`,
+    })
+    .from(treasuryMovementsSchema)
+    .where(eq(treasuryMovementsSchema.organizationId, input.organizationId));
+
+  const opening = Number.parseFloat(source.openingBalance ?? '0') || 0;
+  const credits = Number.parseFloat(movRow?.credits ?? '0') || 0;
+  const debits = Number.parseFloat(movRow?.debits ?? '0') || 0;
+  const currentBalance = balanceForAccount(opening, credits, debits);
+
+  if (currentBalance < amt) {
+    throw new Error(
+      `saldo insuficiente en la cuenta de origen: balance ${currentBalance.toFixed(2)}, requested ${amt.toFixed(2)}`,
+    );
+  }
+
+  const [row] = await executor
+    .insert(treasuryMovementsSchema)
+    .values({
+      organizationId: input.organizationId,
+      fromAccountId: input.fromAccountId,
+      toAccountId: null,
+      amount: toMoney(amt),
+      type: 'salida',
+      reason: input.reason,
+      createdBy: input.createdBy,
+    })
+    .returning();
+
+  if (!row) {
+    throw new Error('treasury_movements: inflow source debit insert returned no row');
+  }
+  return row;
+}
+
 // ── Phase 3: Handover ledger foundation ──────────────────────────────────────
 
 /**

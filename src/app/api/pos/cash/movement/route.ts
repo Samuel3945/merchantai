@@ -9,10 +9,25 @@ import {
 } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import { requirePosAuth } from '@/libs/pos-auth';
+import { recordInflowSourceDebit } from '@/libs/treasury';
 import { cashMovementsSchema, suppliersSchema } from '@/models/Schema';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+// Origin discriminator for entrada (inflow) movements.
+// 'internal': cash from another treasury container (cofre, banco).
+//             Requires fromAccountId. Records a companion treasury salida.
+// 'external': direct owner injection — no source container.
+// Omitted / null: legacy device — treated as a plain cash entrada (backward-compat).
+type InternalOrigin = {
+  kind: 'internal';
+  fromAccountId?: string;
+};
+
+type ExternalOrigin = {
+  kind: 'external';
+};
 
 type MovementBody = {
   type?: string;
@@ -22,6 +37,9 @@ type MovementBody = {
   // sends the supplier id chosen from /pos/suppliers; it is validated against
   // the caja's org before being persisted to cash_movements.supplier_id.
   supplierId?: string | null;
+  // Optional (slice 3): origin discriminator for entrada movements.
+  // Legacy devices that omit this field keep working unchanged (backward-compat).
+  origin?: InternalOrigin | ExternalOrigin | null;
 };
 
 const ALLOWED_TYPES: CashMovementType[] = [
@@ -66,6 +84,32 @@ export async function POST(req: Request): Promise<NextResponse> {
     );
   }
 
+  // Validate origin when provided on income movement types.
+  const isIncome = INCOME_MOVEMENT_TYPES.includes(type);
+  const origin = body.origin ?? null;
+
+  if (origin && origin.kind === 'internal') {
+    if (!isIncome) {
+      return NextResponse.json(
+        { error: 'origin solo es válido para movimientos de ingreso (entrada)' },
+        { status: 400 },
+      );
+    }
+    if (!origin.fromAccountId) {
+      return NextResponse.json(
+        { error: 'origin.fromAccountId es requerido para origin.kind="internal"' },
+        { status: 400 },
+      );
+    }
+  }
+
+  if (origin && origin.kind === 'external' && !isIncome) {
+    return NextResponse.json(
+      { error: 'origin solo es válido para movimientos de ingreso (entrada)' },
+      { status: 400 },
+    );
+  }
+
   // Optional supplier link (Pago a proveedor). Must be a real, active supplier
   // of this caja's org — guards against stale or cross-tenant ids from the device.
   const supplierId = body.supplierId ?? null;
@@ -96,6 +140,23 @@ export async function POST(req: Request): Promise<NextResponse> {
         throw new Error('No hay caja abierta. Abre la caja primero.');
       }
 
+      // For INTERNAL-origin entradas: record a treasury salida from the source
+      // container BEFORE inserting the cash_movements row. This validates the
+      // source (active, org-scoped, sufficient balance) inside the transaction,
+      // so any validation failure rolls back both writes atomically.
+      let treasuryMovementId: string | null = null;
+
+      if (origin?.kind === 'internal' && origin.fromAccountId) {
+        const treasuryRow = await recordInflowSourceDebit(tx, {
+          organizationId: ctx.organizationId,
+          fromAccountId: origin.fromAccountId,
+          amount,
+          reason,
+          createdBy: ctx.cashierName || 'Cajero',
+        });
+        treasuryMovementId = treasuryRow.id;
+      }
+
       const [created] = await tx
         .insert(cashMovementsSchema)
         .values({
@@ -106,6 +167,9 @@ export async function POST(req: Request): Promise<NextResponse> {
           reason,
           supplierId,
           createdBy: ctx.cashierName || 'Cajero',
+          // Slice 3: persist origin discriminator + treasury link for internal entradas
+          origin: origin?.kind ?? null,
+          treasuryMovementId,
         })
         .returning();
 
