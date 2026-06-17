@@ -12,9 +12,9 @@ import { revalidatePath } from 'next/cache';
 import { ActionValidationError } from '@/libs/action-result';
 import { logAction } from '@/libs/audit-log';
 import { findOrCreateOpenSession } from '@/libs/cash-helpers';
+import { findOrCreateCustomer } from '@/libs/customers';
 import { db } from '@/libs/DB';
 import { createFiado } from '@/libs/fiados';
-import { parseClient } from '@/libs/fiados-math';
 import { requirePanelModule } from '@/libs/panel-session';
 import { reclassifyPayment } from '@/libs/payment-reclassification';
 import {
@@ -465,14 +465,27 @@ export async function recordTransferExplanation(
   return { ok: true, data: row };
 }
 
+// Input for the captured customer when resolving as 'receivable'.
+// When supplied (by the View B capture UI), the cashier gives a name + at least
+// one contact (whatsapp or documentId) and a real customers row is found-or-created.
+export type FiadoCustomerInput = {
+  customerName: string;
+  whatsapp?: string | null;
+  documentId?: string | null;
+};
+
 // Closes the investigation of a not_arrived / mismatch transfer with an outcome.
-// 'receivable' is only legal for a sale with a known customer (honest error) and
-// books a fiado for the outstanding amount — atomically with the resolution.
+// 'receivable' accepts an OPTIONAL customerInput: when a name is provided, a real
+// customers row is found-or-created and the fiado is linked to it (customer_id set);
+// when it is absent (the current panel button), it falls back to a legacy fiado
+// with a null customer_id so the existing flow keeps working until the capture UI
+// is wired in the View B redesign.
 // 'loss' and 'cashier_liability' just record the outcome; the audit trail is the
 // fraud signal (alerts are computed, not stored).
 export async function resolveTransfer(
   id: string,
   resolutionType: ResolutionType,
+  customerInput?: FiadoCustomerInput,
 ): Promise<ActionResult<TransferReconciliation>> {
   const { userId, orgId } = await requirePanelModule(MODULE);
 
@@ -507,22 +520,44 @@ export async function resolveTransfer(
             'Solo una venta con cliente puede pasar a fiado',
           );
         }
+
         const sale = await getReconciliationSale(tx, row.salePaymentId);
-        const client = parseClient(sale?.notes ?? null);
-        if (!sale || !client.name) {
+        if (!sale) {
           throw new ActionValidationError(
             'La venta no tiene cliente; marcá pérdida o responsabilidad del cajero',
           );
         }
+
         const owed = outstandingAmount(row);
         if (owed <= 0) {
           throw new ActionValidationError('No hay saldo pendiente para cobrar');
         }
+
+        // Customer capture is optional for backward compatibility. When the
+        // caller passes explicit customer data (the View B capture modal),
+        // find-or-create a real customers row and link it (ADR-7: dedup on
+        // whatsapp first, then documentId). When it is absent (the current
+        // panel button), fall back to a legacy fiado with a null customer_id so
+        // the existing flow keeps working until the capture UI is wired.
+        let customerId: string | null = null;
+        const capturedName = customerInput?.customerName?.trim() ?? '';
+        if (capturedName) {
+          const customer = await findOrCreateCustomer(tx, {
+            orgId,
+            name: capturedName,
+            whatsapp: customerInput?.whatsapp ?? null,
+            documentId: customerInput?.documentId ?? null,
+            createdBy: actor,
+          });
+          customerId = customer.id;
+        }
+
         const fiado = await createFiado(tx, {
           organizationId: orgId,
           saleId: sale.saleId,
           originalAmount: owed,
           createdBy: actor,
+          customerId,
           notes: sale.notes,
         });
         if (!fiado) {
