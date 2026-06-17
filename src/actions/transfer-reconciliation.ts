@@ -6,7 +6,7 @@ import type {
   ResolutionType,
   TransferReconciliation,
 } from '@/libs/transfer-reconciliation';
-import { currentUser } from '@clerk/nextjs/server';
+import { auth, currentUser } from '@clerk/nextjs/server';
 import { and, eq, isNull } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { ActionValidationError } from '@/libs/action-result';
@@ -475,6 +475,22 @@ export async function resolveTransfer(
   resolutionType: ResolutionType,
 ): Promise<ActionResult<TransferReconciliation>> {
   const { userId, orgId } = await requirePanelModule(MODULE);
+
+  // Anti-fraud gate: loss and cashier_liability outcomes carry financial and
+  // disciplinary consequences that must never be triggered by a cashier.
+  // Even a cashier who holds the cash panel module is blocked — the module gate
+  // (requirePanelModule) is a capability check, not a role check.
+  // Pattern: mirrors actions/treasury.ts:182-190.
+  if (resolutionType === 'loss' || resolutionType === 'cashier_liability') {
+    const { orgRole } = await auth();
+    if (orgRole !== 'org:admin') {
+      return {
+        ok: false,
+        error: 'Solo el propietario puede registrar pérdidas o cargos al cajero',
+      };
+    }
+  }
+
   const actor = await getActorName(userId);
 
   try {
