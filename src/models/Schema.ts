@@ -233,6 +233,11 @@ export const salesSchema = pgTable(
     einvoiceNumber: text('einvoice_number'),
     einvoiceId: uuid('einvoice_id'),
     createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+    // Real BUSINESS time of the sale, as opposed to created_at (the server
+    // insert time). For the always-online web POS they match; the field exists
+    // so a future offline-capable client can ship the true sale time and have
+    // analytics (e.g. caja saturation) measure on it instead of sync time.
+    occurredAt: timestamp('occurred_at', { mode: 'date' }).defaultNow().notNull(),
   },
   table => [
     // Sales listings and date-range reports scan by org + time window.
@@ -242,6 +247,12 @@ export const salesSchema = pgTable(
       table.organizationId,
       table.status,
       table.createdAt,
+    ),
+    // Caja saturation scans org + status over a trailing occurred_at window.
+    index('sales_org_status_occurred_idx').on(
+      table.organizationId,
+      table.status,
+      table.occurredAt,
     ),
     // One commercial number per organization; lets lookups by number be exact.
     uniqueIndex('sales_org_number_unique_idx').on(
