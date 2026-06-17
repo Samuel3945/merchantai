@@ -221,6 +221,48 @@ describe('findOrCreateCustomer — dedup on documentId', () => {
   });
 });
 
+// ── FIX 5: documentId collision when whatsapp is new ─────────────────────────
+// When BOTH whatsapp and documentId are provided and only the documentId already
+// exists (new whatsapp), the insert hits the documentId unique index and
+// onConflictDoNothing returns no row. The re-select must then match on whatsapp
+// OR documentId — keying on whatsapp alone finds nothing and throws (latent 500).
+
+describe('findOrCreateCustomer — documentId collision with a new whatsapp', () => {
+  it('returns the existing row when documentId collides but whatsapp is new', async () => {
+    const [existing] = await db
+      .insert(customersSchema)
+      .values({
+        organizationId: ORG,
+        name: 'Documento Existente',
+        documentId: '55667788',
+        whatsapp: null,
+        deleted: false,
+        createdBy: USER,
+      })
+      .returning();
+
+    // Same documentId, a brand-new whatsapp → conflict fires on the document
+    // index, not the whatsapp one.
+    const result = await findOrCreateCustomer(db, {
+      orgId: ORG,
+      name: 'Documento Existente (otro contacto)',
+      whatsapp: '3007778888',
+      documentId: '55667788',
+      createdBy: USER,
+    });
+
+    expect(result.id).toBe(existing!.id);
+
+    // No duplicate created.
+    const allRows = await db
+      .select()
+      .from(customersSchema)
+      .where(eq(customersSchema.organizationId, ORG));
+
+    expect(allRows).toHaveLength(1);
+  });
+});
+
 // ── Org isolation: does NOT dedup across organizations ───────────────────────
 
 describe('findOrCreateCustomer — org isolation', () => {
