@@ -48,7 +48,12 @@ export type DashboardMetrics = {
   salesByDay: SalesByDayRow[];
   // Best sellers over the selected range — feeds the "Más vendidos" panel.
   topProducts: TopProductRow[];
+  // New credit extended per day — feeds the "Por cobrar" chart series.
+  fiadoByDay: FiadoByDayRow[];
 };
+
+// New fiado credit summed by the day it was created.
+export type FiadoByDayRow = { day: string; amount: number };
 
 // Products at or below their minimum stock — the "Stock crítico" reorder list.
 // Current state (not range-dependent), so the page fetches it once.
@@ -57,6 +62,9 @@ export type LowStockRow = {
   stock: number;
   minStock: number;
 };
+
+// Low-stock product count grouped by category — the "Stock crítico" chart series.
+export type StockCategoryRow = { category: string; count: number };
 
 async function requireOrg() {
   const { userId, orgId, orgRole } = await auth();
@@ -263,6 +271,32 @@ function validateDate(value: string, field: string): string {
   return value;
 }
 
+// New fiado credit summed by the day it was created, over the range.
+async function fiadoByDay(
+  orgId: string,
+  start: string,
+  end: string,
+): Promise<FiadoByDayRow[]> {
+  const result = await db.execute(sql`
+    SELECT
+      to_char(
+        (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date,
+        'YYYY-MM-DD'
+      ) AS day,
+      COALESCE(SUM(original_amount), 0)::float8 AS amount
+    FROM fiados
+    WHERE organization_id = ${orgId}
+      AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
+          BETWEEN ${start}::date AND ${end}::date
+    GROUP BY day
+    ORDER BY day
+  `);
+  return (result.rows ?? []).map((r) => {
+    const row = r as Record<string, unknown>;
+    return { day: String(row.day ?? ''), amount: toNum(row.amount) };
+  });
+}
+
 export async function getMetrics(
   start: string,
   end: string,
@@ -287,6 +321,7 @@ export async function getMetrics(
     prevNet,
     cashFlow,
     topProducts,
+    fiadoDaily,
   ] = await Promise.all([
     periodStats(orgId, s, e),
     inventoryStats(orgId),
@@ -296,6 +331,7 @@ export async function getMetrics(
     hasCompare && cs && ce ? netRevenue(orgId, cs, ce) : Promise.resolve(null),
     cashFlowStats(orgId, s, e),
     getTopProducts(s, e),
+    fiadoByDay(orgId, s, e),
   ]);
 
   return {
@@ -309,6 +345,7 @@ export async function getMetrics(
     inventory,
     salesByDay: byDay,
     topProducts: topProducts.slice(0, 5),
+    fiadoByDay: fiadoDaily,
   };
 }
 
@@ -339,6 +376,28 @@ export async function getLowStockItems(limit = 6): Promise<LowStockRow[]> {
     stock: r.stock,
     minStock: r.minStock,
   }));
+}
+
+// Low-stock product count grouped by category — the "Stock crítico" chart series.
+export async function getStockByCategory(): Promise<StockCategoryRow[]> {
+  const { orgId } = await requireOrg();
+  const result = await db.execute(sql`
+    SELECT
+      COALESCE(NULLIF(category, ''), 'Sin categoría') AS category,
+      COUNT(*)::int AS count
+    FROM products
+    WHERE organization_id = ${orgId}
+      AND deleted = false
+      AND status = 'published'
+      AND min_stock > 0
+      AND stock <= min_stock
+    GROUP BY 1
+    ORDER BY count DESC
+  `);
+  return (result.rows ?? []).map((r) => {
+    const row = r as Record<string, unknown>;
+    return { category: String(row.category ?? 'Sin categoría'), count: toInt(row.count) };
+  });
 }
 
 export type MyDay = {

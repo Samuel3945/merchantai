@@ -1,6 +1,10 @@
 'use client';
 
-import type { DashboardMetrics, LowStockRow } from '@/actions/dashboard';
+import type {
+  DashboardMetrics,
+  LowStockRow,
+  StockCategoryRow,
+} from '@/actions/dashboard';
 import type { FiadosOverview } from '@/libs/fiados';
 import type { RangePreset } from '@/utils/DateRange';
 import { Bot, MessageCircle } from 'lucide-react';
@@ -351,29 +355,31 @@ function KpiCard({
 
 // The metrics that have an honest per-day series to drive the chart. Flujo de
 // caja neto is a period aggregate with no daily line, so it stays a plain stat.
-// Only the two metrics with an honest daily series drive the chart. Por cobrar
-// and Stock crítico are current-state KPIs (no daily line), so they're shown but
-// not selectable.
-type ChartMetric = 'ventas' | 'ganancia';
+// All four KPIs drive the chart, each with its own series and color.
+type ChartMetric = 'ventas' | 'ganancia' | 'cobrar' | 'stock';
 
 const METRIC_CONFIG: Record<ChartMetric, {
-  dataKey: 'total' | 'profit';
   color: string;
   label: string;
+  money: boolean;
 }> = {
-  ventas: { dataKey: 'total', color: '#0F766E', label: 'Ventas por día' },
-  ganancia: { dataKey: 'profit', color: '#10B981', label: 'Ganancia por día' },
+  ventas: { color: '#0F766E', label: 'Ventas por día', money: true },
+  ganancia: { color: '#10B981', label: 'Ganancia por día', money: true },
+  cobrar: { color: '#B45309', label: 'Fiado por día', money: true },
+  stock: { color: '#DC2626', label: 'Stock crítico por categoría', money: false },
 };
 
 export function DashboardClient({
   initial,
   fiado,
   lowStock,
+  stockByCategory,
   hasWhatsAppAgent,
 }: {
   initial: DashboardMetrics;
   fiado: FiadosOverview;
   lowStock: LowStockRow[];
+  stockByCategory: StockCategoryRow[];
   hasWhatsAppAgent: boolean;
 }) {
   const [data, setData] = useState<DashboardMetrics>(initial);
@@ -425,23 +431,37 @@ export function DashboardClient({
   }
 
   const prev = data.previousPeriod;
-
-  const salesByDayLabeled = useMemo(
-    () =>
-      data.salesByDay.map(r => ({
-        ...r,
-        label: formatDayLabel(r.day),
-      })),
-    [data.salesByDay],
-  );
-
-  // The chart reflects the selected metric: its daily series, color and the
-  // period total shown above it.
-  const chart = METRIC_CONFIG[metric];
-  const chartValue = formatMoney(
-    metric === 'ganancia' ? data.period.profit : data.period.total,
-  );
   const fiadoTotal = fiado.clients.reduce((sum, c) => sum + c.balance, 0);
+
+  // The chart reflects the selected KPI: each metric maps to its own {x,y}
+  // series — sales/profit/fiado by day, or low stock by category.
+  const chart = METRIC_CONFIG[metric];
+  const chartSeries = useMemo(() => {
+    switch (metric) {
+      case 'ganancia':
+        return data.salesByDay.map(r => ({ x: formatDayLabel(r.day), y: r.profit }));
+      case 'cobrar':
+        return data.fiadoByDay.map(r => ({ x: formatDayLabel(r.day), y: r.amount }));
+      case 'stock':
+        return stockByCategory.map(r => ({ x: r.category, y: r.count }));
+      default:
+        return data.salesByDay.map(r => ({ x: formatDayLabel(r.day), y: r.total }));
+    }
+  }, [metric, data.salesByDay, data.fiadoByDay, stockByCategory]);
+  const chartValue = chart.money
+    ? formatMoney(
+        metric === 'ganancia'
+          ? data.period.profit
+          : metric === 'cobrar'
+            ? fiadoTotal
+            : data.period.total,
+      )
+    : String(lowStock.length);
+  const chartSub = metric === 'cobrar'
+    ? `${fiado.clients.length} ${fiado.clients.length === 1 ? 'cliente' : 'clientes'}`
+    : metric === 'stock'
+      ? `${lowStock.length} ${lowStock.length === 1 ? 'producto' : 'productos'}`
+      : `${data.period.count} ${data.period.count === 1 ? 'venta' : 'ventas'}`;
 
   return (
     <div className="space-y-6">
@@ -484,7 +504,7 @@ export function DashboardClient({
         </div>
       </header>
 
-      {/* Hero KPIs — the Claude Design set. Ventas + Ganancia drive the chart. */}
+      {/* Hero KPIs — the Claude Design set. All four drive the chart. */}
       <div className="
         grid grid-cols-1 gap-3
         sm:grid-cols-2
@@ -514,6 +534,9 @@ export function DashboardClient({
         <KpiCard
           title="Por cobrar"
           value={formatMoney(fiadoTotal)}
+          selected={metric === 'cobrar'}
+          onSelect={() => setMetric('cobrar')}
+          color={METRIC_CONFIG.cobrar.color}
           hint={`${fiado.clients.length} ${
             fiado.clients.length === 1 ? 'cliente con fiado' : 'clientes con fiado'
           }`}
@@ -521,6 +544,9 @@ export function DashboardClient({
         <KpiCard
           title="Stock crítico"
           value={String(lowStock.length)}
+          selected={metric === 'stock'}
+          onSelect={() => setMetric('stock')}
+          color={METRIC_CONFIG.stock.color}
           hint="productos para reponer"
         />
       </div>
@@ -532,7 +558,7 @@ export function DashboardClient({
       "
       >
         <div className="
-          rounded-lg border bg-background p-4 shadow-xs
+          flex flex-col rounded-lg border bg-background p-4 shadow-xs
           lg:col-span-2
         "
         >
@@ -550,9 +576,7 @@ export function DashboardClient({
                   {chartValue}
                 </span>
                 <span className="text-xs text-muted-foreground tabular-nums">
-                  {data.period.count}
-                  {' '}
-                  {data.period.count === 1 ? 'venta' : 'ventas'}
+                  {chartSub}
                 </span>
               </div>
             </div>
@@ -566,9 +590,11 @@ export function DashboardClient({
               Ver reportes →
             </Link>
           </div>
-          <div className="h-72 w-full">
+          {/* flex-1 + min-h so the chart fills the card the grid stretches to
+              match the sidebar — no empty gap below it. */}
+          <div className="min-h-72 w-full flex-1">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={salesByDayLabeled}>
+              <AreaChart data={chartSeries}>
                 <defs>
                   <linearGradient id="metricFill" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor={chart.color} stopOpacity={0.25} />
@@ -576,17 +602,23 @@ export function DashboardClient({
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
-                <XAxis dataKey="label" fontSize={12} />
+                <XAxis dataKey="x" fontSize={12} />
                 <YAxis
                   fontSize={12}
-                  tickFormatter={v => compactFmt.format(Number(v))}
+                  tickFormatter={v =>
+                    chart.money
+                      ? compactFmt.format(Number(v))
+                      : String(Math.round(Number(v)))}
                 />
                 <Tooltip
-                  formatter={value => [formatMoney(Number(value)), chart.label]}
+                  formatter={value => [
+                    chart.money ? formatMoney(Number(value)) : String(value),
+                    chart.label,
+                  ]}
                 />
                 <Area
                   type="monotone"
-                  dataKey={chart.dataKey}
+                  dataKey="y"
                   name={chart.label}
                   stroke={chart.color}
                   strokeWidth={2}
