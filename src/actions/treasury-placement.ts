@@ -17,6 +17,7 @@ import {
   recordHandoverReturnToCaja,
 } from '@/libs/treasury';
 import {
+  cashSessionsSchema,
   posTokensSchema,
   treasuryAccountsSchema,
   treasuryMovementsSchema,
@@ -231,6 +232,45 @@ export async function listPendingHandoversAction(): Promise<
   const { listPendingHandovers } = await import('@/libs/treasury');
   const handovers = await listPendingHandovers(db, orgId);
   return { ok: true, data: handovers };
+}
+
+export type OpenCajaOption = {
+  posTokenId: string;
+  deviceName: string;
+  sessionId: string;
+};
+
+/**
+ * Returns the list of POS cajas that currently have an OPEN cash session.
+ * Used by the AllocateModal "Volvió a una caja" destination picker.
+ * Gated by requirePanelModule('cash').
+ */
+export async function listOpenCajas(): Promise<ActionResult<OpenCajaOption[]>> {
+  const { orgId } = await requirePanelModule('cash');
+
+  const rows = await db
+    .select({
+      posTokenId: posTokensSchema.id,
+      deviceName: posTokensSchema.deviceName,
+      sessionId: cashSessionsSchema.id,
+    })
+    .from(cashSessionsSchema)
+    .innerJoin(
+      posTokensSchema,
+      and(
+        eq(cashSessionsSchema.posTokenId, posTokensSchema.id),
+        eq(posTokensSchema.organizationId, orgId),
+      ),
+    )
+    .where(
+      and(
+        eq(cashSessionsSchema.organizationId, orgId),
+        eq(cashSessionsSchema.status, 'open'),
+      ),
+    )
+    .orderBy(posTokensSchema.deviceName);
+
+  return { ok: true, data: rows };
 }
 
 /**

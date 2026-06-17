@@ -1,5 +1,6 @@
 'use client';
 
+import type { OpenCajaOption } from '@/actions/treasury-placement';
 import type { PendingHandover, TreasuryAccountRow } from '@/libs/treasury';
 import { Clock, Coins, Lock } from 'lucide-react';
 import { useState } from 'react';
@@ -13,6 +14,7 @@ function HandoverCard(props: {
   handover: PendingHandover;
   bankAccounts: TreasuryAccountRow[];
   cajaFuerteAccounts: TreasuryAccountRow[];
+  openCajas: OpenCajaOption[];
 }) {
   const [modalOpen, setModalOpen] = useState(false);
 
@@ -53,7 +55,7 @@ function HandoverCard(props: {
           {/* Origin + meta */}
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm font-[650]">Cierre de Caja</span>
+              <span className="text-sm font-[650]">{props.handover.origin}</span>
               <span
                 className="
                   inline-flex h-5 items-center rounded-full bg-accent px-2.5
@@ -71,6 +73,9 @@ function HandoverCard(props: {
                 <Clock className="size-3" />
                 {dateLabel}
               </span>
+              {props.handover.cashierName && (
+                <span>{props.handover.cashierName}</span>
+              )}
             </div>
           </div>
 
@@ -95,6 +100,7 @@ function HandoverCard(props: {
         handover={props.handover}
         bankAccounts={props.bankAccounts}
         cajaFuerteAccounts={props.cajaFuerteAccounts}
+        openCajas={props.openCajas}
         open={modalOpen}
         onClose={() => setModalOpen(false)}
       />
@@ -108,13 +114,14 @@ type PorUbicarProps = {
   pendingHandovers: PendingHandover[];
   bankAccounts: TreasuryAccountRow[];
   cajaFuerteAccounts: TreasuryAccountRow[];
+  openCajas: OpenCajaOption[];
 };
 
 /**
  * "Plata por ubicar" section — shown only when there are pending handovers.
  * Header: total sin ubicar + count. One card per handover with an AllocateModal.
  */
-export function PorUbicar({ pendingHandovers, bankAccounts, cajaFuerteAccounts }: PorUbicarProps) {
+export function PorUbicar({ pendingHandovers, bankAccounts, cajaFuerteAccounts, openCajas }: PorUbicarProps) {
   if (pendingHandovers.length === 0) {
     return null;
   }
@@ -158,6 +165,7 @@ export function PorUbicar({ pendingHandovers, bankAccounts, cajaFuerteAccounts }
             handover={h}
             bankAccounts={bankAccounts}
             cajaFuerteAccounts={cajaFuerteAccounts}
+            openCajas={openCajas}
           />
         ))}
       </div>
