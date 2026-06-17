@@ -2677,6 +2677,7 @@ describe('recordHandoverReturnToCaja', () => {
     const handoverId = await makeHandover(pending.id, SES_C_CLOSED, 1000);
 
     const transitoBefore = await dbBalance(pending.id, 0);
+
     expect(transitoBefore).toBe(1000);
 
     await recordHandoverReturnToCaja(db, {
@@ -2690,6 +2691,7 @@ describe('recordHandoverReturnToCaja', () => {
     });
 
     const transitoAfter = await dbBalance(pending.id, 0);
+
     expect(transitoAfter).toBe(0); // fully debited
 
     // Caja session should have an 'internal' deposit entry
@@ -2697,6 +2699,7 @@ describe('recordHandoverReturnToCaja', () => {
       `SELECT type, amount, origin FROM cash_movements WHERE session_id = $1`,
       [SES_C_OPEN],
     );
+
     expect(rows).toHaveLength(1);
     expect(rows[0]!.type).toBe('deposit');
     expect(Number(rows[0]!.amount)).toBe(1000);
@@ -2722,6 +2725,7 @@ describe('recordHandoverReturnToCaja', () => {
     });
 
     const remaining = await getRemainingForHandover(db, handoverId, ORG);
+
     expect(remaining).toBe(600); // 1000 − 400
   });
 
@@ -2776,10 +2780,12 @@ describe('recordHandoverReturnToCaja', () => {
     });
 
     const remaining = await getRemainingForHandover(db, handoverId, ORG);
+
     expect(remaining).toBe(0);
 
     // countPendingHandovers should not count this handover
     const counts = await countPendingHandovers(db, ORG);
+
     expect(counts.count).toBe(0);
   });
 
@@ -2805,6 +2811,7 @@ describe('recordHandoverReturnToCaja', () => {
       `SELECT treasury_movement_id FROM cash_movements WHERE session_id = $1`,
       [SES_C_OPEN],
     );
+
     expect(rows[0]!.treasury_movement_id).toBe(treasuryMovementId);
 
     // The salida row must have handoverMovementId set
@@ -2812,6 +2819,7 @@ describe('recordHandoverReturnToCaja', () => {
       `SELECT handover_movement_id, type FROM treasury_movements WHERE id = $1`,
       [treasuryMovementId],
     );
+
     expect(tmRows[0]!.type).toBe('salida');
     expect(tmRows[0]!.handover_movement_id).toBe(handoverId);
   });
@@ -2859,6 +2867,7 @@ describe('listPendingHandovers — enriched fields', () => {
     await makeHandover(pending.id, SES_LP_DEV, 750);
 
     const handovers = await listPendingHandovers(db, ORG);
+
     expect(handovers).toHaveLength(1);
     expect(handovers[0]!.origin).toBe('Tablet Mostrador');
     expect(handovers[0]!.cashierName).toBe('Pedro');
@@ -2871,6 +2880,7 @@ describe('listPendingHandovers — enriched fields', () => {
     await makeHandover(pending.id, SES_LP_ADMIN, 300);
 
     const handovers = await listPendingHandovers(db, ORG);
+
     expect(handovers).toHaveLength(1);
     expect(handovers[0]!.origin).toBe('Cierre de caja');
     expect(handovers[0]!.cashierName).toBe('Owner');
@@ -2889,6 +2899,7 @@ describe('listPendingHandovers — enriched fields', () => {
     await makeHandover(pending.id, SES_NOCLBY, 100);
 
     const handovers = await listPendingHandovers(db, ORG);
+
     expect(handovers).toHaveLength(1);
     expect(handovers[0]!.cashierName).toBeNull();
     expect(handovers[0]!.origin).toBe('Cierre de caja');

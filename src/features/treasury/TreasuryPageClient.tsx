@@ -1,7 +1,7 @@
 'use client';
 
-import type { OpenCajaOption } from '@/actions/treasury-placement';
 import type { PaymentMethodRow } from '@/actions/payment-methods';
+import type { OpenCajaOption } from '@/actions/treasury-placement';
 import type { PendingHandover, TreasuryAccount, TreasuryAccountRow } from '@/libs/treasury';
 import { useState } from 'react';
 import { CreateSlideover } from './CreateSlideover';

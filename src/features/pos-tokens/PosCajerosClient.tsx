@@ -1248,10 +1248,7 @@ function OrgSweepDefaultSection({
   };
 
   return (
-    <div className="
-      rounded-md border border-input bg-muted/30 px-4 py-4
-    "
-    >
+    <div className="rounded-md border border-input bg-muted/30 p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2 text-sm font-semibold">
@@ -1265,15 +1262,18 @@ function OrgSweepDefaultSection({
           </p>
           {currentAccountId && currentName && (
             <p className="mt-1 text-xs text-muted-foreground">
-              Destino actual:{' '}
+              Destino actual:
+              {' '}
               <span className="font-medium text-foreground">{currentName}</span>
             </p>
           )}
           {!currentAccountId && (
             <p className="mt-1 text-xs text-muted-foreground">
-              Sin destino fijo — los faltantes quedan en{' '}
+              Sin destino fijo — los faltantes quedan en
+              {' '}
               <span className="font-medium text-foreground">Pendiente de ubicar</span>
-              {' '}hasta que se ubiquen manualmente.
+              {' '}
+              hasta que se ubiquen manualmente.
             </p>
           )}
         </div>
