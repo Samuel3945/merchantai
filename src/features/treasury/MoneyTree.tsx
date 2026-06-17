@@ -87,7 +87,7 @@ function Branch({ label, icon, accounts, defaultOpen = true }: BranchProps) {
  *   EMPRESA → ▼ EFECTIVO (caja + caja_fuerte) → ▼ BANCOS (banco)
  *
  * Each branch is collapsible and shows a subtotal derived from the same leaf
- * accounts, matching the SummaryCards buckets exactly (no double-counting).
+ * accounts matching each bucket exactly (no double-counting).
  * POS caja leaves are read-only (no actions on individual leaves).
  */
 export function MoneyTree({ accounts }: { accounts: TreasuryAccount[] }) {

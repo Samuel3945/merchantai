@@ -14,11 +14,13 @@ import {
   getOrCreatePendingAccount,
   getRemainingForHandover,
   getTreasuryPosition,
+  listPendingHandovers,
   listTreasuryAccounts,
   recordBankConsignacion,
   recordContainerTransfer,
   recordGastoOutflow,
   recordHandoverMovement,
+  recordHandoverReturnToCaja,
   resolveBancoForMethod,
   seedOpeningBalance,
 } from '@/libs/treasury';
@@ -82,7 +84,12 @@ const DDL = `
     type "cash_movement_type" NOT NULL,
     amount numeric(12, 2) NOT NULL,
     reason text NOT NULL,
+    category text,
+    authorized_by text,
     created_by text NOT NULL,
+    sale_id uuid,
+    supplier_id uuid,
+    corrects_session_id uuid,
     origin text,
     treasury_movement_id uuid,
     created_at timestamp DEFAULT now() NOT NULL
@@ -2626,5 +2633,275 @@ describe('getOpeningExpected — post-handover adjustment', () => {
 
     expect(result.expected).toBe(600); // 1000 − 400
     expect(result.priorCloseExists).toBe(true);
+  });
+});
+
+// ── recordHandoverReturnToCaja ────────────────────────────────────────────────
+//
+// Tests the core two-row write: treasury salida (transito) + cash_movements entrada.
+// Money-conservation: transito −X, caja +X, company total unchanged.
+
+describe('recordHandoverReturnToCaja', () => {
+  // Stable IDs for this describe block
+  const TOK_C = '00000000-0000-0000-cccc-000000000001';
+  const SES_C_CLOSED = '00000000-0000-0000-cccc-000000000002';
+  const SES_C_OPEN = '00000000-0000-0000-cccc-000000000003';
+
+  // Seeds a CLOSED session (for the originating handover)
+  async function makeClosedSession(id: string): Promise<void> {
+    await pg.query(
+      `INSERT INTO cash_sessions (id, organization_id, pos_token_id, opened_by, opening_amount, status, closed_by, counted_amount)
+       VALUES ($1, $2, NULL, 'cajero', '0', 'closed', 'María', '500.00')`,
+      [id, ORG],
+    );
+  }
+
+  // Seeds an OPEN session linked to a pos_token
+  async function makeOpenSession(sessionId: string, tokenId: string): Promise<void> {
+    await pg.query(
+      `INSERT INTO pos_tokens (id, organization_id, device_name) VALUES ($1, $2, 'Caja Test') ON CONFLICT DO NOTHING`,
+      [tokenId, ORG],
+    );
+    await pg.query(
+      `INSERT INTO cash_sessions (id, organization_id, pos_token_id, opened_by, opening_amount, status)
+       VALUES ($1, $2, $3, 'cajero', '0', 'open')`,
+      [sessionId, ORG, tokenId],
+    );
+  }
+
+  it('debits transito and credits the caja session (happy path)', async () => {
+    await makeClosedSession(SES_C_CLOSED);
+    await makeOpenSession(SES_C_OPEN, TOK_C);
+
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    const handoverId = await makeHandover(pending.id, SES_C_CLOSED, 1000);
+
+    const transitoBefore = await dbBalance(pending.id, 0);
+
+    expect(transitoBefore).toBe(1000);
+
+    await recordHandoverReturnToCaja(db, {
+      organizationId: ORG,
+      handoverMovementId: handoverId,
+      pendingAccountId: pending.id,
+      openSessionId: SES_C_OPEN,
+      deviceName: 'Caja Test',
+      amount: 1000,
+      createdBy: 'owner',
+    });
+
+    const transitoAfter = await dbBalance(pending.id, 0);
+
+    expect(transitoAfter).toBe(0); // fully debited
+
+    // Caja session should have an 'internal' deposit entry
+    const { rows } = await pg.query<{ type: string; amount: string; origin: string }>(
+      `SELECT type, amount, origin FROM cash_movements WHERE session_id = $1`,
+      [SES_C_OPEN],
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.type).toBe('deposit');
+    expect(Number(rows[0]!.amount)).toBe(1000);
+    expect(rows[0]!.origin).toBe('internal');
+  });
+
+  it('reduces handover remaining (partial placement)', async () => {
+    await makeClosedSession(SES_C_CLOSED);
+    await makeOpenSession(SES_C_OPEN, TOK_C);
+
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    const handoverId = await makeHandover(pending.id, SES_C_CLOSED, 1000);
+
+    // Place only 400
+    await recordHandoverReturnToCaja(db, {
+      organizationId: ORG,
+      handoverMovementId: handoverId,
+      pendingAccountId: pending.id,
+      openSessionId: SES_C_OPEN,
+      deviceName: 'Caja Test',
+      amount: 400,
+      createdBy: 'owner',
+    });
+
+    const remaining = await getRemainingForHandover(db, handoverId, ORG);
+
+    expect(remaining).toBe(600); // 1000 − 400
+  });
+
+  it('company total is conserved: transito −X, caja +X = net 0 change', async () => {
+    await makeClosedSession(SES_C_CLOSED);
+    await makeOpenSession(SES_C_OPEN, TOK_C);
+
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    const handoverId = await makeHandover(pending.id, SES_C_CLOSED, 500);
+
+    const transitoBefore = await dbBalance(pending.id, 0);
+
+    await recordHandoverReturnToCaja(db, {
+      organizationId: ORG,
+      handoverMovementId: handoverId,
+      pendingAccountId: pending.id,
+      openSessionId: SES_C_OPEN,
+      deviceName: 'Caja Test',
+      amount: 500,
+      createdBy: 'owner',
+    });
+
+    const transitoAfter = await dbBalance(pending.id, 0);
+
+    // Cash movement sum for that session
+    const { rows } = await pg.query<{ total: string }>(
+      `SELECT COALESCE(SUM(amount), 0)::text AS total FROM cash_movements WHERE session_id = $1`,
+      [SES_C_OPEN],
+    );
+    const cajaTotal = Number(rows[0]!.total);
+
+    // Transito decrease equals caja increase
+    expect(transitoBefore - transitoAfter).toBe(cajaTotal);
+    expect(cajaTotal).toBe(500);
+  });
+
+  it('handover remaining drops to zero when fully placed back to caja', async () => {
+    await makeClosedSession(SES_C_CLOSED);
+    await makeOpenSession(SES_C_OPEN, TOK_C);
+
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    const handoverId = await makeHandover(pending.id, SES_C_CLOSED, 800);
+
+    await recordHandoverReturnToCaja(db, {
+      organizationId: ORG,
+      handoverMovementId: handoverId,
+      pendingAccountId: pending.id,
+      openSessionId: SES_C_OPEN,
+      deviceName: 'Caja Test',
+      amount: 800,
+      createdBy: 'owner',
+    });
+
+    const remaining = await getRemainingForHandover(db, handoverId, ORG);
+
+    expect(remaining).toBe(0);
+
+    // countPendingHandovers should not count this handover
+    const counts = await countPendingHandovers(db, ORG);
+
+    expect(counts.count).toBe(0);
+  });
+
+  it('treasury_movement_id on the cash_movement links to the salida row', async () => {
+    await makeClosedSession(SES_C_CLOSED);
+    await makeOpenSession(SES_C_OPEN, TOK_C);
+
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    const handoverId = await makeHandover(pending.id, SES_C_CLOSED, 300);
+
+    const { treasuryMovementId } = await recordHandoverReturnToCaja(db, {
+      organizationId: ORG,
+      handoverMovementId: handoverId,
+      pendingAccountId: pending.id,
+      openSessionId: SES_C_OPEN,
+      deviceName: 'Caja Test',
+      amount: 300,
+      createdBy: 'owner',
+    });
+
+    // The cash_movement should reference the salida treasury row
+    const { rows } = await pg.query<{ treasury_movement_id: string }>(
+      `SELECT treasury_movement_id FROM cash_movements WHERE session_id = $1`,
+      [SES_C_OPEN],
+    );
+
+    expect(rows[0]!.treasury_movement_id).toBe(treasuryMovementId);
+
+    // The salida row must have handoverMovementId set
+    const { rows: tmRows } = await pg.query<{ handover_movement_id: string; type: string }>(
+      `SELECT handover_movement_id, type FROM treasury_movements WHERE id = $1`,
+      [treasuryMovementId],
+    );
+
+    expect(tmRows[0]!.type).toBe('salida');
+    expect(tmRows[0]!.handover_movement_id).toBe(handoverId);
+  });
+});
+
+// ── listPendingHandovers — origin + cashierName enrichment ────────────────────
+
+describe('listPendingHandovers — enriched fields', () => {
+  const TOK_LP = '00000000-0000-0000-dddd-000000000001';
+  const SES_LP_DEV = '00000000-0000-0000-dddd-000000000002';
+  const SES_LP_ADMIN = '00000000-0000-0000-dddd-000000000003';
+
+  async function insertTokenForLP(tokenId: string, name: string): Promise<void> {
+    await pg.query(
+      `INSERT INTO pos_tokens (id, organization_id, device_name) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+      [tokenId, ORG, name],
+    );
+  }
+
+  async function makeDeviceSession(
+    sessionId: string,
+    tokenId: string,
+    closedBy: string,
+  ): Promise<void> {
+    await pg.query(
+      `INSERT INTO cash_sessions (id, organization_id, pos_token_id, opened_by, opening_amount, status, closed_by, counted_amount)
+       VALUES ($1, $2, $3, 'cajero', '0', 'closed', $4, '100.00')`,
+      [sessionId, ORG, tokenId, closedBy],
+    );
+  }
+
+  async function makeAdminSession(sessionId: string, closedBy: string): Promise<void> {
+    await pg.query(
+      `INSERT INTO cash_sessions (id, organization_id, pos_token_id, opened_by, opening_amount, status, closed_by, counted_amount)
+       VALUES ($1, $2, NULL, 'owner', '0', 'closed', $3, '200.00')`,
+      [sessionId, ORG, closedBy],
+    );
+  }
+
+  it('resolves origin to device_name and cashierName to closed_by', async () => {
+    await insertTokenForLP(TOK_LP, 'Tablet Mostrador');
+    await makeDeviceSession(SES_LP_DEV, TOK_LP, 'Pedro');
+
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    await makeHandover(pending.id, SES_LP_DEV, 750);
+
+    const handovers = await listPendingHandovers(db, ORG);
+
+    expect(handovers).toHaveLength(1);
+    expect(handovers[0]!.origin).toBe('Tablet Mostrador');
+    expect(handovers[0]!.cashierName).toBe('Pedro');
+  });
+
+  it('falls back to "Cierre de caja" when no device token is linked', async () => {
+    await makeAdminSession(SES_LP_ADMIN, 'Owner');
+
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    await makeHandover(pending.id, SES_LP_ADMIN, 300);
+
+    const handovers = await listPendingHandovers(db, ORG);
+
+    expect(handovers).toHaveLength(1);
+    expect(handovers[0]!.origin).toBe('Cierre de caja');
+    expect(handovers[0]!.cashierName).toBe('Owner');
+  });
+
+  it('returns null cashierName when session has no closedBy', async () => {
+    // A session that was never formally closed by someone (edge case)
+    const SES_NOCLBY = '00000000-0000-0000-eeee-000000000001';
+    await pg.query(
+      `INSERT INTO cash_sessions (id, organization_id, pos_token_id, opened_by, opening_amount, status)
+       VALUES ($1, $2, NULL, 'cajero', '0', 'closed')`,
+      [SES_NOCLBY, ORG],
+    );
+
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    await makeHandover(pending.id, SES_NOCLBY, 100);
+
+    const handovers = await listPendingHandovers(db, ORG);
+
+    expect(handovers).toHaveLength(1);
+    expect(handovers[0]!.cashierName).toBeNull();
+    expect(handovers[0]!.origin).toBe('Cierre de caja');
   });
 });

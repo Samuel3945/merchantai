@@ -1,6 +1,7 @@
 'use client';
 
 import type { PaymentMethodRow } from '@/actions/payment-methods';
+import type { OpenCajaOption } from '@/actions/treasury-placement';
 import type { PendingHandover, TreasuryAccount, TreasuryAccountRow } from '@/libs/treasury';
 import { useState } from 'react';
 import { CreateSlideover } from './CreateSlideover';
@@ -19,6 +20,8 @@ type TreasuryPageClientProps = {
   total: number;
   sinUbicar: number;
   pendingCount: number;
+  /** Currently-open POS cajas — passed to AllocateModal for "Volvió a una caja". */
+  openCajas: OpenCajaOption[];
 };
 
 /**
@@ -37,6 +40,7 @@ export function TreasuryPageClient({
   total,
   sinUbicar,
   pendingCount,
+  openCajas,
 }: TreasuryPageClientProps) {
   const [wizardOpen, setWizardOpen] = useState(false);
   const [wizardFromKey, setWizardFromKey] = useState<string | undefined>(undefined);
@@ -60,6 +64,7 @@ export function TreasuryPageClient({
           pendingHandovers={pendingHandovers}
           bankAccounts={bankAccounts}
           cajaFuerteAccounts={cajaFuerteAccounts}
+          openCajas={openCajas}
         />
       )}
 

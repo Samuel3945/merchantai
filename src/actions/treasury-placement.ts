@@ -4,17 +4,24 @@ import type { ActionResult } from '@/libs/action-result';
 import { auth, currentUser } from '@clerk/nextjs/server';
 import { and, eq } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
-import { toMoney } from '@/libs/cash-helpers';
+import { findOpenSession, toMoney } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import { requirePanelModule } from '@/libs/panel-session';
 import {
   getHandoverStatusForSessions,
   getOrCreatePendingAccount,
+  getRemainingForHandover,
   recordBankConsignacion,
   recordContainerTransfer,
   recordGastoOutflow,
+  recordHandoverReturnToCaja,
 } from '@/libs/treasury';
-import { treasuryAccountsSchema, treasuryMovementsSchema } from '@/models/Schema';
+import {
+  cashSessionsSchema,
+  posTokensSchema,
+  treasuryAccountsSchema,
+  treasuryMovementsSchema,
+} from '@/models/Schema';
 
 /**
  * Owner-only (org:admin) gate. Mirrors requireAdminContext in pos-tokens.ts.
@@ -215,7 +222,7 @@ export async function getPendingHandoversOverview(): Promise<
 
 /**
  * Returns the list of pending handovers with remaining balances.
- * Used by the TreasuryConsole placement queue.
+ * Used by the AllocateModal placement queue.
  * Gated by requirePanelModule('cash').
  */
 export async function listPendingHandoversAction(): Promise<
@@ -225,6 +232,45 @@ export async function listPendingHandoversAction(): Promise<
   const { listPendingHandovers } = await import('@/libs/treasury');
   const handovers = await listPendingHandovers(db, orgId);
   return { ok: true, data: handovers };
+}
+
+export type OpenCajaOption = {
+  posTokenId: string;
+  deviceName: string;
+  sessionId: string;
+};
+
+/**
+ * Returns the list of POS cajas that currently have an OPEN cash session.
+ * Used by the AllocateModal "Volvió a una caja" destination picker.
+ * Gated by requirePanelModule('cash').
+ */
+export async function listOpenCajas(): Promise<ActionResult<OpenCajaOption[]>> {
+  const { orgId } = await requirePanelModule('cash');
+
+  const rows = await db
+    .select({
+      posTokenId: posTokensSchema.id,
+      deviceName: posTokensSchema.deviceName,
+      sessionId: cashSessionsSchema.id,
+    })
+    .from(cashSessionsSchema)
+    .innerJoin(
+      posTokensSchema,
+      and(
+        eq(cashSessionsSchema.posTokenId, posTokensSchema.id),
+        eq(posTokensSchema.organizationId, orgId),
+      ),
+    )
+    .where(
+      and(
+        eq(cashSessionsSchema.organizationId, orgId),
+        eq(cashSessionsSchema.status, 'open'),
+      ),
+    )
+    .orderBy(posTokensSchema.deviceName);
+
+  return { ok: true, data: rows };
 }
 
 /**
@@ -370,6 +416,105 @@ export async function reclassifyAutoSweep(
     return {
       ok: false,
       error: err instanceof Error ? err.message : 'Error al reclasificar el traspaso',
+    };
+  }
+}
+
+/**
+ * Places money from the org's Pendiente de ubicar (transito) account back to a
+ * POS caja that must be OPEN at call time.
+ *
+ * Money-conservation invariant:
+ *   transito −amount (salida)  →  cash_movements entrada on the open session
+ *   Total treasury balance stays flat: we debit transito and credit the caja.
+ *
+ * Gated by requirePanelModule('cash') — consistent with the sibling placeHandoverTo* actions.
+ *
+ * @param handoverMovementId - the treasury_movements row id (type='handover')
+ * @param targetPosTokenId   - pos_tokens.id of the caja to receive cash
+ * @param amount             - amount to place (partial placement supported)
+ */
+export async function placeHandoverToCaja(
+  handoverMovementId: string,
+  targetPosTokenId: string,
+  amount: number | string,
+): Promise<ActionResult<null>> {
+  const { userId, orgId } = await requirePanelModule('cash');
+
+  if (!handoverMovementId) {
+    return { ok: false, error: 'handoverMovementId es requerido' };
+  }
+  if (!targetPosTokenId) {
+    return { ok: false, error: 'Caja de destino es requerida' };
+  }
+  const amt = toMoney(amount);
+  if (Number.parseFloat(amt) <= 0) {
+    return { ok: false, error: 'El monto debe ser mayor a 0' };
+  }
+
+  const actor = await getActorName(userId);
+
+  try {
+    await db.transaction(async (tx) => {
+      // 1. Validate target pos_token belongs to this org.
+      const [token] = await tx
+        .select({ id: posTokensSchema.id, deviceName: posTokensSchema.deviceName })
+        .from(posTokensSchema)
+        .where(
+          and(
+            eq(posTokensSchema.id, targetPosTokenId),
+            eq(posTokensSchema.organizationId, orgId),
+          ),
+        )
+        .limit(1);
+
+      if (!token) {
+        throw new Error('La caja seleccionada no existe o no pertenece a la organización');
+      }
+
+      // 2. Validate the target has an OPEN cash_session — money can only flow
+      //    into a caja that is actively handling transactions.
+      const openSession = await findOpenSession(tx, orgId, targetPosTokenId);
+      if (!openSession) {
+        throw new Error(
+          `La caja debe estar abierta para recibir el dinero. `
+          + `Abrí "${token.deviceName}" primero.`,
+        );
+      }
+
+      // 3. Guard: remaining on the handover must cover the requested amount.
+      const remaining = await getRemainingForHandover(tx, handoverMovementId, orgId);
+      if (remaining < Number.parseFloat(amt)) {
+        throw new Error(
+          `El monto supera el saldo disponible en este handover `
+          + `(disponible: ${remaining.toFixed(2)}, solicitado: ${Number.parseFloat(amt).toFixed(2)})`,
+        );
+      }
+
+      // 4 + 5. Debit transito + credit the open caja session atomically.
+      //        recordHandoverReturnToCaja encapsulates the two-row write:
+      //        treasury salida (Pendiente → null) + cash_movements deposit (internal origin).
+      const pending = await getOrCreatePendingAccount(tx, orgId, actor);
+      await recordHandoverReturnToCaja(tx, {
+        organizationId: orgId,
+        handoverMovementId,
+        pendingAccountId: pending.id,
+        openSessionId: openSession.id,
+        deviceName: token.deviceName,
+        amount: amt,
+        createdBy: actor,
+      });
+    });
+
+    revalidatePath(TESORERIA_PATH);
+    revalidatePath(CASH_PATH);
+    return { ok: true, data: null };
+  } catch (err: unknown) {
+    // Surface descriptive errors (open-session guard, remaining guard) as
+    // user-facing messages instead of 500s.
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Error al ubicar en caja',
     };
   }
 }

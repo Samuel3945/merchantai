@@ -31,7 +31,7 @@ export type TreasuryAccount = {
   note?: string;
   /**
    * For type='caja' only: the ID of the last closed cash session for this drawer.
-   * Used by the TreasuryConsole to look up whether the session had a handover
+   * Used by the caja card to look up whether the session had a handover
    * (R7 "entregado" label). Absent when there is no closed session for the drawer.
    */
   sessionId?: string;
@@ -1130,6 +1130,75 @@ export async function recordHandoverMovement(
   return row;
 }
 
+// ── placeHandoverToCaja core logic ────────────────────────────────────────────
+
+export type PlaceHandoverToCajaInput = {
+  organizationId: string;
+  handoverMovementId: string;
+  /** ID of the treasury transito (Pendiente de ubicar) account. */
+  pendingAccountId: string;
+  /** ID of the open cash_session to credit. */
+  openSessionId: string;
+  /** Display name of the target device for the reason field. */
+  deviceName: string;
+  amount: number | string;
+  createdBy: string;
+};
+
+/**
+ * Core ledger logic for placing a handover back to an open caja.
+ *
+ * Money-conservation invariant:
+ *   transito −amount (treasury salida)  →  cash_movements entrada on session
+ *
+ * Does NOT validate org membership, session open state, or remaining balance —
+ * the action layer (placeHandoverToCaja in treasury-placement.ts) must gate
+ * those before calling this inside a transaction.
+ *
+ * Returns the treasury salida row id (useful for testing + traceability).
+ */
+export async function recordHandoverReturnToCaja(
+  executor: Executor,
+  input: PlaceHandoverToCajaInput,
+): Promise<{ treasuryMovementId: string }> {
+  const amt = toMoney(input.amount);
+
+  // Debit Pendiente de ubicar (transito)
+  const [salidaRow] = await executor
+    .insert(treasuryMovementsSchema)
+    .values({
+      organizationId: input.organizationId,
+      fromAccountId: input.pendingAccountId,
+      toAccountId: null,
+      amount: amt,
+      type: 'salida',
+      reason: `Volvió a caja ${input.deviceName}`,
+      handoverMovementId: input.handoverMovementId,
+      createdBy: input.createdBy,
+    })
+    .returning({ id: treasuryMovementsSchema.id });
+
+  if (!salidaRow) {
+    throw new Error('treasury_movements: handover-return salida insert returned no row');
+  }
+
+  // Credit the caja cash session as an internal entrada
+  await executor
+    .insert(cashMovementsSchema)
+    .values({
+      sessionId: input.openSessionId,
+      organizationId: input.organizationId,
+      type: 'deposit',
+      amount: amt,
+      reason: `Reingreso desde Pendiente de ubicar (ubicar en caja)`,
+      origin: 'internal',
+      treasuryMovementId: salidaRow.id,
+      createdBy: input.createdBy,
+    });
+
+  return { treasuryMovementId: salidaRow.id };
+}
+
 // ── Slice C: Financial Timeline ───────────────────────────────────────────────
 
 export type TreasuryTimelineEntry = {
@@ -1437,12 +1506,26 @@ export type PendingHandover = {
   remaining: number;
   /** When the handover was created (close time). */
   createdAt: Date;
+  /**
+   * Name of the POS device (caja) that generated the handover.
+   * Sourced from pos_tokens.device_name via the session's pos_token_id.
+   * Falls back to "Cierre de caja" when there is no linked device.
+   */
+  origin: string;
+  /**
+   * Who closed the session. Sourced from cash_sessions.closed_by (free text set
+   * by the POS at close time — already a resolved display name on the device).
+   * Null when no linked session or the session has no closedBy value.
+   */
+  cashierName: string | null;
 };
 
 /**
- * Returns the list of pending handover movements with their remaining balances.
+ * Returns the list of pending handover movements with their remaining balances,
+ * enriched with origin (device name) and cashierName (who closed the session).
  * A handover is "pending" while remaining > 0.
- * Used by the TreasuryConsole placement queue to show per-handover placement rows.
+ * Used by the placement queue (AllocateModal) to show the recap header
+ * "De dónde salió / Cuándo / Quién la tenía".
  */
 export async function listPendingHandovers(
   executor: Executor,
@@ -1454,6 +1537,10 @@ export async function listPendingHandovers(
       amount: sql<string>`h.amount::text`,
       remaining: sql<string>`(h.amount - COALESCE(p.placed, 0))::text`,
       createdAt: sql<Date>`h.created_at`,
+      // cash_sessions.closed_by is the display name set by the POS at close time
+      cashierName: sql<string | null>`cs.closed_by`,
+      // device name from pos_tokens; null when no device (admin/legacy session)
+      deviceName: sql<string | null>`pt.device_name`,
     })
     .from(sql`treasury_movements h`)
     .leftJoin(
@@ -1464,6 +1551,14 @@ export async function listPendingHandovers(
         GROUP BY handover_movement_id
       ) p`,
       sql`p.handover_movement_id = h.id`,
+    )
+    .leftJoin(
+      sql`cash_sessions cs`,
+      sql`cs.id = h.cash_session_id`,
+    )
+    .leftJoin(
+      sql`pos_tokens pt`,
+      sql`pt.id = cs.pos_token_id`,
     )
     .where(
       sql`h.organization_id = ${organizationId}
@@ -1477,6 +1572,8 @@ export async function listPendingHandovers(
     amount: Number.parseFloat(r.amount) || 0,
     remaining: Number.parseFloat(r.remaining) || 0,
     createdAt: new Date(r.createdAt),
+    origin: r.deviceName ?? 'Cierre de caja',
+    cashierName: r.cashierName ?? null,
   }));
 }
 
@@ -1486,7 +1583,7 @@ export async function listPendingHandovers(
  *   remaining = handover.amount − Σ(amount WHERE handover_movement_id = handover.id) > 0
  *
  * Mirrors countPendingReconciliations in transfer-reconciliation.ts.
- * Feeds the "$X sin ubicar" badge on the dashboard / TreasuryConsole.
+ * Feeds the "$X sin ubicar" badge on the dashboard treasury page.
  */
 export async function countPendingHandovers(
   executor: Executor,

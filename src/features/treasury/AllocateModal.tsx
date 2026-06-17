@@ -1,12 +1,14 @@
 'use client';
 
+import type { OpenCajaOption } from '@/actions/treasury-placement';
 import type { PendingHandover, TreasuryAccountRow } from '@/libs/treasury';
-import { Check, Clock, Coins, Landmark, Lock, Tag, X } from 'lucide-react';
+import { Check, Clock, Coins, Landmark, Lock, Monitor, Tag, User, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import {
   placeHandoverAsGasto,
   placeHandoverToBanco,
+  placeHandoverToCaja,
   placeHandoverToCajaFuerte,
 } from '@/actions/treasury-placement';
 import { Button } from '@/components/ui/button';
@@ -19,7 +21,7 @@ import { cashInputCls, money } from '@/features/cash/cash-ui';
 
 // ── Destination option rows ──────────────────────────────────────────────────
 
-type DestKey = 'caja_fuerte' | 'banco' | 'gasto' | 'otro';
+type DestKey = 'caja_fuerte' | 'banco' | 'gasto' | 'otro' | 'caja';
 
 const DEST_OPTIONS: {
   k: DestKey;
@@ -43,6 +45,13 @@ const DEST_OPTIONS: {
     Icon: Landmark,
   },
   {
+    k: 'caja',
+    label: 'Volvió a una caja',
+    sub: 'Quedó como base / vuelto',
+    quote: 'La dejé en la caja',
+    Icon: Monitor,
+  },
+  {
     k: 'gasto',
     label: 'Fue un gasto',
     sub: 'Pago de algo del negocio',
@@ -64,21 +73,27 @@ type AllocateModalProps = {
   handover: PendingHandover;
   bankAccounts: TreasuryAccountRow[];
   cajaFuerteAccounts: TreasuryAccountRow[];
+  /** Currently-open POS cajas available as "Volvió a una caja" destinations. */
+  openCajas: OpenCajaOption[];
   open: boolean;
   onClose: () => void;
 };
 
 /**
  * Modal to place a pending handover (Plata por ubicar).
- * Recap header shows date/amount. Destination is chosen via large tappable rows.
- * Wired to placeHandoverToCajaFuerte / placeHandoverToBanco / placeHandoverAsGasto.
- * "Otro lugar" maps to placeHandoverAsGasto with a mandatory note.
- * "Volvió a una caja" is omitted — no existing action supports it cleanly.
+ * Recap header shows origin (De dónde salió), date (Cuándo), cashier (Quién la tenía).
+ * Destination is chosen via large tappable rows:
+ *   - Caja fuerte (cofre)
+ *   - Cuenta bancaria (banco)
+ *   - Volvió a una caja (open POS session) — mirroring the design "Quedó como base/vuelto"
+ *   - Fue un gasto
+ *   - Otro lugar (maps to gasto with a mandatory note)
  */
 export function AllocateModal({
   handover,
   bankAccounts,
   cajaFuerteAccounts,
+  openCajas,
   open,
   onClose,
 }: AllocateModalProps) {
@@ -108,6 +123,7 @@ export function AllocateModal({
       || (dest === 'otro' && !note.trim())
       || (dest === 'caja_fuerte' && !accountId)
       || (dest === 'banco' && !accountId)
+      || (dest === 'caja' && !accountId)
       || isPending;
 
   function submit() {
@@ -124,6 +140,8 @@ export function AllocateModal({
           res = await placeHandoverToBanco(handover.id, accountId, amt);
         } else if (dest === 'caja_fuerte') {
           res = await placeHandoverToCajaFuerte(handover.id, accountId, amt);
+        } else if (dest === 'caja') {
+          res = await placeHandoverToCaja(handover.id, accountId, amt);
         } else {
           // 'gasto' and 'otro' both map to placeHandoverAsGasto.
           // 'otro' requires a note (enforced by isDisabled guard above).
@@ -142,13 +160,16 @@ export function AllocateModal({
     });
   }
 
-  // Filtered options — only show destinations that have accounts configured.
+  // Filtered options — only show destinations that have accounts/cajas configured.
   const visibleOptions = DEST_OPTIONS.filter((d) => {
     if (d.k === 'caja_fuerte') {
       return cajaFuerteAccounts.length > 0;
     }
     if (d.k === 'banco') {
       return bankAccounts.length > 0;
+    }
+    if (d.k === 'caja') {
+      return openCajas.length > 0;
     }
     return true; // gasto and otro always available
   });
@@ -194,6 +215,22 @@ export function AllocateModal({
             flex flex-wrap gap-5 text-[12.5px] text-secondary-foreground
           "
           >
+            {/* De dónde salió */}
+            <div>
+              <div className="
+                mb-0.5 text-[10.5px] font-bold tracking-[.06em]
+                text-muted-foreground uppercase
+              "
+              >
+                De dónde salió
+              </div>
+              <span className="inline-flex items-center gap-1">
+                <Monitor className="size-3 text-muted-foreground" />
+                {handover.origin}
+              </span>
+            </div>
+
+            {/* Cuándo */}
             <div>
               <div className="
                 mb-0.5 text-[10.5px] font-bold tracking-[.06em]
@@ -207,6 +244,23 @@ export function AllocateModal({
                 {dateLabel}
               </span>
             </div>
+
+            {/* Quién la tenía — omit when null */}
+            {handover.cashierName && (
+              <div>
+                <div className="
+                  mb-0.5 text-[10.5px] font-bold tracking-[.06em]
+                  text-muted-foreground uppercase
+                "
+                >
+                  Quién la tenía
+                </div>
+                <span className="inline-flex items-center gap-1">
+                  <User className="size-3 text-muted-foreground" />
+                  {handover.cashierName}
+                </span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -293,6 +347,18 @@ export function AllocateModal({
                 onValueChange={setAccountId}
                 options={bankAccounts.map(a => ({ value: a.id, label: a.name }))}
                 placeholder="¿A qué cuenta?"
+              />
+            </div>
+          )}
+
+          {/* Caja picker for "Volvió a una caja" */}
+          {dest === 'caja' && openCajas.length > 0 && (
+            <div className="mt-3.5">
+              <Select
+                value={accountId}
+                onValueChange={setAccountId}
+                options={openCajas.map(c => ({ value: c.posTokenId, label: c.deviceName }))}
+                placeholder="¿A qué caja?"
               />
             </div>
           )}

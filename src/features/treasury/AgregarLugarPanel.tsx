@@ -12,7 +12,7 @@ type AgregarLugarPanelProps = {
 
 /**
  * "Agregar lugar" inline panel — creates a new caja fuerte or banco account.
- * Extracted from TreasuryConsole for use in the new TreasuryActions bar.
+ * Used in the TreasuryActions bar (View B).
  * Reuses createCajaFuerte / createBanco server actions.
  */
 export function AgregarLugarPanel({ onClose }: AgregarLugarPanelProps) {
