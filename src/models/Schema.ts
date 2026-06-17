@@ -496,6 +496,20 @@ export const cashMovementsSchema = pgTable(
       () => cashSessionsSchema.id,
       { onDelete: 'set null' },
     ),
+    // Slice 3 — Inflows model: origin discriminator for entrada movements.
+    // 'internal': cash entered from another treasury container (cofre / banco).
+    //             A companion treasury_movements salida row debits the source.
+    // 'external': direct owner injection — no source container.
+    // null: legacy entry (pre-slice-3 devices) — treated as a plain cash entrada.
+    // Only meaningful for INCOME movement types; ignored for expense types.
+    origin: text('origin'),
+    // Slice 3 — links an internal-origin entrada to its companion treasury debit
+    // row (treasury_movements.id). Set only when origin='internal'. Nullable so
+    // existing rows and external/legacy entries are unaffected. The FK is enforced
+    // via migration 0055 (not .references() here — treasuryMovementsSchema is
+    // defined later in this file; forward reference would work but the migration
+    // approach keeps the pattern consistent with the handoverMovementId approach).
+    treasuryMovementId: uuid('treasury_movement_id'),
     createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
   },
   table => [
