@@ -106,27 +106,66 @@ function formatDayLabel(day: string) {
   return dayFmt.format(new Date(Date.UTC(y, m - 1, d)));
 }
 
-// Sample messages the assistant would send — decoration for the WhatsApp CTA.
-const BOT_MESSAGES = [
-  { text: 'Buenos días 👋', time: '7:02' },
-  { text: 'Hoy llevás $ 842.500 en ventas, 12% más que ayer.', time: '7:03' },
-  {
-    text: 'Don Julio te debe $ 84.000 hace 9 días. ¿Le mando un recordatorio?',
-    time: '9:15',
-  },
-  {
-    text: 'Quedan 2 Arroz Diana 500g. ¿Hago el pedido a Distrigranos?',
-    time: '11:48',
-  },
-  {
-    text: 'La Leche Alpina x12 vence en 4 días. ¿Armo una promo 2x1?',
-    time: '13:20',
-  },
-];
+type BotMessage = { text: string; time: string };
+
+// Builds the WhatsApp preview from THIS business's real data — its sales, its
+// top debtor, its low-stock product, its best seller — so the teaser is coherent
+// with the store instead of a generic mock.
+function buildAssistantMessages(
+  data: DashboardMetrics,
+  fiado: FiadosOverview,
+  lowStock: LowStockRow[],
+): BotMessage[] {
+  const msgs: BotMessage[] = [{ text: 'Buenos días 👋', time: '7:02' }];
+
+  if (data.period.total > 0) {
+    msgs.push({
+      text: `Llevás ${formatMoney(data.period.total)} en ventas (${
+        data.period.count
+      } ${data.period.count === 1 ? 'venta' : 'ventas'}).`,
+      time: '7:03',
+    });
+  }
+
+  const debtor = fiado.clients[0];
+  if (debtor && debtor.balance > 0) {
+    msgs.push({
+      text: `${debtor.name} te debe ${formatMoney(
+        debtor.balance,
+      )}. ¿Le mando un recordatorio?`,
+      time: '9:15',
+    });
+  }
+
+  const low = lowStock[0];
+  if (low) {
+    msgs.push({
+      text: `Quedan ${low.stock} ${low.name}. ¿Hago el pedido al proveedor?`,
+      time: '11:48',
+    });
+  }
+
+  const top = data.topProducts[0];
+  if (top) {
+    msgs.push({
+      text: `${top.name} es lo más vendido (${top.qty} uds). ¿Pido más?`,
+      time: '13:20',
+    });
+  }
+
+  if (msgs.length === 1) {
+    msgs.push({
+      text: 'Te aviso por acá cuando algo necesite tu atención.',
+      time: '7:03',
+    });
+  }
+
+  return msgs;
+}
 
 // Looping WhatsApp-style chat showing what the assistant would message the
-// owner. Pure decoration; cleans up its timers on unmount.
-function WhatsAppPreview() {
+// owner, built from this store's real data. Pure decoration; cleans up on unmount.
+function WhatsAppPreview({ messages }: { messages: BotMessage[] }) {
   const [shown, setShown] = useState(0);
   const [typing, setTyping] = useState(false);
   const bodyRef = useRef<HTMLDivElement | null>(null);
@@ -145,7 +184,7 @@ function WhatsAppPreview() {
         setShown(0);
         setTyping(false);
         await wait(800);
-        for (let i = 0; i < BOT_MESSAGES.length && state.running; i++) {
+        for (let i = 0; i < messages.length && state.running; i++) {
           setTyping(true);
           await wait(i === 0 ? 700 : 1300);
           if (!state.running) {
@@ -162,7 +201,7 @@ function WhatsAppPreview() {
       state.running = false;
       timers.forEach(clearTimeout);
     };
-  }, []);
+  }, [messages]);
 
   useEffect(() => {
     if (bodyRef.current) {
@@ -199,9 +238,9 @@ function WhatsAppPreview() {
         className="flex flex-1 flex-col overflow-y-auto px-2.5 py-3"
       >
         <div className="mt-auto flex flex-col gap-1.5">
-          {BOT_MESSAGES.slice(0, shown).map(m => (
+          {messages.slice(0, shown).map(m => (
             <div
-              key={m.time}
+              key={m.text}
               className="
                 max-w-[88%] self-start rounded-[2px_10px_10px_10px] bg-white
                 px-2.5 py-1.5 text-xs/snug text-[#111B21] shadow-sm
@@ -432,6 +471,10 @@ export function DashboardClient({
 
   const prev = data.previousPeriod;
   const fiadoTotal = fiado.clients.reduce((sum, c) => sum + c.balance, 0);
+  const botMessages = useMemo(
+    () => buildAssistantMessages(data, fiado, lowStock),
+    [data, fiado, lowStock],
+  );
 
   // The chart reflects the selected KPI: each metric maps to its own {x,y}
   // series — sales/profit/fiado by day, or low stock by category.
@@ -654,7 +697,7 @@ export function DashboardClient({
                   </div>
                 </div>
               </div>
-              <WhatsAppPreview />
+              <WhatsAppPreview messages={botMessages} />
               <Link
                 href="/dashboard/ai-agent"
                 className="
