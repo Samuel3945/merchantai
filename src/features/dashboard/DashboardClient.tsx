@@ -3,7 +3,7 @@
 import type { DashboardMetrics, LowStockRow } from '@/actions/dashboard';
 import type { FiadosOverview } from '@/libs/fiados';
 import type { RangePreset } from '@/utils/DateRange';
-import { MessageCircle } from 'lucide-react';
+import { Bot, MessageCircle } from 'lucide-react';
 import Link from 'next/link';
 import {
   useEffect,
@@ -102,6 +102,143 @@ function formatDayLabel(day: string) {
   return dayFmt.format(new Date(Date.UTC(y, m - 1, d)));
 }
 
+// Sample messages the assistant would send — decoration for the WhatsApp CTA.
+const BOT_MESSAGES = [
+  { text: 'Buenos días 👋', time: '7:02' },
+  { text: 'Hoy llevás $ 842.500 en ventas, 12% más que ayer.', time: '7:03' },
+  {
+    text: 'Don Julio te debe $ 84.000 hace 9 días. ¿Le mando un recordatorio?',
+    time: '9:15',
+  },
+  {
+    text: 'Quedan 2 Arroz Diana 500g. ¿Hago el pedido a Distrigranos?',
+    time: '11:48',
+  },
+  {
+    text: 'La Leche Alpina x12 vence en 4 días. ¿Armo una promo 2x1?',
+    time: '13:20',
+  },
+];
+
+// Looping WhatsApp-style chat showing what the assistant would message the
+// owner. Pure decoration; cleans up its timers on unmount.
+function WhatsAppPreview() {
+  const [shown, setShown] = useState(0);
+  const [typing, setTyping] = useState(false);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    // Held in an object so the cleanup can cancel the async loop (a plain `let`
+    // trips no-unmodified-loop-condition since it's only flipped in cleanup).
+    const state = { running: true };
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const wait = (ms: number) =>
+      new Promise<void>((resolve) => {
+        timers.push(setTimeout(resolve, ms));
+      });
+    (async () => {
+      while (state.running) {
+        setShown(0);
+        setTyping(false);
+        await wait(800);
+        for (let i = 0; i < BOT_MESSAGES.length && state.running; i++) {
+          setTyping(true);
+          await wait(i === 0 ? 700 : 1300);
+          if (!state.running) {
+            break;
+          }
+          setTyping(false);
+          setShown(i + 1);
+          await wait(1500);
+        }
+        await wait(2800);
+      }
+    })();
+    return () => {
+      state.running = false;
+      timers.forEach(clearTimeout);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (bodyRef.current) {
+      bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
+    }
+  }, [shown, typing]);
+
+  return (
+    <div className="
+      flex min-h-[220px] flex-col overflow-hidden rounded-xl bg-[#E5DDD5]
+      shadow-lg
+    "
+    >
+      <style>
+        {`@keyframes waPop{from{opacity:0;transform:translateY(7px) scale(.97)}to{opacity:1;transform:none}}@keyframes waDot{0%,60%,100%{opacity:.25;transform:translateY(0)}30%{opacity:1;transform:translateY(-3px)}}`}
+      </style>
+      <div className="flex items-center gap-2 bg-[#075E54] px-3 py-2">
+        <span className="
+          inline-flex size-7 shrink-0 items-center justify-center rounded-full
+          bg-[#0F766E] text-white
+        "
+        >
+          <Bot className="size-4" />
+        </span>
+        <div className="min-w-0 flex-1 text-white">
+          <div className="truncate text-xs font-semibold">
+            Asistente · tu tienda
+          </div>
+          <div className="text-[10px] text-[#A7D7CF]">en línea</div>
+        </div>
+      </div>
+      <div
+        ref={bodyRef}
+        className="flex flex-1 flex-col overflow-y-auto px-2.5 py-3"
+      >
+        <div className="mt-auto flex flex-col gap-1.5">
+          {BOT_MESSAGES.slice(0, shown).map(m => (
+            <div
+              key={m.time}
+              className="
+                max-w-[88%] self-start rounded-[2px_10px_10px_10px] bg-white
+                px-2.5 py-1.5 text-xs/snug text-[#111B21] shadow-sm
+              "
+              style={{ animation: 'waPop .26s ease both' }}
+            >
+              {m.text}
+              <span className="
+                float-right mt-1 ml-2 text-[9.5px] text-[#667781] tabular-nums
+              "
+              >
+                {m.time}
+              </span>
+            </div>
+          ))}
+          {typing && (
+            <div
+              className="
+                flex gap-1 self-start rounded-[2px_10px_10px_10px] bg-white px-3
+                py-2.5 shadow-sm
+              "
+              style={{ animation: 'waPop .2s ease both' }}
+            >
+              {[0, 1, 2].map(d => (
+                <span
+                  key={d}
+                  className="size-1.5 rounded-full bg-[#9AA6AD]"
+                  style={{
+                    animation: 'waDot 1.2s infinite',
+                    animationDelay: `${d * 0.18}s`,
+                  }}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /**
  * Hero KPI. Big number first, one supporting line (delta vs the comparison
  * period or a plain hint). This is the "glance every morning" tier — kept to a
@@ -113,6 +250,7 @@ function KpiCard({
   hint,
   delta,
   deltaPositive,
+  color,
   selected,
   onSelect,
 }: {
@@ -121,6 +259,9 @@ function KpiCard({
   hint?: string;
   delta?: string;
   deltaPositive?: boolean | null;
+  // The metric's accent color. When `selected`, it paints the border and the big
+  // number so the card visibly matches the chart it drives.
+  color?: string;
   // When `selected`, the card is the one driving the chart below. `onSelect`
   // makes it interactive; without it the card is a plain stat (e.g. Flujo, which
   // has no daily series to chart).
@@ -129,12 +270,16 @@ function KpiCard({
 }) {
   const cardClass = cn(
     'block w-full rounded-lg border bg-background p-4 text-left shadow-xs',
-    selected && 'border-primary/50 bg-primary/5 ring-1 ring-primary/30',
+    selected && 'shadow-sm',
     onSelect && !selected && `
       cursor-pointer transition-colors
       hover:border-primary/30
     `,
   );
+  // Selected → metric-colored 1.5px border + a faint tint of the same color.
+  const cardStyle = selected && color
+    ? { borderColor: color, borderWidth: 1.5, backgroundColor: `${color}14` }
+    : undefined;
 
   const inner = (
     <>
@@ -170,9 +315,11 @@ function KpiCard({
           </span>
         )}
       </div>
-      <div className="
-        mt-2 font-display text-3xl font-medium tracking-tight tabular-nums
-      "
+      <div
+        className="
+          mt-2 font-display text-3xl font-medium tracking-tight tabular-nums
+        "
+        style={selected && color ? { color } : undefined}
       >
         {value}
       </div>
@@ -184,13 +331,22 @@ function KpiCard({
 
   if (onSelect) {
     return (
-      <button type="button" onClick={onSelect} className={cardClass}>
+      <button
+        type="button"
+        onClick={onSelect}
+        className={cardClass}
+        style={cardStyle}
+      >
         {inner}
       </button>
     );
   }
 
-  return <div className={cardClass}>{inner}</div>;
+  return (
+    <div className={cardClass} style={cardStyle}>
+      {inner}
+    </div>
+  );
 }
 
 // The metrics that have an honest per-day series to drive the chart. Flujo de
@@ -332,39 +488,45 @@ export function DashboardClient({
 
       {/* WhatsApp agent CTA — only while no assistant is configured yet. */}
       {!hasWhatsAppAgent && (
-        <Link
-          href="/dashboard/ai-agent"
-          className="
-            flex items-center gap-3 rounded-lg border border-emerald-600/30
-            bg-emerald-50 p-4 transition-shadow
-            hover:shadow-sm
-            dark:border-emerald-500/30 dark:bg-emerald-950/30
-          "
+        <div className="
+          grid gap-4 rounded-lg bg-linear-to-b from-[#0F766E] to-[#064E47] p-4
+          text-white
+          sm:grid-cols-[1.4fr_1fr] sm:items-center
+        "
         >
-          <span className="
-            inline-flex size-10 shrink-0 items-center justify-center rounded-xl
-            bg-emerald-600 text-white
-          "
-          >
-            <MessageCircle className="size-5" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="text-sm font-semibold">
-              Activá tu asistente de WhatsApp
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center gap-2.5">
+              <span className="
+                inline-flex size-8 shrink-0 items-center justify-center
+                rounded-[10px] bg-white/15
+              "
+              >
+                <MessageCircle className="size-4" />
+              </span>
+              <div className="min-w-0">
+                <div className="text-sm font-semibold">
+                  Tu asistente por WhatsApp
+                </div>
+                <div className="text-[11px] text-white/75">
+                  mirá lo que te avisaría hoy, en vivo
+                </div>
+              </div>
             </div>
-            <div className="text-xs text-muted-foreground">
-              Tu agente IA responde, cobra fiados y avisa de stock por WhatsApp.
-              Configuralo en minutos.
-            </div>
+            <Link
+              href="/dashboard/ai-agent"
+              className="
+                inline-flex h-10 items-center justify-center gap-2 rounded-md
+                bg-white px-4 text-sm font-semibold text-[#0F766E]
+                transition-colors
+                hover:bg-white/90
+              "
+            >
+              <MessageCircle className="size-4" />
+              Conectar WhatsApp
+            </Link>
           </div>
-          <span className="
-            inline-flex h-9 shrink-0 items-center rounded-md bg-emerald-600 px-3
-            text-sm font-semibold whitespace-nowrap text-white
-          "
-          >
-            Configurar →
-          </span>
-        </Link>
+          <WhatsAppPreview />
+        </div>
       )}
 
       {/* Hero KPIs — the handful you check every morning */}
@@ -380,6 +542,7 @@ export function DashboardClient({
           value={formatMoney(data.netRevenue)}
           selected={metric === 'ingresos'}
           onSelect={() => setMetric('ingresos')}
+          color={METRIC_CONFIG.ingresos.color}
           delta={
             data.prevNetRevenue !== null
               ? formatDelta(data.netRevenue, data.prevNetRevenue)
@@ -397,6 +560,7 @@ export function DashboardClient({
           value={formatMoney(data.period.profit)}
           selected={metric === 'ganancia'}
           onSelect={() => setMetric('ganancia')}
+          color={METRIC_CONFIG.ganancia.color}
           delta={prev ? formatDelta(data.period.profit, prev.profit) : undefined}
           deltaPositive={prev ? deltaUp(data.period.profit, prev.profit) : undefined}
           hint={`margen ${data.period.margin.toFixed(1)}%`}
@@ -413,6 +577,7 @@ export function DashboardClient({
           value={String(data.period.count)}
           selected={metric === 'ventas'}
           onSelect={() => setMetric('ventas')}
+          color={METRIC_CONFIG.ventas.color}
           delta={prev ? formatDelta(data.period.count, prev.count) : undefined}
           deltaPositive={prev ? deltaUp(data.period.count, prev.count) : undefined}
           hint={`ticket ${formatMoney(data.period.avgTicket)}`}
