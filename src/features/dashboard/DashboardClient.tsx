@@ -351,17 +351,18 @@ function KpiCard({
 
 // The metrics that have an honest per-day series to drive the chart. Flujo de
 // caja neto is a period aggregate with no daily line, so it stays a plain stat.
-type ChartMetric = 'ingresos' | 'ganancia' | 'ventas';
+// Only the two metrics with an honest daily series drive the chart. Por cobrar
+// and Stock crítico are current-state KPIs (no daily line), so they're shown but
+// not selectable.
+type ChartMetric = 'ventas' | 'ganancia';
 
 const METRIC_CONFIG: Record<ChartMetric, {
-  dataKey: 'total' | 'profit' | 'count';
+  dataKey: 'total' | 'profit';
   color: string;
   label: string;
-  money: boolean;
 }> = {
-  ingresos: { dataKey: 'total', color: '#0F766E', label: 'Ingresos por día', money: true },
-  ganancia: { dataKey: 'profit', color: '#10B981', label: 'Ganancia por día', money: true },
-  ventas: { dataKey: 'count', color: '#6366F1', label: 'Ventas por día', money: false },
+  ventas: { dataKey: 'total', color: '#0F766E', label: 'Ventas por día' },
+  ganancia: { dataKey: 'profit', color: '#10B981', label: 'Ganancia por día' },
 };
 
 export function DashboardClient({
@@ -381,7 +382,7 @@ export function DashboardClient({
   const [compare, setCompare] = useState<boolean>(initial.compareRange !== null);
   const [activePreset, setActivePreset] = useState<RangePreset | null>(null);
   // Which metric the chart shows; selecting a KPI card drives it.
-  const [metric, setMetric] = useState<ChartMetric>('ingresos');
+  const [metric, setMetric] = useState<ChartMetric>('ventas');
 
   const [pending, startTransition] = useTransition();
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -437,13 +438,10 @@ export function DashboardClient({
   // The chart reflects the selected metric: its daily series, color and the
   // period total shown above it.
   const chart = METRIC_CONFIG[metric];
-  const chartTotal
-    = metric === 'ingresos'
-      ? data.netRevenue
-      : metric === 'ganancia'
-        ? data.period.profit
-        : data.period.count;
-  const chartValue = chart.money ? formatMoney(chartTotal) : String(chartTotal);
+  const chartValue = formatMoney(
+    metric === 'ganancia' ? data.period.profit : data.period.total,
+  );
+  const fiadoTotal = fiado.clients.reduce((sum, c) => sum + c.balance, 0);
 
   return (
     <div className="space-y-6">
@@ -486,77 +484,25 @@ export function DashboardClient({
         </div>
       </header>
 
-      {/* WhatsApp agent CTA — only while no assistant is configured yet. */}
-      {!hasWhatsAppAgent && (
-        <div className="
-          grid gap-4 rounded-lg bg-linear-to-b from-[#0F766E] to-[#064E47] p-4
-          text-white
-          sm:grid-cols-[1.4fr_1fr] sm:items-center
-        "
-        >
-          <div className="flex flex-col gap-3">
-            <div className="flex items-center gap-2.5">
-              <span className="
-                inline-flex size-8 shrink-0 items-center justify-center
-                rounded-[10px] bg-white/15
-              "
-              >
-                <MessageCircle className="size-4" />
-              </span>
-              <div className="min-w-0">
-                <div className="text-sm font-semibold">
-                  Tu asistente por WhatsApp
-                </div>
-                <div className="text-[11px] text-white/75">
-                  mirá lo que te avisaría hoy, en vivo
-                </div>
-              </div>
-            </div>
-            <Link
-              href="/dashboard/ai-agent"
-              className="
-                inline-flex h-10 items-center justify-center gap-2 rounded-md
-                bg-white px-4 text-sm font-semibold text-[#0F766E]
-                transition-colors
-                hover:bg-white/90
-              "
-            >
-              <MessageCircle className="size-4" />
-              Conectar WhatsApp
-            </Link>
-          </div>
-          <WhatsAppPreview />
-        </div>
-      )}
-
-      {/* Hero KPIs — the handful you check every morning */}
+      {/* Hero KPIs — the Claude Design set. Ventas + Ganancia drive the chart. */}
       <div className="
         grid grid-cols-1 gap-3
         sm:grid-cols-2
-        lg:grid-cols-3
-        xl:grid-cols-4
+        lg:grid-cols-4
       "
       >
         <KpiCard
-          title="Ingresos netos"
-          value={formatMoney(data.netRevenue)}
-          selected={metric === 'ingresos'}
-          onSelect={() => setMetric('ingresos')}
-          color={METRIC_CONFIG.ingresos.color}
-          delta={
-            data.prevNetRevenue !== null
-              ? formatDelta(data.netRevenue, data.prevNetRevenue)
-              : undefined
-          }
-          deltaPositive={
-            data.prevNetRevenue !== null
-              ? deltaUp(data.netRevenue, data.prevNetRevenue)
-              : undefined
-          }
-          hint="ya restando devoluciones"
+          title="Ventas hoy"
+          value={formatMoney(data.period.total)}
+          selected={metric === 'ventas'}
+          onSelect={() => setMetric('ventas')}
+          color={METRIC_CONFIG.ventas.color}
+          delta={prev ? formatDelta(data.period.total, prev.total) : undefined}
+          deltaPositive={prev ? deltaUp(data.period.total, prev.total) : undefined}
+          hint={`${data.period.count} ${data.period.count === 1 ? 'venta' : 'ventas'}`}
         />
         <KpiCard
-          title="Ganancia bruta"
+          title="Ganancia hoy"
           value={formatMoney(data.period.profit)}
           selected={metric === 'ganancia'}
           onSelect={() => setMetric('ganancia')}
@@ -566,21 +512,16 @@ export function DashboardClient({
           hint={`margen ${data.period.margin.toFixed(1)}%`}
         />
         <KpiCard
-          title="Flujo de caja neto"
-          value={formatMoney(data.cashFlow.net)}
-          deltaPositive={data.cashFlow.net >= 0}
-          delta={data.cashFlow.net >= 0 ? 'positivo' : 'negativo'}
-          hint={`gastos ${formatMoney(data.cashFlow.expenses)}`}
+          title="Por cobrar"
+          value={formatMoney(fiadoTotal)}
+          hint={`${fiado.clients.length} ${
+            fiado.clients.length === 1 ? 'cliente con fiado' : 'clientes con fiado'
+          }`}
         />
         <KpiCard
-          title="Ventas"
-          value={String(data.period.count)}
-          selected={metric === 'ventas'}
-          onSelect={() => setMetric('ventas')}
-          color={METRIC_CONFIG.ventas.color}
-          delta={prev ? formatDelta(data.period.count, prev.count) : undefined}
-          deltaPositive={prev ? deltaUp(data.period.count, prev.count) : undefined}
-          hint={`ticket ${formatMoney(data.period.avgTicket)}`}
+          title="Stock crítico"
+          value={String(lowStock.length)}
+          hint="productos para reponer"
         />
       </div>
 
@@ -638,16 +579,10 @@ export function DashboardClient({
                 <XAxis dataKey="label" fontSize={12} />
                 <YAxis
                   fontSize={12}
-                  tickFormatter={v =>
-                    chart.money
-                      ? compactFmt.format(Number(v))
-                      : String(Math.round(Number(v)))}
+                  tickFormatter={v => compactFmt.format(Number(v))}
                 />
                 <Tooltip
-                  formatter={value => [
-                    chart.money ? formatMoney(Number(value)) : String(value),
-                    chart.label,
-                  ]}
+                  formatter={value => [formatMoney(Number(value)), chart.label]}
                 />
                 <Area
                   type="monotone"
@@ -662,51 +597,93 @@ export function DashboardClient({
           </div>
         </div>
 
-        {/* Best sellers over the selected range */}
-        <div className="rounded-lg border bg-background p-4 shadow-xs">
-          <div className="
-            mb-1 text-[11px] font-semibold tracking-[0.08em]
-            text-muted-foreground uppercase
-          "
-          >
-            Más vendidos
-          </div>
-          {data.topProducts.length === 0
-            ? (
-                <p className="py-6 text-center text-xs text-muted-foreground">
-                  Sin ventas en el período.
-                </p>
-              )
-            : (
-                <ul className="divide-y">
-                  {data.topProducts.map(p => (
-                    <li
-                      key={p.name}
-                      className="flex items-center justify-between gap-3 py-2.5"
-                    >
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-medium">
-                          {p.name}
+        {/* Right sidebar — WhatsApp CTA (only when no agent) + best sellers */}
+        <div className="flex flex-col gap-6">
+          {!hasWhatsAppAgent && (
+            <div className="
+              flex flex-col gap-3 rounded-lg bg-linear-to-b from-[#0F766E]
+              to-[#064E47] p-4 text-white
+            "
+            >
+              <div className="flex items-center gap-2.5">
+                <span className="
+                  inline-flex size-8 shrink-0 items-center justify-center
+                  rounded-[10px] bg-white/15
+                "
+                >
+                  <MessageCircle className="size-4" />
+                </span>
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold">
+                    Tu asistente por WhatsApp
+                  </div>
+                  <div className="text-[11px] text-white/75">
+                    mirá lo que te avisaría hoy, en vivo
+                  </div>
+                </div>
+              </div>
+              <WhatsAppPreview />
+              <Link
+                href="/dashboard/ai-agent"
+                className="
+                  inline-flex h-10 items-center justify-center gap-2 rounded-md
+                  bg-white px-4 text-sm font-semibold text-[#0F766E]
+                  transition-colors
+                  hover:bg-white/90
+                "
+              >
+                <MessageCircle className="size-4" />
+                Conectar WhatsApp
+              </Link>
+            </div>
+          )}
+          <div className="rounded-lg border bg-background p-4 shadow-xs">
+            <div className="
+              mb-1 text-[11px] font-semibold tracking-[0.08em]
+              text-muted-foreground uppercase
+            "
+            >
+              Más vendidos
+            </div>
+            {data.topProducts.length === 0
+              ? (
+                  <p className="py-6 text-center text-xs text-muted-foreground">
+                    Sin ventas en el período.
+                  </p>
+                )
+              : (
+                  <ul className="divide-y">
+                    {data.topProducts.map(p => (
+                      <li
+                        key={p.name}
+                        className="
+                          flex items-center justify-between gap-3 py-2.5
+                        "
+                      >
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-medium">
+                            {p.name}
+                          </div>
+                          <div className="
+                            text-xs text-muted-foreground tabular-nums
+                          "
+                          >
+                            {p.qty}
+                            {' '}
+                            uds
+                          </div>
                         </div>
                         <div className="
-                          text-xs text-muted-foreground tabular-nums
+                          shrink-0 text-sm font-semibold tabular-nums
                         "
                         >
-                          {p.qty}
-                          {' '}
-                          uds
+                          {formatMoney(p.revenue)}
                         </div>
-                      </div>
-                      <div className="
-                        shrink-0 text-sm font-semibold tabular-nums
-                      "
-                      >
-                        {formatMoney(p.revenue)}
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+          </div>
         </div>
       </div>
 
