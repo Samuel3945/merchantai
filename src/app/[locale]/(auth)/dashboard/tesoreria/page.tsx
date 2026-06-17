@@ -1,14 +1,12 @@
-import { auth } from '@clerk/nextjs/server';
 import { setRequestLocale } from 'next-intl/server';
 import { listPaymentMethods } from '@/actions/payment-methods';
-import { getTimeline, getTreasury, getTreasuryHandoverSettings, listTreasuryAccounts } from '@/actions/treasury';
+import { getTimeline, getTreasury, listTreasuryAccounts } from '@/actions/treasury';
 import {
   getHandoverStatusForSessionsAction,
   getPendingHandoversOverview,
   listPendingHandoversAction,
 } from '@/actions/treasury-placement';
 import { TitleBar } from '@/features/dashboard/TitleBar';
-import { HandoverToggle } from '@/features/treasury/HandoverToggle';
 import { SummaryCards } from '@/features/treasury/SummaryCards';
 import { TreasuryConsole } from '@/features/treasury/TreasuryConsole';
 import { TreasuryTimeline } from '@/features/treasury/TreasuryTimeline';
@@ -19,16 +17,11 @@ export default async function TesoreriaPage(props: {
   const { locale } = await props.params;
   setRequestLocale(locale);
 
-  // Resolve whether the current user is the org owner (for the handover toggle).
-  const { orgRole } = await auth();
-  const isOwner = orgRole === 'org:admin';
-
-  const [treasury, treasuryAccountRows, methods, timelineEntries, handoverSettings] = await Promise.all([
+  const [treasury, treasuryAccountRows, methods, timelineEntries] = await Promise.all([
     getTreasury().catch(() => []),
     listTreasuryAccounts().catch(() => []),
     listPaymentMethods({ activeOnly: true }).catch(() => []),
     getTimeline(50).catch(() => []),
-    getTreasuryHandoverSettings().catch(() => ({ enabled: false })),
   ]);
 
   // Header total = Σ all balances from the single getTreasuryPosition call.
@@ -131,12 +124,6 @@ export default async function TesoreriaPage(props: {
         <TreasuryTimeline entries={timelineEntries} />
       </div>
 
-      {/* PR4: handover opt-in toggle — owner only */}
-      {isOwner && (
-        <div className="mt-8">
-          <HandoverToggle initialEnabled={handoverSettings.enabled} />
-        </div>
-      )}
     </>
   );
 }

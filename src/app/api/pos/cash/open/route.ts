@@ -10,7 +10,12 @@ import {
 } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import { requirePosAuth } from '@/libs/pos-auth';
-import { getOrCreatePendingAccount, recordHandoverMovement } from '@/libs/treasury';
+import {
+  getOrCreatePendingAccount,
+  recordContainerTransfer,
+  recordHandoverMovement,
+  resolveSweepDestination,
+} from '@/libs/treasury';
 import { cashSessionsSchema, posTokensSchema } from '@/models/Schema';
 
 export const runtime = 'nodejs';
@@ -119,7 +124,7 @@ export async function POST(req: Request): Promise<NextResponse> {
         throw new Error('No se pudo abrir la caja');
       }
 
-      // treasury-sweep-model slice 1: open-time shortfall sweep.
+      // treasury-sweep-model: open-time shortfall sweep.
       // Emit a type='handover' movement keyed to the LAST CLOSED session id
       // (not the newly-opened session) when Δ<0. Amount = |Δ| (the shortfall).
       // Keying to the last-closed session makes both subtraction paths work:
@@ -127,16 +132,36 @@ export async function POST(req: Request): Promise<NextResponse> {
       //   • getTreasuryPosition subtracts handoverBySession on lastSessionIds
       // Read-then-write ordering is enforced: carryover was read above before
       // this write, inside the same tx.
+      //
+      // slice 2: If the caja has a configured cofre destination (resolveSweepDestination),
+      // the handover goes to transito and a companion transfer transito→cofre is emitted
+      // in the same tx (handoverMovementId set → getRemainingForHandover = 0, nothing
+      // left in the queue). NO confirmation prompt. When null → falls back to Pendiente
+      // de ubicar (slice-1 path, visible in the placement queue).
       if (priorCloseExists && lastClosedSessionId && difference < 0) {
         const sweepAmount = Math.abs(difference);
         const pendingAccount = await getOrCreatePendingAccount(tx, ctx.organizationId, attribution);
-        await recordHandoverMovement(tx, {
+        const sweepRow = await recordHandoverMovement(tx, {
           organizationId: ctx.organizationId,
           toAccountId: pendingAccount.id,
           amount: sweepAmount,
           cashSessionId: lastClosedSessionId,
           createdBy: attribution,
         });
+
+        // Auto-route to configured cofre (two-step: handover already went to transito;
+        // now place it via a transfer transito→cofre in the same tx so the queue shows 0).
+        const destination = await resolveSweepDestination(tx, ctx.organizationId, ctx.tokenId);
+        if (destination) {
+          await recordContainerTransfer(tx, {
+            organizationId: ctx.organizationId,
+            fromAccountId: pendingAccount.id,
+            toAccountId: destination.accountId,
+            amount: sweepAmount,
+            createdBy: attribution,
+            handoverMovementId: sweepRow.id,
+          });
+        }
       }
 
       return { session: created };

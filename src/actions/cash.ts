@@ -27,8 +27,7 @@ import {
   riskLevelForRatio,
 } from '@/libs/cash-security-policy';
 import { db } from '@/libs/DB';
-// treasury-sweep-model slice 1: getTreasuryHandoverEnabled / recordHandoverMovement
-// removed from close flow. Imports removed; flag/function cleanup finishes in slice 2.
+// treasury-sweep-model: at-close handover retired (slice 1). Flag/toggle retired (slice 2).
 import {
   cashMovementsSchema,
   cashSecurityThresholdCacheSchema,
@@ -114,7 +113,6 @@ export async function closeCashSession(
 
       // treasury-sweep-model slice 1: at-close handover emission removed.
       // The sweep now fires at OPEN time (api/pos/cash/open/route.ts).
-      // getTreasuryHandoverEnabled import kept alive; full cleanup in slice 2.
 
       return closed;
     });

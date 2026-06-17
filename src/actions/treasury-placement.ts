@@ -1,7 +1,8 @@
 'use server';
 
 import type { ActionResult } from '@/libs/action-result';
-import { currentUser } from '@clerk/nextjs/server';
+import { auth, currentUser } from '@clerk/nextjs/server';
+import { and, eq } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { toMoney } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
@@ -13,6 +14,25 @@ import {
   recordContainerTransfer,
   recordGastoOutflow,
 } from '@/libs/treasury';
+import { treasuryAccountsSchema, treasuryMovementsSchema } from '@/models/Schema';
+
+/**
+ * Owner-only (org:admin) gate. Mirrors requireAdminContext in pos-tokens.ts.
+ * reclassifyAutoSweep is owner-callable per the design's owner-only requirement.
+ */
+async function requireOwnerContext(): Promise<{ userId: string; orgId: string }> {
+  const { userId, orgId, orgRole } = await auth();
+  if (!userId) {
+    throw new Error('Not authenticated');
+  }
+  if (!orgId) {
+    throw new Error('No active organization');
+  }
+  if (orgRole !== 'org:admin') {
+    throw new Error('Only organization owners can reclassify auto-sweep transfers');
+  }
+  return { userId, orgId };
+}
 
 const TESORERIA_PATH = '/dashboard/tesoreria';
 const CASH_PATH = '/dashboard/cash';
@@ -227,4 +247,129 @@ export async function getHandoverStatusForSessionsAction(
     result[id] = v;
   }
   return { ok: true, data: result };
+}
+
+/**
+ * Reclassifies an auto-routed sweep transfer to a new cofre destination.
+ * Owner-only (gated by requirePanelModule('cash')).
+ *
+ * The original transfer (transito → cofre A) is compensated by a reverse
+ * transfer (cofre A → transito), restoring the transito balance.
+ * A new forward transfer (transito → cofre B) is then recorded with the same
+ * handoverMovementId so per-handover remaining stays at 0.
+ *
+ * All three movements are written inside one transaction (ADR-5 immutability
+ * + compensating-entries philosophy). The original rows are never mutated.
+ */
+export async function reclassifyAutoSweep(
+  originalTransferId: string,
+  newDestinationAccountId: string,
+): Promise<ActionResult<{ ok: true }>> {
+  const { userId, orgId } = await requireOwnerContext();
+
+  if (!originalTransferId || !newDestinationAccountId) {
+    return { ok: false, error: 'originalTransferId and newDestinationAccountId are required' };
+  }
+
+  // F1: cofre-only guard — newDestinationAccountId must be an ACTIVE caja_fuerte
+  // owned by this org. Mirrors the validation in setPosTokenSweepDestination.
+  const [destAccount] = await db
+    .select({
+      id: treasuryAccountsSchema.id,
+      type: treasuryAccountsSchema.type,
+      active: treasuryAccountsSchema.active,
+    })
+    .from(treasuryAccountsSchema)
+    .where(
+      and(
+        eq(treasuryAccountsSchema.id, newDestinationAccountId),
+        eq(treasuryAccountsSchema.organizationId, orgId),
+      ),
+    )
+    .limit(1);
+
+  if (!destAccount) {
+    return { ok: false, error: 'Cuenta de destino no encontrada' };
+  }
+  if (!destAccount.active) {
+    return { ok: false, error: 'La cuenta de destino está inactiva' };
+  }
+  if (destAccount.type !== 'caja_fuerte') {
+    return {
+      ok: false,
+      error: 'Solo las cajas fuertes (cofres) pueden ser destino del traspaso automático',
+    };
+  }
+
+  const actor = await getActorName(userId);
+
+  try {
+    await db.transaction(async (tx) => {
+      // Load the original transfer to validate it belongs to this org
+      const [original] = await tx
+        .select({
+          id: treasuryMovementsSchema.id,
+          fromAccountId: treasuryMovementsSchema.fromAccountId,
+          toAccountId: treasuryMovementsSchema.toAccountId,
+          amount: treasuryMovementsSchema.amount,
+          handoverMovementId: treasuryMovementsSchema.handoverMovementId,
+          organizationId: treasuryMovementsSchema.organizationId,
+        })
+        .from(treasuryMovementsSchema)
+        .where(eq(treasuryMovementsSchema.id, originalTransferId))
+        .limit(1);
+
+      if (!original || original.organizationId !== orgId) {
+        throw new Error('Movimiento no encontrado o no pertenece a la organización');
+      }
+      if (original.handoverMovementId == null) {
+        throw new Error('El movimiento no es un traspaso auto-dirigido (handover_movement_id nulo)');
+      }
+      // handoverMovementId is validated above (non-null) but intentionally not
+      // forwarded to the compensating transfers: the original placement already
+      // consumed it (remaining=0). Forwarding it would incorrectly re-open the
+      // per-handover remaining and break the placement-queue invariant.
+      const amount = original.amount;
+      const transitoId = original.fromAccountId;
+      const oldCofreId = original.toAccountId;
+
+      if (!transitoId || !oldCofreId) {
+        throw new Error('El movimiento original no tiene origen o destino válido');
+      }
+
+      const amtNum = Number.parseFloat(String(amount));
+
+      // Step 1: reverse the original placement (cofre A → transito).
+      // No handoverMovementId — this is a compensating ledger entry, not a placement.
+      await recordContainerTransfer(tx, {
+        organizationId: orgId,
+        fromAccountId: oldCofreId,
+        toAccountId: transitoId,
+        amount: String(amtNum),
+        createdBy: actor,
+        reason: 'Reclasificación de traspaso automático',
+      });
+
+      // Step 2: place to the new destination (transito → cofre B).
+      // No handoverMovementId — the original handover is already fully-placed (remaining=0).
+      // The "entregado" label is based on the original placement row (which still exists).
+      await recordContainerTransfer(tx, {
+        organizationId: orgId,
+        fromAccountId: transitoId,
+        toAccountId: newDestinationAccountId,
+        amount: String(amtNum),
+        createdBy: actor,
+        reason: 'Reclasificación de traspaso automático',
+      });
+    });
+
+    revalidatePath(TESORERIA_PATH);
+    revalidatePath(CASH_PATH);
+    return { ok: true, data: { ok: true } };
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Error al reclasificar el traspaso',
+    };
+  }
 }

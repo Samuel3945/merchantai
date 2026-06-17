@@ -38,7 +38,8 @@ const SCHEMA = `
   CREATE TABLE pos_tokens (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     organization_id text NOT NULL,
-    device_name text NOT NULL
+    device_name text NOT NULL,
+    default_sweep_destination_account_id uuid
   );
   CREATE TABLE cash_sessions (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
@@ -96,6 +97,14 @@ const SCHEMA = `
       )
     )
   );
+  -- slice 2: app_settings needed for resolveSweepDestination (global KV default)
+  CREATE TABLE app_settings (
+    organization_id text NOT NULL,
+    key text NOT NULL,
+    value text DEFAULT '' NOT NULL,
+    updated_at timestamp DEFAULT now() NOT NULL,
+    PRIMARY KEY (organization_id, key)
+  );
 `;
 
 let pg: PGlite;
@@ -123,7 +132,7 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
-  await pg.exec('TRUNCATE treasury_movements; TRUNCATE treasury_accounts; TRUNCATE cash_sessions; TRUNCATE pos_tokens;');
+  await pg.exec('TRUNCATE treasury_movements; TRUNCATE treasury_accounts; TRUNCATE cash_sessions; TRUNCATE pos_tokens; TRUNCATE app_settings;');
   await pg.query(
     `INSERT INTO pos_tokens (id, organization_id, device_name) VALUES ($1, $2, 'Caja 1')`,
     [TOKEN, ORG],
