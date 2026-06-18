@@ -17,6 +17,10 @@ import {
 } from '@/components/ui/dialog';
 import { Select } from '@/components/ui/select';
 import { cashInputCls, money } from '@/features/cash/cash-ui';
+import {
+  TREASURY_EXPENSE_CATEGORIES,
+  TREASURY_EXPENSE_CATEGORY_LABELS,
+} from './expenseCategories';
 
 // ── Destination option rows ──────────────────────────────────────────────────
 
@@ -92,6 +96,8 @@ export function AllocateModal({
   const [accountId, setAccountId] = useState('');
   const [amount, setAmount] = useState(String(handover.remaining));
   const [note, setNote] = useState('');
+  // Gasto category — mirrors the standalone gasto form (recordGasto).
+  const [category, setCategory] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   const dateLabel = handover.createdAt.toLocaleDateString('es-CO', {
@@ -104,6 +110,8 @@ export function AllocateModal({
   function handleDestChange(k: DestKey) {
     setDest(k);
     setAccountId('');
+    setCategory('');
+    setNote('');
     setError(null);
   }
 
@@ -111,6 +119,8 @@ export function AllocateModal({
     = !dest
       || (dest === 'caja_fuerte' && !accountId)
       || (dest === 'banco' && !accountId)
+      || (dest === 'gasto'
+        && (!category || (category === 'otros' && !note.trim())))
       || isPending;
 
   function submit() {
@@ -132,9 +142,10 @@ export function AllocateModal({
           const noteText = note.trim() || null;
           res = await placeHandoverAsLossAction(handover.id, amt, noteText);
         } else {
-          // 'gasto' maps to placeHandoverAsGasto. The note is optional.
+          // 'gasto' — categorized like the standalone gasto form. Description
+          // is optional except for 'otros' (enforced here and server-side).
           const description = note.trim() || null;
-          res = await placeHandoverAsGasto(handover.id, amt, description);
+          res = await placeHandoverAsGasto(handover.id, amt, category, description);
         }
         if (!res.ok) {
           setError(res.error);
@@ -159,6 +170,12 @@ export function AllocateModal({
     }
     return true; // gasto and perdida always available
   });
+
+  // Same canonical categories as the standalone gasto form (recordGasto).
+  const categoryOptions = TREASURY_EXPENSE_CATEGORIES.map(cat => ({
+    value: cat,
+    label: TREASURY_EXPENSE_CATEGORY_LABELS[cat],
+  }));
 
   return (
     <Dialog
@@ -372,6 +389,18 @@ export function AllocateModal({
             </div>
           )}
 
+          {/* Category picker for gasto — same canonical list as the standalone form */}
+          {dest === 'gasto' && (
+            <div className="mt-3.5">
+              <Select
+                value={category}
+                onValueChange={setCategory}
+                options={categoryOptions}
+                placeholder="Categoría del gasto"
+              />
+            </div>
+          )}
+
           {/* Amount */}
           {dest && (
             <div className="mt-3.5 flex flex-col gap-1.5">
@@ -390,11 +419,16 @@ export function AllocateModal({
             </div>
           )}
 
-          {/* Note — optional for most, obligatory for "otro" */}
-          {dest && (
+          {/* Note / description — for gasto it mirrors the standalone form
+              (required for "otros"); a plain optional note otherwise. */}
+          {dest && (dest !== 'gasto' || category) && (
             <div className="mt-3 flex flex-col gap-1.5">
               <span className="text-xs font-semibold text-secondary-foreground">
-                Nota (opcional)
+                {dest === 'gasto'
+                  ? category === 'otros'
+                    ? 'Motivo del gasto'
+                    : 'Descripción (opcional)'
+                  : 'Nota (opcional)'}
               </span>
               <input
                 className={cashInputCls}
@@ -402,7 +436,9 @@ export function AllocateModal({
                 onChange={e => setNote(e.target.value)}
                 placeholder={
                   dest === 'gasto'
-                    ? 'Ej: pago del gas, recibo #123'
+                    ? category === 'otros'
+                      ? 'Requerido para Otros — ¿en qué se gastó?'
+                      : 'Ej: pago del gas, recibo #123'
                     : dest === 'perdida'
                       ? 'Ej: billete que se cayó al contar'
                       : 'Ej: para acordarte después'
