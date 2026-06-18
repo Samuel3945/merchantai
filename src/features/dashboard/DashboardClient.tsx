@@ -211,26 +211,32 @@ function WhatsAppPreview({ messages }: { messages: BotMessage[] }) {
 
   return (
     <div className="
-      flex min-h-[220px] flex-col overflow-hidden rounded-xl bg-[#E5DDD5]
-      shadow-lg
+      flex min-h-[220px] flex-col overflow-hidden rounded-xl border
+      bg-background shadow-sm
     "
     >
       <style>
         {`@keyframes waPop{from{opacity:0;transform:translateY(7px) scale(.97)}to{opacity:1;transform:none}}@keyframes waDot{0%,60%,100%{opacity:.25;transform:translateY(0)}30%{opacity:1;transform:translateY(-3px)}}`}
       </style>
-      <div className="flex items-center gap-2 bg-[#075E54] px-3 py-2">
+      <div className="flex items-center gap-2 border-b bg-card px-3 py-2">
         <span className="
           inline-flex size-7 shrink-0 items-center justify-center rounded-full
-          bg-[#0F766E] text-white
+          bg-[#25D366] text-white
         "
         >
           <Bot className="size-4" />
         </span>
-        <div className="min-w-0 flex-1 text-white">
-          <div className="truncate text-xs font-semibold">
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-xs font-semibold text-foreground">
             Asistente · tu tienda
           </div>
-          <div className="text-[10px] text-[#A7D7CF]">en línea</div>
+          <div className="
+            flex items-center gap-1 text-[10px] text-muted-foreground
+          "
+          >
+            <span className="size-1.5 rounded-full bg-[#25D366]" />
+            en línea
+          </div>
         </div>
       </div>
       <div
@@ -242,14 +248,16 @@ function WhatsAppPreview({ messages }: { messages: BotMessage[] }) {
             <div
               key={m.text}
               className="
-                max-w-[88%] self-start rounded-[2px_10px_10px_10px] bg-white
-                px-2.5 py-1.5 text-xs/snug text-[#111B21] shadow-sm
+                max-w-[88%] self-start rounded-[2px_10px_10px_10px] border
+                bg-card px-2.5 py-1.5 text-xs/snug text-card-foreground
+                shadow-sm
               "
               style={{ animation: 'waPop .26s ease both' }}
             >
               {m.text}
               <span className="
-                float-right mt-1 ml-2 text-[9.5px] text-[#667781] tabular-nums
+                float-right mt-1 ml-2 text-[9.5px] text-muted-foreground
+                tabular-nums
               "
               >
                 {m.time}
@@ -259,15 +267,15 @@ function WhatsAppPreview({ messages }: { messages: BotMessage[] }) {
           {typing && (
             <div
               className="
-                flex gap-1 self-start rounded-[2px_10px_10px_10px] bg-white px-3
-                py-2.5 shadow-sm
+                flex gap-1 self-start rounded-[2px_10px_10px_10px] border
+                bg-card px-3 py-2.5 shadow-sm
               "
               style={{ animation: 'waPop .2s ease both' }}
             >
               {[0, 1, 2].map(d => (
                 <span
                   key={d}
-                  className="size-1.5 rounded-full bg-[#9AA6AD]"
+                  className="size-1.5 rounded-full bg-muted-foreground/50"
                   style={{
                     animation: 'waDot 1.2s infinite',
                     animationDelay: `${d * 0.18}s`,
@@ -676,14 +684,14 @@ export function DashboardClient({
         <div className="flex flex-col gap-6">
           {!hasWhatsAppAgent && (
             <div className="
-              flex flex-col gap-3 rounded-lg bg-linear-to-b from-[#0F766E]
-              to-[#064E47] p-4 text-white
+              flex flex-col gap-3 rounded-lg border bg-card p-4
+              text-card-foreground shadow-xs
             "
             >
               <div className="flex items-center gap-2.5">
                 <span className="
                   inline-flex size-8 shrink-0 items-center justify-center
-                  rounded-[10px] bg-white/15
+                  rounded-[10px] bg-[#25D366] text-white
                 "
                 >
                   <MessageCircle className="size-4" />
@@ -692,7 +700,7 @@ export function DashboardClient({
                   <div className="text-sm font-semibold">
                     Tu asistente por WhatsApp
                   </div>
-                  <div className="text-[11px] text-white/75">
+                  <div className="text-[11px] text-muted-foreground">
                     mirá lo que te avisaría hoy, en vivo
                   </div>
                 </div>
@@ -702,9 +710,9 @@ export function DashboardClient({
                 href="/dashboard/ai-agent"
                 className="
                   inline-flex h-10 items-center justify-center gap-2 rounded-md
-                  bg-white px-4 text-sm font-semibold text-[#0F766E]
+                  bg-primary px-4 text-sm font-semibold text-primary-foreground
                   transition-colors
-                  hover:bg-white/90
+                  hover:bg-primary/90
                 "
               >
                 <MessageCircle className="size-4" />
