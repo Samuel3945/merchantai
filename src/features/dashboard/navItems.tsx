@@ -13,7 +13,6 @@ import {
   ShoppingCart,
   Sparkles,
   Sun,
-  TrendingDown,
   Truck,
   UserCog,
   UserRound,
@@ -73,7 +72,6 @@ export const navGroups: NavGroup[] = [
     items: [
       { href: '/dashboard/facturas', label: 'Facturas', icon: ReceiptText },
       { href: '/dashboard/reports', label: 'Reportes', icon: BarChart3 },
-      { href: '/dashboard/expenses', label: 'Gastos', icon: TrendingDown },
       { href: '/dashboard/plans', label: 'Planes', icon: CreditCard },
       { href: '/dashboard/settings', label: 'Ajustes', icon: Settings },
     ],

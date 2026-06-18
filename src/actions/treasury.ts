@@ -390,6 +390,64 @@ export async function listGastosAction(input: {
   });
 }
 
+// ── Slice 3: Delete-as-correction (REQ-8) ────────────────────────────────────
+
+/**
+ * Posts a referenced reversing correction for a posted gasto.
+ * The original expenses row is NEVER mutated — ADR-3 immutability.
+ *
+ * For treasury-sourced gastos: inserts a negative expenses row + a compensating
+ * treasury_movements entrada to restore the container balance.
+ * For POS-sourced gastos: inserts only a negative expenses row (drawer side
+ * stays read-only — arqueo concern).
+ *
+ * Owner-only: gated via requireOwnerContext (org:admin).
+ */
+export async function correctGastoAction(
+  expenseId: string,
+): Promise<ActionResult<{ reversalExpenseId: string }>> {
+  const { userId, orgId } = await auth().then(async (a) => {
+    if (!a.userId || !a.orgId) {
+      throw new Error('Not authenticated');
+    }
+    if (a.orgRole !== 'org:admin') {
+      throw new Error('Solo el dueño puede corregir gastos');
+    }
+    return { userId: a.userId, orgId: a.orgId };
+  });
+
+  if (!expenseId?.trim()) {
+    return { ok: false, error: 'ID de gasto requerido' };
+  }
+
+  const { correctGastoExpense } = await import('@/libs/expense-correction');
+
+  try {
+    const result = await correctGastoExpense(db, {
+      organizationId: orgId,
+      expenseId,
+      correctedBy: userId,
+    });
+
+    await logAction({
+      organizationId: orgId,
+      actor: { type: 'user', id: userId },
+      action: 'expense.corrected',
+      entityType: 'expense',
+      entityId: expenseId,
+      after: { reversalExpenseId: result.reversalExpenseId },
+    });
+
+    revalidatePath('/dashboard/tesoreria');
+    revalidatePath('/dashboard');
+
+    return { ok: true, data: { reversalExpenseId: result.reversalExpenseId } };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Error desconocido';
+    return { ok: false, error: message };
+  }
+}
+
 // treasury-sweep-model slice 2: HandoverToggle / getTreasuryHandoverSettings /
 // setTreasuryHandoverEnabled removed. The at-close handover was retired in slice 1;
 // the flag is now dead. Per-caja sweep destination config is in actions/pos-tokens.ts.
