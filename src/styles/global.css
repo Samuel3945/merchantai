@@ -140,3 +140,38 @@
     letter-spacing: -0.005em;
   }
 }
+
+/*
+ * Thin, theme-aware scrollbar. The track stays invisible and the thumb is a
+ * soft tint of the muted ink that darkens on hover, so scroll areas read as
+ * part of the surface instead of a chunky browser bar. Adapts to light/dark
+ * automatically via the design tokens.
+ */
+@utility scrollbar-subtle {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--muted-foreground) 35%, transparent)
+    transparent;
+
+  &::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  &::-webkit-scrollbar-thumb {
+    border-radius: 9999px;
+    background-color: color-mix(
+      in oklab,
+      var(--muted-foreground) 35%,
+      transparent
+    );
+  }
+  &::-webkit-scrollbar-thumb:hover {
+    background-color: color-mix(
+      in oklab,
+      var(--muted-foreground) 60%,
+      transparent
+    );
+  }
+}
