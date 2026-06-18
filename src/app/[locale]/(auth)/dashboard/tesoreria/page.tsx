@@ -3,7 +3,6 @@ import { listPaymentMethods } from '@/actions/payment-methods';
 import { getTimeline, getTreasury, listTreasuryAccounts } from '@/actions/treasury';
 import {
   getHandoverStatusForSessionsAction,
-  listOpenCajas,
   listPendingHandoversAction,
 } from '@/actions/treasury-placement';
 import { TreasuryHero } from '@/features/treasury/TreasuryHero';
@@ -33,12 +32,10 @@ export default async function TesoreriaPage(props: {
     .filter(a => a.type === 'caja' && a.sessionId)
     .map(a => a.sessionId!);
 
-  const [pendingHandoversResult, openCajasResult] = await Promise.all([
+  const [pendingHandoversResult] = await Promise.all([
     hasTransito
       ? listPendingHandoversAction().catch(() => ({ ok: false as const, error: '' }))
       : Promise.resolve({ ok: true as const, data: [] }),
-    // Open cajas — used by AllocateModal "Volvió a una caja" destination.
-    listOpenCajas().catch(() => ({ ok: true as const, data: [] })),
     // R7 "entregado" label — kept for correctness but not rendered in View B (slice B).
     cajaSessionIds.length > 0
       ? getHandoverStatusForSessionsAction(cajaSessionIds).catch(() => ({
@@ -49,7 +46,6 @@ export default async function TesoreriaPage(props: {
   ]);
 
   const pendingHandovers = pendingHandoversResult.ok ? pendingHandoversResult.data : [];
-  const openCajas = openCajasResult.ok ? openCajasResult.data : [];
   const pendingCount = pendingHandovers.length;
 
   // Account rows split for the placement queue
@@ -80,7 +76,6 @@ export default async function TesoreriaPage(props: {
         total={totalEmpresa}
         sinUbicar={sinUbicar}
         pendingCount={pendingCount}
-        openCajas={openCajas}
       />
 
       {/* 5. Historial de tesorería */}
