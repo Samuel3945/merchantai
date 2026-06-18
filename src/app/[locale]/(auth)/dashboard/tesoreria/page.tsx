@@ -1,10 +1,11 @@
 import { setRequestLocale } from 'next-intl/server';
 import { listPaymentMethods } from '@/actions/payment-methods';
-import { getTimeline, getTreasury, listTreasuryAccounts } from '@/actions/treasury';
+import { getTimeline, getTreasury, listGastosAction, listTreasuryAccounts } from '@/actions/treasury';
 import {
   getHandoverStatusForSessionsAction,
   listPendingHandoversAction,
 } from '@/actions/treasury-placement';
+import { GastosHistory } from '@/features/treasury/GastosHistory';
 import { TreasuryHero } from '@/features/treasury/TreasuryHero';
 import { TreasuryHistory } from '@/features/treasury/TreasuryHistory';
 import { TreasuryPageClient } from '@/features/treasury/TreasuryPageClient';
@@ -16,11 +17,19 @@ export default async function TesoreriaPage(props: {
   const { locale } = await props.params;
   setRequestLocale(locale);
 
-  const [treasury, treasuryAccountRows, allMethods, timelineEntries] = await Promise.all([
+  // Default gastos range: current calendar month
+  const now = new Date();
+  const monthStart = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1))
+    .toISOString()
+    .slice(0, 10);
+  const monthEnd = new Date().toISOString().slice(0, 10);
+
+  const [treasury, treasuryAccountRows, allMethods, timelineEntries, initialGastos] = await Promise.all([
     getTreasury().catch(() => []),
     listTreasuryAccounts().catch(() => []),
     listPaymentMethods({ activeOnly: true }).catch(() => []),
     getTimeline(50).catch(() => []),
+    listGastosAction({ start: monthStart, end: monthEnd }).catch(() => ({ rows: [], total: 0 })),
   ]);
 
   const totalEmpresa = treasury.reduce((acc, a) => acc + a.balance, 0);
@@ -80,6 +89,14 @@ export default async function TesoreriaPage(props: {
 
       {/* 5. Historial de tesorería */}
       <TreasuryHistory entries={timelineEntries} />
+
+      {/* 6. Historial de gastos — unified across all origins */}
+      <GastosHistory
+        initialRows={initialGastos.rows}
+        initialTotal={initialGastos.total}
+        initialStart={monthStart}
+        initialEnd={monthEnd}
+      />
     </div>
   );
 }

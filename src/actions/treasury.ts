@@ -369,6 +369,27 @@ export async function getTimeline(
   return listTreasuryTimelineLib(db, orgId, limit);
 }
 
+// ── Slice 2: Unified gastos history ──────────────────────────────────────────
+
+/**
+ * Lists all gastos for the org from the expenses table with origin resolution.
+ * Gated by requirePanelModule('cash'). Supports date-range and category filters.
+ */
+export async function listGastosAction(input: {
+  start: string;
+  end: string;
+  category?: string;
+}) {
+  const { listGastos } = await import('@/libs/gastos');
+  const { orgId } = await requirePanelModule('cash');
+  return listGastos(db, {
+    organizationId: orgId,
+    start: input.start,
+    end: input.end,
+    category: input.category,
+  });
+}
+
 // treasury-sweep-model slice 2: HandoverToggle / getTreasuryHandoverSettings /
 // setTreasuryHandoverEnabled removed. The at-close handover was retired in slice 1;
 // the flag is now dead. Per-caja sweep destination config is in actions/pos-tokens.ts.
