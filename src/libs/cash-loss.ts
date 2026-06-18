@@ -33,10 +33,12 @@ import { toMoney } from '@/libs/cash-helpers';
 import { correctGastoExpense } from '@/libs/expense-correction';
 import {
   getOrCreatePendingAccount,
+  recordBankConsignacion,
   recordContainerTransfer,
 } from '@/libs/treasury';
 import {
   expensesSchema,
+  treasuryAccountsSchema,
   treasuryMovementsSchema,
 } from '@/models/Schema';
 
@@ -100,19 +102,31 @@ export async function placeHandoverAsLoss(
   //   - source balance check
   //   - per-handover remaining guard
   //   - atomic expenses + treasury_movements insert
+  // M1: wrap in a transaction so getOrCreatePendingAccount + recordGastoOutflow
+  // share the same FOR UPDATE lock scope, matching placeHandoverToBanco/AsGasto.
   const { recordGastoOutflow } = await import('@/libs/treasury');
-  const pending = await getOrCreatePendingAccount(executor, input.organizationId, input.createdBy);
 
-  return recordGastoOutflow(executor, {
-    organizationId: input.organizationId,
-    fromAccountId: pending.id,
-    amount: String(amt),
-    category: 'faltante',
-    description,
-    incurredOn: input.incurredOn,
-    createdBy: input.createdBy,
-    handoverMovementId: input.handoverMovementId,
-  });
+  const doPlace = async (tx: Executor): Promise<string> => {
+    const pending = await getOrCreatePendingAccount(tx, input.organizationId, input.createdBy);
+    return recordGastoOutflow(tx, {
+      organizationId: input.organizationId,
+      fromAccountId: pending.id,
+      amount: String(amt),
+      category: 'faltante',
+      description,
+      incurredOn: input.incurredOn,
+      createdBy: input.createdBy,
+      handoverMovementId: input.handoverMovementId,
+    });
+  };
+
+  const isRealDb = typeof (executor as { transaction?: unknown }).transaction === 'function';
+  if (isRealDb) {
+    return (executor as typeof import('@/libs/DB').db).transaction(
+      tx => doPlace(tx as unknown as Executor),
+    );
+  }
+  return doPlace(executor);
 }
 
 // ── Slice 2: listRecoverableLosses ────────────────────────────────────────────
@@ -206,9 +220,9 @@ export async function recoverLoss(
   }
 
   const doRecover = async (tx: Executor): Promise<void> => {
-    // 1. Load the original expense to get its amount before correction.
+    // 1. Load the original expense to get its amount and category before correction.
     const [original] = await tx
-      .select({ amount: expensesSchema.amount })
+      .select({ amount: expensesSchema.amount, category: expensesSchema.category })
       .from(expensesSchema)
       .where(
         and(
@@ -224,22 +238,59 @@ export async function recoverLoss(
       );
     }
 
+    // H1: only faltante expenses can be recovered via this path.
+    if (original.category !== 'faltante') {
+      throw new Error(
+        `recoverLoss: expense ${input.expenseId} is not a faltante (category='${original.category}') — only faltante expenses can be recovered`,
+      );
+    }
+
     const recoveredAmount = Number.parseFloat(original.amount);
 
-    // 2. Reverse the expense + restore money to transito.
+    // M-A: validate that the destination accountId matches the expected container type.
+    if (input.destination === 'caja_fuerte' || input.destination === 'banco') {
+      const [destAccount] = await tx
+        .select({ type: treasuryAccountsSchema.type, active: treasuryAccountsSchema.active })
+        .from(treasuryAccountsSchema)
+        .where(
+          and(
+            eq(treasuryAccountsSchema.id, input.accountId!),
+            eq(treasuryAccountsSchema.organizationId, input.organizationId),
+          ),
+        )
+        .limit(1);
+
+      if (!destAccount) {
+        throw new Error(
+          `recoverLoss: destination account ${input.accountId} not found in org ${input.organizationId}`,
+        );
+      }
+      if (destAccount.type !== input.destination) {
+        throw new Error(
+          `recoverLoss: destination account tipo '${destAccount.type}' does not match requested destination '${input.destination}'`,
+        );
+      }
+    }
+
+    // 2. Reverse the expense (P&L restored).
     //    correctGastoExpense already handles the idempotency guard.
+    //    For pendiente: skip the compensating treasury entrada — the handover
+    //    insert below is the sole credit to transito (C1 fix).
+    //    For caja_fuerte/banco: allow the compensating entrada so transito is
+    //    credited, then recordContainerTransfer/recordBankConsignacion debits it.
+    const isPendiente = input.destination === 'pendiente';
     await correctGastoExpense(tx, {
       organizationId: input.organizationId,
       expenseId: input.expenseId,
       correctedBy: input.correctedBy,
+      skipTreasuryCompensation: isPendiente,
     });
 
-    // 3. The compensating entrada from correctGastoExpense has restored money to
-    //    the transito container. Now route it to the chosen destination.
+    // 3. Route the recovered amount to the chosen destination.
     const pending = await getOrCreatePendingAccount(tx, input.organizationId, input.correctedBy);
 
-    if (input.destination === 'caja_fuerte' || input.destination === 'banco') {
-      // Transfer from transito to the specified container.
+    if (input.destination === 'caja_fuerte') {
+      // Transfer from transito to the cofre.
       await recordContainerTransfer(tx, {
         organizationId: input.organizationId,
         fromAccountId: pending.id,
@@ -248,11 +299,24 @@ export async function recoverLoss(
         createdBy: input.correctedBy,
         reason: 'Recuperación de faltante',
       });
+    } else if (input.destination === 'banco') {
+      // L1: use recordBankConsignacion (type='consignacion') mirroring placeHandoverToBanco,
+      // NOT recordContainerTransfer (type='transfer') which was the wrong movement type.
+      await recordBankConsignacion(tx, {
+        organizationId: input.organizationId,
+        fromAccountId: pending.id,
+        toBankAccountId: input.accountId!,
+        amount: String(recoveredAmount),
+        createdBy: input.correctedBy,
+        note: 'Recuperación de faltante',
+      });
     } else {
       // 'pendiente': create a new handover row that appears in listPendingHandovers.
       // cash_session_id = NULL (no linked session — this is a recovery, not a close).
       // reason = 'Recuperación de faltante' — used as origin fallback by
       // listPendingHandovers (the query falls back to reason when deviceName is null).
+      // C1: correctGastoExpense was called with skipTreasuryCompensation=true above,
+      // so this handover insert is the SOLE credit to transito — no double-credit.
       await tx
         .insert(treasuryMovementsSchema)
         .values({

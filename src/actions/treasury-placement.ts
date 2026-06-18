@@ -449,14 +449,16 @@ export async function listRecoverableLossesAction(): Promise<
  *      - 'banco'       → transfer from transito to banco account
  *      - 'pendiente'   → new handover movement (reappears in pending queue)
  *
- * Gated by requirePanelModule('cash').
+ * Gated by requireOwnerContext() — reversing an expense alters P&L, which is an
+ * owner-level correction (mirrors reclassifyAutoSweep). placeHandoverAsLossAction
+ * and listRecoverableLossesAction remain on requirePanelModule('cash').
  */
 export async function recoverLossAction(
   expenseId: string,
   destination: 'caja_fuerte' | 'banco' | 'pendiente',
   accountId?: string,
 ): Promise<ActionResult<null>> {
-  const { userId, orgId } = await requirePanelModule('cash');
+  const { userId, orgId } = await requireOwnerContext();
 
   if (!expenseId) {
     return { ok: false, error: 'expenseId es requerido' };

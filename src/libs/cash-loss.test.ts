@@ -734,6 +734,321 @@ describe('recoverLoss — idempotency', () => {
   });
 });
 
+// ── H1: non-faltante reversal guard ──────────────────────────────────────────
+
+describe('recoverLoss — H1: category guard', () => {
+  it('throws when the expense is not a faltante, writes nothing', async () => {
+    await seedHandover(500);
+    // Seed a non-faltante expense directly (tesoreria category)
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+    const nonFaltanteId = await recordGastoOutflow(db, {
+      organizationId: ORG,
+      fromAccountId: pending.id,
+      amount: '100',
+      category: 'tesoreria',
+      description: 'rent',
+      incurredOn: '2026-06-18',
+      createdBy: 'owner',
+    });
+
+    const movsBefore = await pg.query(
+      `SELECT id FROM treasury_movements WHERE organization_id = $1`,
+      [ORG],
+    );
+    const expsBefore = await pg.query(
+      `SELECT id FROM expenses WHERE organization_id = $1`,
+      [ORG],
+    );
+
+    await expect(
+      recoverLoss(db, {
+        organizationId: ORG,
+        expenseId: nonFaltanteId,
+        destination: 'pendiente',
+        correctedBy: 'owner',
+      }),
+    ).rejects.toThrow(/faltante/i);
+
+    // Nothing new written
+    const movsAfter = await pg.query(
+      `SELECT id FROM treasury_movements WHERE organization_id = $1`,
+      [ORG],
+    );
+    const expsAfter = await pg.query(
+      `SELECT id FROM expenses WHERE organization_id = $1`,
+      [ORG],
+    );
+
+    expect(movsAfter.rows.length).toBe(movsBefore.rows.length);
+    expect(expsAfter.rows.length).toBe(expsBefore.rows.length);
+  });
+});
+
+// ── M-A: account type mismatch guard ─────────────────────────────────────────
+
+describe('recoverLoss — M-A: destination account type guard', () => {
+  it('throws when caja_fuerte destination receives a banco accountId', async () => {
+    await seedAccounts();
+    const handoverMovementId = await seedHandover(500);
+    await placeHandoverAsLoss(db, {
+      organizationId: ORG,
+      handoverMovementId,
+      amount: 100,
+      incurredOn: '2026-06-18',
+      createdBy: 'owner',
+    });
+
+    const [loss] = await listRecoverableLosses(db, ORG);
+
+    // BANCO_ID is a 'banco' type — passing it as caja_fuerte destination must throw
+    await expect(
+      recoverLoss(db, {
+        organizationId: ORG,
+        expenseId: loss!.id,
+        destination: 'caja_fuerte',
+        accountId: BANCO_ID, // wrong type — banco, not caja_fuerte
+        correctedBy: 'owner',
+      }),
+    ).rejects.toThrow(/tipo|type/i);
+  });
+
+  it('throws when banco destination receives a caja_fuerte accountId', async () => {
+    await seedAccounts();
+    const handoverMovementId = await seedHandover(500);
+    await placeHandoverAsLoss(db, {
+      organizationId: ORG,
+      handoverMovementId,
+      amount: 100,
+      incurredOn: '2026-06-18',
+      createdBy: 'owner',
+    });
+
+    const [loss] = await listRecoverableLosses(db, ORG);
+
+    // VAULT_ID is a 'caja_fuerte' type — passing it as banco destination must throw
+    await expect(
+      recoverLoss(db, {
+        organizationId: ORG,
+        expenseId: loss!.id,
+        destination: 'banco',
+        accountId: VAULT_ID, // wrong type — caja_fuerte, not banco
+        correctedBy: 'owner',
+      }),
+    ).rejects.toThrow(/tipo|type/i);
+  });
+});
+
+// ── C1: transito conservation — pendiente recovery must not double-credit ──────
+
+describe('conservation: pendiente recovery — transito balance stays conserved (C1)', () => {
+  it('transito ledger balance equals pre-loss value after loss→recover-pendiente', async () => {
+    const handoverMovementId = await seedHandover(500);
+    const pendingAccount = await getOrCreatePendingAccount(db, ORG, 'owner');
+
+    // Baseline: transito balance before any loss
+    const balanceBefore = async () => {
+      const { rows } = await pg.query<{ credits: string; debits: string }>(
+        `SELECT
+          COALESCE(SUM(amount) FILTER (WHERE to_account_id = $1), 0)::text AS credits,
+          COALESCE(SUM(amount) FILTER (WHERE from_account_id = $1), 0)::text AS debits
+         FROM treasury_movements WHERE organization_id = $2`,
+        [pendingAccount.id, ORG],
+      );
+      return Number.parseFloat(rows[0]!.credits) - Number.parseFloat(rows[0]!.debits);
+    };
+
+    const beforeLoss = await balanceBefore();
+
+    expect(beforeLoss).toBeCloseTo(500, 2); // seeded 500
+
+    // Place loss of 100
+    await placeHandoverAsLoss(db, {
+      organizationId: ORG,
+      handoverMovementId,
+      amount: 100,
+      incurredOn: '2026-06-18',
+      createdBy: 'owner',
+    });
+
+    // After loss: transito should be 400
+    const afterLoss = await balanceBefore();
+
+    expect(afterLoss).toBeCloseTo(400, 2);
+
+    // Recover to pendiente
+    const [loss] = await listRecoverableLosses(db, ORG);
+    await recoverLoss(db, {
+      organizationId: ORG,
+      expenseId: loss!.id,
+      destination: 'pendiente',
+      correctedBy: 'owner',
+    });
+
+    // After recovery-to-pendiente: transito must equal the pre-loss value (500)
+    // C1 bug: before fix this reads 600 (double credit — correctGastoExpense +
+    // the handover insert both credit transito).
+    const afterRecover = await balanceBefore();
+
+    expect(afterRecover).toBeCloseTo(500, 2);
+  });
+
+  it('re-loss→re-recover loop does NOT accumulate phantom credit', async () => {
+    const handoverMovementId = await seedHandover(500);
+    const pendingAccount = await getOrCreatePendingAccount(db, ORG, 'owner');
+
+    const transitoBalance = async () => {
+      const { rows } = await pg.query<{ credits: string; debits: string }>(
+        `SELECT
+          COALESCE(SUM(amount) FILTER (WHERE to_account_id = $1), 0)::text AS credits,
+          COALESCE(SUM(amount) FILTER (WHERE from_account_id = $1), 0)::text AS debits
+         FROM treasury_movements WHERE organization_id = $2`,
+        [pendingAccount.id, ORG],
+      );
+      return Number.parseFloat(rows[0]!.credits) - Number.parseFloat(rows[0]!.debits);
+    };
+
+    // Cycle 1: place loss on original handover, recover to pendiente
+    await placeHandoverAsLoss(db, {
+      organizationId: ORG,
+      handoverMovementId,
+      amount: 100,
+      incurredOn: '2026-06-18',
+      createdBy: 'owner',
+    });
+    const [loss1] = await listRecoverableLosses(db, ORG);
+    await recoverLoss(db, {
+      organizationId: ORG,
+      expenseId: loss1!.id,
+      destination: 'pendiente',
+      correctedBy: 'owner',
+    });
+
+    // After cycle 1: transito must be back to 500
+    expect(await transitoBalance()).toBeCloseTo(500, 2);
+
+    // Cycle 2: the recovered handover reappears in pending — place a loss on it,
+    // then recover to pendiente again.
+    const pending = await listPendingHandovers(db, ORG);
+    // Find the recovered handover (the one without a cash session)
+    const recoveredHandover = pending.find(h => h.origin === 'Recuperación de faltante');
+
+    expect(recoveredHandover).toBeDefined();
+
+    await placeHandoverAsLoss(db, {
+      organizationId: ORG,
+      handoverMovementId: recoveredHandover!.id,
+      amount: 100,
+      incurredOn: '2026-06-18',
+      createdBy: 'owner',
+    });
+
+    const losses2 = await listRecoverableLosses(db, ORG);
+    const [loss2] = losses2;
+    await recoverLoss(db, {
+      organizationId: ORG,
+      expenseId: loss2!.id,
+      destination: 'pendiente',
+      correctedBy: 'owner',
+    });
+
+    // After cycle 2: transito must still be 500 — no phantom accumulation
+    expect(await transitoBalance()).toBeCloseTo(500, 2);
+  });
+
+  it('recovered amount appears in listPendingHandovers and is re-placeable', async () => {
+    await seedAccounts();
+    const handoverMovementId = await seedHandover(500);
+    await placeHandoverAsLoss(db, {
+      organizationId: ORG,
+      handoverMovementId,
+      amount: 500,
+      incurredOn: '2026-06-18',
+      createdBy: 'owner',
+    });
+
+    const [loss] = await listRecoverableLosses(db, ORG);
+    await recoverLoss(db, {
+      organizationId: ORG,
+      expenseId: loss!.id,
+      destination: 'pendiente',
+      correctedBy: 'owner',
+    });
+
+    // The recovered amount appears as a new pending handover
+    const pending = await listPendingHandovers(db, ORG);
+
+    expect(pending).toHaveLength(1);
+    expect(pending[0]!.remaining).toBeCloseTo(500, 2);
+
+    // It is fully re-placeable (e.g. to caja_fuerte)
+    const pendingAccount = await getOrCreatePendingAccount(db, ORG, 'owner');
+    const { recordContainerTransfer } = await import('@/libs/treasury');
+    await recordContainerTransfer(db, {
+      organizationId: ORG,
+      fromAccountId: pendingAccount.id,
+      toAccountId: VAULT_ID,
+      amount: 500,
+      createdBy: 'owner',
+      handoverMovementId: pending[0]!.id,
+    });
+
+    const { count } = await countPendingHandovers(db, ORG);
+
+    expect(count).toBe(0);
+  });
+});
+
+// ── C1 conservation: banco recovery — transito net zero ──────────────────────
+
+describe('conservation: banco recovery — transito net zero (L1 + conservation)', () => {
+  it('transito net zero and banco up by recovered amount after loss→recover-banco', async () => {
+    await seedAccounts();
+    const handoverMovementId = await seedHandover(500);
+    const pendingAccount = await getOrCreatePendingAccount(db, ORG, 'owner');
+
+    await placeHandoverAsLoss(db, {
+      organizationId: ORG,
+      handoverMovementId,
+      amount: 80,
+      incurredOn: '2026-06-18',
+      createdBy: 'owner',
+    });
+
+    const [loss] = await listRecoverableLosses(db, ORG);
+    await recoverLoss(db, {
+      organizationId: ORG,
+      expenseId: loss!.id,
+      destination: 'banco',
+      accountId: BANCO_ID,
+      correctedBy: 'owner',
+    });
+
+    // Transito: handover(500) + entrada(80) - gasto(80) - consignacion(80) = 420
+    const { rows: tCreds } = await pg.query<{ credits: string; debits: string }>(
+      `SELECT
+        COALESCE(SUM(amount) FILTER (WHERE to_account_id = $1), 0)::text AS credits,
+        COALESCE(SUM(amount) FILTER (WHERE from_account_id = $1), 0)::text AS debits
+       FROM treasury_movements WHERE organization_id = $2`,
+      [pendingAccount.id, ORG],
+    );
+    const transitoNet = Number.parseFloat(tCreds[0]!.credits) - Number.parseFloat(tCreds[0]!.debits);
+
+    // Banco: up by 80
+    const { rows: bRows } = await pg.query<{ credits: string; debits: string }>(
+      `SELECT
+        COALESCE(SUM(amount) FILTER (WHERE to_account_id = $1), 0)::text AS credits,
+        COALESCE(SUM(amount) FILTER (WHERE from_account_id = $1), 0)::text AS debits
+       FROM treasury_movements WHERE organization_id = $2`,
+      [BANCO_ID, ORG],
+    );
+    const bancoBalance = Number.parseFloat(bRows[0]!.credits) - Number.parseFloat(bRows[0]!.debits);
+
+    // Total: 420 (transito) + 80 (banco) = 500 = original handover amount
+    expect(transitoNet + bancoBalance).toBeCloseTo(500, 2);
+    expect(bancoBalance).toBeCloseTo(80, 2);
+  });
+});
+
 // ── Conservation ─────────────────────────────────────────────────────────────
 
 describe('conservation: treasury value across loss → recovery', () => {
