@@ -1,14 +1,12 @@
 'use client';
 
-import type { OpenCajaOption } from '@/actions/treasury-placement';
 import type { PendingHandover, TreasuryAccountRow } from '@/libs/treasury';
-import { Check, Clock, Coins, Landmark, Lock, Monitor, Tag, User, X } from 'lucide-react';
+import { Check, Clock, Landmark, Lock, Monitor, Tag, User, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import {
   placeHandoverAsGasto,
   placeHandoverToBanco,
-  placeHandoverToCaja,
   placeHandoverToCajaFuerte,
 } from '@/actions/treasury-placement';
 import { Button } from '@/components/ui/button';
@@ -21,7 +19,7 @@ import { cashInputCls, money } from '@/features/cash/cash-ui';
 
 // ── Destination option rows ──────────────────────────────────────────────────
 
-type DestKey = 'caja_fuerte' | 'banco' | 'gasto' | 'otro' | 'caja';
+type DestKey = 'caja_fuerte' | 'banco' | 'gasto';
 
 const DEST_OPTIONS: {
   k: DestKey;
@@ -45,25 +43,11 @@ const DEST_OPTIONS: {
     Icon: Landmark,
   },
   {
-    k: 'caja',
-    label: 'Volvió a una caja',
-    sub: 'Quedó como base / vuelto',
-    quote: 'La dejé en la caja',
-    Icon: Monitor,
-  },
-  {
     k: 'gasto',
     label: 'Fue un gasto',
     sub: 'Pago de algo del negocio',
     quote: 'Ya se gastó',
     Icon: Tag,
-  },
-  {
-    k: 'otro',
-    label: 'Otro lugar',
-    sub: 'Lo explico abajo',
-    quote: '',
-    Icon: Coins,
   },
 ];
 
@@ -73,8 +57,6 @@ type AllocateModalProps = {
   handover: PendingHandover;
   bankAccounts: TreasuryAccountRow[];
   cajaFuerteAccounts: TreasuryAccountRow[];
-  /** Currently-open POS cajas available as "Volvió a una caja" destinations. */
-  openCajas: OpenCajaOption[];
   open: boolean;
   onClose: () => void;
 };
@@ -85,15 +67,12 @@ type AllocateModalProps = {
  * Destination is chosen via large tappable rows:
  *   - Caja fuerte (cofre)
  *   - Cuenta bancaria (banco)
- *   - Volvió a una caja (open POS session) — mirroring the design "Quedó como base/vuelto"
  *   - Fue un gasto
- *   - Otro lugar (maps to gasto with a mandatory note)
  */
 export function AllocateModal({
   handover,
   bankAccounts,
   cajaFuerteAccounts,
-  openCajas,
   open,
   onClose,
 }: AllocateModalProps) {
@@ -120,10 +99,8 @@ export function AllocateModal({
 
   const isDisabled
     = !dest
-      || (dest === 'otro' && !note.trim())
       || (dest === 'caja_fuerte' && !accountId)
       || (dest === 'banco' && !accountId)
-      || (dest === 'caja' && !accountId)
       || isPending;
 
   function submit() {
@@ -140,11 +117,8 @@ export function AllocateModal({
           res = await placeHandoverToBanco(handover.id, accountId, amt);
         } else if (dest === 'caja_fuerte') {
           res = await placeHandoverToCajaFuerte(handover.id, accountId, amt);
-        } else if (dest === 'caja') {
-          res = await placeHandoverToCaja(handover.id, accountId, amt);
         } else {
-          // 'gasto' and 'otro' both map to placeHandoverAsGasto.
-          // 'otro' requires a note (enforced by isDisabled guard above).
+          // 'gasto' maps to placeHandoverAsGasto. The note is optional.
           const description = note.trim() || null;
           res = await placeHandoverAsGasto(handover.id, amt, description);
         }
@@ -160,7 +134,7 @@ export function AllocateModal({
     });
   }
 
-  // Filtered options — only show destinations that have accounts/cajas configured.
+  // Filtered options — only show destinations that have accounts configured.
   const visibleOptions = DEST_OPTIONS.filter((d) => {
     if (d.k === 'caja_fuerte') {
       return cajaFuerteAccounts.length > 0;
@@ -168,10 +142,7 @@ export function AllocateModal({
     if (d.k === 'banco') {
       return bankAccounts.length > 0;
     }
-    if (d.k === 'caja') {
-      return openCajas.length > 0;
-    }
-    return true; // gasto and otro always available
+    return true; // gasto always available
   });
 
   return (
@@ -351,18 +322,6 @@ export function AllocateModal({
             </div>
           )}
 
-          {/* Caja picker for "Volvió a una caja" */}
-          {dest === 'caja' && openCajas.length > 0 && (
-            <div className="mt-3.5">
-              <Select
-                value={accountId}
-                onValueChange={setAccountId}
-                options={openCajas.map(c => ({ value: c.posTokenId, label: c.deviceName }))}
-                placeholder="¿A qué caja?"
-              />
-            </div>
-          )}
-
           {/* Amount */}
           {dest && (
             <div className="mt-3.5 flex flex-col gap-1.5">
@@ -385,7 +344,7 @@ export function AllocateModal({
           {dest && (
             <div className="mt-3 flex flex-col gap-1.5">
               <span className="text-xs font-semibold text-secondary-foreground">
-                {dest === 'otro' ? '¿Dónde quedó? (obligatorio)' : 'Nota (opcional)'}
+                Nota (opcional)
               </span>
               <input
                 className={cashInputCls}
@@ -394,9 +353,7 @@ export function AllocateModal({
                 placeholder={
                   dest === 'gasto'
                     ? 'Ej: pago del gas, recibo #123'
-                    : dest === 'otro'
-                      ? 'Ej: se la di a Mirian para el banco mañana'
-                      : 'Ej: para acordarte después'
+                    : 'Ej: para acordarte después'
                 }
               />
             </div>
