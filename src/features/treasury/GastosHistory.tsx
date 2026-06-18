@@ -1,9 +1,9 @@
 'use client';
 
 import type { GastoRow } from '@/libs/gastos';
-import { ChevronDown, ChevronUp, Receipt } from 'lucide-react';
+import { ChevronDown, ChevronUp, Receipt, RotateCcw } from 'lucide-react';
 import { useCallback, useState, useTransition } from 'react';
-import { listGastosAction } from '@/actions/treasury';
+import { correctGastoAction, listGastosAction } from '@/actions/treasury';
 import { Select } from '@/components/ui/select';
 import { cashInputCls, money } from '@/features/cash/cash-ui';
 import {
@@ -42,7 +42,20 @@ function originColor(origin: GastoRow['origin']): string {
 
 // ── Sub-components ───────────────────────────────────────────────────────────
 
-function GastoRowItem({ row }: { row: GastoRow }) {
+// A correction row (negative amount) cannot itself be corrected — that would
+// be a correction of a correction, which is out of scope for v1.
+function isCorrectionRow(row: GastoRow): boolean {
+  return Number.parseFloat(row.amount) < 0;
+}
+
+type GastoRowItemProps = {
+  row: GastoRow;
+  onCorrect: (id: string) => void;
+  correcting: boolean;
+};
+
+function GastoRowItem({ row, onCorrect, correcting }: GastoRowItemProps) {
+  const isReversal = isCorrectionRow(row);
   return (
     <div className="
       flex items-center gap-3.5 rounded-xl px-4 py-3.5 transition-colors
@@ -58,7 +71,13 @@ function GastoRowItem({ row }: { row: GastoRow }) {
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="text-[13.5px] font-semibold">
+          <span className={`
+            text-[13.5px] font-semibold
+            ${isReversal
+      ? `text-muted-foreground line-through`
+      : ''}
+          `}
+          >
             {TREASURY_EXPENSE_CATEGORY_LABELS[row.category as keyof typeof TREASURY_EXPENSE_CATEGORY_LABELS]
               ?? row.category}
           </span>
@@ -69,6 +88,15 @@ function GastoRowItem({ row }: { row: GastoRow }) {
           >
             {originLabel(row.origin)}
           </span>
+          {isReversal && (
+            <span className="
+              rounded-sm bg-muted px-1.5 py-0.5 text-[10px] font-semibold
+              text-muted-foreground
+            "
+            >
+              Corregido
+            </span>
+          )}
         </div>
         <div className="mt-0.5 text-xs text-muted-foreground">
           {formatDate(row.incurredOn)}
@@ -80,13 +108,32 @@ function GastoRowItem({ row }: { row: GastoRow }) {
           )}
         </div>
       </div>
-      <div className="
-        font-display text-[14.5px] font-[650] text-destructive tabular-nums
-      "
-      >
-        -
-        {' '}
-        {money(row.amount)}
+      <div className="flex items-center gap-2">
+        {!isReversal && (
+          <button
+            type="button"
+            onClick={() => onCorrect(row.id)}
+            disabled={correcting}
+            title="Corregir gasto (reversión referenciada)"
+            className="
+              flex size-7 shrink-0 items-center justify-center rounded-md
+              text-muted-foreground transition-colors
+              hover:bg-muted hover:text-foreground
+              disabled:cursor-not-allowed disabled:opacity-40
+            "
+          >
+            <RotateCcw className="size-3.5" />
+          </button>
+        )}
+        <div className={`
+          font-display text-[14.5px] font-[650] tabular-nums
+          ${isReversal ? 'text-emerald-600' : 'text-destructive'}
+        `}
+        >
+          {isReversal ? '+' : '-'}
+          {' '}
+          {money(Math.abs(Number.parseFloat(row.amount)).toFixed(2))}
+        </div>
       </div>
     </div>
   );
@@ -121,6 +168,7 @@ export function GastosHistory({
   const [category, setCategory] = useState('');
   const [expanded, setExpanded] = useState(true);
   const [isPending, startTransition] = useTransition();
+  const [correctingId, setCorrectingId] = useState<string | null>(null);
 
   const categoryOptions = [
     { value: '', label: 'Todas las categorías' },
@@ -163,6 +211,21 @@ export function GastosHistory({
     setCategory(val);
     fetchGastos(start, end, val);
   }
+
+  const onCorrect = useCallback(
+    (expenseId: string) => {
+      setCorrectingId(expenseId);
+      startTransition(async () => {
+        const result = await correctGastoAction(expenseId);
+        setCorrectingId(null);
+        if (result.ok) {
+          // Refresh the list to show the reversal row.
+          fetchGastos(start, end, category);
+        }
+      });
+    },
+    [start, end, category, fetchGastos],
+  );
 
   return (
     <div className="rounded-xl border border-border bg-card p-[18px] shadow-xs">
@@ -268,7 +331,12 @@ export function GastosHistory({
             : (
                 <div className="mt-2 flex flex-col">
                   {rows.map(row => (
-                    <GastoRowItem key={row.id} row={row} />
+                    <GastoRowItem
+                      key={row.id}
+                      row={row}
+                      onCorrect={onCorrect}
+                      correcting={correctingId === row.id}
+                    />
                   ))}
                 </div>
               )}
