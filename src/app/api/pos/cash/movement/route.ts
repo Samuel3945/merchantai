@@ -8,7 +8,9 @@ import {
   toMoney,
 } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
+import { logAction, resolvePosActor } from '@/libs/audit-log';
 import { requirePosAuth } from '@/libs/pos-auth';
+import { recordPosGastoBridge } from '@/libs/pos-gasto-bridge';
 import { recordInflowSourceDebit } from '@/libs/treasury';
 import { cashMovementsSchema, suppliersSchema } from '@/models/Schema';
 
@@ -157,21 +159,66 @@ export async function POST(req: Request): Promise<NextResponse> {
         treasuryMovementId = treasuryRow.id;
       }
 
-      const [created] = await tx
-        .insert(cashMovementsSchema)
-        .values({
-          sessionId: open.id,
+      // gasto-treasury-unification slice 1: POS→P&L bridge.
+      // When type='expense', dual-write: expenses (P&L anchor) + cash_movements
+      // (with expense_id back-pointer). All other types keep the plain insert.
+      let created: typeof cashMovementsSchema.$inferSelect | undefined;
+
+      if (type === 'expense') {
+        const bridge = await recordPosGastoBridge(tx, {
           organizationId: ctx.organizationId,
-          type,
+          sessionId: open.id,
           amount,
           reason,
-          supplierId,
           createdBy: ctx.cashierName || 'Cajero',
-          // Slice 3: persist origin discriminator + treasury link for internal entradas
-          origin: origin?.kind ?? null,
-          treasuryMovementId,
-        })
-        .returning();
+        });
+
+        // Fetch the full cash_movements row to return to the device (201 body).
+        const [row] = await tx
+          .select()
+          .from(cashMovementsSchema)
+          .where(eq(cashMovementsSchema.id, bridge.movementId))
+          .limit(1);
+        created = row;
+
+        // Audit: log that a POS gasto was bridged to the P&L expenses table.
+        await logAction({
+          organizationId: ctx.organizationId,
+          actor: resolvePosActor(ctx),
+          action: 'pos.gasto.bridged',
+          entityType: 'expense',
+          entityId: bridge.expenseId,
+          after: {
+            expenseId: bridge.expenseId,
+            movementId: bridge.movementId,
+            amount,
+            reason,
+          },
+          metadata: { cashierName: ctx.cashierName, sessionId: open.id },
+          ip:
+            req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+            || req.headers.get('x-real-ip')
+            || null,
+          userAgent: req.headers.get('user-agent'),
+        });
+      } else {
+        const [row] = await tx
+          .insert(cashMovementsSchema)
+          .values({
+            sessionId: open.id,
+            organizationId: ctx.organizationId,
+            type,
+            amount,
+            reason,
+            supplierId,
+            createdBy: ctx.cashierName || 'Cajero',
+            // Slice 3: persist origin discriminator + treasury link for internal entradas
+            origin: origin?.kind ?? null,
+            treasuryMovementId,
+          })
+          .returning();
+        created = row;
+      }
 
       if (!created) {
         throw new Error('No se pudo registrar el movimiento');

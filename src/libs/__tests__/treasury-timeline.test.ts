@@ -58,6 +58,7 @@ const DDL = `
     created_by text NOT NULL,
     origin text,
     treasury_movement_id uuid,
+    expense_id uuid,
     created_at timestamp DEFAULT now() NOT NULL
   );
 
