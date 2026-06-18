@@ -1,5 +1,5 @@
 import type { OpenCaja } from '@/actions/cash';
-import { AlertTriangle, CheckCircle2, ChevronRight, User } from 'lucide-react';
+import { AlertTriangle, ChevronRight, User } from 'lucide-react';
 import Link from 'next/link';
 import { cn } from '@/utils/Helpers';
 import { money, relativeTime, stamp } from './cash-ui';
@@ -7,8 +7,9 @@ import { money, relativeTime, stamp } from './cash-ui';
 // THE main section of the Caja module: a read-only supervision view of the active
 // points of sale. Each caja is a clickable card with a status semaphore, the cash
 // it should hold, and a plain-language note — drilling into its own detail. A
-// verdict banner on top answers "is everything ok?" at a glance. This screen never
-// opens, closes or moves money; that happens at the point of sale.
+// verdict banner surfaces only when something needs review; when all is well it
+// stays hidden. This screen never opens, closes or moves money; that happens at
+// the point of sale.
 
 type CajaStatus = 'ok' | 'review';
 
@@ -69,12 +70,15 @@ function StatusPill({ status }: { status: CajaStatus }) {
 }
 
 function Verdict({ issues }: { issues: string[] }) {
-  const ok = issues.length === 0;
+  // Nothing to flag — skip the banner entirely to keep the view quiet.
+  if (issues.length === 0) {
+    return null;
+  }
   return (
     <div
       className={cn(
         'flex items-center gap-5 rounded-2xl border p-5',
-        ok ? 'border-success/20 bg-success/5' : 'border-warn/20 bg-warn/5',
+        'border-warn/20 bg-warn/5',
       )}
     >
       <div
@@ -83,28 +87,22 @@ function Verdict({ issues }: { issues: string[] }) {
             flex size-12 shrink-0 items-center justify-center rounded-full
             text-white
           `,
-          ok ? 'bg-success' : 'bg-warn',
+          'bg-warn',
         )}
       >
-        {ok
-          ? <CheckCircle2 className="size-6" />
-          : <AlertTriangle className="size-6" />}
+        <AlertTriangle className="size-6" />
       </div>
       <div className="min-w-0">
         <div
           className={cn(
             'font-display text-xl font-semibold',
-            ok ? 'text-success' : 'text-warn',
+            'text-warn',
           )}
         >
-          {ok
-            ? 'Todo está en orden'
-            : `Hay ${issues.length} ${issues.length === 1 ? 'cosa' : 'cosas'} para revisar`}
+          {`Hay ${issues.length} ${issues.length === 1 ? 'cosa' : 'cosas'} para revisar`}
         </div>
         <p className="mt-0.5 text-sm text-muted-foreground">
-          {ok
-            ? 'Tus cajas y transferencias están al día.'
-            : issues.join(' · ')}
+          {issues.join(' · ')}
         </p>
       </div>
     </div>
