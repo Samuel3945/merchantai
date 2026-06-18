@@ -1480,6 +1480,8 @@ export async function listPendingHandovers(
       cashierName: sql<string | null>`cs.closed_by`,
       // device name from pos_tokens; null when no device (admin/legacy session)
       deviceName: sql<string | null>`pt.device_name`,
+      // reason is used as origin fallback for recovery handovers (no session/device)
+      reason: sql<string | null>`h.reason`,
     })
     .from(sql`treasury_movements h`)
     .leftJoin(
@@ -1511,7 +1513,7 @@ export async function listPendingHandovers(
     amount: Number.parseFloat(r.amount) || 0,
     remaining: Number.parseFloat(r.remaining) || 0,
     createdAt: new Date(r.createdAt),
-    origin: r.deviceName ?? 'Cierre de caja',
+    origin: r.deviceName ?? r.reason ?? 'Cierre de caja',
     cashierName: r.cashierName ?? null,
   }));
 }

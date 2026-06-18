@@ -1,11 +1,12 @@
 'use client';
 
 import type { PendingHandover, TreasuryAccountRow } from '@/libs/treasury';
-import { Check, Clock, Landmark, Lock, Monitor, Tag, User, X } from 'lucide-react';
+import { AlertTriangle, Check, Clock, Landmark, Lock, Monitor, Tag, Trash2, User, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import {
   placeHandoverAsGasto,
+  placeHandoverAsLossAction,
   placeHandoverToBanco,
   placeHandoverToCajaFuerte,
 } from '@/actions/treasury-placement';
@@ -19,13 +20,14 @@ import { cashInputCls, money } from '@/features/cash/cash-ui';
 
 // ── Destination option rows ──────────────────────────────────────────────────
 
-type DestKey = 'caja_fuerte' | 'banco' | 'gasto';
+type DestKey = 'caja_fuerte' | 'banco' | 'gasto' | 'perdida';
 
 const DEST_OPTIONS: {
   k: DestKey;
   label: string;
   sub: string;
   quote: string;
+  warn?: boolean;
   Icon: React.FC<{ className?: string }>;
 }[] = [
   {
@@ -48,6 +50,14 @@ const DEST_OPTIONS: {
     sub: 'Pago de algo del negocio',
     quote: 'Ya se gastó',
     Icon: Tag,
+  },
+  {
+    k: 'perdida',
+    label: 'Se perdió',
+    sub: 'Un billete que se cayó / faltante',
+    quote: 'No está, se perdió',
+    warn: true,
+    Icon: Trash2,
   },
 ];
 
@@ -117,6 +127,10 @@ export function AllocateModal({
           res = await placeHandoverToBanco(handover.id, accountId, amt);
         } else if (dest === 'caja_fuerte') {
           res = await placeHandoverToCajaFuerte(handover.id, accountId, amt);
+        } else if (dest === 'perdida') {
+          // 'perdida': records a faltante. Category enforced server-side.
+          const noteText = note.trim() || null;
+          res = await placeHandoverAsLossAction(handover.id, amt, noteText);
         } else {
           // 'gasto' maps to placeHandoverAsGasto. The note is optional.
           const description = note.trim() || null;
@@ -135,6 +149,7 @@ export function AllocateModal({
   }
 
   // Filtered options — only show destinations that have accounts configured.
+  // 'gasto' and 'perdida' are always visible (no account picker required).
   const visibleOptions = DEST_OPTIONS.filter((d) => {
     if (d.k === 'caja_fuerte') {
       return cajaFuerteAccounts.length > 0;
@@ -142,7 +157,7 @@ export function AllocateModal({
     if (d.k === 'banco') {
       return bankAccounts.length > 0;
     }
-    return true; // gasto always available
+    return true; // gasto and perdida always available
   });
 
   return (
@@ -246,6 +261,7 @@ export function AllocateModal({
           <div className="mt-4 flex flex-col gap-2.5">
             {visibleOptions.map((d) => {
               const selected = dest === d.k;
+              const isWarn = d.warn === true;
               return (
                 <button
                   key={d.k}
@@ -254,21 +270,25 @@ export function AllocateModal({
                   className={`
                     flex items-center gap-3 rounded-[12px] border px-3.5 py-3
                     text-left transition-[border-color,background-color]
-                    ${selected
-                  ? 'border-primary bg-primary/5'
-                  : `
-                    border-border
-                    hover:border-input hover:bg-muted/50
-                  `}
+                    ${selected && isWarn
+                  ? 'border-destructive bg-destructive/5'
+                  : selected
+                    ? 'border-primary bg-primary/5'
+                    : `
+                      border-border
+                      hover:border-input hover:bg-muted/50
+                    `}
                   `}
                 >
                   <span
                     className={`
                       flex size-9 shrink-0 items-center justify-center
                       rounded-[11px] transition-colors
-                      ${selected
-                  ? 'bg-primary text-primary-foreground'
-                  : `bg-accent text-secondary-foreground`}
+                      ${selected && isWarn
+                  ? 'bg-destructive text-white'
+                  : selected
+                    ? 'bg-primary text-primary-foreground'
+                    : `bg-accent text-secondary-foreground`}
                     `}
                   >
                     <d.Icon className="size-[18px]" />
@@ -291,12 +311,36 @@ export function AllocateModal({
                     )}
                   </div>
                   {selected && (
-                    <Check className="size-[18px] shrink-0 text-primary" />
+                    <Check className={`
+                      size-[18px] shrink-0
+                      ${isWarn
+                      ? `text-destructive`
+                      : `text-primary`}
+                    `}
+                    />
                   )}
                 </button>
               );
             })}
           </div>
+
+          {/* Warning copy for "Se perdió" — lowers utilidad */}
+          {dest === 'perdida' && (
+            <div className="
+              mt-3 flex items-start gap-2 rounded-[10px] border
+              border-destructive/30 bg-destructive/5 px-3 py-2.5
+            "
+            >
+              <AlertTriangle className="
+                mt-0.5 size-3.5 shrink-0 text-destructive
+              "
+              />
+              <p className="text-[12px] text-destructive">
+                Esto baja la utilidad del negocio. Si el billete aparece
+                después, podés recuperarlo desde el panel de faltantes.
+              </p>
+            </div>
+          )}
 
           {/* Account picker for caja_fuerte */}
           {dest === 'caja_fuerte' && cajaFuerteAccounts.length > 0 && (
@@ -353,7 +397,9 @@ export function AllocateModal({
                 placeholder={
                   dest === 'gasto'
                     ? 'Ej: pago del gas, recibo #123'
-                    : 'Ej: para acordarte después'
+                    : dest === 'perdida'
+                      ? 'Ej: billete que se cayó al contar'
+                      : 'Ej: para acordarte después'
                 }
               />
             </div>
