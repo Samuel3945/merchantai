@@ -4,6 +4,7 @@ import type { BusinessTabValues } from './BusinessTab';
 import type { FiscalTabValues } from './FiscalTab';
 import type { ModulesTabValues } from './ModulesTab';
 import type { ReturnsTabValues } from './ReturnsTab';
+import type { TransferSecurityTabValues } from './TransferSecurityTab';
 import type { PaymentMethodRow } from '@/actions/payment-methods';
 import { useState } from 'react';
 import { AuditTab } from './AuditTab';
@@ -12,6 +13,7 @@ import { FiscalTab } from './FiscalTab';
 import { ModulesTab } from './ModulesTab';
 import { PaymentMethodsClient } from './PaymentMethodsClient';
 import { ReturnsTab } from './ReturnsTab';
+import { TransferSecurityTab } from './TransferSecurityTab';
 import { SettingsToastProvider } from './useSettingsToast';
 
 type Tab = {
@@ -27,6 +29,7 @@ const BASE_TABS: ReadonlyArray<Tab> = [
   { key: 'returns', label: 'Devoluciones' },
 ];
 
+const TRANSFER_SECURITY_TAB: Tab = { key: 'transfer-security', label: 'Transferencias' };
 const AUDIT_TAB: Tab = { key: 'audit', label: 'Auditoría' };
 
 export type SettingsClientProps = {
@@ -36,6 +39,7 @@ export type SettingsClientProps = {
   modules: ModulesTabValues;
   fiscal: FiscalTabValues;
   returns: ReturnsTabValues;
+  transferSecurity: TransferSecurityTabValues;
   isAdmin: boolean;
 };
 
@@ -46,9 +50,12 @@ export function SettingsClient({
   modules,
   fiscal,
   returns: returnsValues,
+  transferSecurity,
   isAdmin,
 }: SettingsClientProps) {
-  const tabs = isAdmin ? [...BASE_TABS, AUDIT_TAB] : BASE_TABS;
+  const tabs = isAdmin
+    ? [...BASE_TABS, TRANSFER_SECURITY_TAB, AUDIT_TAB]
+    : BASE_TABS;
   const [activeTab, setActiveTab] = useState<string>(tabs[0]!.key);
 
   return (
@@ -88,6 +95,9 @@ export function SettingsClient({
         {activeTab === 'modules' && <ModulesTab initial={modules} />}
         {activeTab === 'fiscal' && <FiscalTab initial={fiscal} />}
         {activeTab === 'returns' && <ReturnsTab initial={returnsValues} />}
+        {activeTab === 'transfer-security' && isAdmin && (
+          <TransferSecurityTab initial={transferSecurity} />
+        )}
         {activeTab === 'audit' && isAdmin && <AuditTab />}
       </div>
     </SettingsToastProvider>
