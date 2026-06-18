@@ -232,14 +232,14 @@ function NetProfitBreakdownCard({
                 Sin gastos operativos la utilidad está sobreestimada.
               </p>
               <Link
-                href="/dashboard/expenses"
+                href="/dashboard/tesoreria"
                 className="
                   mt-2 inline-block rounded-sm bg-amber-600 px-2.5 py-1 text-xs
                   font-medium text-white
                   hover:bg-amber-700
                 "
               >
-                Cargar gastos
+                Registrar gasto
               </Link>
             </div>
           )}

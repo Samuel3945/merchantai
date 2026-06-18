@@ -134,7 +134,9 @@ const SCHEMA = `
     description text,
     incurred_on date NOT NULL,
     created_by text,
-    created_at timestamp DEFAULT now() NOT NULL
+    reverses_expense_id uuid REFERENCES expenses(id) ON DELETE RESTRICT,
+    created_at timestamp DEFAULT now() NOT NULL,
+    CONSTRAINT expenses_reverses_expense_id_unique UNIQUE (reverses_expense_id)
   );
 
   CREATE TABLE cash_movements (
@@ -548,6 +550,38 @@ describe('(i) POS expense bridge — happy path', () => {
 
     expect(cm[0]!.organization_id).toBe(exp[0]!.organization_id);
     expect(exp[0]!.organization_id).toBe(ORG);
+  });
+});
+
+describe('(j2) POS expense bridge — supplier link is preserved', () => {
+  it('keeps supplier_id on the cash_movements row when type=expense carries a supplierId', async () => {
+    const SUPPLIER_ID = '00000000-0000-0000-0007-000000000001';
+    await pg.query(
+      `INSERT INTO suppliers (id, organization_id, name, status)
+       VALUES ($1, $2, 'Proveedor X', 'active')`,
+      [SUPPLIER_ID, ORG],
+    );
+
+    const res = await POST(movementRequest({
+      type: 'expense',
+      amount: 300,
+      reason: 'Pago a proveedor',
+      supplierId: SUPPLIER_ID,
+    }));
+
+    expect(res.status).toBe(201);
+
+    const { rows: cm } = await pg.query<{ supplier_id: string | null; expense_id: string | null }>(
+      'SELECT supplier_id, expense_id FROM cash_movements WHERE type = $1',
+      ['expense'],
+    );
+
+    expect(cm).toHaveLength(1);
+    // The supplier link must survive the bridge (else it vanishes from
+    // getTodayCashKpis.pagosProveedores).
+    expect(cm[0]!.supplier_id).toBe(SUPPLIER_ID);
+    // And the P&L anchor link must still be set.
+    expect(cm[0]!.expense_id).not.toBeNull();
   });
 });
 

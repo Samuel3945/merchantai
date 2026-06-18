@@ -77,6 +77,8 @@ export async function listGastos(
       and(
         eq(treasuryMovementsSchema.expenseId, expensesSchema.id),
         isNotNull(treasuryMovementsSchema.expenseId),
+        // Defense vs future fan-out: keep the join inside the same org.
+        eq(treasuryMovementsSchema.organizationId, organizationId),
       ),
     )
     .leftJoin(
@@ -84,6 +86,8 @@ export async function listGastos(
       and(
         eq(cashMovementsSchema.expenseId, expensesSchema.id),
         isNotNull(cashMovementsSchema.expenseId),
+        // Defense vs future fan-out: keep the join inside the same org.
+        eq(cashMovementsSchema.organizationId, organizationId),
       ),
     )
     .where(and(...conditions))

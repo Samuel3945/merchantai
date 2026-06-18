@@ -26,6 +26,12 @@ export type PosGastoBridgeInput = {
   /** Device `reason` field — stored as expenses.description so context survives */
   reason: string;
   createdBy: string;
+  /**
+   * Optional supplier link (Pago a proveedor sent as type='expense'). Persisted
+   * on the cash_movements row so the payment stays linked to the supplier and
+   * appears in getTodayCashKpis.pagosProveedores. Validated by the route.
+   */
+  supplierId?: string | null;
 };
 
 export type PosGastoBridgeResult = {
@@ -81,6 +87,7 @@ export async function recordPosGastoBridge(
         type: 'expense',
         amount: amt,
         reason: input.reason,
+        supplierId: input.supplierId ?? null,
         expenseId: expense.id,
         createdBy: input.createdBy,
       })
