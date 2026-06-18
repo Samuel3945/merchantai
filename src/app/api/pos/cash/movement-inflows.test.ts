@@ -560,6 +560,7 @@ describe('(j) POS expense bridge — excluded types produce zero expenses rows',
       expect(res.status).toBe(201);
 
       const { rows: exp } = await pg.query('SELECT id FROM expenses');
+
       expect(exp).toHaveLength(0);
 
       // cash_movements row exists but expense_id is null
@@ -567,6 +568,7 @@ describe('(j) POS expense bridge — excluded types produce zero expenses rows',
         'SELECT expense_id FROM cash_movements WHERE type = $1',
         [excludedType],
       );
+
       expect(cm).toHaveLength(1);
       expect(cm[0]!.expense_id).toBeNull();
     });
