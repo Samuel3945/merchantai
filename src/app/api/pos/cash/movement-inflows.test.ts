@@ -18,6 +18,7 @@ import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { computeNetProfit } from '@/libs/net-profit';
 import { POST } from './movement/route';
 
 const h = vi.hoisted(() => ({
@@ -125,6 +126,17 @@ const SCHEMA = `
     status text DEFAULT 'active' NOT NULL
   );
 
+  CREATE TABLE expenses (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+    organization_id text NOT NULL,
+    amount numeric(12,2) NOT NULL,
+    category text NOT NULL,
+    description text,
+    incurred_on date NOT NULL,
+    created_by text,
+    created_at timestamp DEFAULT now() NOT NULL
+  );
+
   CREATE TABLE cash_movements (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     session_id uuid NOT NULL,
@@ -142,6 +154,8 @@ const SCHEMA = `
     origin text,
     -- Slice 3: links an internal-origin entrada to the companion treasury debit
     treasury_movement_id uuid,
+    -- gasto-treasury-unification slice 1: links POS expense to P&L anchor row
+    expense_id uuid REFERENCES expenses(id) ON DELETE RESTRICT,
     created_at timestamp DEFAULT now() NOT NULL
   );
 
@@ -151,6 +165,18 @@ const SCHEMA = `
     value text DEFAULT '' NOT NULL,
     updated_at timestamp DEFAULT now() NOT NULL,
     PRIMARY KEY (organization_id, key)
+  );
+
+  CREATE TABLE pos_users (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+    organization_id text NOT NULL,
+    name text NOT NULL,
+    email text NOT NULL,
+    password_hash text NOT NULL DEFAULT '',
+    pin text NOT NULL DEFAULT '',
+    role text NOT NULL DEFAULT 'cashier',
+    active boolean DEFAULT true NOT NULL,
+    salary numeric(12, 2)
   );
 `;
 
@@ -199,14 +225,16 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
-  // FK-safe order: children first
+  // FK-safe order: children first (cash_movements.expense_id → expenses)
   await pg.exec('DELETE FROM cash_movements');
+  await pg.exec('DELETE FROM expenses');
   await pg.exec('DELETE FROM treasury_movements');
   await pg.exec('DELETE FROM cash_sessions');
   await pg.exec('DELETE FROM pos_tokens');
   await pg.exec('DELETE FROM treasury_accounts');
   await pg.exec('DELETE FROM app_settings');
   await pg.exec('DELETE FROM suppliers');
+  await pg.exec('DELETE FROM pos_users');
   h.authCtx = {
     organizationId: ORG,
     cashierName: 'Cajero',
@@ -459,5 +487,100 @@ describe('(h) caja inflow invariant', () => {
     const { rows } = await pg.query('SELECT * FROM treasury_movements');
 
     expect(rows).toHaveLength(0);
+  });
+});
+
+// ── gasto-treasury-unification slice 1: POS→P&L bridge (RED) ─────────────────
+//
+// Task 1.2.1 — type='expense' creates exactly 1 expenses row linked by expense_id
+// Task 1.2.2 — atomicity: expenses insert failure rolls back cash_movements
+// Task 1.2.3 — excluded types produce zero expenses rows
+// Task 1.2.4 — bridged POS gasto counted exactly once in computeNetProfit
+
+describe('(i) POS expense bridge — happy path', () => {
+  it('creates exactly one expenses row with correct amount, category=otros, description=reason', async () => {
+    const res = await POST(movementRequest({
+      type: 'expense',
+      amount: 150,
+      reason: 'supplies',
+    }));
+
+    expect(res.status).toBe(201);
+
+    const { rows: exp } = await pg.query<{
+      amount: string;
+      category: string;
+      description: string | null;
+      organization_id: string;
+    }>('SELECT amount, category, description, organization_id FROM expenses');
+
+    expect(exp).toHaveLength(1);
+    expect(Number.parseFloat(exp[0]!.amount)).toBe(150);
+    expect(exp[0]!.category).toBe('otros');
+    expect(exp[0]!.description).toBe('supplies');
+    expect(exp[0]!.organization_id).toBe(ORG);
+  });
+
+  it('cash_movements expense_id links to the new expenses row', async () => {
+    await POST(movementRequest({ type: 'expense', amount: 75, reason: 'office supplies' }));
+
+    const { rows: cm } = await pg.query<{ expense_id: string | null }>(
+      'SELECT expense_id FROM cash_movements WHERE type = $1',
+      ['expense'],
+    );
+    const { rows: exp } = await pg.query<{ id: string }>('SELECT id FROM expenses');
+
+    expect(cm).toHaveLength(1);
+    expect(exp).toHaveLength(1);
+    expect(cm[0]!.expense_id).toBe(exp[0]!.id);
+  });
+
+  it('both rows share the same org scope', async () => {
+    await POST(movementRequest({ type: 'expense', amount: 50, reason: 'cleaning' }));
+
+    const { rows: cm } = await pg.query<{ organization_id: string }>(
+      'SELECT organization_id FROM cash_movements WHERE type = $1',
+      ['expense'],
+    );
+    const { rows: exp } = await pg.query<{ organization_id: string }>(
+      'SELECT organization_id FROM expenses',
+    );
+
+    expect(cm[0]!.organization_id).toBe(exp[0]!.organization_id);
+    expect(exp[0]!.organization_id).toBe(ORG);
+  });
+});
+
+describe('(j) POS expense bridge — excluded types produce zero expenses rows', () => {
+  for (const excludedType of ['salary', 'inventory_purchase', 'withdrawal', 'advance'] as const) {
+    it(`type='${excludedType}' creates exactly zero expenses rows`, async () => {
+      const res = await POST(movementRequest({ type: excludedType, amount: 100, reason: 'test' }));
+
+      // Movement itself is created
+      expect(res.status).toBe(201);
+
+      const { rows: exp } = await pg.query('SELECT id FROM expenses');
+      expect(exp).toHaveLength(0);
+
+      // cash_movements row exists but expense_id is null
+      const { rows: cm } = await pg.query<{ expense_id: string | null }>(
+        'SELECT expense_id FROM cash_movements WHERE type = $1',
+        [excludedType],
+      );
+      expect(cm).toHaveLength(1);
+      expect(cm[0]!.expense_id).toBeNull();
+    });
+  }
+});
+
+describe('(k) POS expense bridge — P&L net-profit includes bridged POS gasto exactly once', () => {
+  it('computeNetProfit expenses field equals the bridged POS gasto amount', async () => {
+    await POST(movementRequest({ type: 'expense', amount: 200, reason: 'maintenance' }));
+
+    // 0 gross margin, 0 salaries. Net = 0 - 0 - 200 = -200
+    const stats = await computeNetProfit(ORG, '2000-01-01', '2099-12-31', 0);
+
+    expect(stats.expenses).toBe(200);
+    expect(stats.net).toBe(-200);
   });
 });

@@ -142,6 +142,7 @@ const SETUP_SQL = `
     corrects_session_id uuid,
     origin text,
     treasury_movement_id uuid,
+    expense_id uuid,
     created_at timestamp DEFAULT now() NOT NULL
   );
 

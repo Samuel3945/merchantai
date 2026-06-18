@@ -521,6 +521,12 @@ export const cashMovementsSchema = pgTable(
     // defined later in this file; forward reference would work but the migration
     // approach keeps the pattern consistent with the handoverMovementId approach).
     treasuryMovementId: uuid('treasury_movement_id'),
+    // gasto-treasury-unification slice 1: links a POS expense movement to its
+    // P&L anchor row in expenses. Set only when type='expense'. Nullable so all
+    // pre-existing rows remain valid. FK enforced via migration 0058 (not
+    // .references() here — expensesSchema is defined later in this file; mirrors
+    // the treasury_movements.expense_id approach from migration 0048).
+    expenseId: uuid('expense_id'),
     createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
   },
   table => [

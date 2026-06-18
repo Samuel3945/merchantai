@@ -247,7 +247,9 @@ function WhatsAppPreview({
       </div>
       <div
         ref={bodyRef}
-        className="flex h-[180px] flex-col overflow-y-auto px-2.5 py-3"
+        className="
+          flex scrollbar-subtle h-[180px] flex-col overflow-y-auto px-2.5 py-3
+        "
       >
         <div className="mt-auto flex flex-col gap-1.5">
           {messages.slice(0, shown).map(m => (
