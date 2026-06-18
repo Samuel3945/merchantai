@@ -1,10 +1,16 @@
 'use server';
 
 import type { ActionResult } from '@/libs/action-result';
+import type { RecoverableLoss } from '@/libs/cash-loss';
 import { auth, currentUser } from '@clerk/nextjs/server';
 import { and, eq } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { toMoney } from '@/libs/cash-helpers';
+import {
+  listRecoverableLosses,
+  placeHandoverAsLoss,
+  recoverLoss,
+} from '@/libs/cash-loss';
 import { db } from '@/libs/DB';
 import { requirePanelModule } from '@/libs/panel-session';
 import {
@@ -373,6 +379,111 @@ export async function reclassifyAutoSweep(
     return {
       ok: false,
       error: err instanceof Error ? err.message : 'Error al reclasificar el traspaso',
+    };
+  }
+}
+
+/**
+ * Places money from a pending handover as a cash loss (faltante).
+ * Category is ALWAYS 'faltante' — enforced server-side regardless of caller input.
+ * Effect: drains handover.remaining by amount + creates a positive expenses row
+ * (lowers utilidad / net profit).
+ *
+ * Gated by requirePanelModule('cash') — owner always passes.
+ */
+export async function placeHandoverAsLossAction(
+  handoverMovementId: string,
+  amount: number | string,
+  note?: string | null,
+): Promise<ActionResult<null>> {
+  const { userId, orgId } = await requirePanelModule('cash');
+
+  if (!handoverMovementId) {
+    return { ok: false, error: 'handoverMovementId es requerido' };
+  }
+  const amt = toMoney(amount);
+  if (Number.parseFloat(amt) <= 0) {
+    return { ok: false, error: 'El monto debe ser mayor a 0' };
+  }
+
+  const actor = await getActorName(userId);
+
+  try {
+    await placeHandoverAsLoss(db, {
+      organizationId: orgId,
+      handoverMovementId,
+      amount: amt,
+      note: note ?? null,
+      incurredOn: new Date().toISOString().slice(0, 10),
+      createdBy: actor,
+    });
+    revalidatePath(TESORERIA_PATH);
+    revalidatePath(CASH_PATH);
+    return { ok: true, data: null };
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Error al registrar la pérdida',
+    };
+  }
+}
+
+/**
+ * Returns the list of recoverable losses (faltante expenses not yet reversed).
+ * Used by the Tesorería page to render the "Faltantes / Pérdidas" section.
+ * Gated by requirePanelModule('cash').
+ */
+export async function listRecoverableLossesAction(): Promise<
+  ActionResult<RecoverableLoss[]>
+> {
+  const { orgId } = await requirePanelModule('cash');
+  const losses = await listRecoverableLosses(db, orgId);
+  return { ok: true, data: losses };
+}
+
+/**
+ * Recovers a previously recorded faltante. Atomically:
+ *   1. Reverses the faltante expense (P&L restored).
+ *   2. Routes the recovered amount to the chosen destination:
+ *      - 'caja_fuerte' → transfer from transito to cofre
+ *      - 'banco'       → transfer from transito to banco account
+ *      - 'pendiente'   → new handover movement (reappears in pending queue)
+ *
+ * Gated by requireOwnerContext() — reversing an expense alters P&L, which is an
+ * owner-level correction (mirrors reclassifyAutoSweep). placeHandoverAsLossAction
+ * and listRecoverableLossesAction remain on requirePanelModule('cash').
+ */
+export async function recoverLossAction(
+  expenseId: string,
+  destination: 'caja_fuerte' | 'banco' | 'pendiente',
+  accountId?: string,
+): Promise<ActionResult<null>> {
+  const { userId, orgId } = await requireOwnerContext();
+
+  if (!expenseId) {
+    return { ok: false, error: 'expenseId es requerido' };
+  }
+  if ((destination === 'caja_fuerte' || destination === 'banco') && !accountId) {
+    return { ok: false, error: 'Cuenta de destino es requerida' };
+  }
+
+  const actor = await getActorName(userId);
+
+  try {
+    await recoverLoss(db, {
+      organizationId: orgId,
+      expenseId,
+      destination,
+      accountId,
+      correctedBy: actor,
+    });
+    revalidatePath(TESORERIA_PATH);
+    revalidatePath(CASH_PATH);
+    return { ok: true, data: null };
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Error al recuperar el faltante',
     };
   }
 }

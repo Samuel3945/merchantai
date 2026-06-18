@@ -35,6 +35,14 @@ export type CorrectGastoInput = {
   expenseId: string;
   /** Clerk userId of the owner posting the correction. */
   correctedBy: string;
+  /**
+   * When true, the compensating treasury_movements entrada is NOT posted.
+   * The reversing expenses row is still written (P&L is corrected).
+   * Use this when the caller will handle the treasury credit itself — e.g.
+   * recoverLoss→pendiente, where the handover insert IS the sole credit.
+   * Default: false (backward-compatible — existing callers unchanged).
+   */
+  skipTreasuryCompensation?: boolean;
 };
 
 export type CorrectGastoResult = {
@@ -144,9 +152,11 @@ export async function correctGastoExpense(
       throw new Error('correctGastoExpense: reversal expenses insert returned no row');
     }
 
-    // 4. Treasury-sourced: post a compensating entrada to restore the container.
+    // 4. Treasury-sourced: post a compensating entrada to restore the container,
+    //    unless the caller opted out via skipTreasuryCompensation (e.g.
+    //    recoverLoss→pendiente, which inserts its own handover credit).
     let compensatingMovementId: string | undefined;
-    if (linkedTreasuryMov) {
+    if (linkedTreasuryMov && !input.skipTreasuryCompensation) {
       const toAccountId = linkedTreasuryMov.fromAccountId;
       const [compMov] = await tx
         .insert(treasuryMovementsSchema)
