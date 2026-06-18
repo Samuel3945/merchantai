@@ -163,13 +163,16 @@ export async function placeHandoverToCajaFuerte(
 /**
  * Places money from the org's Pendiente de ubicar (transito) account as a
  * gasto (expense, out-of-treasury). Reuses recordGastoOutflow (balance guard
- * included). Category defaults to 'tesoreria' for placement-origin gastos.
+ * included). The gasto is categorized with the same canonical categories as
+ * the standalone gasto form (recordGasto): category is required and 'otros'
+ * demands a description — both enforced server-side, not only in the UI.
  *
  * Gated by requirePanelModule('cash') — owner always passes.
  */
 export async function placeHandoverAsGasto(
   handoverMovementId: string,
   amount: number | string,
+  category: string,
   description?: string | null,
 ): Promise<ActionResult<null>> {
   const { userId, orgId } = await requirePanelModule('cash');
@@ -181,6 +184,14 @@ export async function placeHandoverAsGasto(
   if (Number.parseFloat(amt) <= 0) {
     return { ok: false, error: 'El monto debe ser mayor a 0' };
   }
+  if (!category?.trim()) {
+    return { ok: false, error: 'La categoría es requerida' };
+  }
+  // Same 'otros'-requires-description rule as recordGasto — keeps placement
+  // gastos auditable and consistent with the standalone form.
+  if (category.trim() === 'otros' && !description?.trim()) {
+    return { ok: false, error: 'La descripción es requerida para "Otros"' };
+  }
 
   const actor = await getActorName(userId);
 
@@ -191,8 +202,8 @@ export async function placeHandoverAsGasto(
         organizationId: orgId,
         fromAccountId: pending.id,
         amount: amt,
-        category: 'tesoreria',
-        description: description ?? null,
+        category: category.trim(),
+        description: description?.trim() || null,
         incurredOn: new Date().toISOString().slice(0, 10),
         createdBy: actor,
         handoverMovementId,
