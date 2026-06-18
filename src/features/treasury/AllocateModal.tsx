@@ -1,7 +1,7 @@
 'use client';
 
 import type { PendingHandover, TreasuryAccountRow } from '@/libs/treasury';
-import { AlertTriangle, Check, Clock, Landmark, Lock, Monitor, Tag, Trash2, User, X } from 'lucide-react';
+import { AlertTriangle, Check, Clock, Landmark, Lock, Monitor, Tag, Trash2, User } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import {
@@ -195,25 +195,12 @@ export function AllocateModal({
           shrink-0 border-b border-border bg-warn/10 px-[22px] py-5
         "
         >
-          <div className="flex items-start justify-between">
-            <span className="
-              text-[11px] font-semibold tracking-widest text-warn uppercase
-            "
-            >
-              Plata por ubicar
-            </span>
-            <button
-              type="button"
-              onClick={onClose}
-              className="
-                flex size-8 items-center justify-center rounded-[9px] border
-                border-transparent text-muted-foreground transition-colors
-                hover:bg-muted hover:text-foreground
-              "
-            >
-              <X className="size-4" />
-            </button>
-          </div>
+          <span className="
+            text-[11px] font-semibold tracking-widest text-warn uppercase
+          "
+          >
+            Plata por ubicar
+          </span>
           <div className="
             my-1.5 font-display text-[34px] font-semibold tabular-nums
           "

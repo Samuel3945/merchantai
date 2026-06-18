@@ -2,7 +2,7 @@
 
 import type { RecoverableLoss } from '@/libs/cash-loss';
 import type { TreasuryAccountRow } from '@/libs/treasury';
-import { Check, X } from 'lucide-react';
+import { Check } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import { recoverLossAction } from '@/actions/treasury-placement';
@@ -113,25 +113,12 @@ export function RecoverLossModal({
       >
         {/* Header */}
         <div className="shrink-0 border-b border-border px-[22px] py-5">
-          <div className="flex items-start justify-between">
-            <span className="
-              text-[11px] font-semibold tracking-widest text-primary uppercase
-            "
-            >
-              Faltante recuperado
-            </span>
-            <button
-              type="button"
-              onClick={onClose}
-              className="
-                flex size-8 items-center justify-center rounded-[9px] border
-                border-transparent text-muted-foreground transition-colors
-                hover:bg-muted hover:text-foreground
-              "
-            >
-              <X className="size-4" />
-            </button>
-          </div>
+          <span className="
+            text-[11px] font-semibold tracking-widest text-primary uppercase
+          "
+          >
+            Faltante recuperado
+          </span>
           <div className="
             my-1.5 font-display text-[30px] font-semibold tabular-nums
           "
