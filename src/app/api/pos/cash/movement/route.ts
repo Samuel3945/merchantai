@@ -170,6 +170,7 @@ export async function POST(req: Request): Promise<NextResponse> {
           sessionId: open.id,
           amount,
           reason,
+          supplierId,
           createdBy: ctx.cashierName || 'Cajero',
         });
 

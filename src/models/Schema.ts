@@ -2073,6 +2073,15 @@ export const expensesSchema = pgTable(
     incurredOn: date('incurred_on').notNull(),
     // Clerk userId of the owner who logged this entry.
     createdBy: text('created_by'),
+    // Set on a reversing (negative-amount) correction row: points at the
+    // original expense it cancels. The column — NOT the description string — is
+    // the source of truth for "already corrected". A PARTIAL UNIQUE index
+    // (migration 0059) guarantees an original can be reversed AT MOST once, so
+    // concurrent double-corrections collide at the DB. FK ON DELETE RESTRICT
+    // mirrors the expense_id linkage precedent (migrations 0048/0058). Not
+    // .references() inline to avoid a self-referential forward declaration in
+    // the same table; the FK is enforced via migration 0059.
+    reversesExpenseId: uuid('reverses_expense_id'),
     createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
   },
   table => [

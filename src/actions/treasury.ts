@@ -315,6 +315,12 @@ export async function recordGasto(input: {
   if (!input.category?.trim()) {
     return { ok: false, error: 'La categoría es requerida' };
   }
+  // Carry over the 'otros'-requires-description rule from the deleted
+  // createExpense action (M1): a free-form category demands an explanation so
+  // the gasto is auditable. Enforced server-side, not only in the form.
+  if (input.category.trim() === 'otros' && !input.description?.trim()) {
+    return { ok: false, error: 'La descripción es requerida para "Otros"' };
+  }
   if (!input.incurredOn) {
     return { ok: false, error: 'La fecha del gasto es requerida' };
   }

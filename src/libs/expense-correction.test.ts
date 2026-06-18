@@ -87,7 +87,9 @@ const DDL = `
     description text,
     incurred_on date NOT NULL,
     created_by text,
-    created_at timestamp DEFAULT now() NOT NULL
+    reverses_expense_id uuid REFERENCES expenses(id) ON DELETE RESTRICT,
+    created_at timestamp DEFAULT now() NOT NULL,
+    CONSTRAINT expenses_reverses_expense_id_unique UNIQUE (reverses_expense_id)
   );
 
   CREATE TABLE treasury_accounts (
@@ -389,6 +391,87 @@ describe('correctGastoExpense — guard rails', () => {
       correctGastoExpense(db, {
         organizationId: ORG,
         expenseId: nonExistent,
+        correctedBy: 'owner',
+      }),
+    ).rejects.toThrow();
+  });
+});
+
+// ── C1 remediation: server/DB-side idempotency ───────────────────────────────
+describe('correctGastoExpense — idempotency (C1)', () => {
+  it('sets reverses_expense_id on the reversal row (column is source of truth)', async () => {
+    await seedVault();
+    await seedTreasuryGasto(EXP_TREASURY, '100.00');
+
+    const { reversalExpenseId } = await correctGastoExpense(db, {
+      organizationId: ORG,
+      expenseId: EXP_TREASURY,
+      correctedBy: 'owner',
+    });
+
+    const { rows } = await pg.query<{ reverses_expense_id: string }>(
+      `SELECT reverses_expense_id FROM expenses WHERE id = $1`,
+      [reversalExpenseId],
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.reverses_expense_id).toBe(EXP_TREASURY);
+  });
+
+  it('rejects a second correction of the same gasto (no phantom money)', async () => {
+    await seedVault();
+    await seedTreasuryGasto(EXP_TREASURY, '100.00');
+
+    // First correction succeeds.
+    await correctGastoExpense(db, {
+      organizationId: ORG,
+      expenseId: EXP_TREASURY,
+      correctedBy: 'owner',
+    });
+
+    // Second correction MUST be rejected.
+    await expect(
+      correctGastoExpense(db, {
+        organizationId: ORG,
+        expenseId: EXP_TREASURY,
+        correctedBy: 'owner',
+      }),
+    ).rejects.toThrow();
+
+    // P&L still nets to 0 (original 100 + one reversal -100), NOT -100.
+    const { rows: pnl } = await pg.query<{ net: string }>(
+      `SELECT COALESCE(SUM(amount::numeric), 0)::text AS net
+       FROM expenses WHERE organization_id = $1`,
+      [ORG],
+    );
+
+    expect(Number.parseFloat(pnl[0]!.net)).toBeCloseTo(0, 2);
+
+    // Exactly ONE compensating entrada exists (no +200 phantom in the container).
+    const { rows: entradas } = await pg.query<{ amount: string }>(
+      `SELECT amount FROM treasury_movements
+       WHERE organization_id = $1 AND type = 'entrada' AND to_account_id = $2`,
+      [ORG, ACC_VAULT],
+    );
+
+    expect(entradas).toHaveLength(1);
+    expect(Number.parseFloat(entradas[0]!.amount)).toBeCloseTo(100, 2);
+  });
+
+  it('rejects correcting a row that is itself a reversal (cannot correct a correction)', async () => {
+    await seedVault();
+    await seedTreasuryGasto(EXP_TREASURY, '100.00');
+
+    const { reversalExpenseId } = await correctGastoExpense(db, {
+      organizationId: ORG,
+      expenseId: EXP_TREASURY,
+      correctedBy: 'owner',
+    });
+
+    await expect(
+      correctGastoExpense(db, {
+        organizationId: ORG,
+        expenseId: reversalExpenseId,
         correctedBy: 'owner',
       }),
     ).rejects.toThrow();
