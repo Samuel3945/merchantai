@@ -38,6 +38,9 @@ jobs:
         env:
           NEXT_PUBLIC_SENTRY_DISABLED: 'true' # Only upload Sentry source maps in deployment
           NEXT_PUBLIC_APP_URL: http://localhost:3008
+          # CI build is a compile check, not a deploy — skip server env validation
+          # (real env vars live in the VPS/Easypanel runtime, not in CI).
+          SKIP_ENV_VALIDATION: 'true'
 
       - if: matrix.node-version == '24.x' && success()
         name: Cache Next.js build output
