@@ -4,7 +4,7 @@ import { useState } from 'react';
 import {
   BLOCK_CLOSE_SETTING_KEY,
   DEFAULT_RESOLUTION_SETTING_KEY,
-} from '@/libs/transfer-reconciliation';
+} from '@/libs/transfer-reconciliation-keys';
 import { SelectField, ToggleRow } from './fields';
 import { useSettingSave } from './useSettingSave';
 
