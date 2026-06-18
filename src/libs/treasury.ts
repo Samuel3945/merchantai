@@ -25,6 +25,13 @@ export type TreasuryAccountType = 'caja' | 'caja_fuerte' | 'banco' | 'transito';
 
 export type TreasuryAccount = {
   key: string;
+  /**
+   * The real treasury_accounts.id — present only for ledger-backed containers
+   * (caja_fuerte / banco / transito). Absent for POS cajas, which are virtual
+   * (derived from cash_sessions). Transfers MUST use this id, never `key`
+   * (the display key embeds a name for banco, e.g. "banco:Nequi").
+   */
+  accountId?: string;
   name: string;
   type: TreasuryAccountType;
   balance: number;
@@ -208,6 +215,7 @@ export async function getTreasuryPosition(
           : `banco:${acct.name}`;
       accounts.push({
         key,
+        accountId: acct.id,
         name: acct.name,
         type: acct.type as TreasuryAccountType,
         balance: balanceForAccount(opening, credits, debits),

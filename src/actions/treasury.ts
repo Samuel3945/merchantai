@@ -192,6 +192,13 @@ export async function transferEntreCajas(
   if (!fromAccountId || !toAccountId) {
     return { ok: false, error: 'Cuenta de origen y destino son requeridos' };
   }
+  // Defense-in-depth: this action moves money between ledger-backed accounts and
+  // expects real treasury_accounts ids. A composite display key (e.g.
+  // "banco:Nequi" or "caja:<token>") is never a valid account id — reject it with
+  // a clean error instead of letting it crash the `WHERE id = ...` query.
+  if (fromAccountId.includes(':') || toAccountId.includes(':')) {
+    return { ok: false, error: 'Identificador de cuenta inválido' };
+  }
   if (fromAccountId === toAccountId) {
     return { ok: false, error: 'Las cuentas de origen y destino deben ser diferentes' };
   }
