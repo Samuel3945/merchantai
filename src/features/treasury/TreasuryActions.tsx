@@ -150,7 +150,13 @@ function GastoFormExpanded({
       <div className="flex gap-2">
         <Button
           size="sm"
-          disabled={isPending || !fromAccountId || !amount || !category}
+          disabled={
+            isPending
+            || !fromAccountId
+            || !amount
+            || !category
+            || (category === 'otros' && !description.trim())
+          }
           onClick={submit}
         >
           Registrar
