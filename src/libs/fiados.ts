@@ -634,6 +634,60 @@ export async function getFiadosHistory(
   });
 }
 
+// Same settled-fiado data as getFiadosHistory, mapped to the snake_case wire
+// shape the cashier device (pos-merchatai FiadosCajero history tab) reads. The
+// history is org-wide on purpose: a debt settled at ANY register/sede of the org
+// shows here, not only the ones the current cashier closed.
+export type PosFiadoHistoryItem = {
+  id: string; // clientKey — unique per client, used as the list key
+  client_name: string;
+  client_phone: string | null;
+  total: number; // full amount of the debt that was settled
+  created_at: string; // when the oldest fiado in the group was generated
+  settled_at: string; // when the last payment landed
+};
+
+export async function getFiadosHistoryForPos(
+  organizationId: string,
+): Promise<PosFiadoHistoryItem[]> {
+  const paid = await fetchEnrichedFiados(organizationId, 'paid');
+
+  const groups = new Map<string, EnrichedFiado[]>();
+  for (const f of paid) {
+    const key = clientKeyOf(f);
+    const list = groups.get(key);
+    if (list) {
+      list.push(f);
+    } else {
+      groups.set(key, [f]);
+    }
+  }
+
+  const items: PosFiadoHistoryItem[] = [];
+  for (const [clientKey, list] of groups) {
+    const { name, phone } = parseClient(list[0]?.notes ?? null);
+    const total = round2(list.reduce((a, f) => a + f.originalAmount, 0));
+    const createdAt = list
+      .map(f => f.createdAt)
+      .reduce((a, b) => (a < b ? a : b));
+    const settledAt = list
+      .map(f => f.lastMovementAt ?? f.createdAt)
+      .reduce((a, b) => (a > b ? a : b));
+    items.push({
+      id: clientKey,
+      client_name: name || 'Sin nombre',
+      client_phone: phone || null,
+      total,
+      created_at: createdAt.toISOString(),
+      settled_at: settledAt.toISOString(),
+    });
+  }
+
+  return items.sort(
+    (a, b) => Date.parse(b.settled_at) - Date.parse(a.settled_at),
+  );
+}
+
 // ── POS (cashier app) compatibility ──────────────────────────────────────────
 // The cashier endpoints (/api/pos/fiados*) read from the SAME ledger as the
 // dashboard so an abono on either surface stays consistent. These map the
