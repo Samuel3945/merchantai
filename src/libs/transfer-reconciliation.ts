@@ -2,6 +2,10 @@ import { and, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
 import { findOpenSession, toMoney } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import {
+  BLOCK_CLOSE_SETTING_KEY,
+  DEFAULT_RESOLUTION_SETTING_KEY,
+} from '@/libs/transfer-reconciliation-keys';
+import {
   appSettingsSchema,
   salePaymentsSchema,
   salesSchema,
@@ -727,11 +731,11 @@ export async function createRecoveryReconciliation(
 //
 // Both helpers are executor-aware so they can run inside transactions.
 
-/** Setting key for toggle A (block close when open investigations exist). */
-export const BLOCK_CLOSE_SETTING_KEY = 'transfer-block-close-on-investigation';
-
-/** Setting key for toggle B (default destination for a non-arrival). */
-export const DEFAULT_RESOLUTION_SETTING_KEY = 'transfer-default-resolution';
+// Setting keys live in the client-safe ./transfer-reconciliation-keys module so
+// client components can import them without pulling this server-only module
+// (DB + Clerk auth) into the browser bundle. Re-exported here so existing
+// server-side importers keep working unchanged.
+export { BLOCK_CLOSE_SETTING_KEY, DEFAULT_RESOLUTION_SETTING_KEY };
 
 /**
  * Returns true if at least one `not_arrived` row exists for the org.
