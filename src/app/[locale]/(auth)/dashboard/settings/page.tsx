@@ -4,6 +4,10 @@ import { getAppSetting } from '@/actions/app-settings';
 import { listPaymentMethods } from '@/actions/payment-methods';
 import { TitleBar } from '@/features/dashboard/TitleBar';
 import { SettingsClient } from '@/features/settings/SettingsClient';
+import {
+  BLOCK_CLOSE_SETTING_KEY,
+  DEFAULT_RESOLUTION_SETTING_KEY,
+} from '@/libs/transfer-reconciliation';
 
 const KEYS = [
   // Business
@@ -36,6 +40,9 @@ const KEYS = [
   'returns_enabled',
   'returns_max_days',
   'returns_require_admin',
+  // Transfer investigation toggles (admin-only)
+  BLOCK_CLOSE_SETTING_KEY,
+  DEFAULT_RESOLUTION_SETTING_KEY,
 ] as const;
 
 type SettingKey = (typeof KEYS)[number];
@@ -101,6 +108,16 @@ export default async function DashboardSettingsPage(props: {
           returns_enabled: asBool(map.returns_enabled, true),
           returns_max_days: map.returns_max_days,
           returns_require_admin: asBool(map.returns_require_admin),
+        }}
+        transferSecurity={{
+          blockCloseOnInvestigation: asBool(
+            map[BLOCK_CLOSE_SETTING_KEY],
+            false,
+          ),
+          defaultResolution:
+            map[DEFAULT_RESOLUTION_SETTING_KEY] === 'direct_loss'
+              ? 'direct_loss'
+              : 'investigate',
         }}
         isAdmin={isAdmin}
       />
