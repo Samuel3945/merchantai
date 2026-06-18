@@ -541,13 +541,17 @@ export function TransferReconciliationPanel(props: {
   return (
     <div className="space-y-5">
       {/* Modals */}
+      {/* key per row so the modal remounts with fresh inputs every open —
+          prevents the previous customer's data leaking into the next fiado. */}
       <FiadoModal
+        key={fiadoModal?.rowId ?? 'fiado-closed'}
         state={fiadoModal}
         pending={pending}
         onConfirm={handleFiadoConfirm}
         onClose={() => setFiadoModal(null)}
       />
       <RecoveryModal
+        key={recoveryModal?.rowId ?? 'recovery-closed'}
         state={recoveryModal}
         pending={pending}
         onConfirm={handleRecoveryConfirm}
