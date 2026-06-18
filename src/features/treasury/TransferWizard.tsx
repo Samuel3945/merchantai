@@ -53,8 +53,10 @@ function PlacePicker({
   exclude: string;
   onPick: (key: string) => void;
 }) {
+  // POS cajas are intentionally excluded: their cash is managed at the device
+  // (open/close), never moved from treasury. Only ledger-backed containers.
   const eligible = accounts.filter(
-    a => a.key !== exclude && (a.type === 'caja_fuerte' || a.type === 'banco' || a.type === 'caja'),
+    a => a.key !== exclude && (a.type === 'caja_fuerte' || a.type === 'banco'),
   );
 
   if (eligible.length === 0) {
@@ -203,11 +205,19 @@ export function TransferWizard({
     if (!fromAccount || !toAccount) {
       return;
     }
+    // The action moves money between ledger-backed accounts, so it needs the real
+    // treasury_accounts.id — never the composite display key (e.g. "banco:Nequi").
+    const fromId = fromAccount.accountId;
+    const toId = toAccount.accountId;
+    if (!fromId || !toId) {
+      setError('Solo se puede mover entre caja fuerte y banco.');
+      return;
+    }
     startTransition(async () => {
       try {
         const res = await transferEntreCajas(
-          fromKey,
-          toKey,
+          fromId,
+          toId,
           amount,
           reason.trim() || null,
         );

@@ -64,7 +64,11 @@ function PlaceNode({
 }: {
   account: TreasuryAccount;
   accent: { icon: string; bg: string };
-  onMove: (key: string) => void;
+  /**
+   * When omitted, the place is read-only (no "mover" button) — e.g. POS cajas,
+   * whose cash is managed at the device (open/close), not moved from treasury.
+   */
+  onMove?: (key: string) => void;
 }) {
   return (
     <div
@@ -89,20 +93,22 @@ function PlaceNode({
           {money(account.balance)}
         </div>
       </div>
-      <button
-        type="button"
-        onClick={() => onMove(account.key)}
-        title="Mover desde aquí"
-        className="
-          flex size-8 shrink-0 items-center justify-center rounded-[9px] border
-          border-border bg-card text-secondary-foreground opacity-0
-          transition-[opacity,background-color]
-          group-hover:opacity-100
-          hover:border-input hover:bg-muted
-        "
-      >
-        <ArrowRightLeft className="size-[15px]" />
-      </button>
+      {onMove && (
+        <button
+          type="button"
+          onClick={() => onMove(account.key)}
+          title="Mover desde aquí"
+          className="
+            flex size-8 shrink-0 items-center justify-center rounded-[9px]
+            border border-border bg-card text-secondary-foreground opacity-0
+            transition-[opacity,background-color]
+            group-hover:opacity-100
+            hover:border-input hover:bg-muted
+          "
+        >
+          <ArrowRightLeft className="size-[15px]" />
+        </button>
+      )}
     </div>
   );
 }
@@ -340,7 +346,9 @@ export function MoneyFlow({
               key={p.key}
               account={p}
               accent={{ icon: 'text-success', bg: 'bg-success/10' }}
-              onMove={onMoveFromPlace}
+              // POS cajas are read-only here: their cash moves only at the device
+              // (open/close), never from treasury.
+              onMove={p.type === 'caja' ? undefined : onMoveFromPlace}
             />
           ))}
           {bancosPlaces.map(p => (
