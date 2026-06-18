@@ -169,9 +169,15 @@ export function AllocateModal({
         }
       }}
     >
-      <DialogContent className="max-w-[480px] overflow-hidden p-0">
+      <DialogContent className="
+        flex max-h-[90dvh] max-w-[480px] flex-col gap-0 overflow-hidden p-0
+      "
+      >
         {/* Recap header */}
-        <div className="border-b border-border bg-warn/10 px-[22px] py-5">
+        <div className="
+          shrink-0 border-b border-border bg-warn/10 px-[22px] py-5
+        "
+        >
           <div className="flex items-start justify-between">
             <span className="
               text-[11px] font-semibold tracking-widest text-warn uppercase
@@ -250,8 +256,8 @@ export function AllocateModal({
           </div>
         </div>
 
-        {/* Body */}
-        <div className="p-[22px]">
+        {/* Body — scrolls when content exceeds the viewport so the footer stays reachable */}
+        <div className="min-h-0 flex-1 overflow-y-auto p-[22px]">
           <h3 className="text-[15px] font-semibold">¿Dónde quedó esta plata?</h3>
           <p className="mt-0.5 text-[12.5px] text-muted-foreground">
             Acordate qué hiciste con ella: dónde la pusiste o dónde está ahora.
@@ -410,8 +416,12 @@ export function AllocateModal({
           )}
         </div>
 
-        {/* Footer */}
-        <div className="flex gap-2.5 px-[22px] pb-[22px]">
+        {/* Footer — pinned below the scrollable body, always visible */}
+        <div className="
+          flex shrink-0 gap-2.5 border-t border-border bg-background px-[22px]
+          pt-4 pb-[22px]
+        "
+        >
           <Button
             variant="outline"
             className="h-11 px-[18px]"
