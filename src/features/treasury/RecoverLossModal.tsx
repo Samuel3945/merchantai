@@ -144,7 +144,10 @@ export function RecoverLossModal({
         </div>
 
         {/* Body — scrolls when content exceeds the viewport so the footer stays reachable */}
-        <div className="min-h-0 flex-1 overflow-y-auto p-[22px]">
+        <div className="
+          scrollbar-subtle min-h-0 flex-1 overflow-y-auto p-[22px]
+        "
+        >
           <h3 className="text-[15px] font-semibold">¿Dónde va esta plata ahora?</h3>
           <p className="mt-0.5 text-[12.5px] text-muted-foreground">
             El faltante se va a revertir y la utilidad va a volver a subir.
