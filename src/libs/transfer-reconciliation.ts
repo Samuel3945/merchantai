@@ -488,15 +488,20 @@ export async function splitPartialArrival(
     throw new Error('Transferencia no encontrada o no pertenece a esta organización');
   }
 
-  // Current-status guard: a partial arrival only applies to a row still under
-  // investigation. A terminal `resolved` row (replay) or an already-`confirmed`
-  // row must never be re-split — that would create a second live remainder or
-  // post a credit for money already booked.
-  if (original.status !== 'not_arrived' && original.status !== 'mismatch') {
+  // Current-status guard: a partial arrival applies to a row that is still open
+  // — `pending` (straight from the Novedad flow at verification time) or already
+  // under investigation (`not_arrived` / `mismatch`). A terminal `resolved` row
+  // (replay) or an already-`confirmed` row must never be re-split — that would
+  // create a second live remainder or post a credit for money already booked.
+  if (
+    original.status !== 'pending'
+    && original.status !== 'not_arrived'
+    && original.status !== 'mismatch'
+  ) {
     throw new Error(
       original.status === 'resolved'
         ? 'Esta transferencia ya fue resuelta'
-        : 'Solo se puede registrar un arribo parcial de una transferencia en investigación',
+        : 'Solo se puede registrar un arribo parcial de una transferencia abierta',
     );
   }
 

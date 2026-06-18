@@ -134,6 +134,14 @@ const SETUP_SQL = `
   CREATE UNIQUE INDEX transfer_reconciliations_sale_payment_idx
     ON transfer_reconciliations (sale_payment_id)
     WHERE sale_payment_id IS NOT NULL;
+
+  CREATE TABLE app_settings (
+    organization_id text NOT NULL,
+    key text NOT NULL,
+    value text DEFAULT '' NOT NULL,
+    updated_at timestamp DEFAULT now() NOT NULL,
+    PRIMARY KEY (organization_id, key)
+  );
 `;
 
 const ORG = 'org-arrivals-action';
@@ -170,6 +178,15 @@ async function seedWithStatus(
   return id;
 }
 
+async function setSetting(key: string, value: string): Promise<void> {
+  await pg.query(
+    `INSERT INTO app_settings (organization_id, key, value)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (organization_id, key) DO UPDATE SET value = EXCLUDED.value`,
+    [ORG, key, value],
+  );
+}
+
 beforeAll(async () => {
   pg = new PGlite();
   h.db = drizzle(pg);
@@ -177,7 +194,7 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
-  await pg.exec('DELETE FROM transfer_reconciliations');
+  await pg.exec('DELETE FROM transfer_reconciliations; DELETE FROM app_settings;');
   counter = 0;
   h.depositCalls = [];
   h.orgRole = 'org:admin';
@@ -482,5 +499,80 @@ describe('FIX 3: partial-arrival deposit is atomic with the split', () => {
     expect(result.ok).toBe(true);
     expect(h.depositCalls).toHaveLength(1);
     expect(Number(h.depositCalls[0]?.amount)).toBeCloseTo(60, 2);
+  });
+});
+
+// ── Shortfall routing by default-resolution (Novedad foundation) ──────────────
+// The remainder of a partial arrival follows the org's default-resolution
+// setting: 'investigate' (default) parks it as not_arrived; 'direct_loss' closes
+// it as a loss immediately — so the shortfall never sits in limbo.
+
+describe('partialTransferArrival — remainder routing by default-resolution', () => {
+  it('default (investigate): remainder stays not_arrived', async () => {
+    const { partialTransferArrival } = await import('./transfer-reconciliation');
+    const id = await seedNotArrived('100.00');
+
+    const result = await partialTransferArrival(id, 60);
+
+    expect(result.ok).toBe(true);
+
+    if (!result.ok) {
+      return;
+    }
+
+    expect(result.data.remainder.status).toBe('not_arrived');
+    expect(result.data.remainder.resolutionType).toBeNull();
+  });
+
+  it('direct_loss: remainder is resolved as a loss', async () => {
+    const { partialTransferArrival } = await import('./transfer-reconciliation');
+    await setSetting('transfer-default-resolution', 'direct_loss');
+    const id = await seedNotArrived('100.00');
+
+    const result = await partialTransferArrival(id, 60);
+
+    expect(result.ok).toBe(true);
+
+    if (!result.ok) {
+      return;
+    }
+
+    expect(result.data.remainder.status).toBe('resolved');
+    expect(result.data.remainder.resolutionType).toBe('loss');
+  });
+
+  it('direct_loss: still deposits ONLY the arrived portion (no credit for the loss)', async () => {
+    const { partialTransferArrival } = await import('./transfer-reconciliation');
+    await setSetting('transfer-default-resolution', 'direct_loss');
+    const id = await seedNotArrived('100.00');
+
+    await partialTransferArrival(id, 60);
+
+    expect(h.depositCalls).toHaveLength(1);
+    expect(Number(h.depositCalls[0]?.amount)).toBeCloseTo(60, 2);
+  });
+});
+
+// ── Guard relaxation: a partial may come straight from a pending row ──────────
+// The Novedad flow runs at verification time, so splitPartialArrival must accept
+// a still-pending row (not only investigation rows).
+
+describe('partialTransferArrival — accepts a pending row', () => {
+  it('splits a pending transfer: original resolved, remainder created', async () => {
+    const { partialTransferArrival } = await import('./transfer-reconciliation');
+    const id = await seedWithStatus('pending', '100.00');
+
+    const result = await partialTransferArrival(id, 60);
+
+    expect(result.ok).toBe(true);
+
+    if (!result.ok) {
+      return;
+    }
+
+    expect(result.data.original.status).toBe('resolved');
+    expect(Number(result.data.original.arrivedAmount)).toBeCloseTo(60, 2);
+    expect(result.data.remainder.status).toBe('not_arrived');
+    expect(Number(result.data.remainder.expectedAmount)).toBeCloseTo(40, 2);
   });
 });

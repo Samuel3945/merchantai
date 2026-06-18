@@ -22,11 +22,10 @@ import {
   confirmLateTransfer,
   confirmTransfer,
   correctConfirmedTransfer,
-  markTransferMismatch,
-  markTransferNotArrived,
   partialTransferArrival,
   reclassifySalePayment,
   recordTransferExplanation,
+  recordTransferNovelty,
   recoverTransfer,
   resolveTransfer,
 } from '@/actions/transfer-reconciliation';
@@ -427,9 +426,9 @@ export function TransferReconciliationPanel(props: {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
-  // Pending-row inline editors.
-  const [mismatchId, setMismatchId] = useState<string | null>(null);
-  const [mismatchAmount, setMismatchAmount] = useState('');
+  // Pending-row inline editor — the "Novedad" amount capture.
+  const [noveltyId, setNoveltyId] = useState<string | null>(null);
+  const [noveltyAmount, setNoveltyAmount] = useState('');
 
   // Confirmed-history inline editor (the "edit a confirmed transfer" feature).
   const [editId, setEditId] = useState<string | null>(null);
@@ -753,20 +752,11 @@ export function TransferReconciliationPanel(props: {
                                 variant="outline"
                                 disabled={pending}
                                 onClick={() => {
-                                  setMismatchId(mismatchId === r.id ? null : r.id);
-                                  setMismatchAmount('');
+                                  setNoveltyId(noveltyId === r.id ? null : r.id);
+                                  setNoveltyAmount('');
                                 }}
                               >
-                                Otro monto
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="destructive"
-                                disabled={pending}
-                                onClick={() =>
-                                  run(() => markTransferNotArrived(r.id))}
-                              >
-                                No llegó
+                                Novedad
                               </Button>
                             </>
                           )}
@@ -789,31 +779,52 @@ export function TransferReconciliationPanel(props: {
                         </div>
                       </div>
 
-                      {isPending && mismatchId === r.id && (
-                        <div className="mt-3 flex flex-wrap items-center gap-2">
-                          <input
-                            className={cn(cashInputCls, 'max-w-40')}
-                            type="number"
-                            inputMode="decimal"
-                            min="0"
-                            placeholder="Monto que llegó"
-                            value={mismatchAmount}
-                            onChange={e => setMismatchAmount(e.target.value)}
-                          />
-                          <Button
-                            size="sm"
-                            disabled={pending || mismatchAmount === ''}
-                            onClick={() =>
-                              run(
-                                () => markTransferMismatch(r.id, mismatchAmount),
-                                () => {
-                                  setMismatchId(null);
-                                  setMismatchAmount('');
-                                },
-                              )}
-                          >
-                            Guardar diferencia
-                          </Button>
+                      {isPending && noveltyId === r.id && (
+                        <div className="
+                          mt-3 space-y-2 rounded-lg border border-border
+                          bg-background p-3
+                        "
+                        >
+                          <div className="text-xs text-muted-foreground">
+                            Ingresá cuánto llegó realmente. Si llegó de más, se
+                            confirma igual. Si llegó de menos (o nada), el
+                            faltante va a investigación o pérdida según Ajustes de
+                            transferencias.
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <input
+                              aria-label="Monto que llegó realmente"
+                              className={cn(cashInputCls, 'max-w-40')}
+                              type="number"
+                              inputMode="decimal"
+                              min="0"
+                              placeholder="Monto que llegó"
+                              value={noveltyAmount}
+                              onChange={e => setNoveltyAmount(e.target.value)}
+                            />
+                            <Button
+                              size="sm"
+                              disabled={pending || noveltyAmount === ''}
+                              onClick={() =>
+                                run(
+                                  () => recordTransferNovelty(r.id, noveltyAmount),
+                                  () => {
+                                    setNoveltyId(null);
+                                    setNoveltyAmount('');
+                                  },
+                                )}
+                            >
+                              Guardar novedad
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              disabled={pending}
+                              onClick={() => setNoveltyId(null)}
+                            >
+                              Cancelar
+                            </Button>
+                          </div>
                         </div>
                       )}
 

@@ -164,6 +164,56 @@ export async function confirmTransfer(
   return { ok: true, data: confirmed };
 }
 
+// ── Verification-time entry: "Novedad" ────────────────────────────────────────
+// The cashier verifying a pending transfer has exactly two choices: Confirmar
+// (the amount matches) or Novedad (something is off → enter what REALLY arrived).
+// This single entry routes that amount server-side, so the more/less/zero rule
+// never lives in the client:
+//   • arrived >= expected → confirm at the real amount. A surplus just deposits
+//     the real figure; there is nothing to investigate ("no pasa nada").
+//   • 0 < arrived < expected → partial: the arrived portion confirms and
+//     deposits; the shortfall is routed by the org's default-resolution setting
+//     (investigate → opens a case; direct_loss → closes as a loss).
+//   • arrived === 0 → nothing landed (the former "No llegó"): routed by that same
+//     default-resolution setting.
+// Only a still-pending row is a valid Novedad target.
+export async function recordTransferNovelty(
+  id: string,
+  arrivedAmount: number | string,
+): Promise<ActionResult<TransferReconciliation>> {
+  const { orgId } = await requirePanelModule(MODULE);
+
+  const row = await getReconciliationById(db, { id, organizationId: orgId });
+  if (!row) {
+    return { ok: false, error: 'Transferencia no encontrada' };
+  }
+  if (row.status !== 'pending') {
+    return {
+      ok: false,
+      error: 'Solo una transferencia por verificar admite una novedad',
+    };
+  }
+
+  const arrived = Number.parseFloat(String(arrivedAmount));
+  if (!Number.isFinite(arrived) || arrived < 0) {
+    return { ok: false, error: 'Ingresá un monto válido (0 o mayor).' };
+  }
+
+  const expected = Number.parseFloat(row.expectedAmount) || 0;
+
+  // Nothing landed → not-arrived routing (respects default-resolution).
+  if (arrived === 0) {
+    return markTransferNotArrived(id);
+  }
+  // Short → partial: confirm what arrived, route the shortfall by the setting.
+  if (arrived < expected) {
+    const result = await partialTransferArrival(id, arrived);
+    return result.ok ? { ok: true, data: result.data.original } : result;
+  }
+  // Exact or surplus → confirm at the real amount.
+  return confirmTransfer(id, arrived);
+}
+
 // Best-effort bank deposit for a confirmed transfer. Returns the error message
 // when it fails (so the caller can surface it) instead of throwing, so a
 // bookkeeping failure never rolls back or 500s the confirmation itself.
@@ -336,39 +386,6 @@ export async function markTransferNotArrived(
     entityType: 'transfer_reconciliation',
     entityId: row.id,
     after: { status: row.status, note: row.note },
-  });
-  revalidatePath(CASH_PATH);
-  return { ok: true, data: row };
-}
-
-export async function markTransferMismatch(
-  id: string,
-  arrivedAmount: number | string,
-  note?: string | null,
-): Promise<ActionResult<TransferReconciliation>> {
-  const { userId, orgId } = await requirePanelModule(MODULE);
-  const actor = await getActorName(userId);
-  const row = await markReconciliationMismatch(db, {
-    id,
-    organizationId: orgId,
-    reconciledBy: actor,
-    arrivedAmount,
-    note,
-  });
-  if (!row) {
-    return { ok: false, error: 'Transferencia no encontrada' };
-  }
-  await logAction({
-    organizationId: orgId,
-    actor: { type: 'user', id: userId },
-    action: 'transfer.mismatch',
-    entityType: 'transfer_reconciliation',
-    entityId: row.id,
-    after: {
-      status: row.status,
-      expectedAmount: row.expectedAmount,
-      arrivedAmount: row.arrivedAmount,
-    },
   });
   revalidatePath(CASH_PATH);
   return { ok: true, data: row };
@@ -770,7 +787,11 @@ export async function confirmLateTransfer(
 // ── Axis-1: Partial arrival ───────────────────────────────────────────────────
 // "Llegó parcial $X": the transfer partially showed up.
 // • Original row → resolved, arrivedAmount=$X, remainderReconciliationId set.
-// • New remainder row → not_arrived, expectedAmount=original.expected-$X.
+// • New remainder row → expectedAmount=original.expected-$X. Its fate follows the
+//   org's default-resolution setting: 'investigate' (default) parks it as
+//   not_arrived for a case; 'direct_loss' closes it as a loss immediately —
+//   exactly like a full non-arrival, so the shortfall never sits in limbo when
+//   the org opted out of investigations.
 // • Treasury credit posted for $X only (NOT for the remainder).
 // Conservation: arrived + remainder.expected === original.expected.
 // Validation: 0 < arrivedAmount < expectedAmount (strict bounds).
@@ -783,6 +804,11 @@ export async function partialTransferArrival(
 > {
   const { userId, orgId } = await requirePanelModule(MODULE);
   const actor = await getActorName(userId);
+
+  // Read the shortfall routing setting once, outside the tx (it reads
+  // app_settings). 'direct_loss' closes the remainder as a loss in the same tx;
+  // 'investigate' (default) leaves it parked as not_arrived for a case.
+  const defaultResolution = await getDefaultResolution(db, orgId);
 
   try {
     // The split AND its treasury credit run in ONE transaction. The arrived row
@@ -807,6 +833,21 @@ export async function partialTransferArrival(
         amount: split.original.arrivedAmount ?? split.original.expectedAmount,
         createdBy: actor,
       });
+      // Route the shortfall by the org setting. direct_loss closes the remainder
+      // now (no bank credit was posted for it, so nothing to claw back); the
+      // default leaves it not_arrived for the investigation flow.
+      if (defaultResolution === 'direct_loss') {
+        const resolvedRemainder = await setReconciliationResolution(tx, {
+          id: split.remainder.id,
+          organizationId: orgId,
+          resolvedBy: actor,
+          resolutionType: 'loss',
+          status: 'resolved',
+        });
+        if (resolvedRemainder) {
+          return { original: split.original, remainder: resolvedRemainder };
+        }
+      }
       return split;
     });
 
