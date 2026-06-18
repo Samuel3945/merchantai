@@ -80,7 +80,6 @@ export const POS_CORE_MODULES: string[] = ['cash', 'sales', 'fiados', 'customers
 const OWNER_ONLY_PREFIXES = [
   '/dashboard/pos-cajeros',
   '/dashboard/employees',
-  '/dashboard/expenses',
   '/dashboard/plans',
   '/dashboard/settings',
   '/dashboard/ai-agent',

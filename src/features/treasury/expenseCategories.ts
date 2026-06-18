@@ -1,11 +1,6 @@
-// Treasury-owned canonical expense categories.
-// This module is the single source of truth for the structured category taxonomy.
+// Treasury-owned canonical expense categories — single source of truth.
 // "otros" is special: the UI and recordGasto both require a non-empty description
 // for it, otherwise the expense is unauditable.
-//
-// Slice 3 will delete src/features/expenses/ and ExpensesClient.tsx; that module
-// also uses categories — it imports from features/expenses/categories.ts which is
-// a separate (older) list. After Slice 3, this module is the only definition.
 export const TREASURY_EXPENSE_CATEGORIES = [
   'servicios',
   'arriendo',
