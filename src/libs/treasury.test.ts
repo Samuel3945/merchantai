@@ -151,7 +151,9 @@ const DDL = `
     description text,
     incurred_on date NOT NULL,
     created_by text,
-    created_at timestamp DEFAULT now() NOT NULL
+    reverses_expense_id uuid REFERENCES expenses(id) ON DELETE RESTRICT,
+    created_at timestamp DEFAULT now() NOT NULL,
+    CONSTRAINT expenses_reverses_expense_id_unique UNIQUE (reverses_expense_id)
   );
 
   CREATE TABLE treasury_accounts (

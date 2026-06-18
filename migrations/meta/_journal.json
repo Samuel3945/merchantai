@@ -414,6 +414,13 @@
       "when": 1781700000009,
       "tag": "0058_pos_gasto_expense_link",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1781700000010,
+      "tag": "0059_expense_reversal_link",
+      "breakpoints": true
     }
   ]
 }

@@ -74,6 +74,37 @@ export async function correctGastoExpense(
 
     const originalAmount = Number.parseFloat(original.amount);
 
+    // 1a. Idempotency guard (C1): cannot correct a row that is itself a
+    // reversal — i.e. an already-posted correction. The reverses_expense_id
+    // column is the source of truth; the negative-amount check is a belt-and
+    // -suspenders guard for legacy reversals predating this column.
+    if (original.reversesExpenseId || originalAmount < 0) {
+      throw new Error(
+        `correctGastoExpense: expense ${input.expenseId} is a correction and cannot be corrected`,
+      );
+    }
+
+    // 1b. Idempotency guard (C1): reject if a reversal already references this
+    // expense. The PARTIAL UNIQUE index on reverses_expense_id is the ultimate
+    // backstop for concurrent double-corrections; this read-side check fails
+    // fast with a friendly message inside the same transaction.
+    const [existingReversal] = await tx
+      .select({ id: expensesSchema.id })
+      .from(expensesSchema)
+      .where(
+        and(
+          eq(expensesSchema.reversesExpenseId, input.expenseId),
+          eq(expensesSchema.organizationId, input.organizationId),
+        ),
+      )
+      .limit(1);
+
+    if (existingReversal) {
+      throw new Error(
+        `correctGastoExpense: expense ${input.expenseId} has already been corrected`,
+      );
+    }
+
     // 2. Determine source: look for a treasury_movements gasto linked to this expense.
     const [linkedTreasuryMov] = await tx
       .select({
@@ -90,7 +121,10 @@ export async function correctGastoExpense(
       )
       .limit(1);
 
-    // 3. Insert reversing expenses row (negative amount, back-reference in description).
+    // 3. Insert reversing expenses row (negative amount). The
+    // reverses_expense_id COLUMN is the source of truth for "already corrected"
+    // (the PARTIAL UNIQUE index makes a second insert collide at the DB). The
+    // description is kept for human readability only.
     const reversalDescription = `Corrección de gasto ${input.expenseId}`;
 
     const [reversalRow] = await tx
@@ -102,6 +136,7 @@ export async function correctGastoExpense(
         description: reversalDescription,
         incurredOn: original.incurredOn,
         createdBy: input.correctedBy,
+        reversesExpenseId: input.expenseId,
       })
       .returning({ id: expensesSchema.id });
 
