@@ -7,6 +7,7 @@ import type {
 } from '@/actions/dashboard';
 import type { FiadosOverview } from '@/libs/fiados';
 import type { RangePreset } from '@/utils/DateRange';
+import { useOrganization } from '@clerk/nextjs';
 import { Bot, MessageCircle } from 'lucide-react';
 import Link from 'next/link';
 import {
@@ -165,7 +166,13 @@ function buildAssistantMessages(
 
 // Looping WhatsApp-style chat showing what the assistant would message the
 // owner, built from this store's real data. Pure decoration; cleans up on unmount.
-function WhatsAppPreview({ messages }: { messages: BotMessage[] }) {
+function WhatsAppPreview({
+  messages,
+  orgName,
+}: {
+  messages: BotMessage[];
+  orgName?: string;
+}) {
   const [shown, setShown] = useState(0);
   const [typing, setTyping] = useState(false);
   const bodyRef = useRef<HTMLDivElement | null>(null);
@@ -211,8 +218,7 @@ function WhatsAppPreview({ messages }: { messages: BotMessage[] }) {
 
   return (
     <div className="
-      flex min-h-[220px] flex-col overflow-hidden rounded-xl border
-      bg-background shadow-sm
+      flex flex-col overflow-hidden rounded-xl border bg-background shadow-sm
     "
     >
       <style>
@@ -228,7 +234,7 @@ function WhatsAppPreview({ messages }: { messages: BotMessage[] }) {
         </span>
         <div className="min-w-0 flex-1">
           <div className="truncate text-xs font-semibold text-foreground">
-            Asistente · tu tienda
+            {orgName ? `Asistente · ${orgName}` : 'Asistente'}
           </div>
           <div className="
             flex items-center gap-1 text-[10px] text-muted-foreground
@@ -241,7 +247,7 @@ function WhatsAppPreview({ messages }: { messages: BotMessage[] }) {
       </div>
       <div
         ref={bodyRef}
-        className="flex flex-1 flex-col overflow-y-auto px-2.5 py-3"
+        className="flex h-[180px] flex-col overflow-y-auto px-2.5 py-3"
       >
         <div className="mt-auto flex flex-col gap-1.5">
           {messages.slice(0, shown).map(m => (
@@ -436,6 +442,7 @@ export function DashboardClient({
   const [activePreset, setActivePreset] = useState<RangePreset | null>(null);
   // Which metric the chart shows; selecting a KPI card drives it.
   const [metric, setMetric] = useState<ChartMetric>('ventas');
+  const { organization } = useOrganization();
 
   const [pending, startTransition] = useTransition();
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -705,7 +712,10 @@ export function DashboardClient({
                   </div>
                 </div>
               </div>
-              <WhatsAppPreview messages={botMessages} />
+              <WhatsAppPreview
+                messages={botMessages}
+                orgName={organization?.name}
+              />
               <Link
                 href="/dashboard/ai-agent"
                 className="
