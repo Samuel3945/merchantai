@@ -16,18 +16,29 @@ import {
   X,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { useMemo, useState, useTransition } from 'react';
+import { useMemo, useRef, useState, useTransition } from 'react';
 import {
   confirmAllPendingTransfers,
+  confirmLateTransfer,
   confirmTransfer,
   correctConfirmedTransfer,
   markTransferMismatch,
   markTransferNotArrived,
+  partialTransferArrival,
   reclassifySalePayment,
   recordTransferExplanation,
+  recoverTransfer,
   resolveTransfer,
 } from '@/actions/transfer-reconciliation';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { cn } from '@/utils/Helpers';
 import { cashInputCls, money, stamp } from './cash-ui';
 
@@ -146,6 +157,232 @@ function RowMeta({ row }: { row: TransferReconciliation }) {
   );
 }
 
+// ── FIADO Customer Capture Modal ─────────────────────────────────────────────
+
+type FiadoModalState = {
+  rowId: string;
+  expectedAmount: string;
+};
+
+type FiadoModalProps = {
+  state: FiadoModalState | null;
+  pending: boolean;
+  onConfirm: (rowId: string, customerName: string, whatsapp: string, documentId: string) => void;
+  onClose: () => void;
+};
+
+function FiadoModal({ state, pending, onConfirm, onClose }: FiadoModalProps) {
+  const [customerName, setCustomerName] = useState('');
+  const [whatsapp, setWhatsapp] = useState('');
+  const [documentId, setDocumentId] = useState('');
+  const nameRef = useRef<HTMLInputElement>(null);
+
+  const hasContact = whatsapp.trim() !== '' || documentId.trim() !== '';
+  const canSubmit = customerName.trim() !== '' && !pending;
+
+  function handleOpenChange(open: boolean) {
+    if (!open) {
+      onClose();
+      setCustomerName('');
+      setWhatsapp('');
+      setDocumentId('');
+    }
+  }
+
+  return (
+    <Dialog open={state !== null} onOpenChange={handleOpenChange}>
+      <DialogContent
+        className="max-w-[440px]"
+        onOpenAutoFocus={() => nameRef.current?.focus()}
+        aria-describedby="fiado-dialog-description"
+      >
+        <DialogHeader>
+          <DialogTitle>Cobrar como fiado</DialogTitle>
+          <DialogDescription id="fiado-dialog-description">
+            Registrá quién asume la deuda para que el agente pueda cobrarla
+            después.
+            {state && (
+              <span className="ml-1 font-semibold text-foreground">
+                {money(state.expectedAmount)}
+              </span>
+            )}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex flex-col gap-3">
+          {/* Customer name — required */}
+          <div className="flex flex-col gap-1.5">
+            <label
+              htmlFor="fiado-customer-name"
+              className="text-xs font-semibold"
+            >
+              Nombre completo
+              {' '}
+              <span className="text-destructive" aria-hidden="true">*</span>
+            </label>
+            <input
+              id="fiado-customer-name"
+              ref={nameRef}
+              className={cashInputCls}
+              placeholder="Ej: Ana García"
+              value={customerName}
+              onChange={e => setCustomerName(e.target.value)}
+              autoComplete="name"
+            />
+          </div>
+
+          {/* WhatsApp — recommended */}
+          <div className="flex flex-col gap-1.5">
+            <label
+              htmlFor="fiado-whatsapp"
+              className="text-xs font-semibold"
+            >
+              WhatsApp
+            </label>
+            <input
+              id="fiado-whatsapp"
+              className={cashInputCls}
+              type="tel"
+              inputMode="tel"
+              placeholder="Ej: 3001234567"
+              value={whatsapp}
+              onChange={e => setWhatsapp(e.target.value)}
+              autoComplete="tel"
+            />
+          </div>
+
+          {/* Document ID — recommended */}
+          <div className="flex flex-col gap-1.5">
+            <label
+              htmlFor="fiado-document"
+              className="text-xs font-semibold"
+            >
+              Documento (CC / NIT)
+            </label>
+            <input
+              id="fiado-document"
+              className={cashInputCls}
+              placeholder="Ej: 1234567890"
+              value={documentId}
+              onChange={e => setDocumentId(e.target.value)}
+            />
+          </div>
+
+          {!hasContact && customerName.trim() !== '' && (
+            <p className="text-xs text-warn">
+              Te recomendamos al menos un contacto (WhatsApp o documento) para
+              que el agente pueda cobrar el fiado.
+            </p>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={pending}>
+            Cancelar
+          </Button>
+          <Button
+            disabled={!canSubmit}
+            onClick={() => {
+              if (state) {
+                onConfirm(state.rowId, customerName.trim(), whatsapp.trim(), documentId.trim());
+              }
+            }}
+          >
+            Registrar fiado
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Recovery Modal ───────────────────────────────────────────────────────────
+
+type RecoveryModalState = {
+  rowId: string;
+  expectedAmount: string;
+};
+
+type RecoveryModalProps = {
+  state: RecoveryModalState | null;
+  pending: boolean;
+  onConfirm: (rowId: string, arrivedAmount: number) => void;
+  onClose: () => void;
+};
+
+function RecoveryModal({ state, pending, onConfirm, onClose }: RecoveryModalProps) {
+  const [amount, setAmount] = useState('');
+  const amountRef = useRef<HTMLInputElement>(null);
+
+  const arrivedNum = Number.parseFloat(amount);
+  const canSubmit = !pending && Number.isFinite(arrivedNum) && arrivedNum > 0 && amount !== '';
+
+  function handleOpenChange(open: boolean) {
+    if (!open) {
+      onClose();
+      setAmount('');
+    }
+  }
+
+  return (
+    <Dialog open={state !== null} onOpenChange={handleOpenChange}>
+      <DialogContent
+        className="max-w-[400px]"
+        onOpenAutoFocus={() => amountRef.current?.focus()}
+        aria-describedby="recovery-dialog-description"
+      >
+        <DialogHeader>
+          <DialogTitle>Registrar recuperación</DialogTitle>
+          <DialogDescription id="recovery-dialog-description">
+            El dinero volvió después de haberse marcado como pérdida. Indicá el
+            monto que realmente llegó.
+            {state && (
+              <span className="ml-1 font-semibold text-foreground">
+                Esperado originalmente:
+                {' '}
+                {money(state.expectedAmount)}
+              </span>
+            )}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="recovery-amount" className="text-xs font-semibold">
+            Monto recuperado
+          </label>
+          <input
+            id="recovery-amount"
+            ref={amountRef}
+            className={cashInputCls}
+            type="number"
+            inputMode="decimal"
+            min="0.01"
+            placeholder="0"
+            value={amount}
+            onChange={e => setAmount(e.target.value)}
+          />
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={pending}>
+            Cancelar
+          </Button>
+          <Button
+            disabled={!canSubmit}
+            onClick={() => {
+              if (state) {
+                onConfirm(state.rowId, arrivedNum);
+              }
+            }}
+          >
+            Confirmar recuperación
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ── Filtering ────────────────────────────────────────────────────────────────
 
 type Chip = 'all' | 'pending' | 'confirmed';
@@ -180,9 +417,11 @@ function rowMatchesQuery(row: TransferReconciliation, q: string): boolean {
 export function TransferReconciliationPanel(props: {
   reconciliations: TransferReconciliation[]; // pending
   investigating: TransferReconciliation[]; // not_arrived
-  history: TransferReconciliation[]; // confirmed + mismatch
+  history: TransferReconciliation[]; // confirmed + mismatch + resolved
   pendingCount: number;
   counts: { pending: number; confirmedToday: number; notArrived: number };
+  /** Whether the current user is org:admin. Controls admin-only action buttons. */
+  isAdmin: boolean;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -202,6 +441,16 @@ export function TransferReconciliationPanel(props: {
   const [reclassifyId, setReclassifyId] = useState<string | null>(null);
   const [reclassifyMethod, setReclassifyMethod] = useState('Efectivo');
   const [reclassifyAmount, setReclassifyAmount] = useState('');
+
+  // Arrival inline editors for not_arrived rows.
+  const [partialId, setPartialId] = useState<string | null>(null);
+  const [partialAmount, setPartialAmount] = useState('');
+
+  // FIADO capture modal state.
+  const [fiadoModal, setFiadoModal] = useState<{ rowId: string; expectedAmount: string } | null>(null);
+
+  // Recovery modal state (admin only).
+  const [recoveryModal, setRecoveryModal] = useState<{ rowId: string; expectedAmount: string } | null>(null);
 
   // Filters / sort (display only — never mutate, just locate).
   const [query, setQuery] = useState('');
@@ -225,9 +474,45 @@ export function TransferReconciliationPanel(props: {
     });
   }
 
+  function handleFiadoConfirm(
+    rowId: string,
+    customerName: string,
+    whatsapp: string,
+    documentId: string,
+  ) {
+    run(
+      () =>
+        resolveTransfer(rowId, 'receivable', {
+          customerName,
+          whatsapp: whatsapp || null,
+          documentId: documentId || null,
+        }),
+      () => setFiadoModal(null),
+    );
+  }
+
+  function handleRecoveryConfirm(rowId: string, arrivedAmount: number) {
+    run(
+      () => recoverTransfer(rowId, arrivedAmount),
+      () => setRecoveryModal(null),
+    );
+  }
+
+  // History rows: confirmed + mismatch (editable). Resolved rows are separate.
+  const editableHistory = useMemo(
+    () => props.history.filter(r => r.status === 'confirmed' || r.status === 'mismatch'),
+    [props.history],
+  );
+
+  // Resolved-as-loss rows that the admin can potentially recover.
+  const resolvedLossRows = useMemo(
+    () => props.history.filter(r => r.status === 'resolved' && r.resolutionType === 'loss'),
+    [props.history],
+  );
+
   const allRows = useMemo(
-    () => [...props.reconciliations, ...props.history],
-    [props.reconciliations, props.history],
+    () => [...props.reconciliations, ...editableHistory],
+    [props.reconciliations, editableHistory],
   );
 
   const shown = useMemo(() => {
@@ -245,7 +530,7 @@ export function TransferReconciliationPanel(props: {
     { k: 'all', label: `Todas · ${allRows.length}` },
     {
       k: 'confirmed',
-      label: `Confirmadas · ${props.history.length}`,
+      label: `Confirmadas · ${editableHistory.length}`,
     },
     {
       k: 'pending',
@@ -255,6 +540,24 @@ export function TransferReconciliationPanel(props: {
 
   return (
     <div className="space-y-5">
+      {/* Modals */}
+      {/* key per row so the modal remounts with fresh inputs every open —
+          prevents the previous customer's data leaking into the next fiado. */}
+      <FiadoModal
+        key={fiadoModal?.rowId ?? 'fiado-closed'}
+        state={fiadoModal}
+        pending={pending}
+        onConfirm={handleFiadoConfirm}
+        onClose={() => setFiadoModal(null)}
+      />
+      <RecoveryModal
+        key={recoveryModal?.rowId ?? 'recovery-closed'}
+        state={recoveryModal}
+        pending={pending}
+        onConfirm={handleRecoveryConfirm}
+        onClose={() => setRecoveryModal(null)}
+      />
+
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h2 className="font-display text-lg font-semibold">
@@ -633,35 +936,112 @@ export function TransferReconciliationPanel(props: {
                     </div>
                   </div>
 
+                  {/* Resolution action buttons */}
                   <div className="flex flex-wrap items-center gap-2">
+                    {/* Axis-1: late full arrival — cashier-level */}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={pending}
+                      onClick={() => run(() => confirmLateTransfer(r.id))}
+                    >
+                      Llegó tarde (completa)
+                    </Button>
+
+                    {/* Axis-1: partial arrival — cashier-level (toggles inline input) */}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={pending}
+                      onClick={() => {
+                        setPartialId(partialId === r.id ? null : r.id);
+                        setPartialAmount('');
+                      }}
+                    >
+                      Llegó parcial
+                    </Button>
+
+                    {/* Axis-2: FIADO — cashier-level, opens capture modal */}
                     <Button
                       size="sm"
                       variant="outline"
                       disabled={pending}
                       onClick={() =>
-                        run(() => resolveTransfer(r.id, 'receivable'))}
+                        setFiadoModal({ rowId: r.id, expectedAmount: r.expectedAmount })}
                     >
                       Cobrar (fiado)
                     </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={pending}
-                      onClick={() =>
-                        run(() => resolveTransfer(r.id, 'cashier_liability'))}
-                    >
-                      Culpa del cajero
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      disabled={pending}
-                      onClick={() => run(() => resolveTransfer(r.id, 'loss'))}
-                    >
-                      Pérdida
-                    </Button>
+
+                    {/* Axis-2: admin-only outcomes */}
+                    {props.isAdmin && (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={pending}
+                          onClick={() =>
+                            run(() => resolveTransfer(r.id, 'cashier_liability'))}
+                        >
+                          Culpa del cajero
+                        </Button>
+                        <LossDropdown
+                          disabled={pending}
+                          onLoss={() => run(() => resolveTransfer(r.id, 'loss', undefined, false))}
+                          onLossWithClaim={() =>
+                            run(() => resolveTransfer(r.id, 'loss', undefined, true))}
+                        />
+                      </>
+                    )}
                   </div>
                 </div>
+
+                {/* Partial arrival inline input */}
+                {partialId === r.id && (
+                  <div className="
+                    mt-3 space-y-2 rounded-lg border border-border bg-background
+                    p-3
+                  "
+                  >
+                    <div className="text-xs text-muted-foreground">
+                      Ingresá el monto que sí llegó. Se crea un nuevo registro
+                      por la diferencia.
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <input
+                        aria-label="Monto que llegó parcialmente"
+                        className={cn(cashInputCls, 'max-w-40')}
+                        type="number"
+                        inputMode="decimal"
+                        min="0.01"
+                        placeholder="Monto que llegó"
+                        value={partialAmount}
+                        onChange={e => setPartialAmount(e.target.value)}
+                      />
+                      <Button
+                        size="sm"
+                        disabled={pending || partialAmount === ''}
+                        onClick={() =>
+                          run(
+                            () => partialTransferArrival(r.id, partialAmount),
+                            () => {
+                              setPartialId(null);
+                              setPartialAmount('');
+                            },
+                          )}
+                      >
+                        Confirmar parcial
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={pending}
+                        onClick={() => setPartialId(null)}
+                      >
+                        Cancelar
+                      </Button>
+                    </div>
+                  </div>
+                )}
 
                 {r.cashierExplanation && (
                   <div className="
@@ -797,6 +1177,74 @@ export function TransferReconciliationPanel(props: {
         </div>
       )}
 
+      {/* Resolved-as-loss rows — admin-only recovery surface */}
+      {props.isAdmin && resolvedLossRows.length > 0 && (
+        <div className="space-y-3">
+          <div>
+            <h3 className="font-display text-lg font-semibold">
+              Pérdidas registradas
+            </h3>
+            <p className="text-sm text-muted-foreground">
+              Si el dinero apareció después, podés registrar una recuperación
+              para que entre a Tesorería.
+            </p>
+          </div>
+          <div className="space-y-2">
+            {resolvedLossRows.map(r => (
+              <Card key={r.id} className="p-4">
+                <div className="
+                  flex flex-wrap items-center justify-between gap-3
+                "
+                >
+                  <div className="flex min-w-0 items-center gap-3">
+                    <span className="
+                      flex size-9 shrink-0 items-center justify-center
+                      rounded-lg bg-muted text-muted-foreground
+                    "
+                    >
+                      <Send className="size-4" />
+                    </span>
+                    <div className="min-w-0">
+                      <div className="
+                        flex flex-wrap items-center gap-2 text-sm font-medium
+                      "
+                      >
+                        <span>{r.method}</span>
+                        <span className="font-display tabular-nums">
+                          {money(r.expectedAmount)}
+                        </span>
+                        {r.claimOpen && (
+                          <span className="
+                            inline-flex h-6 items-center rounded-full bg-warn/10
+                            px-2.5 text-xs font-semibold text-warn
+                          "
+                          >
+                            Con reclamo abierto
+                          </span>
+                        )}
+                      </div>
+                      <RowMeta row={r} />
+                    </div>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={pending}
+                    onClick={() =>
+                      setRecoveryModal({
+                        rowId: r.id,
+                        expectedAmount: r.expectedAmount,
+                      })}
+                  >
+                    Recuperar
+                  </Button>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <Clock className="size-3.5" />
         <span>
@@ -804,6 +1252,76 @@ export function TransferReconciliationPanel(props: {
           cajas — eso se hace en el punto de cobro.
         </span>
       </div>
+    </div>
+  );
+}
+
+// ── LossDropdown ─────────────────────────────────────────────────────────────
+// Inline component for the two PÉRDIDA variants. Uses a simple toggle approach
+// rather than a Radix dropdown to stay consistent with the panel's existing
+// inline-editor pattern.
+
+type LossDropdownProps = {
+  disabled: boolean;
+  onLoss: () => void;
+  onLossWithClaim: () => void;
+};
+
+function LossDropdown({ disabled, onLoss, onLossWithClaim }: LossDropdownProps) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="relative">
+      <Button
+        size="sm"
+        variant="destructive"
+        disabled={disabled}
+        onClick={() => setOpen(v => !v)}
+        aria-expanded={open}
+        aria-haspopup="menu"
+      >
+        Pérdida
+      </Button>
+      {open && (
+        <div
+          role="menu"
+          className="
+            absolute top-full right-0 z-10 mt-1 min-w-[180px] rounded-lg border
+            border-border bg-card py-1 shadow-md
+          "
+        >
+          <button
+            role="menuitem"
+            type="button"
+            className="
+              w-full px-3 py-2 text-left text-sm
+              hover:bg-muted
+              focus:bg-muted
+            "
+            onClick={() => {
+              setOpen(false);
+              onLoss();
+            }}
+          >
+            Sin reclamo
+          </button>
+          <button
+            role="menuitem"
+            type="button"
+            className="
+              w-full px-3 py-2 text-left text-sm
+              hover:bg-muted
+              focus:bg-muted
+            "
+            onClick={() => {
+              setOpen(false);
+              onLossWithClaim();
+            }}
+          >
+            Con reclamo / denuncia
+          </button>
+        </div>
+      )}
     </div>
   );
 }

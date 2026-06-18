@@ -1,4 +1,5 @@
 import type { TransferReconciliation } from '@/libs/transfer-reconciliation';
+import { auth } from '@clerk/nextjs/server';
 import { setRequestLocale } from 'next-intl/server';
 import {
   getFraudAlerts,
@@ -21,6 +22,9 @@ export default async function DashboardCashPage(props: {
 }) {
   const { locale } = await props.params;
   setRequestLocale(locale);
+
+  const { orgRole } = await auth();
+  const isAdmin = orgRole === 'org:admin';
 
   const [collections, alerts, openCajas, methods] = await Promise.all([
     getTodayCollectionsByMethod(),
@@ -47,6 +51,7 @@ export default async function DashboardCashPage(props: {
       investigatingResult,
       confirmedResult,
       mismatchResult,
+      resolvedResult,
       overviewResult,
       countsResult,
     ] = await Promise.all([
@@ -54,6 +59,11 @@ export default async function DashboardCashPage(props: {
       listTransferReconciliations({ status: 'not_arrived' }).catch(() => null),
       listTransferReconciliations({ status: 'confirmed' }).catch(() => null),
       listTransferReconciliations({ status: 'mismatch' }).catch(() => null),
+      // Resolved rows are only shown to admins (recovery surface). Fetch only
+      // when needed — cashiers never see this section.
+      isAdmin
+        ? listTransferReconciliations({ status: 'resolved' }).catch(() => null)
+        : Promise.resolve(null),
       getPendingTransfersOverview().catch(() => null),
       getTransferStatusCounts().catch(() => null),
     ]);
@@ -62,6 +72,7 @@ export default async function DashboardCashPage(props: {
     history = [
       ...(confirmedResult?.ok ? confirmedResult.data : []),
       ...(mismatchResult?.ok ? mismatchResult.data : []),
+      ...(resolvedResult?.ok ? resolvedResult.data : []),
     ];
     pendingTransfers = overviewResult?.ok
       ? overviewResult.data
@@ -88,6 +99,7 @@ export default async function DashboardCashPage(props: {
             history={history}
             pendingCount={pendingTransfers.count}
             counts={transferCounts}
+            isAdmin={isAdmin}
           />
         )}
       </div>
