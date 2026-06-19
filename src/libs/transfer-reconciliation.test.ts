@@ -11,7 +11,6 @@ import {
   markReconciliationMismatch,
   markReconciliationNotArrived,
   outstandingAmount,
-  recordCashierExplanation,
   setReconciliationResolution,
 } from '@/libs/transfer-reconciliation';
 import { transferReconciliationsSchema } from '@/models/Schema';
@@ -299,34 +298,6 @@ describe('countReconciliationsByStatus', () => {
     });
 
     expect(counts.pending).toBe(1);
-  });
-});
-
-describe('recordCashierExplanation', () => {
-  it('records the explanation with author and timestamp', async () => {
-    const id = await seed({ status: 'not_arrived' });
-    const row = await recordCashierExplanation(db, {
-      id,
-      organizationId: ORG,
-      explanation: 'Confirmé el comprobante que el cliente mostró en pantalla',
-      explainedBy: 'Cajero Ana',
-    });
-
-    expect(row?.cashierExplanation).toContain('comprobante');
-    expect(row?.cashierExplainedBy).toBe('Cajero Ana');
-    expect(row?.cashierExplainedAt).not.toBeNull();
-  });
-
-  it('does not touch another org row (tenant isolation)', async () => {
-    const id = await seed({ status: 'not_arrived' });
-    const row = await recordCashierExplanation(db, {
-      id,
-      organizationId: OTHER,
-      explanation: 'x',
-      explainedBy: 'y',
-    });
-
-    expect(row).toBeNull();
   });
 });
 

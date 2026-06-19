@@ -390,34 +390,6 @@ export async function getReconciliationSale(
   return row ?? null;
 }
 
-// The cashier on duty's account of the comprobante they confirmed (async — the
-// owner may flag the case days before the cashier can answer).
-export async function recordCashierExplanation(
-  executor: Executor,
-  args: {
-    id: string;
-    organizationId: string;
-    explanation: string;
-    explainedBy: string;
-  },
-): Promise<TransferReconciliation | null> {
-  const [row] = await executor
-    .update(transferReconciliationsSchema)
-    .set({
-      cashierExplanation: args.explanation,
-      cashierExplainedBy: args.explainedBy,
-      cashierExplainedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(transferReconciliationsSchema.id, args.id),
-        eq(transferReconciliationsSchema.organizationId, args.organizationId),
-      ),
-    )
-    .returning();
-  return row ?? null;
-}
-
 // Closes the investigation with an outcome. The fiado for 'receivable' is created
 // by the caller (action layer) and passed in as resolutionFiadoId.
 // `status` MUST be supplied by the action layer: 'resolved' for all loss/fiado/

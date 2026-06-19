@@ -29,7 +29,6 @@ import {
   markReconciliationMismatch,
   markReconciliationNotArrived,
   outstandingAmount,
-  recordCashierExplanation,
   setReconciliationResolution,
   splitPartialArrival,
 } from '@/libs/transfer-reconciliation';
@@ -530,39 +529,6 @@ export async function confirmAllPendingTransfers(
     };
   }
   return { ok: true, data: { confirmed } };
-}
-
-// The cashier on duty explains the comprobante they confirmed for a transfer
-// under investigation. Recorded async — the owner may have flagged it days ago.
-export async function recordTransferExplanation(
-  id: string,
-  explanation: string,
-): Promise<ActionResult<TransferReconciliation>> {
-  const { userId, orgId } = await requirePanelModule(MODULE);
-  const text = explanation.trim();
-  if (!text) {
-    return { ok: false, error: 'La explicación no puede estar vacía' };
-  }
-  const actor = await getActorName(userId);
-  const row = await recordCashierExplanation(db, {
-    id,
-    organizationId: orgId,
-    explanation: text,
-    explainedBy: actor,
-  });
-  if (!row) {
-    return { ok: false, error: 'Transferencia no encontrada' };
-  }
-  await logAction({
-    organizationId: orgId,
-    actor: { type: 'user', id: userId },
-    action: 'transfer.explained',
-    entityType: 'transfer_reconciliation',
-    entityId: row.id,
-    after: { cashierExplainedBy: row.cashierExplainedBy },
-  });
-  revalidatePath(CASH_PATH);
-  return { ok: true, data: row };
 }
 
 // Input for the captured customer when resolving as 'receivable'.
