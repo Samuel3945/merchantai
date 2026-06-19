@@ -983,25 +983,14 @@ export function TransferReconciliationPanel(props: {
                       Cobrar (fiado)
                     </Button>
 
-                    {/* Axis-2: admin-only outcomes */}
+                    {/* Axis-2: admin-only outcome — PÉRDIDA (with/without claim) */}
                     {props.isAdmin && (
-                      <>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={pending}
-                          onClick={() =>
-                            run(() => resolveTransfer(r.id, 'cashier_liability'))}
-                        >
-                          Culpa del cajero
-                        </Button>
-                        <LossDropdown
-                          disabled={pending}
-                          onLoss={() => run(() => resolveTransfer(r.id, 'loss', undefined, false))}
-                          onLossWithClaim={() =>
-                            run(() => resolveTransfer(r.id, 'loss', undefined, true))}
-                        />
-                      </>
+                      <LossDropdown
+                        disabled={pending}
+                        onLoss={() => run(() => resolveTransfer(r.id, 'loss', undefined, false))}
+                        onLossWithClaim={() =>
+                          run(() => resolveTransfer(r.id, 'loss', undefined, true))}
+                      />
                     )}
                   </div>
                 </div>
