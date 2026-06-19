@@ -26,7 +26,6 @@ import {
   getReconciliationById,
   getReconciliationSale,
   listReconciliations,
-  markReconciliationMismatch,
   markReconciliationNotArrived,
   outstandingAmount,
   setReconciliationResolution,
@@ -388,20 +387,16 @@ export async function markTransferNotArrived(
   return { ok: true, data: row };
 }
 
-// Edits an ALREADY-confirmed transfer (a confirmed or mismatch row) and keeps
-// Tesorería in sync — the "corrección segura" contract. Two corrections:
-//   • 'amount'      — it really landed for a different amount. The row becomes
-//                     confirmed (== expected) or mismatch (≠ expected) and the
-//                     bank is adjusted by the delta.
-//   • 'not_arrived' — it turned out it never landed. The row moves back to
-//                     investigation and the full bank credit is clawed back.
-// The status change and the bank adjustment run in ONE transaction, so the bank
-// can never drift from the reconciliation.
+// Corrects an ALREADY-confirmed transfer (a confirmed or mismatch row). The
+// amount is IMMUTABLE: what arrived is what should have arrived — editing it
+// would desync the reconciliation from the sale that recorded the payment. The
+// ONLY correction is reversal: it turned out the transfer never landed, so the
+// row moves back to investigation and the full bank credit is clawed back. The
+// status change and the bank claw-back run in ONE transaction, so the bank can
+// never drift from the reconciliation.
 export async function correctConfirmedTransfer(
   id: string,
-  correction:
-    | { kind: 'amount'; arrivedAmount: number | string }
-    | { kind: 'not_arrived'; note?: string | null },
+  correction?: { note?: string | null },
 ): Promise<ActionResult<TransferReconciliation>> {
   const { userId, orgId } = await requirePanelModule(MODULE);
   const actor = await getActorName(userId);
@@ -414,47 +409,21 @@ export async function correctConfirmedTransfer(
       }
       if (row.status !== 'confirmed' && row.status !== 'mismatch') {
         throw new ActionValidationError(
-          'Solo se puede editar una transferencia ya confirmada',
+          'Solo se puede corregir una transferencia ya confirmada',
         );
       }
 
-      // What the bank was credited when the transfer was confirmed.
+      // What the bank was credited when the transfer was confirmed — clawed
+      // back in full since the money never actually arrived.
       const previousBankAmount
         = Number.parseFloat(row.arrivedAmount ?? row.expectedAmount) || 0;
 
-      let result: TransferReconciliation | null;
-      let newBankAmount: number;
-
-      if (correction.kind === 'not_arrived') {
-        newBankAmount = 0;
-        result = await markReconciliationNotArrived(tx, {
-          id,
-          organizationId: orgId,
-          reconciledBy: actor,
-          note: correction.note ?? null,
-        });
-      } else {
-        const amount = Number.parseFloat(String(correction.arrivedAmount));
-        if (!Number.isFinite(amount) || amount < 0) {
-          throw new ActionValidationError('El monto corregido no es válido');
-        }
-        newBankAmount = amount;
-        const expected = Number.parseFloat(row.expectedAmount) || 0;
-        result
-          = amount === expected
-            ? await confirmReconciliation(tx, {
-                id,
-                organizationId: orgId,
-                reconciledBy: actor,
-                arrivedAmount: amount,
-              })
-            : await markReconciliationMismatch(tx, {
-                id,
-                organizationId: orgId,
-                reconciledBy: actor,
-                arrivedAmount: amount,
-              });
-      }
+      const result = await markReconciliationNotArrived(tx, {
+        id,
+        organizationId: orgId,
+        reconciledBy: actor,
+        note: correction?.note ?? null,
+      });
 
       if (!result) {
         throw new Error('No se pudo actualizar la transferencia');
@@ -464,7 +433,7 @@ export async function correctConfirmedTransfer(
         organizationId: orgId,
         method: row.method,
         previousBankAmount,
-        newBankAmount,
+        newBankAmount: 0,
         createdBy: actor,
         reference: row.reference,
       });
