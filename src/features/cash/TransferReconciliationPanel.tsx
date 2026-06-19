@@ -431,9 +431,9 @@ export function TransferReconciliationPanel(props: {
   const [noveltyId, setNoveltyId] = useState<string | null>(null);
   const [noveltyAmount, setNoveltyAmount] = useState('');
 
-  // Confirmed-history inline editor (the "edit a confirmed transfer" feature).
+  // Confirmed-history inline editor — the only correction is reversing a
+  // confirmed transfer that never actually arrived. The amount is immutable.
   const [editId, setEditId] = useState<string | null>(null);
-  const [editAmount, setEditAmount] = useState('');
 
   // Arrival inline editors for not_arrived rows.
   const [partialId, setPartialId] = useState<string | null>(null);
@@ -775,15 +775,11 @@ export function TransferReconciliationPanel(props: {
                               size="sm"
                               variant="outline"
                               disabled={pending}
-                              onClick={() => {
-                                setEditId(editId === r.id ? null : r.id);
-                                setEditAmount(
-                                  r.arrivedAmount ?? r.expectedAmount,
-                                );
-                              }}
+                              onClick={() =>
+                                setEditId(editId === r.id ? null : r.id)}
                             >
                               <Pencil className="size-3.5" />
-                              Editar
+                              Corregir
                             </Button>
                           )}
                           {isLoss && props.isAdmin && (
@@ -859,43 +855,19 @@ export function TransferReconciliationPanel(props: {
                         "
                         >
                           <div className="text-xs text-muted-foreground">
-                            Corregí el monto que realmente llegó. Tesorería se
-                            ajusta sola con la diferencia.
+                            El monto de una transferencia confirmada no se
+                            cambia: lo que llegó es lo que debió llegar. Si en
+                            realidad nunca llegó, revertila acá y Tesorería se
+                            ajusta sola.
                           </div>
                           <div className="flex flex-wrap items-center gap-2">
-                            <input
-                              className={cn(cashInputCls, 'max-w-40')}
-                              type="number"
-                              inputMode="decimal"
-                              min="0"
-                              value={editAmount}
-                              onChange={e => setEditAmount(e.target.value)}
-                            />
-                            <Button
-                              size="sm"
-                              disabled={pending || editAmount === ''}
-                              onClick={() =>
-                                run(
-                                  () =>
-                                    correctConfirmedTransfer(r.id, {
-                                      kind: 'amount',
-                                      arrivedAmount: editAmount,
-                                    }),
-                                  () => setEditId(null),
-                                )}
-                            >
-                              Guardar corrección
-                            </Button>
                             <Button
                               size="sm"
                               variant="destructive"
                               disabled={pending}
                               onClick={() =>
                                 run(
-                                  () =>
-                                    correctConfirmedTransfer(r.id, {
-                                      kind: 'not_arrived',
-                                    }),
+                                  () => correctConfirmedTransfer(r.id),
                                   () => setEditId(null),
                                 )}
                             >
