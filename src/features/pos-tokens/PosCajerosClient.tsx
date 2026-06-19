@@ -30,7 +30,6 @@ import {
   listPosTokens,
   regeneratePosToken,
   renamePosToken,
-  setOrgSweepDefaultDestination,
   setPosTokenAddress,
   setPosTokenSweepDestination,
   unblockPosToken,
@@ -129,23 +128,17 @@ export function PosCajerosClient({
   initialQuota,
   initialAddresses,
   initialCofres,
-  initialOrgDefaultSweepId,
 }: {
   initialTokens: TokenRow[];
   initialQuota: PosDeviceQuota;
   initialAddresses: OrgAddress[];
   initialCofres: CofreOption[];
-  /** The org-wide default sweep destination account id, null if not set. */
-  initialOrgDefaultSweepId: string | null;
 }) {
   const confirm = useConfirm();
   const [tokens, setTokens] = useState(initialTokens);
   const [quota, setQuota] = useState(initialQuota);
   const [addresses, setAddresses] = useState(initialAddresses);
   const [cofres] = useState(initialCofres);
-  const [orgDefaultSweepId, setOrgDefaultSweepId] = useState<string | null>(
-    initialOrgDefaultSweepId,
-  );
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [activeToken, setActiveToken] = useState<TokenRow | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<TokenRow | null>(null);
@@ -313,20 +306,6 @@ export function PosCajerosClient({
         <LimitBanner
           payload={limitError}
           onDismiss={() => setLimitError(null)}
-        />
-      )}
-
-      {/* Org-wide default sweep destination — applies to every caja that has no
-          per-caja override. Only shown when cofres are configured. */}
-      {cofres.length > 0 && (
-        <OrgSweepDefaultSection
-          cofres={cofres}
-          currentAccountId={orgDefaultSweepId}
-          onSaved={(accountId) => {
-            setOrgDefaultSweepId(accountId);
-          }}
-          onError={msg => setError(msg)}
-          pending={pending}
         />
       )}
 
@@ -1199,109 +1178,6 @@ function SweepDestinationModal({
             Cancelar
           </Button>
           <Button type="button" onClick={handleSave} disabled={submitting}>
-            {submitting ? 'Guardando…' : 'Guardar'}
-          </Button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/**
- * Card at the top of the page to configure the ORG-WIDE default sweep destination.
- * This applies to every caja that has no per-caja override set.
- * Per-caja overrides (set via the "Destino de barrido" dropdown menu) always win.
- */
-function OrgSweepDefaultSection({
-  cofres,
-  currentAccountId,
-  onSaved,
-  onError,
-  pending,
-}: {
-  cofres: CofreOption[];
-  currentAccountId: string | null;
-  onSaved: (accountId: string | null) => void;
-  onError: (msg: string) => void;
-  pending: boolean;
-}) {
-  const [selectedId, setSelectedId] = useState<string | null>(currentAccountId);
-  const [submitting, setSubmitting] = useState(false);
-
-  const currentName = cofres.find(c => c.id === currentAccountId)?.name ?? null;
-  const isDirty = selectedId !== currentAccountId;
-
-  const handleSave = async () => {
-    setSubmitting(true);
-    try {
-      const result = await setOrgSweepDefaultDestination(selectedId);
-      if (!result.ok) {
-        onError(result.error);
-        return;
-      }
-      onSaved(result.data.accountId);
-    } catch {
-      onError('No se pudo guardar el destino global de barrido');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <div className="rounded-md border border-input bg-muted/30 p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2 text-sm font-semibold">
-            <Vault className="size-4 text-muted-foreground" />
-            Destino de barrido global
-          </div>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Cuando una caja abre con menos efectivo del que cerró, el faltante se
-            registra automáticamente aquí. Cada caja puede sobrescribir este
-            destino con su propia configuración.
-          </p>
-          {currentAccountId && currentName && (
-            <p className="mt-1 text-xs text-muted-foreground">
-              Destino actual:
-              {' '}
-              <span className="font-medium text-foreground">{currentName}</span>
-            </p>
-          )}
-          {!currentAccountId && (
-            <p className="mt-1 text-xs text-muted-foreground">
-              Sin destino fijo — los faltantes quedan en
-              {' '}
-              <span className="font-medium text-foreground">Pendiente de ubicar</span>
-              {' '}
-              hasta que se ubiquen manualmente.
-            </p>
-          )}
-        </div>
-
-        <div className="flex shrink-0 items-center gap-2">
-          <select
-            value={selectedId ?? ''}
-            onChange={e => setSelectedId(e.target.value || null)}
-            disabled={submitting || pending}
-            className={`
-              ${inputCls}
-              w-52 cursor-pointer
-            `}
-            aria-label="Destino de barrido global"
-          >
-            <option value="">Sin destino fijo</option>
-            {cofres.map(c => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-
-          <Button
-            size="sm"
-            onClick={handleSave}
-            disabled={!isDirty || submitting || pending}
-          >
             {submitting ? 'Guardando…' : 'Guardar'}
           </Button>
         </div>

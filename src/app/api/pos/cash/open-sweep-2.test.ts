@@ -4,13 +4,11 @@
  * Tests validate:
  *   (a) Configured cofre → open-time shortfall auto-routes to cofre (no transito)
  *   (b) Unconfigured caja → falls back to Pendiente de ubicar (slice-1 path)
- *   (c) Global default cofre applies when caja column is null
- *   (d) Per-caja column wins over global default
  *   (e) Cofre-only guard: config action rejects banco/caja/transito as destination
  *   (f) Destination inactive/deleted at open → fallback to Pendiente (not a throw)
  *   (g) Auto-routed sweep is reclassifiable (reclassifyAutoSweep action)
  *   (h) ON DELETE SET NULL: deleting the cofre account clears the FK on pos_tokens
- *   (i) resolveSweepDestination: per-caja > global default > null priority
+ *   (i) resolveSweepDestination: per-caja → null priority
  */
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -321,120 +319,6 @@ describe('POST /api/pos/cash/open — unconfigured caja → Pendiente (b)', () =
 
 // ── (c) Global default applies when caja column is null ──────────────────────
 
-describe('POST /api/pos/cash/open — global default destination (c)', () => {
-  it('uses global default cofre when per-caja column is null', async () => {
-    const CLOSED = '33333333-3333-3333-3333-333333333333';
-    await seedClosedSession('500', CLOSED);
-    await seedCofre(COFRE_ID);
-
-    // Set global default via app_settings
-    await pg.query(
-      `INSERT INTO app_settings (organization_id, key, value)
-       VALUES ($1, 'treasurySweepDefaultDestinationAccountId', $2)`,
-      [ORG, COFRE_ID],
-    );
-
-    // NO per-caja override on pos_tokens
-
-    const res = await POST(openRequest({ openingAmount: 400 }));
-
-    expect(res.status).toBe(201);
-
-    // Handover goes to transito (two-step), transfer goes to cofre
-    const transitoRows = await pg.query<{ id: string }>(
-      `SELECT id FROM treasury_accounts WHERE type = 'transito'`,
-    );
-
-    expect(transitoRows.rows.length).toBe(1);
-
-    const transitoId = transitoRows.rows[0]!.id;
-
-    const handover = await pg.query<{ to_account_id: string }>(
-      `SELECT to_account_id FROM treasury_movements WHERE type = 'handover'`,
-    );
-
-    expect(handover.rows.length).toBe(1);
-    expect(handover.rows[0]!.to_account_id).toBe(transitoId);
-
-    // Transfer goes from transito to cofre
-    const transfer = await pg.query<{ to_account_id: string }>(
-      `SELECT to_account_id FROM treasury_movements WHERE type = 'transfer'`,
-    );
-
-    expect(transfer.rows.length).toBe(1);
-    expect(transfer.rows[0]!.to_account_id).toBe(COFRE_ID);
-
-    // F3: money-conservation assertions for global default route
-    const position = await getTreasuryPosition(h.db as unknown as TreasuryExecutor, ORG);
-    const cofre = position.find(a => a.type === 'caja_fuerte');
-    const transito2 = position.find(a => a.type === 'transito');
-    const total = position.reduce((sum, a) => sum + a.balance, 0);
-
-    expect(total).toBe(500);
-    expect(cofre).toBeDefined();
-    expect(cofre!.balance).toBe(100);
-    expect(transito2).toBeDefined();
-    expect(transito2!.balance).toBe(0);
-  });
-});
-
-// ── (d) Per-caja wins over global default ─────────────────────────────────────
-
-describe('POST /api/pos/cash/open — per-caja wins over global (d)', () => {
-  it('per-caja config overrides the global default', async () => {
-    const CLOSED = '44444444-4444-4444-4444-444444444444';
-    await seedClosedSession('500', CLOSED);
-
-    // Two cofres: global default A and per-caja B
-    const COFRE_A = 'aaaaaaaa-bbbb-bbbb-bbbb-aaaaaaaaaaaa';
-    const COFRE_B = 'bbbbbbbb-aaaa-aaaa-aaaa-bbbbbbbbbbbb';
-    await pg.query(
-      `INSERT INTO treasury_accounts (id, organization_id, type, name, opening_balance, active)
-       VALUES ($1, $2, 'caja_fuerte', 'Cofre A', '0', true), ($3, $2, 'caja_fuerte', 'Cofre B', '0', true)`,
-      [COFRE_A, ORG, COFRE_B],
-    );
-
-    // Global default → COFRE_A
-    await pg.query(
-      `INSERT INTO app_settings (organization_id, key, value)
-       VALUES ($1, 'treasurySweepDefaultDestinationAccountId', $2)`,
-      [ORG, COFRE_A],
-    );
-
-    // Per-caja override → COFRE_B
-    await pg.query(
-      `UPDATE pos_tokens SET default_sweep_destination_account_id = $1 WHERE id = $2`,
-      [COFRE_B, TOKEN],
-    );
-
-    const res = await POST(openRequest({ openingAmount: 400 }));
-
-    expect(res.status).toBe(201);
-
-    // Transfer goes to cofre B (per-caja wins)
-    const transfer = await pg.query<{ to_account_id: string }>(
-      `SELECT to_account_id FROM treasury_movements WHERE type = 'transfer'`,
-    );
-
-    expect(transfer.rows.length).toBe(1);
-    expect(transfer.rows[0]!.to_account_id).toBe(COFRE_B);
-
-    // F3: money-conservation assertions for per-caja override route
-    const position = await getTreasuryPosition(h.db as unknown as TreasuryExecutor, ORG);
-    const cofreB = position.find(
-      a => a.type === 'caja_fuerte' && a.key.includes(COFRE_B),
-    );
-    const transito2 = position.find(a => a.type === 'transito');
-    const total = position.reduce((sum, a) => sum + a.balance, 0);
-
-    expect(total).toBe(500);
-    expect(cofreB).toBeDefined();
-    expect(cofreB!.balance).toBe(100);
-    expect(transito2).toBeDefined();
-    expect(transito2!.balance).toBe(0);
-  });
-});
-
 // ── (e) Cofre-only guard ───────────────────────────────────────────────────────
 
 describe('resolveSweepDestination — cofre-only guard (e)', () => {
@@ -665,7 +549,7 @@ describe('pos_tokens.default_sweep_destination_account_id — ON DELETE SET NULL
   });
 });
 
-// ── (i) resolveSweepDestination priority: per-caja > global > null ────────────
+// ── (i) resolveSweepDestination priority: per-caja → null ─────────────────────
 
 describe('resolveSweepDestination — priority chain (i)', () => {
   it('returns null when nothing is configured', async () => {
@@ -674,44 +558,17 @@ describe('resolveSweepDestination — priority chain (i)', () => {
     expect(result).toBeNull();
   });
 
-  it('returns global default when per-caja is unset', async () => {
+  it('returns the per-caja FK destination when set', async () => {
     await seedCofre(COFRE_ID);
 
     await pg.query(
-      `INSERT INTO app_settings (organization_id, key, value)
-       VALUES ($1, 'treasurySweepDefaultDestinationAccountId', $2)`,
-      [ORG, COFRE_ID],
+      `UPDATE pos_tokens SET default_sweep_destination_account_id = $1 WHERE id = $2`,
+      [COFRE_ID, TOKEN],
     );
 
     const result = await resolveSweepDestination(h.db as unknown as TreasuryExecutor, ORG, TOKEN);
 
     expect(result).not.toBeNull();
     expect(result!.accountId).toBe(COFRE_ID);
-  });
-
-  it('per-caja FK wins over global default', async () => {
-    const COFRE_A = '11111111-aaaa-aaaa-aaaa-111111111111';
-    const COFRE_B = '22222222-bbbb-bbbb-bbbb-222222222222';
-    await pg.query(
-      `INSERT INTO treasury_accounts (id, organization_id, type, name, opening_balance, active)
-       VALUES ($1, $2, 'caja_fuerte', 'Cofre Global', '0', true),
-              ($3, $2, 'caja_fuerte', 'Cofre Caja', '0', true)`,
-      [COFRE_A, ORG, COFRE_B],
-    );
-
-    await pg.query(
-      `INSERT INTO app_settings (organization_id, key, value)
-       VALUES ($1, 'treasurySweepDefaultDestinationAccountId', $2)`,
-      [ORG, COFRE_A],
-    );
-
-    await pg.query(
-      `UPDATE pos_tokens SET default_sweep_destination_account_id = $1 WHERE id = $2`,
-      [COFRE_B, TOKEN],
-    );
-
-    const result = await resolveSweepDestination(h.db as unknown as TreasuryExecutor, ORG, TOKEN);
-
-    expect(result!.accountId).toBe(COFRE_B);
   });
 });
