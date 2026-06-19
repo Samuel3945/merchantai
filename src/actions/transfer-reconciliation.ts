@@ -11,12 +11,10 @@ import { and, eq, isNull } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { ActionValidationError } from '@/libs/action-result';
 import { logAction } from '@/libs/audit-log';
-import { findOrCreateOpenSession } from '@/libs/cash-helpers';
 import { findOrCreateCustomer } from '@/libs/customers';
 import { db } from '@/libs/DB';
 import { createFiado } from '@/libs/fiados';
 import { requirePanelModule } from '@/libs/panel-session';
-import { reclassifyPayment } from '@/libs/payment-reclassification';
 import {
   bulkConfirmPending,
   confirmReconciliation,
@@ -874,56 +872,6 @@ export async function partialTransferArrival(
     }
     throw err;
   }
-}
-
-// Corrects a mis-entered payment split (e.g. a mixed payment booked as all-cash):
-// moves an amount from one method to another on a sale. The total and stock are
-// untouched. The cash delta posts as a signed reclassification in the current
-// open session; a new transfer gets a reconciliation row to confirm later.
-export async function reclassifySalePayment(
-  salePaymentId: string,
-  toMethod: string,
-  amount: number | string,
-): Promise<ActionResult<null>> {
-  const { userId, orgId } = await requirePanelModule(MODULE);
-  const actor = await getActorName(userId);
-
-  try {
-    await db.transaction(async (tx) => {
-      // Auto-open the panel session — the owner never opens a caja here.
-      const open = await findOrCreateOpenSession(tx, {
-        organizationId: orgId,
-        openedBy: actor,
-      });
-      const result = await reclassifyPayment(tx, {
-        organizationId: orgId,
-        salePaymentId,
-        toMethod,
-        amount,
-        currentSessionId: open.id,
-        createdBy: actor,
-      });
-      if (!result.ok) {
-        throw new ActionValidationError(result.error);
-      }
-    });
-  } catch (err) {
-    if (err instanceof ActionValidationError) {
-      return { ok: false, error: err.message };
-    }
-    throw err;
-  }
-
-  await logAction({
-    organizationId: orgId,
-    actor: { type: 'user', id: userId },
-    action: 'transfer.reclassified',
-    entityType: 'sale_payment',
-    entityId: salePaymentId,
-    after: { toMethod, amount: String(amount) },
-  });
-  revalidatePath(CASH_PATH);
-  return { ok: true, data: null };
 }
 
 // ── Axis-2: Cross-period recovery (ADR-8) ────────────────────────────────────
