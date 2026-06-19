@@ -52,7 +52,11 @@ export const customerUpdateSchema = customerCreateSchema
 export type CustomerCreateInput = z.input<typeof customerCreateSchema>;
 export type CustomerUpdateInput = z.input<typeof customerUpdateSchema>;
 
-const CONSUMIDOR_FINAL_RE = /consumidor\s*final/i;
+// The canonical marker emitted by the POS is `CONSUMIDOR_FINAL` (underscore,
+// see einvoice/emit.ts). `\s*` only matches whitespace, so it silently missed
+// the real marker and the "skip anonymous sale" guard never fired. Allow the
+// underscore (and any whitespace) between the two words.
+const CONSUMIDOR_FINAL_RE = /consumidor[\s_]*final/i;
 
 export function isConsumidorFinal(name: string | null | undefined): boolean {
   if (!name) {
@@ -77,7 +81,10 @@ export function normalizeWhatsapp(value: string | null | undefined): string | nu
 const FACTURA_TAG_RE = /\[FACTURA\]/i;
 const DOC_RE = /(?:doc|cc|nit|documento)\s*(?:[:#]\s*)?([A-Z0-9.-]{4,30})/i;
 const WA_RE = /(?:wa|whatsapp|tel|cel)\s*[:#]?\s*([+\d\s().-]{7,25})/i;
-const NAME_RE = /(?:nombre|cliente)\s*(?:[:#]\s*)?([^\n,;]{2,120})/i;
+// Notes use `|` as the field separator ("Cliente: NAME | Tel: PHONE || [FACTURA]
+// …"), so the name must stop at the first pipe. Without it the capture swallowed
+// the phone and the [FACTURA] tag straight into the stored customer name.
+const NAME_RE = /(?:nombre|cliente)\s*(?:[:#]\s*)?([^\n,;|]{2,120})/i;
 
 export type ParsedInvoiceCustomer = {
   name: string | null;
