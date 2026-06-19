@@ -2,8 +2,9 @@ import type { SaleDetail } from '@/actions/sales';
 import { setRequestLocale } from 'next-intl/server';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { getSaleDetail } from '@/actions/sales';
+import { getSaleDetail, getSaleTimeline } from '@/actions/sales';
 import { Badge } from '@/components/ui/badge';
+import { SaleTimeline } from '@/features/sales/SaleTimeline';
 import { formatSaleNumber } from '@/libs/sale-number';
 import { cn } from '@/utils/Helpers';
 
@@ -86,7 +87,10 @@ export default async function SaleDetailPage(props: {
   const { locale, saleId } = await props.params;
   setRequestLocale(locale);
 
-  const detail = await getSaleDetail(saleId);
+  const [detail, timeline] = await Promise.all([
+    getSaleDetail(saleId),
+    getSaleTimeline(saleId),
+  ]);
   if (!detail) {
     notFound();
   }
@@ -390,6 +394,8 @@ export default async function SaleDetailPage(props: {
               </div>
             ))}
           </div>
+
+          <SaleTimeline events={timeline} />
 
           <div className="
             space-y-3 rounded-lg border bg-background p-4 shadow-xs

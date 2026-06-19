@@ -7,6 +7,7 @@ import type {
   SaleListRow,
   SaleReturnDetail,
   SalesFilterOptions,
+  SalesSummary,
 } from '@/actions/sales';
 import type { ReturnDisposition, ReturnReason } from '@/libs/sale-returns';
 import { useRouter } from 'next/navigation';
@@ -15,6 +16,7 @@ import { listPaymentMethods } from '@/actions/payment-methods';
 import {
   getSaleForReturn,
   getSalesFilterOptions,
+  getSalesSummary,
   listSales,
   processReturn,
 } from '@/actions/sales';
@@ -23,6 +25,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Combobox } from '@/components/ui/combobox';
 import { Select } from '@/components/ui/select';
+import { SalesInsights } from '@/features/sales/SalesInsights';
 import { formatSaleNumber } from '@/libs/sale-number';
 import { buildPresetOptions, todayBogota } from '@/utils/DateRange';
 import { cn } from '@/utils/Helpers';
@@ -160,13 +163,16 @@ function returnStatus(row: SaleListRow): { label: string; cls: string } {
 
 export function SalesClient({
   initial,
+  initialSummary,
   pageSize,
 }: {
   initial: ListSalesResult;
+  initialSummary: SalesSummary;
   pageSize: number;
 }) {
   const router = useRouter();
   const [rows, setRows] = useState<SaleListRow[]>(initial.items);
+  const [summary, setSummary] = useState<SalesSummary>(initialSummary);
   const [total, setTotal] = useState<number>(initial.total);
   const [page, setPage] = useState(0);
 
@@ -249,9 +255,9 @@ export function SalesClient({
   }, [activeMethods]);
 
   async function fetchSales() {
-    const data = await listSales({
-      limit: pageSize,
-      offset: page * pageSize,
+    // The list and the KPI band answer to one filter set; the summary just drops
+    // pagination so the cards cover the whole filtered range, not the page.
+    const filters = {
       start: start || null,
       end: end || null,
       payment,
@@ -261,9 +267,14 @@ export function SalesClient({
       productId: productId || null,
       origin,
       returnState,
-    });
+    };
+    const [data, nextSummary] = await Promise.all([
+      listSales({ ...filters, limit: pageSize, offset: page * pageSize }),
+      getSalesSummary(filters),
+    ]);
     setRows(data.items);
     setTotal(data.total);
+    setSummary(nextSummary);
   }
 
   useEffect(() => {
@@ -471,6 +482,9 @@ export function SalesClient({
           {submitSuccess}
         </div>
       )}
+
+      {/* Period insights — the same filtered range as the table, summarized. */}
+      <SalesInsights summary={summary} />
 
       {/* Filter bar — main filters always visible, advanced ones behind
           "Más filtros". Same pattern as the inventory movement history. */}

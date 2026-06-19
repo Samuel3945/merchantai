@@ -1,5 +1,6 @@
 'use server';
 
+import type { SQL } from 'drizzle-orm';
 import type { CajaSales, SaturationConfig } from '@/libs/caja-saturation';
 import type {
   ReturnPolicy,
@@ -45,6 +46,8 @@ import { applySaleReturn } from '@/libs/sale-returns';
 import { recordSaleTransferReconciliations } from '@/libs/transfer-reconciliation';
 import { wholesaleUnitPrice } from '@/libs/wholesale';
 import {
+  fiadoMovementsSchema,
+  fiadosSchema,
   orgAddressesSchema,
   posReturnItemsSchema,
   posReturnsSchema,
@@ -55,6 +58,7 @@ import {
   salePaymentsSchema,
   salesSchema,
   stockMovementsSchema,
+  transferReconciliationsSchema,
 } from '@/models/Schema';
 
 export type SalePaymentInput = {
@@ -477,90 +481,16 @@ const FULLY_RETURNED_SQL = `(
   ), 0)
 )`;
 
-// Lightweight, org-scoped option lists for the sales filter bar: every POS
-// register, every active employee, and the product catalog. One round trip.
-export type SalesFilterOptions = {
-  registers: { id: string; name: string }[];
-  employees: { id: string; name: string }[];
-  products: { id: string; name: string }[];
-  /** Return rules so the listing can disable "Devolver" up front. */
-  returnPolicy: ReturnPolicy;
-};
-
-export async function getSalesFilterOptions(): Promise<SalesFilterOptions> {
-  const { userId, orgId, orgRole } = await auth();
-  if (!userId) {
-    throw new Error('Not authenticated');
-  }
-  if (!orgId) {
-    throw new Error('No active organization');
-  }
-
-  const returnPolicy = await loadReturnPolicy(db, orgId);
-
-  // A non-owner employee only ever sees their own sales, so the cashier filter
-  // must list just themselves — never their colleagues' names.
-  const employeeConds = [
-    eq(posUsersSchema.organizationId, orgId),
-    eq(posUsersSchema.active, true),
-  ];
-  if (orgRole !== 'org:admin') {
-    employeeConds.push(eq(posUsersSchema.clerkUserId, userId));
-  }
-
-  const [registers, employees, products] = await Promise.all([
-    db
-      .select({ id: posTokensSchema.id, name: posTokensSchema.deviceName })
-      .from(posTokensSchema)
-      .where(eq(posTokensSchema.organizationId, orgId))
-      .orderBy(posTokensSchema.deviceName),
-    db
-      .select({ id: posUsersSchema.id, name: posUsersSchema.name })
-      .from(posUsersSchema)
-      .where(and(...employeeConds))
-      .orderBy(posUsersSchema.name),
-    db
-      .select({ id: productsSchema.id, name: productsSchema.name })
-      .from(productsSchema)
-      .where(eq(productsSchema.organizationId, orgId))
-      .orderBy(productsSchema.name),
-  ]);
-
-  return { registers, employees, products, returnPolicy };
-}
-
-export type ListSalesResult = {
-  items: SaleListRow[];
-  total: number;
-};
-
-export async function listSales(
-  filters: ListSalesFilters = {},
-): Promise<ListSalesResult> {
-  const { userId, orgId, orgRole } = await auth();
-  if (!userId) {
-    throw new Error('Not authenticated');
-  }
-  if (!orgId) {
-    throw new Error('No active organization');
-  }
-
-  // Non-owner employees are scoped to their OWN sales: we force the cashier
-  // filter to their linked pos_users id and ignore any incoming cashierId so it
-  // cannot be spoofed. An employee with no active linked user sees nothing.
-  let scopedCashierId: string | null = null;
-  if (orgRole !== 'org:admin') {
-    const me = await getCurrentPanelUser(userId, orgId);
-    if (!me) {
-      return { items: [], total: 0 };
-    }
-    scopedCashierId = me.id;
-  }
-
-  const limit = Math.min(Math.max(filters.limit ?? 25, 1), 200);
-  const offset = Math.max(filters.offset ?? 0, 0);
-
-  const conds = [
+// The single source of truth for "which sales are in scope" — shared by the
+// listing (listSales) and the period KPIs (getSalesSummary) so the cards on top
+// always reflect the exact same filter set as the rows below them. scopedCashierId
+// is resolved by the caller (a non-owner employee is forced to their own sales).
+function buildSalesConds(
+  orgId: string,
+  scopedCashierId: string | null,
+  filters: ListSalesFilters,
+): SQL[] {
+  const conds: SQL[] = [
     eq(salesSchema.organizationId, orgId),
     // Fully returned sales keep their row (status flips to 'returned'); they must
     // stay visible in the listing with the "Devuelta totalmente" badge, not vanish.
@@ -669,6 +599,94 @@ export async function listSales(
       conds.push(f);
     }
   }
+
+  return conds;
+}
+
+// Lightweight, org-scoped option lists for the sales filter bar: every POS
+// register, every active employee, and the product catalog. One round trip.
+export type SalesFilterOptions = {
+  registers: { id: string; name: string }[];
+  employees: { id: string; name: string }[];
+  products: { id: string; name: string }[];
+  /** Return rules so the listing can disable "Devolver" up front. */
+  returnPolicy: ReturnPolicy;
+};
+
+export async function getSalesFilterOptions(): Promise<SalesFilterOptions> {
+  const { userId, orgId, orgRole } = await auth();
+  if (!userId) {
+    throw new Error('Not authenticated');
+  }
+  if (!orgId) {
+    throw new Error('No active organization');
+  }
+
+  const returnPolicy = await loadReturnPolicy(db, orgId);
+
+  // A non-owner employee only ever sees their own sales, so the cashier filter
+  // must list just themselves — never their colleagues' names.
+  const employeeConds = [
+    eq(posUsersSchema.organizationId, orgId),
+    eq(posUsersSchema.active, true),
+  ];
+  if (orgRole !== 'org:admin') {
+    employeeConds.push(eq(posUsersSchema.clerkUserId, userId));
+  }
+
+  const [registers, employees, products] = await Promise.all([
+    db
+      .select({ id: posTokensSchema.id, name: posTokensSchema.deviceName })
+      .from(posTokensSchema)
+      .where(eq(posTokensSchema.organizationId, orgId))
+      .orderBy(posTokensSchema.deviceName),
+    db
+      .select({ id: posUsersSchema.id, name: posUsersSchema.name })
+      .from(posUsersSchema)
+      .where(and(...employeeConds))
+      .orderBy(posUsersSchema.name),
+    db
+      .select({ id: productsSchema.id, name: productsSchema.name })
+      .from(productsSchema)
+      .where(eq(productsSchema.organizationId, orgId))
+      .orderBy(productsSchema.name),
+  ]);
+
+  return { registers, employees, products, returnPolicy };
+}
+
+export type ListSalesResult = {
+  items: SaleListRow[];
+  total: number;
+};
+
+export async function listSales(
+  filters: ListSalesFilters = {},
+): Promise<ListSalesResult> {
+  const { userId, orgId, orgRole } = await auth();
+  if (!userId) {
+    throw new Error('Not authenticated');
+  }
+  if (!orgId) {
+    throw new Error('No active organization');
+  }
+
+  // Non-owner employees are scoped to their OWN sales: we force the cashier
+  // filter to their linked pos_users id and ignore any incoming cashierId so it
+  // cannot be spoofed. An employee with no active linked user sees nothing.
+  let scopedCashierId: string | null = null;
+  if (orgRole !== 'org:admin') {
+    const me = await getCurrentPanelUser(userId, orgId);
+    if (!me) {
+      return { items: [], total: 0 };
+    }
+    scopedCashierId = me.id;
+  }
+
+  const limit = Math.min(Math.max(filters.limit ?? 25, 1), 200);
+  const offset = Math.max(filters.offset ?? 0, 0);
+
+  const conds = buildSalesConds(orgId, scopedCashierId, filters);
 
   const whereClause = and(...conds);
 
@@ -1178,4 +1196,483 @@ export async function getCashierSaturation(
   }
 
   return computeSaturationReport([...byCaja.values()], effectiveConfig);
+}
+
+// --- Period KPIs --------------------------------------------------------------
+
+export type SalesSummary = {
+  /** SUM of sale totals in the filtered range (gross, before refunds). */
+  soldGross: number;
+  salesCount: number;
+  /** soldGross / salesCount, 0 when the range has no sales. */
+  avgTicket: number;
+  /** Refunds tied to sales in the range. */
+  refundedTotal: number;
+  refundCount: number;
+  /** How customers paid: physical cash vs everything digital. */
+  cashPaid: number;
+  digitalPaid: number;
+  /** Busiest local hour (0-23) by sale count, null when the range is empty. */
+  peakHour: number | null;
+  peakHourCount: number;
+  /** Per-day sold totals (Bogota date, ascending) for the headline sparkline. */
+  daily: { day: string; total: number }[];
+};
+
+const EMPTY_SUMMARY: SalesSummary = {
+  soldGross: 0,
+  salesCount: 0,
+  avgTicket: 0,
+  refundedTotal: 0,
+  refundCount: 0,
+  cashPaid: 0,
+  digitalPaid: 0,
+  peakHour: null,
+  peakHourCount: 0,
+  daily: [],
+};
+
+// Aggregate the SAME filtered sale set the listing shows — never the visible
+// page. The cards on top and the rows below answer to one WHERE clause
+// (buildSalesConds), so a period filter moves both together.
+export async function getSalesSummary(
+  filters: ListSalesFilters = {},
+): Promise<SalesSummary> {
+  const { userId, orgId, orgRole } = await auth();
+  if (!userId) {
+    throw new Error('Not authenticated');
+  }
+  if (!orgId) {
+    throw new Error('No active organization');
+  }
+
+  let scopedCashierId: string | null = null;
+  if (orgRole !== 'org:admin') {
+    const me = await getCurrentPanelUser(userId, orgId);
+    if (!me) {
+      return EMPTY_SUMMARY;
+    }
+    scopedCashierId = me.id;
+  }
+
+  const where = and(...buildSalesConds(orgId, scopedCashierId, filters));
+
+  const [base, refunds, split, peak, daily] = await Promise.all([
+    db
+      .select({
+        count: sql<number>`count(*)::int`,
+        sold: sql<number>`COALESCE(SUM(${salesSchema.total}), 0)::float8`,
+      })
+      .from(salesSchema)
+      .where(where),
+    db
+      .select({
+        refunded: sql<number>`COALESCE(SUM(${posReturnsSchema.totalRefunded}), 0)::float8`,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(posReturnsSchema)
+      .innerJoin(salesSchema, eq(posReturnsSchema.saleId, salesSchema.id))
+      .where(where),
+    db
+      .select({
+        cash: sql<number>`COALESCE(SUM(CASE WHEN ${salePaymentsSchema.method} ILIKE '%efectivo%' OR ${salePaymentsSchema.method} ILIKE '%cash%' THEN ${salePaymentsSchema.amount} ELSE 0 END), 0)::float8`,
+        total: sql<number>`COALESCE(SUM(${salePaymentsSchema.amount}), 0)::float8`,
+      })
+      .from(salePaymentsSchema)
+      .innerJoin(salesSchema, eq(salePaymentsSchema.saleId, salesSchema.id))
+      .where(where),
+    db
+      .select({
+        hour: sql<number>`EXTRACT(HOUR FROM (${salesSchema.createdAt} AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota'))::int`,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(salesSchema)
+      .where(where)
+      .groupBy(sql`1`)
+      .orderBy(sql`2 DESC`)
+      .limit(1),
+    db
+      .select({
+        day: sql<string>`to_char((${salesSchema.createdAt} AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date, 'YYYY-MM-DD')`,
+        total: sql<number>`COALESCE(SUM(${salesSchema.total}), 0)::float8`,
+      })
+      .from(salesSchema)
+      .where(where)
+      .groupBy(sql`1`)
+      .orderBy(sql`1`),
+  ]);
+
+  const soldGross = base[0]?.sold ?? 0;
+  const salesCount = base[0]?.count ?? 0;
+  const cashPaid = split[0]?.cash ?? 0;
+  const totalPaid = split[0]?.total ?? 0;
+
+  return {
+    soldGross,
+    salesCount,
+    avgTicket: salesCount > 0 ? soldGross / salesCount : 0,
+    refundedTotal: refunds[0]?.refunded ?? 0,
+    refundCount: refunds[0]?.count ?? 0,
+    cashPaid,
+    digitalPaid: Math.max(0, totalPaid - cashPaid),
+    peakHour: peak[0]?.hour ?? null,
+    peakHourCount: peak[0]?.count ?? 0,
+    daily: daily.map(d => ({ day: d.day, total: d.total })),
+  };
+}
+
+// --- Sale timeline ------------------------------------------------------------
+
+export type SaleTimelineTone
+  = 'neutral' | 'success' | 'warning' | 'danger' | 'eco';
+
+export type SaleTimelineEvent = {
+  id: string;
+  kind:
+    | 'sale_created'
+    | 'payment'
+    | 'transfer_pending'
+    | 'transfer_confirmed'
+    | 'transfer_partial'
+    | 'transfer_not_arrived'
+    | 'transfer_to_fiado'
+    | 'transfer_loss'
+    | 'cashier_explained'
+    | 'fiado_opened'
+    | 'fiado_abono'
+    | 'fiado_extended'
+    | 'fiado_writeoff'
+    | 'fiado_paid'
+    | 'return';
+  /** ISO timestamp; the UI sorts and formats it. */
+  at: string;
+  title: string;
+  detail: string | null;
+  /** Numeric string when the beat moves money, else null. */
+  amount: string | null;
+  tone: SaleTimelineTone;
+};
+
+// The full lifecycle of ONE sale, projected read-only over the ledgers that
+// already record it: the sale and its payments, the transfer-reconciliation
+// trail (confirmed / partial / not arrived / loss / converted to fiado), the
+// fiado debt and its abonos, and any returns. No new table — every beat is
+// reconstructed from existing rows and returned oldest-first.
+export async function getSaleTimeline(
+  saleId: string,
+): Promise<SaleTimelineEvent[]> {
+  const { userId, orgId } = await auth();
+  if (!userId) {
+    throw new Error('Not authenticated');
+  }
+  if (!orgId) {
+    throw new Error('No active organization');
+  }
+  if (!UUID_RE.test(saleId)) {
+    return [];
+  }
+
+  const copFmt = new Intl.NumberFormat('es-CO', {
+    style: 'currency',
+    currency: 'COP',
+    maximumFractionDigits: 0,
+  });
+  const money = (v: string | number) =>
+    copFmt.format(typeof v === 'number' ? v : Number.parseFloat(v) || 0);
+
+  const [sale] = await db
+    .select({
+      id: salesSchema.id,
+      createdAt: salesSchema.createdAt,
+      total: salesSchema.total,
+      paymentType: salesSchema.paymentType,
+    })
+    .from(salesSchema)
+    .where(
+      and(eq(salesSchema.id, saleId), eq(salesSchema.organizationId, orgId)),
+    )
+    .limit(1);
+
+  if (!sale) {
+    return [];
+  }
+
+  const [payments, returns, fiados] = await Promise.all([
+    db
+      .select({
+        id: salePaymentsSchema.id,
+        method: salePaymentsSchema.method,
+        amount: salePaymentsSchema.amount,
+        createdAt: salePaymentsSchema.createdAt,
+      })
+      .from(salePaymentsSchema)
+      .where(eq(salePaymentsSchema.saleId, saleId)),
+    db
+      .select({
+        id: posReturnsSchema.id,
+        totalRefunded: posReturnsSchema.totalRefunded,
+        refundMethod: posReturnsSchema.refundMethod,
+        partial: posReturnsSchema.partial,
+        createdAt: posReturnsSchema.createdAt,
+      })
+      .from(posReturnsSchema)
+      .where(eq(posReturnsSchema.saleId, saleId)),
+    db
+      .select({
+        id: fiadosSchema.id,
+        originalAmount: fiadosSchema.originalAmount,
+        status: fiadosSchema.status,
+        dueDate: fiadosSchema.dueDate,
+        createdAt: fiadosSchema.createdAt,
+      })
+      .from(fiadosSchema)
+      .where(eq(fiadosSchema.saleId, saleId)),
+  ]);
+
+  const paymentIds = payments.map(p => p.id);
+  const fiadoIds = fiados.map(f => f.id);
+
+  const transfers = paymentIds.length > 0
+    ? await db
+        .select({
+          id: transferReconciliationsSchema.id,
+          method: transferReconciliationsSchema.method,
+          expectedAmount: transferReconciliationsSchema.expectedAmount,
+          arrivedAmount: transferReconciliationsSchema.arrivedAmount,
+          status: transferReconciliationsSchema.status,
+          reconciledAt: transferReconciliationsSchema.reconciledAt,
+          resolvedAt: transferReconciliationsSchema.resolvedAt,
+          resolutionType: transferReconciliationsSchema.resolutionType,
+          resolutionFiadoId: transferReconciliationsSchema.resolutionFiadoId,
+          cashierExplainedAt: transferReconciliationsSchema.cashierExplainedAt,
+          cashierExplanation: transferReconciliationsSchema.cashierExplanation,
+          createdAt: transferReconciliationsSchema.createdAt,
+        })
+        .from(transferReconciliationsSchema)
+        .where(
+          inArray(transferReconciliationsSchema.salePaymentId, paymentIds),
+        )
+    : [];
+
+  const movements = fiadoIds.length > 0
+    ? await db
+        .select({
+          id: fiadoMovementsSchema.id,
+          fiadoId: fiadoMovementsSchema.fiadoId,
+          type: fiadoMovementsSchema.type,
+          amount: fiadoMovementsSchema.amount,
+          method: fiadoMovementsSchema.method,
+          dueDateBefore: fiadoMovementsSchema.dueDateBefore,
+          dueDateAfter: fiadoMovementsSchema.dueDateAfter,
+          createdAt: fiadoMovementsSchema.createdAt,
+        })
+        .from(fiadoMovementsSchema)
+        .where(inArray(fiadoMovementsSchema.fiadoId, fiadoIds))
+    : [];
+
+  // Fiados that exist because a transfer was resolved as a receivable — their
+  // "opened" beat is already told by the transfer_to_fiado event, so we don't
+  // repeat it as a standalone "Pasó a fiado".
+  const fiadoFromTransfer = new Set(
+    transfers
+      .map(t => t.resolutionFiadoId)
+      .filter((id): id is string => id != null),
+  );
+
+  const events: SaleTimelineEvent[] = [];
+
+  events.push({
+    id: `sale-${sale.id}`,
+    kind: 'sale_created',
+    at: sale.createdAt.toISOString(),
+    title: 'Venta creada',
+    detail: sale.paymentType ? `Pago: ${sale.paymentType}` : null,
+    amount: sale.total,
+    tone: 'neutral',
+  });
+
+  for (const p of payments) {
+    events.push({
+      id: `pay-${p.id}`,
+      kind: 'payment',
+      at: p.createdAt.toISOString(),
+      title: `Pago registrado — ${p.method}`,
+      detail: null,
+      amount: p.amount,
+      tone: 'neutral',
+    });
+  }
+
+  for (const t of transfers) {
+    if (t.reconciledAt) {
+      if (t.status === 'confirmed') {
+        events.push({
+          id: `tr-conf-${t.id}`,
+          kind: 'transfer_confirmed',
+          at: t.reconciledAt.toISOString(),
+          title: 'Transferencia confirmada',
+          detail: `Llegó completa por ${t.method}`,
+          amount: t.arrivedAmount ?? t.expectedAmount,
+          tone: 'success',
+        });
+      } else if (t.status === 'mismatch') {
+        events.push({
+          id: `tr-part-${t.id}`,
+          kind: 'transfer_partial',
+          at: t.reconciledAt.toISOString(),
+          title: 'La transferencia llegó parcial',
+          detail: `Esperado ${money(t.expectedAmount)} · llegó ${money(t.arrivedAmount ?? '0')}`,
+          amount: t.arrivedAmount,
+          tone: 'warning',
+        });
+      } else if (t.status === 'not_arrived') {
+        events.push({
+          id: `tr-na-${t.id}`,
+          kind: 'transfer_not_arrived',
+          at: t.reconciledAt.toISOString(),
+          title: 'La transferencia no llegó',
+          detail: `Se esperaban ${money(t.expectedAmount)}`,
+          amount: null,
+          tone: 'danger',
+        });
+      }
+    } else if (t.status === 'pending') {
+      events.push({
+        id: `tr-pend-${t.id}`,
+        kind: 'transfer_pending',
+        at: t.createdAt.toISOString(),
+        title: 'Transferencia por confirmar',
+        detail: 'Pendiente de verificar contra el banco',
+        amount: t.expectedAmount,
+        tone: 'warning',
+      });
+    }
+
+    if (t.cashierExplainedAt) {
+      events.push({
+        id: `tr-exp-${t.id}`,
+        kind: 'cashier_explained',
+        at: t.cashierExplainedAt.toISOString(),
+        title: 'El cajero explicó la confirmación',
+        detail: t.cashierExplanation ?? null,
+        amount: null,
+        tone: 'neutral',
+      });
+    }
+
+    if (t.resolvedAt && t.resolutionType === 'receivable') {
+      events.push({
+        id: `tr-fiado-${t.id}`,
+        kind: 'transfer_to_fiado',
+        at: t.resolvedAt.toISOString(),
+        title: 'Transferencia convertida en fiado',
+        detail: 'El cliente queda debiendo el monto',
+        amount: t.expectedAmount,
+        tone: 'warning',
+      });
+    } else if (t.resolvedAt && t.resolutionType === 'loss') {
+      events.push({
+        id: `tr-loss-${t.id}`,
+        kind: 'transfer_loss',
+        at: t.resolvedAt.toISOString(),
+        title: 'Transferencia dada como pérdida',
+        detail: 'Se descontó de los ingresos',
+        amount: t.expectedAmount,
+        tone: 'danger',
+      });
+    }
+  }
+
+  for (const f of fiados) {
+    if (!fiadoFromTransfer.has(f.id)) {
+      events.push({
+        id: `fiado-${f.id}`,
+        kind: 'fiado_opened',
+        at: f.createdAt.toISOString(),
+        title: 'Pasó a fiado (crédito)',
+        detail: `Vence el ${f.dueDate}`,
+        amount: f.originalAmount,
+        tone: 'warning',
+      });
+    }
+  }
+
+  // The latest payment movement per fiado, so the "pagado totalmente" beat lands
+  // at the moment the balance actually reached zero.
+  const lastPaymentByFiado = new Map<string, Date>();
+  for (const m of movements) {
+    if (m.type === 'payment') {
+      const prev = lastPaymentByFiado.get(m.fiadoId);
+      if (!prev || m.createdAt > prev) {
+        lastPaymentByFiado.set(m.fiadoId, m.createdAt);
+      }
+    }
+  }
+
+  for (const m of movements) {
+    if (m.type === 'payment') {
+      events.push({
+        id: `fm-pay-${m.id}`,
+        kind: 'fiado_abono',
+        at: m.createdAt.toISOString(),
+        title: `Abono al fiado — ${m.method ?? 'efectivo'}`,
+        detail: null,
+        amount: m.amount,
+        tone: 'success',
+      });
+    } else if (m.type === 'extension') {
+      events.push({
+        id: `fm-ext-${m.id}`,
+        kind: 'fiado_extended',
+        at: m.createdAt.toISOString(),
+        title: 'Plazo del fiado extendido',
+        detail:
+          m.dueDateBefore && m.dueDateAfter
+            ? `${m.dueDateBefore} → ${m.dueDateAfter}`
+            : null,
+        amount: null,
+        tone: 'neutral',
+      });
+    } else if (m.type === 'writeoff') {
+      events.push({
+        id: `fm-wo-${m.id}`,
+        kind: 'fiado_writeoff',
+        at: m.createdAt.toISOString(),
+        title: 'Fiado dado de baja',
+        detail: null,
+        amount: m.amount,
+        tone: 'danger',
+      });
+    }
+  }
+
+  for (const f of fiados) {
+    if (f.status === 'paid') {
+      const at = lastPaymentByFiado.get(f.id) ?? f.createdAt;
+      events.push({
+        id: `fiado-paid-${f.id}`,
+        kind: 'fiado_paid',
+        at: at.toISOString(),
+        title: 'Fiado pagado totalmente',
+        detail: 'El cliente quedó al día',
+        amount: null,
+        tone: 'eco',
+      });
+    }
+  }
+
+  for (const r of returns) {
+    events.push({
+      id: `ret-${r.id}`,
+      kind: 'return',
+      at: r.createdAt.toISOString(),
+      title: r.partial ? 'Devolución parcial' : 'Devolución total',
+      detail: `Reembolso en ${r.refundMethod}`,
+      amount: r.totalRefunded,
+      tone: 'danger',
+    });
+  }
+
+  events.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  return events;
 }

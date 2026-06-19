@@ -1,5 +1,5 @@
 import { setRequestLocale } from 'next-intl/server';
-import { listSales } from '@/actions/sales';
+import { getSalesSummary, listSales } from '@/actions/sales';
 import { TitleBar } from '@/features/dashboard/TitleBar';
 import { SalesClient } from '@/features/sales/SalesClient';
 
@@ -11,7 +11,10 @@ export default async function DashboardSalesPage(props: {
   const { locale } = await props.params;
   setRequestLocale(locale);
 
-  const initial = await listSales({ limit: DEFAULT_PAGE_SIZE, offset: 0 });
+  const [initial, initialSummary] = await Promise.all([
+    listSales({ limit: DEFAULT_PAGE_SIZE, offset: 0 }),
+    getSalesSummary({}),
+  ]);
 
   return (
     <>
@@ -19,7 +22,11 @@ export default async function DashboardSalesPage(props: {
         title="Ventas"
         description="Consulta, filtra y audita las ventas completadas."
       />
-      <SalesClient initial={initial} pageSize={DEFAULT_PAGE_SIZE} />
+      <SalesClient
+        initial={initial}
+        initialSummary={initialSummary}
+        pageSize={DEFAULT_PAGE_SIZE}
+      />
     </>
   );
 }
