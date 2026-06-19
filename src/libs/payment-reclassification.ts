@@ -145,3 +145,60 @@ export async function reclassifyPayment(
 
   return { ok: true };
 }
+
+export type PosReclassifyArgs = {
+  organizationId: string;
+  // The device's CURRENT open cash session — where the cash delta will land.
+  session: { id: string; openedAt: Date; posTokenId: string | null };
+  salePaymentId: string;
+  toMethod: string;
+  amount: number | string;
+  createdBy: string;
+};
+
+// POS-side "error de carga" correction: the cashier fixes a mis-entered split
+// (e.g. a mixed cash/transfer payment) on a sale from THEIR CURRENT shift, so
+// the compensating cash delta posts into the live session and the caja stays
+// cuadrada. Correcting a sale from a past/closed shift is rejected on purpose —
+// its delta would land in today's session and re-open a descuadre, which is the
+// exact thing this flow exists to prevent. In-shift = same device + the sale was
+// created at or after the open session started.
+export async function reclassifyPosSalePayment(
+  executor: Executor,
+  args: PosReclassifyArgs,
+): Promise<ReclassifyResult> {
+  const [row] = await executor
+    .select({
+      saleCreatedAt: salesSchema.createdAt,
+      salePosTokenId: salesSchema.posTokenId,
+    })
+    .from(salePaymentsSchema)
+    .innerJoin(salesSchema, eq(salesSchema.id, salePaymentsSchema.saleId))
+    .where(
+      and(
+        eq(salePaymentsSchema.id, args.salePaymentId),
+        eq(salesSchema.organizationId, args.organizationId),
+      ),
+    )
+    .limit(1);
+  if (!row) {
+    return { ok: false, error: 'Pago no encontrado' };
+  }
+
+  const sameDevice
+    = (row.salePosTokenId ?? null) === (args.session.posTokenId ?? null);
+  const withinShift
+    = row.saleCreatedAt.getTime() >= args.session.openedAt.getTime();
+  if (!sameDevice || !withinShift) {
+    return { ok: false, error: 'Solo podés corregir una venta del turno actual' };
+  }
+
+  return reclassifyPayment(executor, {
+    organizationId: args.organizationId,
+    salePaymentId: args.salePaymentId,
+    toMethod: args.toMethod,
+    amount: args.amount,
+    currentSessionId: args.session.id,
+    createdBy: args.createdBy,
+  });
+}
