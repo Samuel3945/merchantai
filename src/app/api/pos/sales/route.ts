@@ -10,6 +10,7 @@ import { createFiado } from '@/libs/fiados';
 import { fiadoAmountFor } from '@/libs/fiados-math';
 import { consumeFifoExits } from '@/libs/fifo-cogs';
 import { requirePosAuth } from '@/libs/pos-auth';
+import { salePaymentsAggJson } from '@/libs/pos-sales-payments-agg';
 import { assignNextSaleNumber } from '@/libs/sale-number';
 import { resolveOccurredAt } from '@/libs/sale-occurred-at';
 import { recordSaleTransferReconciliations } from '@/libs/transfer-reconciliation';
@@ -457,6 +458,10 @@ export async function GET(req: Request): Promise<NextResponse> {
           ) FILTER (WHERE ${saleItemsSchema.id} IS NOT NULL),
           '[]'
         )`,
+        // Payment split (correlated subquery — see salePaymentsAggJson, which
+        // avoids cartesian-multiplying the items aggregation above). The cashier
+        // app reads it to correct a mis-entered "error de carga".
+        payments: salePaymentsAggJson(),
       })
       .from(salesSchema)
       .leftJoin(saleItemsSchema, eq(saleItemsSchema.saleId, salesSchema.id))
