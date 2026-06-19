@@ -3,9 +3,13 @@ import { and, eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { computeCashBreakdown } from '@/libs/cash-helpers';
-import { reclassifyPayment } from '@/libs/payment-reclassification';
+import {
+  reclassifyPayment,
+  reclassifyPosSalePayment,
+} from '@/libs/payment-reclassification';
 import {
   cashMovementsSchema,
+  cashSessionsSchema,
   salePaymentsSchema,
   transferReconciliationsSchema,
 } from '@/models/Schema';
@@ -47,7 +51,8 @@ const DDL = `
   CREATE TABLE sales (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     organization_id text NOT NULL,
-    pos_token_id uuid
+    pos_token_id uuid,
+    created_at timestamp DEFAULT now() NOT NULL
   );
 
   CREATE TABLE sale_payments (
@@ -299,6 +304,120 @@ describe('reclassifyPayment — guards', () => {
       amount: 10,
       currentSessionId: SESSION,
       createdBy: 'owner',
+    });
+
+    expect(res).toEqual({ ok: false, error: 'Pago no encontrado' });
+  });
+});
+
+// ── POS "error de carga": in-shift guard ─────────────────────────────────────
+// The cashier may only correct a sale from THEIR CURRENT shift — same device and
+// created at/after the open session started. Correcting a past/closed-shift sale
+// would post the cash delta into today's session and re-open a descuadre.
+
+describe('reclassifyPosSalePayment — in-shift guard', () => {
+  // openedAt is read from the DB so it shares the same timestamp parsing as the
+  // sale's created_at (both timestamp-without-tz). In production both come from
+  // the DB, so the relative comparison is always consistent regardless of TZ.
+  async function openSessionOpenedAt(): Promise<Date> {
+    const [s] = await db
+      .select({ openedAt: cashSessionsSchema.openedAt })
+      .from(cashSessionsSchema)
+      .where(eq(cashSessionsSchema.id, SESSION))
+      .limit(1);
+    return s!.openedAt;
+  }
+
+  it('reclassifies a current-shift sale (same device, created after open)', async () => {
+    const cashPayment = await seedPayment('Efectivo', '50.00');
+
+    const res = await reclassifyPosSalePayment(db, {
+      organizationId: ORG,
+      session: {
+        id: SESSION,
+        openedAt: await openSessionOpenedAt(),
+        posTokenId: null,
+      },
+      salePaymentId: cashPayment,
+      toMethod: 'Transferencia',
+      amount: 20,
+      createdBy: 'cajero',
+    });
+
+    expect(res.ok).toBe(true);
+
+    const byMethod = Object.fromEntries(
+      (await payments()).map(p => [p.method, p.amount]),
+    );
+
+    expect(byMethod.Efectivo).toBe('30.00');
+    expect(byMethod.Transferencia).toBe('20.00');
+  });
+
+  it('rejects a sale created BEFORE the open session (past shift)', async () => {
+    // Force the sale far into the past — before any open session could start.
+    await pg.query(
+      `UPDATE sales SET created_at = '2000-01-01 00:00:00' WHERE id = $1`,
+      [SALE],
+    );
+    const cashPayment = await seedPayment('Efectivo', '50.00');
+
+    const res = await reclassifyPosSalePayment(db, {
+      organizationId: ORG,
+      session: {
+        id: SESSION,
+        openedAt: await openSessionOpenedAt(),
+        posTokenId: null,
+      },
+      salePaymentId: cashPayment,
+      toMethod: 'Transferencia',
+      amount: 20,
+      createdBy: 'cajero',
+    });
+
+    expect(res).toEqual({
+      ok: false,
+      error: 'Solo podés corregir una venta del turno actual',
+    });
+  });
+
+  it('rejects a sale from another device (posToken mismatch)', async () => {
+    const cashPayment = await seedPayment('Efectivo', '50.00');
+
+    const res = await reclassifyPosSalePayment(db, {
+      organizationId: ORG,
+      // The seeded sale has posTokenId NULL; this session is a different device.
+      session: {
+        id: SESSION,
+        openedAt: await openSessionOpenedAt(),
+        posTokenId: UUID(777),
+      },
+      salePaymentId: cashPayment,
+      toMethod: 'Transferencia',
+      amount: 20,
+      createdBy: 'cajero',
+    });
+
+    expect(res).toEqual({
+      ok: false,
+      error: 'Solo podés corregir una venta del turno actual',
+    });
+  });
+
+  it('does not find a payment from another org (tenant isolation)', async () => {
+    const cashPayment = await seedPayment('Efectivo', '50.00');
+
+    const res = await reclassifyPosSalePayment(db, {
+      organizationId: OTHER,
+      session: {
+        id: SESSION,
+        openedAt: await openSessionOpenedAt(),
+        posTokenId: null,
+      },
+      salePaymentId: cashPayment,
+      toMethod: 'Transferencia',
+      amount: 20,
+      createdBy: 'cajero',
     });
 
     expect(res).toEqual({ ok: false, error: 'Pago no encontrado' });
