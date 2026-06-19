@@ -382,7 +382,7 @@ function RecoveryModal({ state, pending, onConfirm, onClose }: RecoveryModalProp
 
 // ── Filtering ────────────────────────────────────────────────────────────────
 
-type Chip = 'all' | 'pending' | 'confirmed';
+type Chip = 'all' | 'pending' | 'confirmed' | 'loss';
 
 function rowMatchesChip(row: TransferReconciliation, chip: Chip): boolean {
   if (chip === 'all') {
@@ -390,6 +390,9 @@ function rowMatchesChip(row: TransferReconciliation, chip: Chip): boolean {
   }
   if (chip === 'pending') {
     return row.status === 'pending';
+  }
+  if (chip === 'loss') {
+    return row.status === 'resolved' && row.resolutionType === 'loss';
   }
   return row.status === 'confirmed' || row.status === 'mismatch';
 }
@@ -501,8 +504,8 @@ export function TransferReconciliationPanel(props: {
   );
 
   const allRows = useMemo(
-    () => [...props.reconciliations, ...editableHistory],
-    [props.reconciliations, editableHistory],
+    () => [...props.reconciliations, ...editableHistory, ...resolvedLossRows],
+    [props.reconciliations, editableHistory, resolvedLossRows],
   );
 
   const shown = useMemo(() => {
@@ -526,6 +529,9 @@ export function TransferReconciliationPanel(props: {
       k: 'pending',
       label: `Por verificar · ${props.reconciliations.length}`,
     },
+    ...(props.isAdmin
+      ? [{ k: 'loss' as const, label: `Pérdidas · ${resolvedLossRows.length}` }]
+      : []),
   ];
 
   return (
@@ -697,6 +703,8 @@ export function TransferReconciliationPanel(props: {
                   const isPending = r.status === 'pending';
                   const isConfirmed
                     = r.status === 'confirmed' || r.status === 'mismatch';
+                  const isLoss
+                    = r.status === 'resolved' && r.resolutionType === 'loss';
                   const shownAmount
                     = r.arrivedAmount ?? r.expectedAmount;
                   return (
@@ -728,7 +736,30 @@ export function TransferReconciliationPanel(props: {
                         </div>
 
                         <div className="flex flex-wrap items-center gap-2">
-                          <StateBadge status={r.status} />
+                          {isLoss
+                            ? (
+                                <>
+                                  <span className="
+                                    inline-flex h-7 items-center rounded-full
+                                    bg-destructive/10 px-3 text-xs font-semibold
+                                    text-destructive
+                                  "
+                                  >
+                                    Pérdida
+                                  </span>
+                                  {r.claimOpen && (
+                                    <span className="
+                                      inline-flex h-7 items-center rounded-full
+                                      bg-warn/10 px-3 text-xs font-semibold
+                                      text-warn
+                                    "
+                                    >
+                                      Con reclamo abierto
+                                    </span>
+                                  )}
+                                </>
+                              )
+                            : <StateBadge status={r.status} />}
                           {isPending && (
                             <>
                               <Button
@@ -765,6 +796,20 @@ export function TransferReconciliationPanel(props: {
                             >
                               <Pencil className="size-3.5" />
                               Editar
+                            </Button>
+                          )}
+                          {isLoss && props.isAdmin && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={pending}
+                              onClick={() =>
+                                setRecoveryModal({
+                                  rowId: r.id,
+                                  expectedAmount: r.expectedAmount,
+                                })}
+                            >
+                              Recuperar
                             </Button>
                           )}
                         </div>
@@ -1013,74 +1058,6 @@ export function TransferReconciliationPanel(props: {
                   </div>
                 )}
 
-              </Card>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Resolved-as-loss rows — admin-only recovery surface */}
-      {props.isAdmin && resolvedLossRows.length > 0 && (
-        <div className="space-y-3">
-          <div>
-            <h3 className="font-display text-lg font-semibold">
-              Pérdidas registradas
-            </h3>
-            <p className="text-sm text-muted-foreground">
-              Si el dinero apareció después, podés registrar una recuperación
-              para que entre a Tesorería.
-            </p>
-          </div>
-          <div className="space-y-2">
-            {resolvedLossRows.map(r => (
-              <Card key={r.id} className="p-4">
-                <div className="
-                  flex flex-wrap items-center justify-between gap-3
-                "
-                >
-                  <div className="flex min-w-0 items-center gap-3">
-                    <span className="
-                      flex size-9 shrink-0 items-center justify-center
-                      rounded-lg bg-muted text-muted-foreground
-                    "
-                    >
-                      <Send className="size-4" />
-                    </span>
-                    <div className="min-w-0">
-                      <div className="
-                        flex flex-wrap items-center gap-2 text-sm font-medium
-                      "
-                      >
-                        <span>{r.method}</span>
-                        <span className="font-display tabular-nums">
-                          {money(r.expectedAmount)}
-                        </span>
-                        {r.claimOpen && (
-                          <span className="
-                            inline-flex h-6 items-center rounded-full bg-warn/10
-                            px-2.5 text-xs font-semibold text-warn
-                          "
-                          >
-                            Con reclamo abierto
-                          </span>
-                        )}
-                      </div>
-                      <RowMeta row={r} />
-                    </div>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={pending}
-                    onClick={() =>
-                      setRecoveryModal({
-                        rowId: r.id,
-                        expectedAmount: r.expectedAmount,
-                      })}
-                  >
-                    Recuperar
-                  </Button>
-                </div>
               </Card>
             ))}
           </div>
