@@ -427,8 +427,11 @@ export function TransferReconciliationPanel(props: {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
-  // Pending-row inline editor — the "Novedad" amount capture.
+  // Pending-row "Novedad" flow. First a choice (arrived incomplete vs. never
+  // arrived), then — only for the incomplete path — the amount that did arrive.
+  // Typing 0 to mean "didn't arrive" was confusing, so it's an explicit button.
   const [noveltyId, setNoveltyId] = useState<string | null>(null);
+  const [noveltyStage, setNoveltyStage] = useState<'choice' | 'partial'>('choice');
   const [noveltyAmount, setNoveltyAmount] = useState('');
 
   // Confirmed-history inline editor — the only correction is reversing a
@@ -763,6 +766,7 @@ export function TransferReconciliationPanel(props: {
                                 disabled={pending}
                                 onClick={() => {
                                   setNoveltyId(noveltyId === r.id ? null : r.id);
+                                  setNoveltyStage('choice');
                                   setNoveltyAmount('');
                                 }}
                               >
@@ -805,46 +809,101 @@ export function TransferReconciliationPanel(props: {
                           bg-background p-3
                         "
                         >
-                          <div className="text-xs text-muted-foreground">
-                            Ingresá cuánto llegó realmente. Si llegó de más, se
-                            confirma igual. Si llegó de menos (o nada), el
-                            faltante va a investigación o pérdida según Ajustes de
-                            transferencias.
-                          </div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <input
-                              aria-label="Monto que llegó realmente"
-                              className={cn(cashInputCls, 'max-w-40')}
-                              type="number"
-                              inputMode="decimal"
-                              min="0"
-                              placeholder="Monto que llegó"
-                              value={noveltyAmount}
-                              onChange={e => setNoveltyAmount(e.target.value)}
-                            />
-                            <Button
-                              size="sm"
-                              disabled={pending || noveltyAmount === ''}
-                              onClick={() =>
-                                run(
-                                  () => recordTransferNovelty(r.id, noveltyAmount),
-                                  () => {
-                                    setNoveltyId(null);
-                                    setNoveltyAmount('');
-                                  },
-                                )}
-                            >
-                              Guardar novedad
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              disabled={pending}
-                              onClick={() => setNoveltyId(null)}
-                            >
-                              Cancelar
-                            </Button>
-                          </div>
+                          {noveltyStage === 'choice'
+                            ? (
+                                <>
+                                  <div className="text-xs text-muted-foreground">
+                                    ¿Qué pasó con esta transferencia? Elegí si
+                                    llegó incompleta o si no llegó nada.
+                                  </div>
+                                  <div className="
+                                    flex flex-wrap items-center gap-2
+                                  "
+                                  >
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      disabled={pending}
+                                      onClick={() => {
+                                        setNoveltyStage('partial');
+                                        setNoveltyAmount('');
+                                      }}
+                                    >
+                                      Llegó incompleta
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="destructive"
+                                      disabled={pending}
+                                      onClick={() =>
+                                        run(
+                                          () => recordTransferNovelty(r.id, 0),
+                                          () => {
+                                            setNoveltyId(null);
+                                            setNoveltyStage('choice');
+                                          },
+                                        )}
+                                    >
+                                      No llegó
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      disabled={pending}
+                                      onClick={() => setNoveltyId(null)}
+                                    >
+                                      Cancelar
+                                    </Button>
+                                  </div>
+                                </>
+                              )
+                            : (
+                                <>
+                                  <div className="text-xs text-muted-foreground">
+                                    Ingresá el monto que sí llegó. El faltante va
+                                    a investigación o pérdida según Ajustes de
+                                    transferencias.
+                                  </div>
+                                  <div className="
+                                    flex flex-wrap items-center gap-2
+                                  "
+                                  >
+                                    <input
+                                      aria-label="Monto que llegó realmente"
+                                      className={cn(cashInputCls, 'max-w-40')}
+                                      type="number"
+                                      inputMode="decimal"
+                                      min="0"
+                                      placeholder="Monto que llegó"
+                                      value={noveltyAmount}
+                                      onChange={e => setNoveltyAmount(e.target.value)}
+                                    />
+                                    <Button
+                                      size="sm"
+                                      disabled={pending || noveltyAmount === ''}
+                                      onClick={() =>
+                                        run(
+                                          () => recordTransferNovelty(r.id, noveltyAmount),
+                                          () => {
+                                            setNoveltyId(null);
+                                            setNoveltyStage('choice');
+                                            setNoveltyAmount('');
+                                          },
+                                        )}
+                                    >
+                                      Guardar novedad
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      disabled={pending}
+                                      onClick={() => setNoveltyStage('choice')}
+                                    >
+                                      Volver
+                                    </Button>
+                                  </div>
+                                </>
+                              )}
                         </div>
                       )}
 
