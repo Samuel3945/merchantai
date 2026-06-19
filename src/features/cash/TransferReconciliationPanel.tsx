@@ -738,26 +738,14 @@ export function TransferReconciliationPanel(props: {
                         <div className="flex flex-wrap items-center gap-2">
                           {isLoss
                             ? (
-                                <>
-                                  <span className="
-                                    inline-flex h-7 items-center rounded-full
-                                    bg-destructive/10 px-3 text-xs font-semibold
-                                    text-destructive
-                                  "
-                                  >
-                                    Pérdida
-                                  </span>
-                                  {r.claimOpen && (
-                                    <span className="
-                                      inline-flex h-7 items-center rounded-full
-                                      bg-warn/10 px-3 text-xs font-semibold
-                                      text-warn
-                                    "
-                                    >
-                                      Con reclamo abierto
-                                    </span>
-                                  )}
-                                </>
+                                <span className="
+                                  inline-flex h-7 items-center rounded-full
+                                  bg-destructive/10 px-3 text-xs font-semibold
+                                  text-destructive
+                                "
+                                >
+                                  Pérdida
+                                </span>
                               )
                             : <StateBadge status={r.status} />}
                           {isPending && (
@@ -998,14 +986,17 @@ export function TransferReconciliationPanel(props: {
                         setFiadoModal({ rowId: r.id, expectedAmount: r.expectedAmount })}
                     />
 
-                    {/* PÉRDIDA — admin-only outcome (with/without claim) */}
+                    {/* PÉRDIDA — admin-only. Loss is loss: no claim distinction.
+                        If the money shows up later it can still be recovered. */}
                     {props.isAdmin && (
-                      <LossDropdown
+                      <Button
+                        size="sm"
+                        variant="destructive"
                         disabled={pending}
-                        onLoss={() => run(() => resolveTransfer(r.id, 'loss', undefined, false))}
-                        onLossWithClaim={() =>
-                          run(() => resolveTransfer(r.id, 'loss', undefined, true))}
-                      />
+                        onClick={() => run(() => resolveTransfer(r.id, 'loss'))}
+                      >
+                        Pérdida
+                      </Button>
                     )}
                   </div>
                 </div>
@@ -1154,76 +1145,6 @@ function SolutionDropdown({
             onClick={() => pick(onFiado)}
           >
             Queda en fiado
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── LossDropdown ─────────────────────────────────────────────────────────────
-// Inline component for the two PÉRDIDA variants. Uses a simple toggle approach
-// rather than a Radix dropdown to stay consistent with the panel's existing
-// inline-editor pattern.
-
-type LossDropdownProps = {
-  disabled: boolean;
-  onLoss: () => void;
-  onLossWithClaim: () => void;
-};
-
-function LossDropdown({ disabled, onLoss, onLossWithClaim }: LossDropdownProps) {
-  const [open, setOpen] = useState(false);
-
-  return (
-    <div className="relative">
-      <Button
-        size="sm"
-        variant="destructive"
-        disabled={disabled}
-        onClick={() => setOpen(v => !v)}
-        aria-expanded={open}
-        aria-haspopup="menu"
-      >
-        Pérdida
-      </Button>
-      {open && (
-        <div
-          role="menu"
-          className="
-            absolute top-full right-0 z-10 mt-1 min-w-[180px] rounded-lg border
-            border-border bg-card py-1 shadow-md
-          "
-        >
-          <button
-            role="menuitem"
-            type="button"
-            className="
-              w-full px-3 py-2 text-left text-sm
-              hover:bg-muted
-              focus:bg-muted
-            "
-            onClick={() => {
-              setOpen(false);
-              onLoss();
-            }}
-          >
-            Sin reclamo
-          </button>
-          <button
-            role="menuitem"
-            type="button"
-            className="
-              w-full px-3 py-2 text-left text-sm
-              hover:bg-muted
-              focus:bg-muted
-            "
-            onClick={() => {
-              setOpen(false);
-              onLossWithClaim();
-            }}
-          >
-            Con reclamo / denuncia
           </button>
         </div>
       )}
