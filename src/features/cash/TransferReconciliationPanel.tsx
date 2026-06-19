@@ -23,7 +23,6 @@ import {
   confirmTransfer,
   correctConfirmedTransfer,
   partialTransferArrival,
-  recordTransferExplanation,
   recordTransferNovelty,
   recoverTransfer,
   resolveTransfer,
@@ -432,10 +431,6 @@ export function TransferReconciliationPanel(props: {
   // Confirmed-history inline editor (the "edit a confirmed transfer" feature).
   const [editId, setEditId] = useState<string | null>(null);
   const [editAmount, setEditAmount] = useState('');
-
-  // Investigation inline editors.
-  const [explainId, setExplainId] = useState<string | null>(null);
-  const [explainText, setExplainText] = useState('');
 
   // Arrival inline editors for not_arrived rows.
   const [partialId, setPartialId] = useState<string | null>(null);
@@ -898,8 +893,8 @@ export function TransferReconciliationPanel(props: {
               En investigación
             </h3>
             <p className="text-sm text-muted-foreground">
-              No aparecieron en la cuenta. El cajero tiene que explicar qué pasó
-              con cada una.
+              No aparecieron en la cuenta. Hay que resolver qué pasó con cada
+              una: o se recupera o es pérdida.
             </p>
           </div>
           <div className="
@@ -936,50 +931,29 @@ export function TransferReconciliationPanel(props: {
                           text-destructive
                         "
                         >
-                          El cajero debe explicar
+                          Sin resolver
                         </span>
                       </div>
                       <RowMeta row={r} />
                     </div>
                   </div>
 
-                  {/* Resolution action buttons */}
+                  {/* Two realities for a transfer that didn't arrive: the money
+                      is recovered (Solución) or it's gone (Pérdida). */}
                   <div className="flex flex-wrap items-center gap-2">
-                    {/* Axis-1: late full arrival — cashier-level */}
-                    <Button
-                      size="sm"
-                      variant="outline"
+                    {/* Solución groups the three recovery paths — all cashier-level */}
+                    <SolutionDropdown
                       disabled={pending}
-                      onClick={() => run(() => confirmLateTransfer(r.id))}
-                    >
-                      Llegó tarde (completa)
-                    </Button>
-
-                    {/* Axis-1: partial arrival — cashier-level (toggles inline input) */}
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={pending}
-                      onClick={() => {
+                      onArrivedFull={() => run(() => confirmLateTransfer(r.id))}
+                      onArrivedPartial={() => {
                         setPartialId(partialId === r.id ? null : r.id);
                         setPartialAmount('');
                       }}
-                    >
-                      Llegó parcial
-                    </Button>
-
-                    {/* Axis-2: FIADO — cashier-level, opens capture modal */}
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={pending}
-                      onClick={() =>
+                      onFiado={() =>
                         setFiadoModal({ rowId: r.id, expectedAmount: r.expectedAmount })}
-                    >
-                      Cobrar (fiado)
-                    </Button>
+                    />
 
-                    {/* Axis-2: admin-only outcome — PÉRDIDA (with/without claim) */}
+                    {/* PÉRDIDA — admin-only outcome (with/without claim) */}
                     {props.isAdmin && (
                       <LossDropdown
                         disabled={pending}
@@ -1039,60 +1013,6 @@ export function TransferReconciliationPanel(props: {
                   </div>
                 )}
 
-                {r.cashierExplanation && (
-                  <div className="
-                    mt-3 rounded-lg border border-border bg-background px-3 py-2
-                    text-xs
-                  "
-                  >
-                    <span className="text-muted-foreground">
-                      Explicación del cajero:
-                      {' '}
-                    </span>
-                    {r.cashierExplanation}
-                    {r.cashierExplainedBy ? ` — ${r.cashierExplainedBy}` : ''}
-                  </div>
-                )}
-
-                {!r.cashierExplanation && explainId === r.id && (
-                  <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <input
-                      className={cn(cashInputCls, 'flex-1')}
-                      placeholder="Explicación del comprobante confirmado"
-                      value={explainText}
-                      onChange={e => setExplainText(e.target.value)}
-                    />
-                    <Button
-                      size="sm"
-                      disabled={pending || explainText.trim() === ''}
-                      onClick={() =>
-                        run(
-                          () => recordTransferExplanation(r.id, explainText),
-                          () => {
-                            setExplainId(null);
-                            setExplainText('');
-                          },
-                        )}
-                    >
-                      Guardar
-                    </Button>
-                  </div>
-                )}
-
-                {!r.cashierExplanation && explainId !== r.id && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="mt-3"
-                    disabled={pending}
-                    onClick={() => {
-                      setExplainId(r.id);
-                      setExplainText('');
-                    }}
-                  >
-                    Explicar comprobante
-                  </Button>
-                )}
               </Card>
             ))}
           </div>
@@ -1174,6 +1094,92 @@ export function TransferReconciliationPanel(props: {
           cajas — eso se hace en el punto de cobro.
         </span>
       </div>
+    </div>
+  );
+}
+
+// ── SolutionDropdown ─────────────────────────────────────────────────────────
+// Groups the three recovery paths for a transfer under investigation under one
+// "Solución" action: it arrived in full, it arrived partially, or it becomes a
+// fiado someone will pay. All cashier-level. Mirrors LossDropdown's inline menu.
+
+type SolutionDropdownProps = {
+  disabled: boolean;
+  onArrivedFull: () => void;
+  onArrivedPartial: () => void;
+  onFiado: () => void;
+};
+
+function SolutionDropdown({
+  disabled,
+  onArrivedFull,
+  onArrivedPartial,
+  onFiado,
+}: SolutionDropdownProps) {
+  const [open, setOpen] = useState(false);
+
+  function pick(fn: () => void) {
+    setOpen(false);
+    fn();
+  }
+
+  return (
+    <div className="relative">
+      <Button
+        size="sm"
+        disabled={disabled}
+        onClick={() => setOpen(v => !v)}
+        aria-expanded={open}
+        aria-haspopup="menu"
+      >
+        Solución
+      </Button>
+      {open && (
+        <div
+          role="menu"
+          className="
+            absolute top-full right-0 z-10 mt-1 min-w-[200px] rounded-lg border
+            border-border bg-card py-1 shadow-md
+          "
+        >
+          <button
+            role="menuitem"
+            type="button"
+            className="
+              w-full px-3 py-2 text-left text-sm
+              hover:bg-muted
+              focus:bg-muted
+            "
+            onClick={() => pick(onArrivedFull)}
+          >
+            Llegó completa
+          </button>
+          <button
+            role="menuitem"
+            type="button"
+            className="
+              w-full px-3 py-2 text-left text-sm
+              hover:bg-muted
+              focus:bg-muted
+            "
+            onClick={() => pick(onArrivedPartial)}
+          >
+            Llegó incompleta
+          </button>
+          <button
+            role="menuitem"
+            type="button"
+            className="
+              w-full px-3 py-2 text-left text-sm
+              hover:bg-muted
+              focus:bg-muted
+            "
+            onClick={() => pick(onFiado)}
+          >
+            Queda en fiado
+          </button>
+        </div>
+      )}
     </div>
   );
 }
