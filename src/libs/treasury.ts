@@ -7,7 +7,6 @@ import {
   toMoney,
 } from '@/libs/cash-helpers';
 import {
-  appSettingsSchema,
   cashMovementsSchema,
   cashSessionsSchema,
   expensesSchema,
@@ -857,12 +856,10 @@ export async function recordGastoOutflow(
 
 // treasury-sweep-model slice 2: TREASURY_HANDOVER_SETTING_KEY and
 // getTreasuryHandoverEnabled removed. The at-close handover flag was retired in
-// slice 1 (handoverBySession subtraction decoupled). Sweep destination config
-// uses the new TREASURY_SWEEP_DEFAULT_KEY (resolveSweepDestination above).
+// slice 1 (handoverBySession subtraction decoupled). Sweep destination is
+// configured per-caja only (resolveSweepDestination below).
 
 // ── Slice 2: per-caja sweep destination resolver ─────────────────────────────
-
-export const TREASURY_SWEEP_DEFAULT_KEY = 'treasurySweepDefaultDestinationAccountId';
 
 export type SweepDestination = {
   accountId: string;
@@ -871,7 +868,7 @@ export type SweepDestination = {
 
 /**
  * Resolves the auto-route destination for a caja's open-time sweep.
- * Priority: per-caja FK column → org-wide KV default → null (Pendiente).
+ * Priority: per-caja FK column → null (Pendiente de ubicar).
  *
  * Only returns a destination when:
  *   - The resolved account exists in the org
@@ -888,7 +885,7 @@ export async function resolveSweepDestination(
 ): Promise<SweepDestination | null> {
   let candidateId: string | null = null;
 
-  // 1. Per-caja column (highest priority)
+  // Per-caja column is the only sweep destination source.
   if (posTokenId) {
     const [tokenRow] = await executor
       .select({
@@ -899,21 +896,6 @@ export async function resolveSweepDestination(
       .where(eq(posTokensSchema.id, posTokenId))
       .limit(1);
     candidateId = tokenRow?.defaultSweepDestinationAccountId ?? null;
-  }
-
-  // 2. Org-wide KV default (fallback when no per-caja config)
-  if (!candidateId) {
-    const [kvRow] = await executor
-      .select({ value: appSettingsSchema.value })
-      .from(appSettingsSchema)
-      .where(
-        and(
-          eq(appSettingsSchema.organizationId, organizationId),
-          eq(appSettingsSchema.key, TREASURY_SWEEP_DEFAULT_KEY),
-        ),
-      )
-      .limit(1);
-    candidateId = kvRow?.value?.trim() || null;
   }
 
   if (!candidateId) {

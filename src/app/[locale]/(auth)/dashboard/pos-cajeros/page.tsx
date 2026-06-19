@@ -1,10 +1,6 @@
 import { setRequestLocale } from 'next-intl/server';
 import { listOrgAddresses } from '@/actions/org-addresses';
-import {
-  getOrgSweepDefaultDestination,
-  getPosDeviceQuota,
-  listPosTokens,
-} from '@/actions/pos-tokens';
+import { getPosDeviceQuota, listPosTokens } from '@/actions/pos-tokens';
 import { listTreasuryAccounts } from '@/actions/treasury';
 import { TitleBar } from '@/features/dashboard/TitleBar';
 import { PosCajerosClient } from '@/features/pos-tokens/PosCajerosClient';
@@ -15,12 +11,11 @@ export default async function DashboardPosCajerosPage(props: {
   const { locale } = await props.params;
   setRequestLocale(locale);
 
-  const [tokens, quota, addresses, allAccounts, orgDefaultSweepId] = await Promise.all([
+  const [tokens, quota, addresses, allAccounts] = await Promise.all([
     listPosTokens(),
     getPosDeviceQuota(),
     listOrgAddresses(),
     listTreasuryAccounts().catch(() => []),
-    getOrgSweepDefaultDestination().catch(() => null),
   ]);
 
   // Only active caja_fuerte accounts can be sweep destinations.
@@ -39,7 +34,6 @@ export default async function DashboardPosCajerosPage(props: {
         initialQuota={quota}
         initialAddresses={addresses}
         initialCofres={cofres}
-        initialOrgDefaultSweepId={orgDefaultSweepId}
       />
     </>
   );
