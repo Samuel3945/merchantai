@@ -29,7 +29,6 @@ import {
 } from '@/actions/payment-methods';
 import { Button } from '@/components/ui/button';
 import { useConfirm } from '@/components/ui/confirm';
-import { Select } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { FiadoTermField } from '@/features/settings/FiadoTermField';
 import { ToggleRow } from './fields';
@@ -59,14 +58,6 @@ function transferSummary(details: unknown): string {
 const inputCls
   = 'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50';
 const labelCls = 'text-xs font-medium text-muted-foreground';
-
-// Cash and credit are system-managed (see banner + Fiado toggle), so they are
-// not offered when creating a custom method.
-const TYPE_OPTIONS: ReadonlyArray<{ value: PaymentMethodType; label: string }> = [
-  { value: 'transfer', label: 'Transferencia' },
-  { value: 'card', label: 'Tarjeta' },
-  { value: 'other', label: 'Otro' },
-];
 
 export function PaymentMethodsClient({
   initialMethods,
@@ -408,7 +399,9 @@ function EditModal({
   onError: (err: unknown) => void;
 }) {
   const [name, setName] = useState(initial?.name ?? '');
-  const [type, setType] = useState<PaymentMethodType>(initial?.type ?? 'transfer');
+  // Solo se crean cuentas de transferencia; los registros antiguos conservan su
+  // tipo al editarse, pero ya no se puede crear card/other desde ajustes.
+  const type: PaymentMethodType = initial?.type ?? 'transfer';
   const [icon, setIcon] = useState(initial?.icon ?? '');
   const [details, setDetails] = useState<TransferDetails>(
     (initial?.details ?? {}) as TransferDetails,
@@ -502,21 +495,6 @@ function EditModal({
               value={name}
               onChange={e => setName(e.target.value)}
               className={inputCls}
-            />
-          </div>
-
-          <div>
-            <label htmlFor="pm-type" className={labelCls}>
-              Tipo
-            </label>
-            <Select
-              id="pm-type"
-              value={type}
-              onValueChange={v => setType(v as PaymentMethodType)}
-              options={TYPE_OPTIONS.map(opt => ({
-                value: opt.value,
-                label: opt.label,
-              }))}
             />
           </div>
 
