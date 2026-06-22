@@ -225,9 +225,11 @@ function TopUpModal({
 export function PlansClient({
   initialSnapshot,
   plans,
+  aiEnabled,
 }: {
   initialSnapshot: PlanSnapshot;
   plans: PublicPlan[];
+  aiEnabled: boolean;
 }) {
   const [snapshot, setSnapshot] = useState(initialSnapshot);
   const [topUpAgent, setTopUpAgent] = useState<AgentKind | null>(null);
@@ -303,30 +305,34 @@ export function PlansClient({
         </div>
       </section>
 
-      <section>
-        <h2 className="mb-4 text-lg font-semibold">Consumo del periodo</h2>
-        <div className="
-          grid grid-cols-1 gap-4
-          md:grid-cols-2
-        "
-        >
-          {snapshot.counters.map(c => (
-            <CounterCard
-              key={c.agentKind}
-              counter={c}
-              onTopUp={() => setTopUpAgent(c.agentKind)}
-            />
-          ))}
-        </div>
-      </section>
+      {aiEnabled && (
+        <>
+          <section>
+            <h2 className="mb-4 text-lg font-semibold">Consumo del periodo</h2>
+            <div className="
+              grid grid-cols-1 gap-4
+              md:grid-cols-2
+            "
+            >
+              {snapshot.counters.map(c => (
+                <CounterCard
+                  key={c.agentKind}
+                  counter={c}
+                  onTopUp={() => setTopUpAgent(c.agentKind)}
+                />
+              ))}
+            </div>
+          </section>
 
-      {topUpAgent && (
-        <TopUpModal
-          agentKind={topUpAgent}
-          busy={pending}
-          onClose={() => setTopUpAgent(null)}
-          onConfirm={handleTopUp}
-        />
+          {topUpAgent && (
+            <TopUpModal
+              agentKind={topUpAgent}
+              busy={pending}
+              onClose={() => setTopUpAgent(null)}
+              onConfirm={handleTopUp}
+            />
+          )}
+        </>
       )}
     </div>
   );

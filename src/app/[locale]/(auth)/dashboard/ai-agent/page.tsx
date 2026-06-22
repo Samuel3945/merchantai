@@ -1,5 +1,7 @@
 import { auth } from '@clerk/nextjs/server';
 import { setRequestLocale } from 'next-intl/server';
+import { redirect } from 'next/navigation';
+import { getAppSetting } from '@/actions/app-settings';
 import { getSmartStockSettings } from '@/actions/smart-stock';
 import { listWhatsAppChannels } from '@/actions/whatsapp-channels';
 import { AgentPersonaSection } from '@/features/ai-agent/AgentPersonaSection';
@@ -13,6 +15,13 @@ export default async function DashboardAiAgentPage(props: {
 }) {
   const { locale } = await props.params;
   setRequestLocale(locale);
+
+  // AI preview is a per-org flag the operator flips from /platform; default OFF.
+  // Guard the route so a direct hit bounces when AI isn't enabled for the org.
+  const aiSetting = await getAppSetting('modules.ai');
+  if (aiSetting.value !== 'true') {
+    redirect('/dashboard');
+  }
 
   const [{ orgRole }, smartStock] = await Promise.all([
     auth(),

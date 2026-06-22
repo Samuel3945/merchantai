@@ -140,7 +140,7 @@ function saturationNotice(
  * (separate, non-interchangeable limits), so we show one bar per agent that the
  * plan includes — never a misleading sum.
  */
-export async function PlanPanel() {
+export async function PlanPanel({ aiEnabled }: { aiEnabled: boolean }) {
   const [
     { subscription, counters },
     posSettled,
@@ -183,7 +183,9 @@ export async function PlanPanel() {
           <p className="mt-0.5 text-xs text-muted-foreground">
             {subscription.periodEnd
               ? `Renovación: ${formatDate(subscription.periodEnd)}`
-              : 'La IA potencia y automatiza tu negocio.'}
+              : aiEnabled
+                ? 'La IA potencia y automatiza tu negocio.'
+                : 'Acceso completo al software, sin compromiso.'}
           </p>
         </div>
         <Link
@@ -257,7 +259,7 @@ export async function PlanPanel() {
         </Link>
       )}
 
-      {lowAny && (
+      {aiEnabled && lowAny && (
         <div className="
           mb-4 flex items-center justify-between gap-3 rounded-md border
           border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700
@@ -276,7 +278,7 @@ export async function PlanPanel() {
         </div>
       )}
 
-      {activeAgents.length === 0
+      {aiEnabled && (activeAgents.length === 0
         ? (
             <div className="
               flex flex-wrap items-center justify-between gap-3 rounded-md
@@ -360,7 +362,7 @@ export async function PlanPanel() {
                 );
               })}
             </div>
-          )}
+          ))}
     </div>
   );
 }

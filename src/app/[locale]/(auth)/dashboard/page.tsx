@@ -1,6 +1,7 @@
 import { auth } from '@clerk/nextjs/server';
 import { setRequestLocale } from 'next-intl/server';
 import { redirect } from 'next/navigation';
+import { getAppSetting } from '@/actions/app-settings';
 import { getLowStockItems, getMetrics, getStockByCategory } from '@/actions/dashboard';
 import { fetchFiadosOverview } from '@/actions/fiados';
 import { listWhatsAppChannels } from '@/actions/whatsapp-channels';
@@ -49,14 +50,20 @@ export default async function DashboardIndexPage(props: {
 
   // Range metrics drive the chart/KPIs/top-sellers; the fiado + low-stock lists
   // are current state, fetched once here (not in the client's range re-fetch).
-  const [metrics, fiado, lowStock, stockByCategory, whatsappChannels]
+  const [metrics, fiado, lowStock, stockByCategory, whatsappChannels, aiSetting]
     = await Promise.all([
       getMetrics(start, end, prevStart, prevEnd),
       fetchFiadosOverview(),
       getLowStockItems(),
       getStockByCategory(),
       listWhatsAppChannels(),
+      getAppSetting('modules.ai'),
     ]);
+
+  // AI preview is OFF by default and flipped per-org by the operator. When off,
+  // every AI surface on the Resumen (the WhatsApp agent CTA and the AI-credit
+  // sections of the plan panel) is hidden.
+  const aiEnabled = aiSetting.value === 'true';
 
   return (
     <>
@@ -66,9 +73,10 @@ export default async function DashboardIndexPage(props: {
         lowStock={lowStock}
         stockByCategory={stockByCategory}
         hasWhatsAppAgent={whatsappChannels.length > 0}
+        aiEnabled={aiEnabled}
       />
       <div className="mt-6">
-        <PlanPanel />
+        <PlanPanel aiEnabled={aiEnabled} />
       </div>
     </>
   );

@@ -40,7 +40,7 @@ const STATUS_OPTIONS: { value: OrgStatus; label: string }[] = [
 ];
 
 const KNOWN_ADDONS = ['pos_device', 'pos_cashier'];
-const KNOWN_SETTING_KEYS = ['smartStockEnabled'];
+const KNOWN_SETTING_KEYS = ['smartStockEnabled', 'modules.ai'];
 
 const AGENT_LABELS: Record<PlatformAgentKind, string> = {
   sales_manager: 'Sales Manager',
@@ -81,6 +81,11 @@ export function BusinessCockpitClient(props: {
   const [settingValue, setSettingValue] = useState('');
   const [impersonationReason, setImpersonationReason] = useState('');
   const [impersonationUrl, setImpersonationUrl] = useState<string | null>(null);
+
+  // AI preview is an opt-in per-org override (app_setting modules.ai). Default
+  // OFF: only orgs the operator flips on here see the AI agent and Domicilios.
+  const aiPreviewOn
+    = org.settings.find(s => s.key === 'modules.ai')?.value === 'true';
 
   const run = (fn: () => Promise<{ ok: boolean; error?: string }>) => {
     startTransition(async () => {
@@ -142,6 +147,33 @@ export function BusinessCockpitClient(props: {
           </div>
         </div>
       </div>
+
+      <Section title="Vista previa de IA">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="max-w-xl text-sm text-muted-foreground">
+            Muestra el Agente IA y Domicilios solo a esta organización para
+            probar. Mientras esté inactiva, el negocio no ve nada de IA.
+          </p>
+          <div className="flex items-center gap-2">
+            <Badge variant={aiPreviewOn ? 'default' : 'secondary'}>
+              {aiPreviewOn ? 'Activa' : 'Inactiva'}
+            </Badge>
+            <Button
+              variant={aiPreviewOn ? 'secondary' : 'default'}
+              disabled={pending}
+              onClick={() =>
+                run(() =>
+                  setOrgSetting(
+                    org.organizationId,
+                    'modules.ai',
+                    aiPreviewOn ? 'false' : 'true',
+                  ))}
+            >
+              {aiPreviewOn ? 'Desactivar IA' : 'Activar IA'}
+            </Button>
+          </div>
+        </div>
+      </Section>
 
       <div className="
         grid grid-cols-1 gap-4

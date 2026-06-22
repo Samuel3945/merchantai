@@ -96,6 +96,10 @@ export type NavModuleFlags = {
   delivery: boolean;
   facturas: boolean;
   suppliers: boolean;
+  // AI preview. Unlike the others this defaults OFF and is flipped per-org by
+  // the operator from /platform, gating the AI agent (and delivery, its phase-2
+  // use case) so customers never see half-built AI until it's ready.
+  ai: boolean;
 };
 
 // Maps a nav href to the module flag that controls its visibility. Items not
@@ -106,6 +110,7 @@ const GATED_HREF: Record<string, keyof NavModuleFlags> = {
   '/dashboard/delivery': 'delivery',
   '/dashboard/facturas': 'facturas',
   '/dashboard/suppliers': 'suppliers',
+  '/dashboard/ai-agent': 'ai',
 };
 
 // Personal views that only make sense for non-owner members. The owner is a

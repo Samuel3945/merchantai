@@ -91,20 +91,27 @@ export default async function DashboardLayout(props: DashboardLayoutProps) {
     deliverySetting,
     facturasSetting,
     suppliersSetting,
+    aiSetting,
   ] = await Promise.all([
     getAppSetting('fiado-enabled'),
     getAppSetting('modules.employees'),
     getAppSetting('modules.delivery'),
     getAppSetting('modules.facturas'),
     getAppSetting('modules.suppliers'),
+    getAppSetting('modules.ai'),
   ]);
-  // Every module defaults to ENABLED; the owner opts out in Ajustes → Módulos.
+  // Most modules default to ENABLED; the owner opts out in Ajustes → Módulos.
+  // The AI preview is the exception: it defaults OFF and is enabled per-org by
+  // the operator from /platform. Domicilios rides with it (the agent's phase-2
+  // use case), so it stays hidden until AI preview is on AND its own toggle is.
+  const aiEnabled = aiSetting.value === 'true';
   const navFlags: NavModuleFlags = {
     fiado: fiadoSetting.value !== 'false',
     employees: employeesSetting.value !== 'false',
-    delivery: deliverySetting.value !== 'false',
+    delivery: aiEnabled && deliverySetting.value !== 'false',
     facturas: facturasSetting.value !== 'false',
     suppliers: suppliersSetting.value !== 'false',
+    ai: aiEnabled,
   };
 
   // Sidebar collapsed/expanded preference, resolved server-side so the first
