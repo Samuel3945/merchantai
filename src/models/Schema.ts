@@ -833,6 +833,10 @@ export const posTokensSchema = pgTable(
     // active=false => caja bloqueada (no puede loguear ni sincronizar, pero la
     // fila persiste y libera cupo del plan). El borrado real elimina la fila.
     active: boolean('active').default(true).notNull(),
+    // Per-cajero "sell without stock control". When true, the POS sale/sync
+    // routes let a sale through even if stock is 0 (stock clamps at 0, FIFO
+    // values uncovered units at fallback cost). Default false => stock enforced.
+    allowOversell: boolean('allow_oversell').default(false).notNull(),
     // PIN de acceso de la caja (bcrypt). Se exige en /api/pos/login junto con el
     // token. '' => caja sin PIN (acceso directo con solo el token/QR).
     pin: text('pin').default('').notNull(),

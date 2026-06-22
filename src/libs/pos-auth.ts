@@ -11,6 +11,9 @@ export type PosAuthContext = {
   cashierId: string | null;
   cashierName: string;
   canConfirmTransfers: boolean;
+  // Per-cajero "sell without stock control". Only the device-token path can
+  // grant it (it lives on the token); the user-login path is always false.
+  allowOversell: boolean;
   source: 'token' | 'user';
   tokenId: string | null;
 };
@@ -76,6 +79,7 @@ async function resolveFromToken(
     cashierId: row.token.cashierId,
     cashierName: row.cashierName || row.token.deviceName,
     canConfirmTransfers: row.canConfirmTransfers ?? true,
+    allowOversell: row.token.allowOversell,
     source: 'token',
     tokenId: row.token.id,
   };
@@ -105,6 +109,8 @@ async function resolveFromUser(
     cashierId: user.id,
     cashierName: user.name,
     canConfirmTransfers: user.canConfirmTransfers,
+    // No device token on the user-login path → stock is always enforced.
+    allowOversell: false,
     source: 'user',
     tokenId: null,
   };
