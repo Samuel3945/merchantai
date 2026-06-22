@@ -421,6 +421,13 @@
       "when": 1781700000010,
       "tag": "0059_expense_reversal_link",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1781700000011,
+      "tag": "0060_single_free_plan_launch",
+      "breakpoints": true
     }
   ]
 }
