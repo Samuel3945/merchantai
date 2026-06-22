@@ -430,12 +430,14 @@ export function DashboardClient({
   lowStock,
   stockByCategory,
   hasWhatsAppAgent,
+  aiEnabled,
 }: {
   initial: DashboardMetrics;
   fiado: FiadosOverview;
   lowStock: LowStockRow[];
   stockByCategory: StockCategoryRow[];
   hasWhatsAppAgent: boolean;
+  aiEnabled: boolean;
 }) {
   const [data, setData] = useState<DashboardMetrics>(initial);
   const [start, setStart] = useState(initial.range.start);
@@ -691,7 +693,7 @@ export function DashboardClient({
 
         {/* Right sidebar — WhatsApp CTA (only when no agent) + best sellers */}
         <div className="flex flex-col gap-6">
-          {!hasWhatsAppAgent && (
+          {aiEnabled && !hasWhatsAppAgent && (
             <div className="
               flex flex-col gap-3 rounded-lg border bg-card p-4
               text-card-foreground shadow-xs
