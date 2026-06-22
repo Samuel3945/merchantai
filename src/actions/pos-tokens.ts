@@ -248,6 +248,7 @@ export async function listPosTokens() {
       address: orgAddressesSchema.address,
       addressCity: orgAddressesSchema.city,
       active: posTokensSchema.active,
+      allowOversell: posTokensSchema.allowOversell,
       createdAt: posTokensSchema.createdAt,
       defaultSweepDestinationAccountId: posTokensSchema.defaultSweepDestinationAccountId,
     })
@@ -494,6 +495,43 @@ export async function setPosTokenAddress(
     entityId: id,
     before: { addressId: current.addressId },
     after: { addressId: updated.addressId },
+  });
+
+  revalidatePath('/dashboard/pos-cajeros');
+  return { ok: true, data: updated };
+}
+
+// Per-caja "sell without stock control". When on, the POS sale/sync routes let
+// this cajero complete a sale even with stock 0 (stock clamps at 0, FIFO values
+// uncovered units at fallback cost). Owner-only.
+export async function setPosTokenAllowOversell(
+  id: string,
+  allow: boolean,
+): Promise<ActionResult<{ id: string; allowOversell: boolean }>> {
+  const { userId, orgId } = await requireAdminContext();
+
+  const [updated] = await db
+    .update(posTokensSchema)
+    .set({ allowOversell: allow })
+    .where(
+      and(eq(posTokensSchema.id, id), eq(posTokensSchema.organizationId, orgId)),
+    )
+    .returning({
+      id: posTokensSchema.id,
+      allowOversell: posTokensSchema.allowOversell,
+    });
+
+  if (!updated) {
+    return { ok: false, error: 'Caja no encontrada' };
+  }
+
+  await logAction({
+    organizationId: orgId,
+    actor: { type: 'user', id: userId },
+    action: 'pos_token.oversell_changed',
+    entityType: 'pos_token',
+    entityId: id,
+    after: { allowOversell: allow },
   });
 
   revalidatePath('/dashboard/pos-cajeros');

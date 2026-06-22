@@ -148,7 +148,8 @@ export async function POST(req: Request): Promise<NextResponse> {
               `Límite de ventas alcanzado: ${product.name} (disp: ${product.digitalLimit})`,
             );
           }
-        } else if (product.stock < qty) {
+        } else if (!ctx.allowOversell && product.stock < qty) {
+          // This caja enforces stock; cajas with allow_oversell let it through.
           throw new Error(
             `Stock insuficiente: ${product.name} (disp: ${product.stock})`,
           );

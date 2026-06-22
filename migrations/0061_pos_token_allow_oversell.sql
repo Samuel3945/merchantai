@@ -1,0 +1,15 @@
+-- Per-cajero "sell without stock control" (oversell).
+--
+-- Adds allow_oversell to pos_tokens so the owner can pick, per POS device, which
+-- cashier may complete a sale even when stock is 0. Default false preserves the
+-- current behavior (stock enforced). When true, the POS sale/sync routes skip the
+-- "Stock insuficiente" guard; stock still clamps at 0 (GREATEST) and FIFO values
+-- the uncovered units at the product's fallback cost, so COGS and the
+-- products.stock = SUM(remaining_qty) invariant stay correct.
+--
+-- Hand-written (not drizzle-kit generated): regenerating migrations from the
+-- schema would drop the pos_tokens sweep-destination FK (see Schema.ts note on
+-- default_sweep_destination_account_id).
+--
+-- prod: node scripts/db-migrate.mjs
+ALTER TABLE "pos_tokens" ADD COLUMN IF NOT EXISTS "allow_oversell" boolean DEFAULT false NOT NULL;

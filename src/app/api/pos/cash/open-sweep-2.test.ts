@@ -80,6 +80,7 @@ const SCHEMA = `
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     organization_id text NOT NULL,
     device_name text NOT NULL,
+    allow_oversell boolean DEFAULT false NOT NULL,
     default_sweep_destination_account_id uuid REFERENCES treasury_accounts(id) ON DELETE SET NULL
   );
 

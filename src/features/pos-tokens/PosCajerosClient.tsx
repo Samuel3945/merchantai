@@ -12,6 +12,7 @@ import {
   MapPin,
   Monitor,
   MoreVertical,
+  PackageX,
   Pencil,
   Plus,
   QrCode,
@@ -31,6 +32,7 @@ import {
   regeneratePosToken,
   renamePosToken,
   setPosTokenAddress,
+  setPosTokenAllowOversell,
   setPosTokenSweepDestination,
   unblockPosToken,
 } from '@/actions/pos-tokens';
@@ -206,6 +208,21 @@ export function PosCajerosClient({
         refresh();
       } catch {
         setError('No se pudo desbloquear');
+      }
+    });
+  };
+
+  const handleToggleOversell = (t: TokenRow) => {
+    startTransition(async () => {
+      try {
+        const result = await setPosTokenAllowOversell(t.id, !t.allowOversell);
+        if (!result.ok) {
+          setError(result.error);
+          return;
+        }
+        refresh();
+      } catch {
+        setError('No se pudo cambiar el control de stock');
       }
     });
   };
@@ -484,6 +501,14 @@ export function PosCajerosClient({
                             Destino de barrido
                           </DropdownMenuItem>
                         )}
+                        <DropdownMenuItem
+                          onClick={() => handleToggleOversell(t)}
+                        >
+                          <PackageX className="size-4" />
+                          {t.allowOversell
+                            ? 'Exigir stock para vender'
+                            : 'Vender sin control de stock'}
+                        </DropdownMenuItem>
                         {t.active && (
                           <>
                             <DropdownMenuItem
@@ -539,6 +564,7 @@ export function PosCajerosClient({
               address: addresses.find(a => a.id === created.addressId)?.address ?? null,
               addressCity: addresses.find(a => a.id === created.addressId)?.city ?? null,
               active: created.active,
+              allowOversell: created.allowOversell,
               createdAt: created.createdAt,
               defaultSweepDestinationAccountId: null,
             });
