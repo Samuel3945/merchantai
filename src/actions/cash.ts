@@ -7,7 +7,7 @@ import { auth, currentUser } from '@clerk/nextjs/server';
 import { and, asc, desc, eq, getTableColumns, gte, isNotNull, lt, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { ActionValidationError } from '@/libs/action-result';
-import { logAction } from '@/libs/audit-log';
+import { logAction, resolveActorNames } from '@/libs/audit-log';
 import {
   computeCashBreakdown,
   computeCollectionsByMethod,
@@ -33,6 +33,7 @@ import {
 } from '@/libs/transfer-reconciliation';
 // treasury-sweep-model: at-close handover retired (slice 1). Flag/toggle retired (slice 2).
 import {
+  auditLogsSchema,
   cashMovementsSchema,
   cashSecurityThresholdCacheSchema,
   cashSessionsSchema,
@@ -615,6 +616,18 @@ export async function listCajas(): Promise<CajaSummary[]> {
   );
 }
 
+// One admin/management action recorded against this caja (pos_token) in the audit
+// trail — rename, block, access regenerated, etc. Surfaced in the caja detail so
+// EVERY action on the device, down to the smallest, is auditable in one place.
+export type CajaAdminAction = {
+  id: string;
+  action: string;
+  actor: string;
+  before: unknown;
+  after: unknown;
+  createdAt: string;
+};
+
 export type CajaDetail = {
   posTokenId: string;
   deviceName: string | null;
@@ -625,6 +638,7 @@ export type CajaDetail = {
   lastActivityAt: string | null;
   movements: CashMovement[];
   closures: CashSession[];
+  adminActions: CajaAdminAction[];
 };
 
 /**
@@ -655,7 +669,7 @@ export async function getCajaDetail(
     return null;
   }
 
-  const [openSession, movements, closures] = await Promise.all([
+  const [openSession, movements, closures, auditRows] = await Promise.all([
     db
       .select()
       .from(cashSessionsSchema)
@@ -697,7 +711,33 @@ export async function getCajaDetail(
       )
       .orderBy(desc(cashSessionsSchema.openedAt))
       .limit(200),
+    // Admin/management actions on this caja (rename, block, access change, …).
+    db
+      .select()
+      .from(auditLogsSchema)
+      .where(
+        and(
+          eq(auditLogsSchema.organizationId, orgId),
+          eq(auditLogsSchema.entityType, 'pos_token'),
+          eq(auditLogsSchema.entityId, posTokenId),
+        ),
+      )
+      .orderBy(desc(auditLogsSchema.createdAt))
+      .limit(200),
   ]);
+
+  const actorNames = await resolveActorNames(
+    orgId,
+    auditRows.map(r => r.actorId),
+  );
+  const adminActions: CajaAdminAction[] = auditRows.map(r => ({
+    id: r.id,
+    action: r.action,
+    actor: actorNames.get(r.actorId) ?? r.actorId,
+    before: r.before,
+    after: r.after,
+    createdAt: r.createdAt.toISOString(),
+  }));
 
   const session = openSession[0] ?? null;
   const expected = session
@@ -722,6 +762,7 @@ export async function getCajaDetail(
     lastActivityAt,
     movements,
     closures,
+    adminActions,
   };
 }
 

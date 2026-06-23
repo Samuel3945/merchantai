@@ -1,10 +1,11 @@
 'use server';
 
 import type { AuditActorType } from '@/libs/audit-log';
-import { auth, clerkClient } from '@clerk/nextjs/server';
-import { and, desc, eq, gte, ilike, inArray, lte, sql } from 'drizzle-orm';
+import { auth } from '@clerk/nextjs/server';
+import { and, desc, eq, gte, ilike, lte, sql } from 'drizzle-orm';
+import { resolveActorNames } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
-import { auditLogsSchema, posUsersSchema } from '@/models/Schema';
+import { auditLogsSchema } from '@/models/Schema';
 
 export type AuditLogRow = {
   id: string;
@@ -136,11 +137,9 @@ export type AuditFacets = {
 };
 
 const MAX_ACTOR_FACETS = 100;
-const UUID_RE
-  = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// Resolves distinct audit actor ids to human names: POS cashiers from
-// pos_users, panel admins from Clerk (best-effort), anything else as-is.
+// Resolves distinct audit actor ids to human names (shared resolver: POS
+// cashiers from pos_users, panel admins from Clerk, anything else as-is).
 async function resolveActorFacets(
   orgId: string,
 ): Promise<{ id: string; label: string }[]> {
@@ -151,40 +150,7 @@ async function resolveActorFacets(
     .limit(MAX_ACTOR_FACETS);
 
   const ids = rows.map(r => r.id).filter(Boolean);
-  const uuidIds = ids.filter(id => UUID_RE.test(id));
-  const clerkIds = ids.filter(id => id.startsWith('user_'));
-
-  const names = new Map<string, string>();
-
-  if (uuidIds.length > 0) {
-    const users = await db
-      .select({ id: posUsersSchema.id, name: posUsersSchema.name })
-      .from(posUsersSchema)
-      .where(inArray(posUsersSchema.id, uuidIds));
-    for (const u of users) {
-      names.set(u.id, u.name);
-    }
-  }
-
-  if (clerkIds.length > 0) {
-    try {
-      const client = await clerkClient();
-      const { data } = await client.users.getUserList({
-        userId: clerkIds,
-        limit: clerkIds.length,
-      });
-      for (const u of data) {
-        const name
-          = u.fullName
-            || [u.firstName, u.lastName].filter(Boolean).join(' ').trim()
-            || u.primaryEmailAddress?.emailAddress
-            || u.id;
-        names.set(u.id, name);
-      }
-    } catch {
-      // Clerk unavailable → those actors fall back to their raw id.
-    }
-  }
+  const names = await resolveActorNames(orgId, ids);
 
   return ids
     .map(id => ({ id, label: names.get(id) ?? id }))
