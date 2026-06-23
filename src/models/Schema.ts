@@ -419,6 +419,10 @@ export const cashSessionsSchema = pgTable(
     openingExpected: numeric('opening_expected', { precision: 12, scale: 2 }),
     openingDifference: numeric('opening_difference', { precision: 12, scale: 2 }),
     openingExplanation: text('opening_explanation'),
+    // Device-generated UUID v4 for offline-authoritative open/close. Lets the
+    // server dedupe replays (idempotent open) and reconcile a concurrent open.
+    // NULL for legacy/admin sessions (dashboard, web POS) that send no key.
+    clientSessionId: uuid('client_session_id'),
   },
   table => [
     // One open session per POS device (caja). Each register operates its own till.
@@ -430,6 +434,11 @@ export const cashSessionsSchema = pgTable(
     uniqueIndex('cash_sessions_one_open_admin_idx')
       .on(table.organizationId)
       .where(sql`${table.status} = 'open' AND ${table.posTokenId} IS NULL`),
+    // Idempotent device open/close: one session row per (org, client_session_id).
+    // Partial so the many legacy/admin sessions with a NULL key stay valid.
+    uniqueIndex('cash_sessions_org_client_session_idx')
+      .on(table.organizationId, table.clientSessionId)
+      .where(sql`${table.clientSessionId} IS NOT NULL`),
   ],
 );
 

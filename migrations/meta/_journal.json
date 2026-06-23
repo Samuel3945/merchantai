@@ -442,6 +442,13 @@
       "when": 1781900000000,
       "tag": "0062_sale_idempotency_key",
       "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1781900000001,
+      "tag": "0063_cash_session_client_id",
+      "breakpoints": true
     }
   ]
 }
