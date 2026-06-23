@@ -108,7 +108,6 @@ export async function POST(req: Request): Promise<NextResponse> {
       notes,
       userId: cashierId ?? deviceName,
       createdBy: cashierId ?? deviceName ?? null,
-      posTokenId: posToken.id,
       audit: {
         actor: { type: 'cashier', id: cashierId ?? `device:${deviceName}` },
         action: 'sale.created',

@@ -5,6 +5,7 @@ import { logAction } from '@/libs/audit-log';
 import { recordCashMovement } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import { maybeAutoEmitInvoice } from '@/libs/einvoice/emit';
+import { logger } from '@/libs/Logger';
 import { recordSaleTransferReconciliations } from '@/libs/transfer-reconciliation';
 import { auditLogsSchema, salesSchema } from '@/models/Schema';
 
@@ -57,11 +58,10 @@ export type PostSaleSideEffectArgs = {
   // recordCashMovement / customer upsert attribution.
   userId: string;
   createdBy: string | null;
-  // Fallback only. The cash movement is scoped to the PERSISTED sale.posTokenId
-  // (read under the lock), NOT this value, so the create path and the deduped
-  // path always converge on the same cash session. Kept for callers that have no
-  // persisted sale yet (none today) and for back-compat.
-  posTokenId?: string | null;
+  // NOTE: cash scoping is NOT a caller input. The cash movement is scoped to the
+  // PERSISTED sale.posTokenId, read under the FOR UPDATE lock inside
+  // applyPostSaleSideEffects, so the create path and the deduped path always
+  // converge on the same cash session no matter which request finishes them.
   // Audit trail. The audit `sale.created` row is the universal "side effects
   // already applied" sentinel — it exists for every sale regardless of payment
   // method (cash, fiado, transfer), so it gates the non-idempotent customer
@@ -158,8 +158,17 @@ export async function applyPostSaleSideEffects(
       });
     })
     // A side-effect failure must NEVER roll back or fail the already-committed
-    // sale. Swallow and let the next retry converge (the lock makes that safe).
-    .catch(() => null);
+    // sale. Swallow and let the next retry converge (the lock makes that safe) —
+    // but LOG it first so a money-path convergence failure (cash movement,
+    // customer spend, transfer reconciliation) is observable instead of silent.
+    .catch((err) => {
+      logger.error('post_sale_side_effects_failed', {
+        organizationId: args.organizationId,
+        saleId: args.saleId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    });
 
   // OUTSIDE the lock: emit the electronic invoice if a provider is configured.
   // A DIAN provider network call must never run while we hold a sale row lock.

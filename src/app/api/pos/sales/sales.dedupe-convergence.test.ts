@@ -59,9 +59,10 @@ vi.mock('@/libs/audit-log', async importOriginal => ({
 vi.mock('@/libs/einvoice/emit', () => ({
   maybeAutoEmitInvoice: vi.fn(async () => {}),
 }));
-vi.mock('@/libs/transfer-reconciliation', () => ({
-  recordSaleTransferReconciliations: vi.fn(async () => {}),
-}));
+// recordSaleTransferReconciliations is NOT mocked: the REAL helper runs against
+// PGLite so the most-changed money-path converger (transfer reconciliations) is
+// proven to insert exactly ONE row per transfer payment and to stay at one under
+// the crash-window retry (onConflictDoNothing on the UNIQUE(sale_payment) index).
 // applyInvoiceCustomerUpsert is NOT mocked: the real one bumps
 // customers.totalSpent, so the "spend bumped exactly once" convergence assertion
 // has teeth.

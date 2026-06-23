@@ -94,7 +94,6 @@ async function dedupedResponse(
     notes: sale.notes,
     userId: ctx.cashierId ?? ctx.cashierName,
     createdBy: ctx.cashierId ?? ctx.cashierName ?? null,
-    posTokenId: ctx.tokenId,
     audit: {
       actor: resolvePosActor(ctx),
       action: 'sale.created',
@@ -416,7 +415,6 @@ export async function POST(req: Request): Promise<NextResponse> {
       notes: result.notes,
       userId: ctx.cashierId ?? ctx.cashierName,
       createdBy: ctx.cashierId ?? ctx.cashierName ?? null,
-      posTokenId: ctx.tokenId,
       audit: {
         actor: resolvePosActor(ctx),
         action: 'sale.created',
