@@ -18,6 +18,7 @@ import {
   QrCode,
   RefreshCw,
   Unlock,
+  UserCog,
   Vault,
 } from 'lucide-react';
 import { useCallback, useState, useTransition } from 'react';
@@ -29,6 +30,7 @@ import {
   listPosTokens,
   regeneratePosToken,
   renamePosToken,
+  setAdminAsCashier,
   setPosTokenAddress,
   setPosTokenAllowOversell,
   setPosTokenSweepDestination,
@@ -219,6 +221,25 @@ export function PosCajerosClient({
         refresh();
       } catch {
         setError('No se pudo cambiar el control de stock');
+      }
+    });
+  };
+
+  // Toggle "el admin hace de cajero" for this caja: ON (cashier_id set) → the
+  // admin is the default responsable; OFF (null) → each cashier employee
+  // identifies themselves. Turning it OFF is rejected by the server when no
+  // cashier employee exists, so the caja is never left without a responsable.
+  const handleToggleAdminCashier = (t: TokenRow) => {
+    startTransition(async () => {
+      try {
+        const result = await setAdminAsCashier(t.id, t.cashierId == null);
+        if (!result.ok) {
+          setError(result.error);
+          return;
+        }
+        refresh();
+      } catch {
+        setError('No se pudo cambiar quién hace de cajero');
       }
     });
   };
@@ -485,6 +506,14 @@ export function PosCajerosClient({
                             ? 'Exigir stock para vender'
                             : 'Vender sin control de stock'}
                         </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => handleToggleAdminCashier(t)}
+                        >
+                          <UserCog className="size-4" />
+                          {t.cashierId
+                            ? 'Quitar al admin como cajero'
+                            : 'Poner al admin como cajero'}
+                        </DropdownMenuItem>
                         {t.active && (
                           <>
                             <DropdownMenuItem
@@ -524,6 +553,7 @@ export function PosCajerosClient({
               storeId: created.storeId,
               deviceName: created.deviceName,
               createdBy: created.createdBy,
+              cashierId: created.cashierId,
               currentCashierId: created.currentCashierId,
               currentCashierName: null,
               currentCashierAt: created.currentCashierAt,

@@ -4,7 +4,7 @@ import type { ActionResult } from '@/libs/action-result';
 import { randomUUID } from 'node:crypto';
 import { auth, clerkClient } from '@clerk/nextjs/server';
 import bcrypt from 'bcryptjs';
-import { and, count, desc, eq, ne, sql } from 'drizzle-orm';
+import { and, count, desc, eq, isNull, ne, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
@@ -20,6 +20,7 @@ import { CASHIERS_LIMIT_REACHED } from '@/libs/plan-limits';
 import {
   employeeInvitationsSchema,
   planAddonsSchema,
+  posTokensSchema,
   posUsersSchema,
 } from '@/models/Schema';
 
@@ -720,6 +721,45 @@ export async function setEmployeeActive(
   active: boolean,
 ): Promise<ActionResult<{ id: string }>> {
   const { orgId, userId: actorId } = await requireAdminContext();
+
+  if (!active) {
+    // Invariant: a caja with the admin stepped back ("el admin hace de cajero"
+    // OFF → cashier_id null) relies on its cashier employees as responsables.
+    // Don't deactivate the LAST cashier employee while such a caja exists, or it
+    // would be left with nobody responsible.
+    const [remaining] = await db
+      .select({ value: count() })
+      .from(posUsersSchema)
+      .where(
+        and(
+          eq(posUsersSchema.organizationId, orgId),
+          eq(posUsersSchema.active, true),
+          ne(posUsersSchema.role, 'admin'),
+          ne(posUsersSchema.id, userId),
+          sql`'pos' = ANY(${posUsersSchema.enabledModules})`,
+        ),
+      );
+    if (Number(remaining?.value ?? 0) === 0) {
+      const [adminOffCaja] = await db
+        .select({ id: posTokensSchema.id })
+        .from(posTokensSchema)
+        .where(
+          and(
+            eq(posTokensSchema.organizationId, orgId),
+            eq(posTokensSchema.active, true),
+            isNull(posTokensSchema.cashierId),
+          ),
+        )
+        .limit(1);
+      if (adminOffCaja) {
+        return {
+          ok: false,
+          error:
+            'No podés desactivar al último cajero: una caja quedaría sin responsable. Reactivá "el admin hace de cajero" en esa caja, o sumá otro cajero primero.',
+        };
+      }
+    }
+  }
 
   if (active) {
     const [entitlements, used, addons] = await Promise.all([
