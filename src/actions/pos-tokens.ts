@@ -2,12 +2,13 @@
 
 import type { ActionResult } from '@/libs/action-result';
 import { randomUUID } from 'node:crypto';
-import { auth } from '@clerk/nextjs/server';
+import { auth, currentUser } from '@clerk/nextjs/server';
 import { and, count, desc, eq, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
 import { getOrgEntitlements, limitOf } from '@/libs/entitlements';
+import { ensureOwnerCashier } from '@/libs/owner-cashier';
 import { POS_DEVICES_LIMIT_REACHED } from '@/libs/plan-limits';
 import {
   orgAddressesSchema,
@@ -109,6 +110,11 @@ export type CreatePosTokenInput = {
   deviceName: string;
   /** Branch address for this caja (org_addresses.id). */
   addressId?: string | null;
+  /**
+   * PIN for the owner-admin operator. Used only the first time the owner becomes
+   * an operator (when their operator profile still has no PIN); ignored after.
+   */
+  adminPin?: string | null;
 };
 
 // Register names must be unique per org (case-insensitive): audit trails and
@@ -163,22 +169,49 @@ export async function createPosToken(
 
   const addressId = await resolveOrgAddressId(orgId, input.addressId);
 
-  // A caja is born with no operator, no assignment and no device PIN: it opens
-  // with the token only (typed or scanned). Per-operator accountability is the
-  // employee's personal PIN, verified on profile change at the device.
-  const [row] = await db
-    .insert(posTokensSchema)
-    .values({
-      organizationId: orgId,
-      deviceName,
-      createdBy: userId,
-      addressId,
-    })
-    .returning();
+  // Owner identity for the admin operator (email/name come from Clerk).
+  const clerkUser = await currentUser();
+  const owner = {
+    clerkUserId: userId,
+    email:
+      clerkUser?.primaryEmailAddress?.emailAddress
+      ?? clerkUser?.emailAddresses?.[0]?.emailAddress
+      ?? '',
+    name:
+      clerkUser?.fullName
+      || [clerkUser?.firstName, clerkUser?.lastName]
+        .filter(Boolean)
+        .join(' ')
+        .trim(),
+  };
 
-  if (!row) {
-    throw new Error('Failed to create POS token');
-  }
+  // A caja is born ASSIGNED to a real operator (never null): the owner-admin by
+  // default, so the device "¿quién sos?" selector is never empty and the
+  // "Responsable" is always a person, not the caja. The owner can later hand the
+  // caja to an employee (setCajaOperator). The PIN, when given, is set on the
+  // owner operator's first caja.
+  const { row, operatorId } = await db.transaction(async (tx) => {
+    const operator = await ensureOwnerCashier(
+      tx,
+      orgId,
+      owner,
+      input.adminPin ?? undefined,
+    );
+    const [created] = await tx
+      .insert(posTokensSchema)
+      .values({
+        organizationId: orgId,
+        deviceName,
+        createdBy: userId,
+        addressId,
+        cashierId: operator.id,
+      })
+      .returning();
+    if (!created) {
+      throw new Error('Failed to create POS token');
+    }
+    return { row: created, operatorId: operator.id };
+  });
 
   await logAction({
     organizationId: orgId,
@@ -189,6 +222,7 @@ export async function createPosToken(
     after: {
       deviceName: row.deviceName,
       addressId: row.addressId,
+      cashierId: operatorId,
     },
   });
 

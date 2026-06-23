@@ -4,7 +4,7 @@ import type { ActionResult } from '@/libs/action-result';
 import { randomUUID } from 'node:crypto';
 import { auth, clerkClient } from '@clerk/nextjs/server';
 import bcrypt from 'bcryptjs';
-import { and, count, desc, eq, sql } from 'drizzle-orm';
+import { and, count, desc, eq, ne, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
@@ -75,9 +75,12 @@ async function countCashierAddons(orgId: string): Promise<number> {
   return Number(row?.value ?? 0);
 }
 
-// Counts every active user of the org. There are no role tiers anymore: the
-// plan seat limit applies to all business users (the owner is a Clerk member,
-// not a posUser, so they never consume a seat).
+// Counts the active business users that consume a paid cashier seat. The owner's
+// own operator profile (role 'admin', provisioned as the default caja operator —
+// see libs/owner-cashier.ts) is EXCLUDED: the owner pays for the org and must
+// not eat a seat just for being an operator, otherwise a 1-seat plan could never
+// hand a caja to a real employee. Invited employees (role 'cashier'/'employee')
+// are the seats.
 async function countActiveUsers(orgId: string): Promise<number> {
   const [row] = await db
     .select({ value: count() })
@@ -86,6 +89,7 @@ async function countActiveUsers(orgId: string): Promise<number> {
       and(
         eq(posUsersSchema.organizationId, orgId),
         eq(posUsersSchema.active, true),
+        ne(posUsersSchema.role, 'admin'),
       ),
     );
   return Number(row?.value ?? 0);
