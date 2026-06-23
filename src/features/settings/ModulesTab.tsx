@@ -39,11 +39,24 @@ const MODULE_TOGGLES: Array<{
   },
 ];
 
-export function ModulesTab({ initial }: { initial: ModulesTabValues }) {
+export function ModulesTab({
+  initial,
+  aiPreviewEnabled,
+}: {
+  initial: ModulesTabValues;
+  aiPreviewEnabled: boolean;
+}) {
   const { save } = useSettingSave();
 
   const persist = (key: keyof ModulesTabValues, value: boolean) =>
     save(key, value ? 'true' : 'false', { notifyConfigChange: true });
+
+  // Domicilios rides with the AI preview (operator-gated in /platform). While
+  // that preview is off the module is invisible everywhere, so its toggle has
+  // nothing to control and is dropped from the list.
+  const visibleToggles = aiPreviewEnabled
+    ? MODULE_TOGGLES
+    : MODULE_TOGGLES.filter(m => m.key !== 'modules.delivery');
 
   return (
     <div className="space-y-6">
@@ -57,7 +70,7 @@ export function ModulesTab({ initial }: { initial: ModulesTabValues }) {
       </div>
 
       <div className="space-y-3">
-        {MODULE_TOGGLES.map(m => (
+        {visibleToggles.map(m => (
           <ToggleRow
             key={m.key}
             label={m.label}
