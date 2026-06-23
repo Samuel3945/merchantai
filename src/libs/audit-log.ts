@@ -18,6 +18,12 @@ export type AuditActor = {
   id: string;
 };
 
+// Either the pooled db or an open transaction handle. Callers that must write
+// the audit row inside a locked transaction (e.g. the post-sale convergence
+// sentinel) pass their tx so the write commits atomically with the effects it
+// gates.
+type Executor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
+
 export type LogActionInput = {
   organizationId: string;
   actor: AuditActor;
@@ -29,6 +35,13 @@ export type LogActionInput = {
   metadata?: Record<string, unknown> | null;
   ip?: string | null;
   userAgent?: string | null;
+  // Optional executor. Defaults to the pooled db (back-compat with every
+  // existing caller). Pass a tx to write inside an open transaction.
+  executor?: Executor;
+  // When true, a failed insert re-throws instead of being swallowed. Used by the
+  // post-sale convergence sentinel: if the gating audit row can't be written, the
+  // whole locked transaction MUST roll back so effects never commit ungated.
+  throwOnError?: boolean;
 };
 
 // `next/headers` is only callable inside a request scope (server actions,
@@ -66,7 +79,8 @@ export async function logAction(input: LogActionInput): Promise<void> {
         ? { ip: input.ip ?? null, userAgent: input.userAgent ?? null }
         : await readRequestMeta();
 
-    await db.insert(auditLogsSchema).values({
+    const executor = input.executor ?? db;
+    await executor.insert(auditLogsSchema).values({
       organizationId: input.organizationId,
       actorType: input.actor.type,
       actorId: input.actor.id,
@@ -87,5 +101,8 @@ export async function logAction(input: LogActionInput): Promise<void> {
       organizationId: input.organizationId,
       error: err instanceof Error ? err.message : String(err),
     });
+    if (input.throwOnError) {
+      throw err;
+    }
   }
 }

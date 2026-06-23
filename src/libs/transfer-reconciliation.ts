@@ -48,8 +48,9 @@ export function methodNeedsReconciliation(method: string | null): boolean {
 // so all three sale entry points (createSale, pos/sales, pos/sync) share it.
 export async function recordSaleTransferReconciliations(
   saleId: string,
+  executor: Executor = db,
 ): Promise<void> {
-  const [sale] = await db
+  const [sale] = await executor
     .select({
       organizationId: salesSchema.organizationId,
       posTokenId: salesSchema.posTokenId,
@@ -61,7 +62,7 @@ export async function recordSaleTransferReconciliations(
     return;
   }
 
-  const payments = await db
+  const payments = await executor
     .select({
       id: salePaymentsSchema.id,
       method: salePaymentsSchema.method,
@@ -78,12 +79,12 @@ export async function recordSaleTransferReconciliations(
 
   // Scope the session lookup to the device that made the sale (null = admin).
   const session = await findOpenSession(
-    db,
+    executor,
     sale.organizationId,
     sale.posTokenId,
   );
 
-  await db
+  await executor
     .insert(transferReconciliationsSchema)
     .values(
       reconcilable.map(p => ({

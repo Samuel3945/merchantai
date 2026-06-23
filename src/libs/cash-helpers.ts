@@ -435,12 +435,21 @@ export async function computeExpectedAmount(
 export async function recordCashMovement(
   saleId: string,
   total: number | string,
-  ctx?: { organizationId: string; userId: string; posTokenId?: string | null },
+  ctx?: {
+    organizationId: string;
+    userId: string;
+    posTokenId?: string | null;
+    // Optional executor. Defaults to the pooled db (back-compat). The post-sale
+    // convergence path passes its locked tx so the existence check + insert run
+    // inside the same serialized transaction (exactly-once cash movement).
+    executor?: Executor;
+  },
 ): Promise<CashMovement | null> {
   let userId: string | undefined;
   let orgId: string | undefined;
   // Scope the till to the device that made the sale (null/omitted = admin/org).
   const posTokenId = ctx?.posTokenId;
+  const executor: Executor = ctx?.executor ?? db;
 
   if (ctx) {
     userId = ctx.userId;
@@ -458,9 +467,9 @@ export async function recordCashMovement(
   // Auto-create a minimal session when cash enters the drawer so the cash is
   // always accounted for. No silent gaps that surface as unexplained surpluses
   // at closing time.
-  let open = await findOpenSession(db, orgId, posTokenId);
+  let open = await findOpenSession(executor, orgId, posTokenId);
   if (!open) {
-    const [autoSession] = await db
+    const [autoSession] = await executor
       .insert(cashSessionsSchema)
       .values({
         organizationId: orgId,
@@ -481,7 +490,7 @@ export async function recordCashMovement(
   // human-readable movement label (saleNumber). Using the per-org sale number
   // keeps the Caja ledger consistent with the Sales view (#1001) instead of a
   // raw UUID prefix.
-  const [sale] = await db
+  const [sale] = await executor
     .select({
       paymentType: salesSchema.paymentType,
       saleNumber: salesSchema.saleNumber,
@@ -490,7 +499,7 @@ export async function recordCashMovement(
     .where(eq(salesSchema.id, saleId))
     .limit(1);
 
-  const [cashRow] = await db
+  const [cashRow] = await executor
     .select({
       sum: sql<string>`COALESCE(SUM(${salePaymentsSchema.amount}), 0)::text`,
     })
@@ -522,7 +531,7 @@ export async function recordCashMovement(
   // The sale_movement row is the sentinel — if it already exists for this sale,
   // return it instead of inserting a second one (which would inflate expected
   // cash and surface as a phantom surplus at close).
-  const [already] = await db
+  const [already] = await executor
     .select()
     .from(cashMovementsSchema)
     .where(
@@ -537,7 +546,7 @@ export async function recordCashMovement(
     return already;
   }
 
-  const [created] = await db
+  const [created] = await executor
     .insert(cashMovementsSchema)
     .values({
       sessionId: open.id,

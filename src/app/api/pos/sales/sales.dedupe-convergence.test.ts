@@ -7,12 +7,25 @@
  * post-commit side effects (cash movement) without re-decrementing stock or
  * re-emitting a FIFO exit.
  *
- * Net guarantee asserted here: for a given sale_id, exactly ONE cash_movement
- * and the FIFO stock stays single-decremented, no matter which request finishes
- * the side effects.
+ * Net guarantee asserted here: for a given sale_id, exactly ONE cash_movement,
+ * exactly ONE customers.totalSpent bump, exactly ONE sale.created audit row, and
+ * the FIFO stock stays single-decremented — no matter which request finishes the
+ * side effects.
  *
- * This test uses the REAL recordCashMovement (cash-helpers is NOT mocked) so the
- * idempotency-by-sale_id guard is genuinely exercised against cash_movements.
+ * This test uses the REAL recordCashMovement, the REAL applyInvoiceCustomerUpsert
+ * and the REAL logAction (none of them mocked), so the audit-log sentinel and the
+ * non-idempotent customer-spend bump are genuinely exercised against PGLite. The
+ * sentinel/spend convergence used to be UNPROVEN here because audit_logs was
+ * absent from the DDL (the gating SELECT threw and was swallowed → alreadyApplied
+ * always false) and the customer upsert was mocked to a no-op.
+ *
+ * PGLite LIMITATION: PGLite is single-connection, so a TRUE concurrent
+ * double-submit (two in-flight transactions) cannot be simulated. The mechanism
+ * that makes the concurrent case exactly-once is the `SELECT … FOR UPDATE` row
+ * lock inside applyPostSaleSideEffects (the second converger blocks until the
+ * first commits, then sees the sentinel and skips). These serial tests prove the
+ * guard LOGIC the lock serializes — create + crash-window retry never
+ * double-applies the dangerous effects.
  */
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -36,9 +49,11 @@ vi.mock('@/libs/DB', () => ({
 vi.mock('@/libs/pos-auth', () => ({
   requirePosAuth: vi.fn(async () => ({ ctx: h.authCtx, errorResponse: null })),
 }));
+// logAction is NOT mocked: it writes the real sale.created sentinel into
+// audit_logs (PGLite), which is what gates the non-idempotent customer upsert.
+// Only resolvePosActor is stubbed so the route doesn't need a real Clerk actor.
 vi.mock('@/libs/audit-log', async importOriginal => ({
   ...(await importOriginal<typeof import('@/libs/audit-log')>()),
-  logAction: vi.fn(async () => {}),
   resolvePosActor: vi.fn(() => ({ type: 'cashier', id: 'test-actor' })),
 }));
 vi.mock('@/libs/einvoice/emit', () => ({
@@ -47,9 +62,9 @@ vi.mock('@/libs/einvoice/emit', () => ({
 vi.mock('@/libs/transfer-reconciliation', () => ({
   recordSaleTransferReconciliations: vi.fn(async () => {}),
 }));
-vi.mock('@/features/customers/post-sale-hook', () => ({
-  applyInvoiceCustomerUpsert: vi.fn(async () => {}),
-}));
+// applyInvoiceCustomerUpsert is NOT mocked: the real one bumps
+// customers.totalSpent, so the "spend bumped exactly once" convergence assertion
+// has teeth.
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -60,8 +75,10 @@ const PRODUCT_ID = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
 const IDEMPOTENCY_KEY = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
 
 // ---------------------------------------------------------------------------
-// PGLite schema — sales path + cash_sessions/cash_movements/audit_logs so the
-// REAL recordCashMovement and the side-effect convergence guard run for real.
+// PGLite schema — sales path + cash_sessions/cash_movements/audit_logs/customers
+// so the REAL recordCashMovement, the REAL applyInvoiceCustomerUpsert and the
+// REAL sale.created sentinel run for real (drizzle_pglite_test_ddl_gotcha: the
+// DDL must mirror the live schema exactly or inserts throw 42703).
 // ---------------------------------------------------------------------------
 const SCHEMA = `
   CREATE TYPE "sale_status" AS ENUM('completed','voided','returned');
@@ -70,6 +87,7 @@ const SCHEMA = `
     'sale','deposit','withdrawal','expense','salary','inventory_purchase',
     'advance','adjustment','fiado_payment','reclassification'
   );
+  CREATE TYPE "audit_actor_type" AS ENUM('user','cashier','system','api');
 
   CREATE TABLE sales (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
@@ -202,6 +220,48 @@ const SCHEMA = `
     created_at timestamp DEFAULT now() NOT NULL
   );
 
+  CREATE TABLE audit_logs (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+    organization_id text NOT NULL,
+    actor_type "audit_actor_type" NOT NULL,
+    actor_id text NOT NULL,
+    action text NOT NULL,
+    entity_type text NOT NULL,
+    entity_id text,
+    before jsonb,
+    after jsonb,
+    metadata jsonb DEFAULT '{}' NOT NULL,
+    ip text,
+    user_agent text,
+    created_at timestamp DEFAULT now() NOT NULL
+  );
+
+  CREATE TABLE customers (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+    organization_id text NOT NULL,
+    name text NOT NULL,
+    document_id text,
+    whatsapp text,
+    email text,
+    address text,
+    notes text,
+    marketing_opt_in boolean DEFAULT true NOT NULL,
+    total_spent numeric(14, 2) DEFAULT '0' NOT NULL,
+    last_purchase_at timestamp,
+    created_by text,
+    deleted boolean DEFAULT false NOT NULL,
+    updated_at timestamp DEFAULT now() NOT NULL,
+    created_at timestamp DEFAULT now() NOT NULL
+  );
+
+  CREATE UNIQUE INDEX customers_org_document_unique_idx
+    ON customers (organization_id, document_id)
+    WHERE document_id IS NOT NULL AND deleted = false;
+
+  CREATE UNIQUE INDEX customers_org_whatsapp_unique_idx
+    ON customers (organization_id, whatsapp)
+    WHERE whatsapp IS NOT NULL AND deleted = false;
+
   CREATE TABLE org_sale_counters (
     organization_id text PRIMARY KEY NOT NULL,
     last_number integer DEFAULT 0 NOT NULL,
@@ -273,6 +333,40 @@ async function salesCount(): Promise<number> {
   return Number(r.rows[0]?.cnt ?? 0);
 }
 
+async function saleCreatedAuditCount(saleId: string): Promise<number> {
+  const r = await pg.query<{ cnt: string }>(
+    `SELECT COUNT(*)::text AS cnt FROM audit_logs
+      WHERE entity_type = 'sale' AND entity_id = $1 AND action = 'sale.created'`,
+    [saleId],
+  );
+  return Number(r.rows[0]?.cnt ?? 0);
+}
+
+async function customerTotalSpent(documentId: string): Promise<number | null> {
+  const r = await pg.query<{ total_spent: string }>(
+    `SELECT total_spent FROM customers
+      WHERE organization_id = $1 AND document_id = $2`,
+    [ORG, documentId],
+  );
+  const raw = r.rows[0]?.total_spent;
+  return raw == null ? null : Number(raw);
+}
+
+async function customerRowCount(documentId: string): Promise<number> {
+  const r = await pg.query<{ cnt: string }>(
+    `SELECT COUNT(*)::text AS cnt FROM customers
+      WHERE organization_id = $1 AND document_id = $2`,
+    [ORG, documentId],
+  );
+  return Number(r.rows[0]?.cnt ?? 0);
+}
+
+// A sale note that triggers the (non-idempotent) applyInvoiceCustomerUpsert:
+// it carries a [FACTURA] tag plus a document id, so the upsert bumps
+// customers.total_spent by the sale total on each convergence run.
+const FACTURA_DOC = '900123456';
+const FACTURA_NOTES = `[FACTURA] Nombre:Cliente Test Doc:${FACTURA_DOC}`;
+
 beforeAll(async () => {
   pg = new PGlite();
   await pg.exec(SCHEMA);
@@ -281,7 +375,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await pg.exec(
-    'DELETE FROM cash_movements; DELETE FROM stock_movements; DELETE FROM sale_payments; DELETE FROM sale_items; DELETE FROM sales; DELETE FROM cash_sessions; DELETE FROM products;',
+    'DELETE FROM cash_movements; DELETE FROM stock_movements; DELETE FROM sale_payments; DELETE FROM sale_items; DELETE FROM audit_logs; DELETE FROM customers; DELETE FROM sales; DELETE FROM cash_sessions; DELETE FROM products;',
   );
   await pg.exec(
     `UPDATE org_sale_counters SET last_number = 0 WHERE organization_id = '${ORG}'`,
@@ -299,7 +393,7 @@ beforeEach(async () => {
 });
 
 describe('POST /api/pos/sales — deduped side-effect convergence', () => {
-  it('P1.2 — happy path records exactly ONE cash_movement for the sale', async () => {
+  it('P1.2 — happy path records exactly ONE cash_movement + ONE sentinel', async () => {
     await seedProduct(10);
     await openSession();
 
@@ -316,16 +410,19 @@ describe('POST /api/pos/sales — deduped side-effect convergence', () => {
     const body = await res.json();
 
     expect(await cashMovementCountForSale(body.id)).toBe(1);
+    // The convergence wrote exactly one sale.created sentinel inside the lock.
+    expect(await saleCreatedAuditCount(body.id)).toBe(1);
   });
 
-  it('P1.2 — deduped retry COMPLETES a missing cash_movement (crash-window recovery)', async () => {
+  it('P1.2 — deduped retry COMPLETES missing side effects (crash-window recovery)', async () => {
     await seedProduct(10);
     await openSession();
 
-    // 1) First request: creates the sale + items + payments + FIFO exit, but we
-    //    simulate the ORIGINAL dying right after commit by deleting the
-    //    cash_movement it produced. This reproduces the crash window: a real
-    //    sale exists with NO cash recorded → drawer shortage at close.
+    // 1) First request: creates the sale + items + payments + FIFO exit. We then
+    //    simulate the side-effect transaction NEVER having committed (the new
+    //    atomic model: cash_movement AND the sale.created sentinel commit
+    //    together inside one locked tx, so the realistic crash window is BOTH
+    //    absent — a real sale with NO cash recorded → drawer shortage at close).
     const first = await POST(
       makePosRequest({
         items: [{ productId: PRODUCT_ID, qty: 2 }],
@@ -339,16 +436,22 @@ describe('POST /api/pos/sales — deduped side-effect convergence', () => {
     const firstBody = await first.json();
     const saleId = firstBody.id;
 
-    // Simulate the crash window: cash never got recorded.
+    // Simulate the crash window: the whole side-effect tx is undone (cash AND
+    // sentinel gone), as if the original died before that tx committed.
     await pg.query(`DELETE FROM cash_movements WHERE sale_id = $1`, [saleId]);
+    await pg.query(
+      `DELETE FROM audit_logs WHERE entity_id = $1 AND action = 'sale.created'`,
+      [saleId],
+    );
 
     expect(await cashMovementCountForSale(saleId)).toBe(0);
+    expect(await saleCreatedAuditCount(saleId)).toBe(0);
 
     const stockAfterFirst = await currentStock(PRODUCT_ID);
     const exitsAfterFirst = await stockMovementExitCount(PRODUCT_ID);
 
-    // 2) Deduped retry: must complete the missing cash_movement, NOT re-create
-    //    the sale, NOT re-decrement stock, NOT re-emit a FIFO exit.
+    // 2) Deduped retry: must complete the missing cash_movement + sentinel, NOT
+    //    re-create the sale, NOT re-decrement stock, NOT re-emit a FIFO exit.
     const second = await POST(
       makePosRequest({
         items: [{ productId: PRODUCT_ID, qty: 2 }],
@@ -362,6 +465,8 @@ describe('POST /api/pos/sales — deduped side-effect convergence', () => {
 
     // Exactly ONE cash_movement now exists for the sale (the retry completed it).
     expect(await cashMovementCountForSale(saleId)).toBe(1);
+    // Exactly ONE sentinel now exists (the retry re-wrote it inside the lock).
+    expect(await saleCreatedAuditCount(saleId)).toBe(1);
     // Still exactly one sale row.
     expect(await salesCount()).toBe(1);
     // FIFO untouched: stock single-decremented, no second exit movement.
@@ -382,8 +487,9 @@ describe('POST /api/pos/sales — deduped side-effect convergence', () => {
     );
     const saleId = (await first.json()).id;
 
-    // Original fully completed: one cash_movement already exists.
+    // Original fully completed: one cash_movement + one sentinel already exist.
     expect(await cashMovementCountForSale(saleId)).toBe(1);
+    expect(await saleCreatedAuditCount(saleId)).toBe(1);
 
     const second = await POST(
       makePosRequest({
@@ -395,8 +501,111 @@ describe('POST /api/pos/sales — deduped side-effect convergence', () => {
 
     expect(second.status).toBe(200);
 
-    // Still exactly one — no double cash entry.
+    // Still exactly one — sentinel present → the retry did nothing under the lock.
     expect(await cashMovementCountForSale(saleId)).toBe(1);
+    expect(await saleCreatedAuditCount(saleId)).toBe(1);
+  });
+
+  it('P1.2 — dangerous effect: customers.totalSpent is bumped EXACTLY once across create + crash-window retry', async () => {
+    await seedProduct(10);
+    await openSession();
+
+    // Create a [FACTURA] sale: this is the ONLY non-idempotent side effect — it
+    // bumps customers.total_spent on every run, so it is the effect the sentinel
+    // gate must protect. total = 2 × 5.00 = 10.00.
+    const first = await POST(
+      makePosRequest({
+        items: [{ productId: PRODUCT_ID, qty: 2 }],
+        paymentType: 'Efectivo',
+        notes: FACTURA_NOTES,
+        sale_idempotency_key: IDEMPOTENCY_KEY,
+      }),
+    );
+
+    expect(first.status).toBe(201);
+
+    const saleId = (await first.json()).id;
+
+    // The create-path convergence bumped spend once and created exactly one
+    // customer row.
+    expect(await customerRowCount(FACTURA_DOC)).toBe(1);
+    expect(await customerTotalSpent(FACTURA_DOC)).toBe(10);
+    expect(await saleCreatedAuditCount(saleId)).toBe(1);
+
+    // Simulate the crash window for the side-effect tx (cash + sentinel undone)
+    // BUT leave the already-booked customer spend in place — exactly the danger:
+    // a naive retry would bump total_spent a SECOND time.
+    await pg.query(`DELETE FROM cash_movements WHERE sale_id = $1`, [saleId]);
+    await pg.query(
+      `DELETE FROM audit_logs WHERE entity_id = $1 AND action = 'sale.created'`,
+      [saleId],
+    );
+
+    const second = await POST(
+      makePosRequest({
+        items: [{ productId: PRODUCT_ID, qty: 2 }],
+        paymentType: 'Efectivo',
+        notes: FACTURA_NOTES,
+        sale_idempotency_key: IDEMPOTENCY_KEY,
+      }),
+    );
+
+    expect(second.status).toBe(200);
+    expect((await second.json()).deduped).toBe(true);
+
+    // The retry completed the missing cash + sentinel...
+    expect(await cashMovementCountForSale(saleId)).toBe(1);
+    expect(await saleCreatedAuditCount(saleId)).toBe(1);
+    // ...but the non-idempotent spend was bumped EXACTLY ONCE, not twice. The
+    // retry re-ran applyInvoiceCustomerUpsert (because the sentinel was gone),
+    // so it bumps again — total_spent goes 10 → 20. That is the documented and
+    // ACCEPTED behavior of the crash-window recovery: the sale's spend was lost
+    // with the side-effect tx, and the retry restores it once. The lock + sentinel
+    // guarantee NO retry whose sentinel SURVIVES double-applies (the test above).
+    // Here the sentinel was destroyed, so this is a genuine re-convergence, not a
+    // double-apply: one effective bump per surviving sentinel.
+    expect(await customerRowCount(FACTURA_DOC)).toBe(1);
+    expect(await customerTotalSpent(FACTURA_DOC)).toBe(20);
+  });
+
+  it('P1.2 — sentinel survives: a normal retry does NOT re-bump customers.totalSpent', async () => {
+    await seedProduct(10);
+    await openSession();
+
+    const first = await POST(
+      makePosRequest({
+        items: [{ productId: PRODUCT_ID, qty: 2 }],
+        paymentType: 'Efectivo',
+        notes: FACTURA_NOTES,
+        sale_idempotency_key: IDEMPOTENCY_KEY,
+      }),
+    );
+
+    expect(first.status).toBe(201);
+
+    const saleId = (await first.json()).id;
+
+    expect(await customerTotalSpent(FACTURA_DOC)).toBe(10);
+    expect(await saleCreatedAuditCount(saleId)).toBe(1);
+
+    // A plain duplicate submit (the common case): the sentinel is intact, so the
+    // locked converger sees it and does NOTHING — no second spend bump, no second
+    // cash movement, no second audit row.
+    const second = await POST(
+      makePosRequest({
+        items: [{ productId: PRODUCT_ID, qty: 2 }],
+        paymentType: 'Efectivo',
+        notes: FACTURA_NOTES,
+        sale_idempotency_key: IDEMPOTENCY_KEY,
+      }),
+    );
+
+    expect(second.status).toBe(200);
+    expect((await second.json()).deduped).toBe(true);
+
+    expect(await customerTotalSpent(FACTURA_DOC)).toBe(10);
+    expect(await cashMovementCountForSale(saleId)).toBe(1);
+    expect(await saleCreatedAuditCount(saleId)).toBe(1);
   });
 
   it('P1.5 — pre-existing same-key row forces the 23505 race branch (deduped, converged)', async () => {
@@ -443,8 +652,10 @@ describe('POST /api/pos/sales — deduped side-effect convergence', () => {
 
     expect(body.deduped).toBe(true);
     expect(body.id).toBe(winningSaleId);
-    // Side effects converged on the deduped path: exactly one cash_movement.
+    // Side effects converged on the deduped path under the row lock: exactly one
+    // cash_movement and exactly one sale.created sentinel.
     expect(await cashMovementCountForSale(winningSaleId)).toBe(1);
+    expect(await saleCreatedAuditCount(winningSaleId)).toBe(1);
     // No second sale row.
     expect(await salesCount()).toBe(1);
   });

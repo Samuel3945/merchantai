@@ -7,11 +7,18 @@ import {
   parseFacturaCustomer,
 } from './validation';
 
+// Either the pooled db or an open transaction handle, so the (non-idempotent)
+// totalSpent bump can run inside the post-sale convergence lock.
+type Executor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
+
 type PostSaleArgs = {
   organizationId: string;
   notes: string | null | undefined;
   total: string | number;
   createdBy?: string | null;
+  // Optional executor. Defaults to the pooled db (back-compat). Pass a tx to run
+  // inside an open transaction (post-sale convergence serializes on a row lock).
+  executor?: Executor;
 };
 
 function toAmount(v: string | number): number {
@@ -19,6 +26,7 @@ function toAmount(v: string | number): number {
 }
 
 export async function applyInvoiceCustomerUpsert(args: PostSaleArgs) {
+  const executor = args.executor ?? db;
   const parsed = parseFacturaCustomer(args.notes);
   if (!parsed) {
     return null;
@@ -44,7 +52,7 @@ export async function applyInvoiceCustomerUpsert(args: PostSaleArgs) {
   // Try to find by documentId first, then by whatsapp.
   let existingId: string | null = null;
   if (documentId) {
-    const [row] = await db
+    const [row] = await executor
       .select({ id: customersSchema.id })
       .from(customersSchema)
       .where(
@@ -58,7 +66,7 @@ export async function applyInvoiceCustomerUpsert(args: PostSaleArgs) {
     existingId = row?.id ?? null;
   }
   if (!existingId && whatsapp) {
-    const [row] = await db
+    const [row] = await executor
       .select({ id: customersSchema.id })
       .from(customersSchema)
       .where(
@@ -73,7 +81,7 @@ export async function applyInvoiceCustomerUpsert(args: PostSaleArgs) {
   }
 
   if (existingId) {
-    const [row] = await db
+    const [row] = await executor
       .update(customersSchema)
       .set({
         totalSpent: sql`${customersSchema.totalSpent} + ${amountStr}::numeric`,
@@ -86,7 +94,7 @@ export async function applyInvoiceCustomerUpsert(args: PostSaleArgs) {
     return row ?? null;
   }
 
-  const [row] = await db
+  const [row] = await executor
     .insert(customersSchema)
     .values({
       organizationId: args.organizationId,
