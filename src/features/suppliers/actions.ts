@@ -502,7 +502,8 @@ export async function bulkImportSuppliers(
 export type ProductOption = { id: string; name: string };
 
 // Products (id + name) to pick from when assigning what a supplier provides.
-// Capped — the supplier modal searches as you type rather than loading all.
+// Returns the full catalog (filtered by the search box as you type) — no cap, so
+// every product is reachable from the picker.
 export async function listSupplierProductOptions(
   params?: { search?: string },
 ): Promise<ProductOption[]> {
@@ -528,8 +529,7 @@ export async function listSupplierProductOptions(
     .select({ id: productsSchema.id, name: productsSchema.name })
     .from(productsSchema)
     .where(and(...filters))
-    .orderBy(asc(productsSchema.name))
-    .limit(50);
+    .orderBy(asc(productsSchema.name));
 }
 
 // Contact data for an active supplier surfaced by the reverse lookup.
