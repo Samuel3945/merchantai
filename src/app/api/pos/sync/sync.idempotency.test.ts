@@ -322,4 +322,39 @@ describe('POST /api/pos/sync — idempotency', () => {
     expect(body.results[0].success).toBe(true);
     expect(await salesCount()).toBe(1);
   });
+
+  it('P1.1 — malformed (non-UUID) key syncs the sale normally (no permanent reject)', async () => {
+    await seedProduct(10);
+
+    // A non-UUID key must NOT reach the uuid column (22P02 would permanently
+    // reject this localId on every retry). Treated as null: normal create.
+    const res = await POST(
+      makeSyncRequest({
+        token: TOKEN,
+        sales: [
+          {
+            localId: 7,
+            items: [{ productId: PRODUCT_ID, qty: 1 }],
+            paymentType: 'Efectivo',
+            sale_idempotency_key: 'not-a-uuid',
+          },
+        ],
+      }),
+    );
+
+    expect(res.status).toBe(200);
+
+    const body = await res.json();
+
+    expect(body.results[0].success).toBe(true);
+    expect(body.results[0].serverSaleId).toBeDefined();
+    expect(await salesCount()).toBe(1);
+
+    const row = await pg.query<{ sale_idempotency_key: string | null }>(
+      `SELECT sale_idempotency_key FROM sales WHERE id = $1`,
+      [body.results[0].serverSaleId],
+    );
+
+    expect(row.rows[0]?.sale_idempotency_key).toBeNull();
+  });
 });

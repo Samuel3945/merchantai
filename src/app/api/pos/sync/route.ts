@@ -1,14 +1,14 @@
 import { and, asc, eq, sql } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { touchLastSync, validatePosToken } from '@/actions/pos-tokens';
-import { applyInvoiceCustomerUpsert } from '@/features/customers/post-sale-hook';
-import { recordCashMovement, toMoney } from '@/libs/cash-helpers';
+import { toMoney } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import { createFiado } from '@/libs/fiados';
 import { fiadoAmountFor } from '@/libs/fiados-math';
 import { consumeFifoExits } from '@/libs/fifo-cogs';
+import { applyPostSaleSideEffects } from '@/libs/post-sale-side-effects';
 import { assignNextSaleNumber } from '@/libs/sale-number';
-import { recordSaleTransferReconciliations } from '@/libs/transfer-reconciliation';
+import { normalizeIdempotencyKey } from '@/libs/uuid';
 import {
   productsSchema,
   saleItemsSchema,
@@ -91,10 +91,41 @@ export async function POST(req: Request): Promise<NextResponse> {
 
   const results: SyncResult[] = [];
 
+  // Post-commit side effects for a synced sale, idempotent by sale_id and run by
+  // BOTH the create path and the deduped paths (pre-SELECT belt + 23505 catch).
+  // A retry that finds the sale already created still runs this so it completes
+  // anything the original sync attempt never finished — exactly one cash_movement
+  // and one set of side effects per sale_id, never re-touching stock.
+  const runSideEffects = (
+    saleId: string,
+    total: string | number,
+    notes: string | null,
+  ): Promise<void> =>
+    applyPostSaleSideEffects({
+      organizationId: orgId,
+      saleId,
+      total,
+      notes,
+      userId: cashierId ?? deviceName,
+      createdBy: cashierId ?? deviceName ?? null,
+      posTokenId: posToken.id,
+      audit: {
+        actor: { type: 'cashier', id: cashierId ?? `device:${deviceName}` },
+        action: 'sale.created',
+        after: { id: saleId, total },
+        metadata: { source: 'sync', deviceName },
+      },
+    });
+
   for (const queuedSale of queued) {
     // Exactly-once dedupe key — declared here so the catch block can reference
-    // it for the 23505 re-SELECT suspenders path.
-    const batchIdempotencyKey = queuedSale.sale_idempotency_key?.trim() || null;
+    // it for the 23505 re-SELECT suspenders path. A present-but-malformed
+    // (non-UUID) key would hit the `uuid` column and throw 22P02, permanently
+    // rejecting this localId on every retry; normalize it to null instead (no
+    // dedupe, normal create — back-compat with clients that send garbage).
+    const batchIdempotencyKey = normalizeIdempotencyKey(
+      queuedSale.sale_idempotency_key,
+    );
 
     try {
       if (!queuedSale.items?.length) {
@@ -104,7 +135,11 @@ export async function POST(req: Request): Promise<NextResponse> {
       // Belt (pre-SELECT) before the insert transaction.
       if (batchIdempotencyKey) {
         const [existingSale] = await db
-          .select({ id: salesSchema.id })
+          .select({
+            id: salesSchema.id,
+            total: salesSchema.total,
+            notes: salesSchema.notes,
+          })
           .from(salesSchema)
           .where(
             and(
@@ -114,6 +149,10 @@ export async function POST(req: Request): Promise<NextResponse> {
           )
           .limit(1);
         if (existingSale) {
+          // Deduped: complete any post-commit side effect the original never
+          // finished (e.g. it died before recordCashMovement → cash for a real
+          // sale never recorded → drawer shortage). Idempotent by sale_id.
+          await runSideEffects(existingSale.id, existingSale.total, existingSale.notes);
           results.push({
             localId: queuedSale.localId,
             success: true,
@@ -123,7 +162,7 @@ export async function POST(req: Request): Promise<NextResponse> {
         }
       }
 
-      const { saleId, total: saleTotal } = await db.transaction(async (tx) => {
+      const { saleId, total: saleTotal, notes: saleNotes } = await db.transaction(async (tx) => {
         let total = 0;
         const itemsToInsert: {
           productId: string;
@@ -322,20 +361,7 @@ export async function POST(req: Request): Promise<NextResponse> {
         serverSaleId: saleId,
       });
 
-      await recordCashMovement(saleId, saleTotal, {
-        organizationId: orgId,
-        userId: cashierId ?? deviceName,
-        posTokenId: posToken.id,
-      }).catch(() => null);
-
-      await recordSaleTransferReconciliations(saleId).catch(() => null);
-
-      await applyInvoiceCustomerUpsert({
-        organizationId: orgId,
-        notes: queuedSale.notes ?? null,
-        total: saleTotal,
-        createdBy: cashierId ?? deviceName ?? null,
-      }).catch(() => null);
+      await runSideEffects(saleId, saleTotal, saleNotes);
     } catch (err) {
       // Suspenders: concurrent-retry race resolved via 23505 unique violation.
       // If two retries with the same key arrive concurrently, one commits and
@@ -348,7 +374,11 @@ export async function POST(req: Request): Promise<NextResponse> {
         && (err as { code: string }).code === '23505'
       ) {
         const [deduped] = await db
-          .select({ id: salesSchema.id })
+          .select({
+            id: salesSchema.id,
+            total: salesSchema.total,
+            notes: salesSchema.notes,
+          })
           .from(salesSchema)
           .where(
             and(
@@ -358,6 +388,8 @@ export async function POST(req: Request): Promise<NextResponse> {
           )
           .limit(1);
         if (deduped) {
+          // Same convergence guarantee on the concurrent-retry race winner.
+          await runSideEffects(deduped.id, deduped.total, deduped.notes);
           results.push({
             localId: queuedSale.localId,
             success: true,

@@ -369,4 +369,62 @@ describe('POST /api/pos/sales — idempotency', () => {
 
     expect(row.rows[0]?.sale_idempotency_key).toBeNull();
   });
+
+  it('P1.1 — malformed (non-UUID) key creates sale normally, no crash, null stored', async () => {
+    await seedProduct();
+
+    // A non-UUID key must NOT reach the uuid column (Postgres 22P02). The route
+    // treats it as null: normal create, no dedupe, no 500.
+    const res = await POST(
+      makePosRequest({
+        items: [{ productId: PRODUCT_ID, qty: 1 }],
+        sale_idempotency_key: 'not-a-uuid',
+      }),
+    );
+
+    expect(res.status).toBe(201);
+
+    const body = await res.json();
+
+    expect(body.id).toBeDefined();
+    expect(body.deduped).toBeUndefined();
+
+    const row = await pg.query<{ sale_idempotency_key: string | null }>(
+      `SELECT sale_idempotency_key FROM sales WHERE id = $1`,
+      [body.id],
+    );
+
+    expect(row.rows[0]?.sale_idempotency_key).toBeNull();
+    expect(await salesCount(ORG)).toBe(1);
+  });
+
+  it('P1.3 — deduped response includes items + payments (shape parity)', async () => {
+    await seedProduct();
+
+    const first = await POST(
+      makePosRequest({
+        items: [{ productId: PRODUCT_ID, qty: 1 }],
+        sale_idempotency_key: IDEMPOTENCY_KEY,
+      }),
+    );
+    const firstBody = await first.json();
+
+    const second = await POST(
+      makePosRequest({
+        items: [{ productId: PRODUCT_ID, qty: 1 }],
+        sale_idempotency_key: IDEMPOTENCY_KEY,
+      }),
+    );
+
+    expect(second.status).toBe(200);
+
+    const secondBody = await second.json();
+
+    expect(secondBody.deduped).toBe(true);
+    expect(secondBody.id).toBe(firstBody.id);
+    expect(Array.isArray(secondBody.items)).toBe(true);
+    expect(secondBody.items).toHaveLength(1);
+    expect(Array.isArray(secondBody.payments)).toBe(true);
+    expect(secondBody.payments.length).toBeGreaterThanOrEqual(1);
+  });
 });

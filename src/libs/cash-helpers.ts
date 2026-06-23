@@ -517,6 +517,26 @@ export async function recordCashMovement(
     return null;
   }
 
+  // Idempotency by sale_id: a sale's cash movement is recorded exactly once,
+  // no matter how many times this runs (deduped retry, crash-window recovery).
+  // The sale_movement row is the sentinel — if it already exists for this sale,
+  // return it instead of inserting a second one (which would inflate expected
+  // cash and surface as a phantom surplus at close).
+  const [already] = await db
+    .select()
+    .from(cashMovementsSchema)
+    .where(
+      and(
+        eq(cashMovementsSchema.organizationId, orgId),
+        eq(cashMovementsSchema.saleId, saleId),
+        eq(cashMovementsSchema.type, 'sale'),
+      ),
+    )
+    .limit(1);
+  if (already) {
+    return already;
+  }
+
   const [created] = await db
     .insert(cashMovementsSchema)
     .values({
