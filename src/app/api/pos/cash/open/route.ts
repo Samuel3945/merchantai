@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { logAction, resolvePosActor } from '@/libs/audit-log';
 import {
@@ -16,6 +16,7 @@ import {
   recordHandoverMovement,
   resolveSweepDestination,
 } from '@/libs/treasury';
+import { normalizeIdempotencyKey } from '@/libs/uuid';
 import { cashSessionsSchema, posTokensSchema } from '@/models/Schema';
 
 export const runtime = 'nodejs';
@@ -26,6 +27,10 @@ type OpenBody = {
   notes?: string | null;
   // Carry-over fields (optional — legacy device omits them; backward-compat preserved)
   explanation?: string | null;
+  // Device-generated UUID v4 for offline-authoritative open (optional — legacy
+  // clients omit it). Lets the server dedupe replays and reconcile a concurrent
+  // server-side open for the same caja.
+  clientSessionId?: string | null;
 };
 
 export async function POST(req: Request): Promise<NextResponse> {
@@ -49,6 +54,32 @@ export async function POST(req: Request): Promise<NextResponse> {
     );
   }
 
+  // A present-but-malformed key normalizes to null → no idempotency, normal open
+  // (back-compat with clients that send garbage).
+  const clientSessionId = normalizeIdempotencyKey(body.clientSessionId);
+
+  // Idempotent open (belt): a replayed open with the same client_session_id
+  // returns the EXISTING session as-is (open OR already closed) without creating
+  // a second row. The partial UNIQUE index + the 23505 catch below are the
+  // suspenders for a true-concurrent double-open of the same key.
+  if (clientSessionId) {
+    const [existingByClient] = await db
+      .select()
+      .from(cashSessionsSchema)
+      .where(
+        and(
+          eq(cashSessionsSchema.organizationId, ctx.organizationId),
+          eq(cashSessionsSchema.clientSessionId, clientSessionId),
+        ),
+      )
+      .limit(1);
+    if (existingByClient) {
+      return NextResponse.json(toPosCashSession(existingByClient), {
+        status: 200,
+      });
+    }
+  }
+
   // Build attribution label: "employee (device)" when both are known, otherwise just cashierName
   let attribution = ctx.cashierName || 'Cajero';
   if (ctx.source === 'token' && ctx.tokenId) {
@@ -68,6 +99,18 @@ export async function POST(req: Request): Promise<NextResponse> {
     const result = await db.transaction(async (tx) => {
       const existing = await findOpenSession(tx, ctx.organizationId, ctx.tokenId);
       if (existing) {
+        // Concurrent-open reconciliation: a DIFFERENT session already holds the
+        // one-open-per-caja slot (our own would have returned 200 above by
+        // client_session_id). The offline device must NOT force a second open —
+        // it adopts the server session. Surface a 409 carrying that session id.
+        if (clientSessionId) {
+          const conflict = new Error(
+            'Ya hay una caja abierta para esta caja; se vinculó la sesión del servidor.',
+          ) as Error & { statusCode?: number; conflictSessionId?: string };
+          conflict.statusCode = 409;
+          conflict.conflictSessionId = existing.id;
+          throw conflict;
+        }
         throw new Error('Ya hay una caja abierta. Ciérrala primero.');
       }
 
@@ -117,6 +160,8 @@ export async function POST(req: Request): Promise<NextResponse> {
           // Accept and store the legacy explanation field from older POS devices
           // (ADR-3 backward-compat). Never required — open is never blocked.
           openingExplanation: body.explanation?.trim() || null,
+          // Offline-authoritative device key (null for legacy/dashboard opens).
+          clientSessionId,
         })
         .returning();
 
@@ -206,6 +251,47 @@ export async function POST(req: Request): Promise<NextResponse> {
 
     return NextResponse.json(toPosCashSession(session), { status: 201 });
   } catch (err) {
+    // Concurrent-open reconciliation: a different session holds the caja slot.
+    // Return its id so the device adopts the server session.
+    const conflictSessionId = (err as { conflictSessionId?: string })
+      .conflictSessionId;
+    if (conflictSessionId) {
+      return NextResponse.json(
+        {
+          error: err instanceof Error ? err.message : 'Caja en conflicto',
+          code: 'session_conflict',
+          session_id: conflictSessionId,
+        },
+        { status: 409 },
+      );
+    }
+
+    // Suspenders: a true-concurrent double-open of the same client_session_id —
+    // both passed the pre-SELECT, one committed, the other hit the partial UNIQUE
+    // index → 23505. Re-select the winner and return it idempotently (200). The
+    // losing transaction was rolled back, so no duplicate session exists.
+    if (
+      clientSessionId
+      && err !== null
+      && typeof err === 'object'
+      && 'code' in err
+      && (err as { code: string }).code === '23505'
+    ) {
+      const [winner] = await db
+        .select()
+        .from(cashSessionsSchema)
+        .where(
+          and(
+            eq(cashSessionsSchema.organizationId, ctx.organizationId),
+            eq(cashSessionsSchema.clientSessionId, clientSessionId),
+          ),
+        )
+        .limit(1);
+      if (winner) {
+        return NextResponse.json(toPosCashSession(winner), { status: 200 });
+      }
+    }
+
     const statusCode = (err as Error & { statusCode?: number }).statusCode ?? 400;
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Error al abrir caja' },

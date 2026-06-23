@@ -212,7 +212,8 @@ const SCHEMA = `
     opening_difference numeric(12, 2),
     opening_explanation text,
     opened_at timestamp DEFAULT now() NOT NULL,
-    closed_at timestamp
+    closed_at timestamp,
+    client_session_id uuid
   );
 
   CREATE TABLE cash_movements (

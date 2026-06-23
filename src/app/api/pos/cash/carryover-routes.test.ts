@@ -58,7 +58,8 @@ const SCHEMA = `
     notes text,
     opening_expected numeric(12, 2),
     opening_difference numeric(12, 2),
-    opening_explanation text
+    opening_explanation text,
+    client_session_id uuid
   );
   -- treasury-sweep-model slice 1: treasury_accounts needed for getOrCreatePendingAccount
   -- (the open-time sweep lazy-seeds the transito account on first shortfall).

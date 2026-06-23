@@ -1,4 +1,4 @@
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, ne, or, sql } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { touchLastSync, validatePosToken } from '@/actions/pos-tokens';
 import { toMoney } from '@/libs/cash-helpers';
@@ -6,10 +6,17 @@ import { db } from '@/libs/DB';
 import { createFiado } from '@/libs/fiados';
 import { fiadoAmountFor } from '@/libs/fiados-math';
 import { consumeFifoExits } from '@/libs/fifo-cogs';
+import { requirePosAuth } from '@/libs/pos-auth';
 import { applyPostSaleSideEffects } from '@/libs/post-sale-side-effects';
 import { assignNextSaleNumber } from '@/libs/sale-number';
 import { normalizeIdempotencyKey } from '@/libs/uuid';
+import { parseWholesaleTiers } from '@/libs/wholesale';
 import {
+  appSettingsSchema,
+  categoriesSchema,
+  customersSchema,
+  paymentMethodsSchema,
+  posUsersSchema,
   productsSchema,
   saleItemsSchema,
   salePaymentsSchema,
@@ -438,4 +445,276 @@ export async function POST(req: Request): Promise<NextResponse> {
   }));
 
   return NextResponse.json({ results, products: wireProducts });
+}
+
+// ── GET /api/pos/sync?since=<ISO> — delta sync DOWN (REQ-03/REQ-09) ──────────
+// Returns only the rows each read-model entity changed since the device's
+// watermark, so an offline-first device pulls deltas instead of the whole
+// catalog. The POST above stays the sync-UP (sale batch) path, untouched for the
+// web POS.
+//
+// Shape: { server_time, has_more: {<entity>: bool},
+//          <entity>: { updated: [...], deleted: ["id"] } }
+// for products, payment_methods, customers, categories, app_settings, employees.
+// Only products + customers carry tombstones (soft-deleted / non-published rows
+// whose updated_at crossed the watermark) so the device removes them locally.
+// Employee PIN hashes are NEVER here — they ride the dedicated
+// /api/pos/employees/secrets path (REQ-09).
+//
+// Cursor: strict `updated_at > since`. A row exactly on the boundary is re-sent
+// next pull and re-applied idempotently (the device upserts), so no row is
+// skipped. First run (no `since`) returns the full catalog and empty deleted
+// sets. `limit` (default 500, max 1000) caps each entity; `has_more[entity]`
+// tells the device to pull again.
+const SYNC_PAGE_DEFAULT = 500;
+const SYNC_PAGE_MAX = 1000;
+
+export async function GET(req: Request): Promise<NextResponse> {
+  const { ctx, errorResponse } = await requirePosAuth(req);
+  if (errorResponse) {
+    return errorResponse;
+  }
+  const orgId = ctx.organizationId;
+
+  const url = new URL(req.url);
+  const sinceParam = url.searchParams.get('since');
+  let since: Date | null = null;
+  if (sinceParam) {
+    const parsed = new Date(sinceParam);
+    if (Number.isNaN(parsed.getTime())) {
+      return NextResponse.json(
+        { error: 'invalid since (expected ISO timestamp)' },
+        { status: 400 },
+      );
+    }
+    since = parsed;
+  }
+
+  const limitParam = Number.parseInt(url.searchParams.get('limit') ?? '', 10);
+  const limit = Number.isFinite(limitParam)
+    ? Math.min(Math.max(limitParam, 1), SYNC_PAGE_MAX)
+    : SYNC_PAGE_DEFAULT;
+
+  const isoOrNull = (d: Date | null | undefined): string | null =>
+    d ? d.toISOString() : null;
+
+  const [
+    products,
+    productTombstones,
+    paymentMethods,
+    customers,
+    customerTombstones,
+    categories,
+    appSettings,
+    employees,
+  ] = await Promise.all([
+    // products: published & not deleted that changed since the watermark.
+    db
+      .select()
+      .from(productsSchema)
+      .where(
+        and(
+          eq(productsSchema.organizationId, orgId),
+          eq(productsSchema.deleted, false),
+          eq(productsSchema.status, 'published'),
+          since ? gt(productsSchema.updatedAt, since) : undefined,
+        ),
+      )
+      .orderBy(asc(productsSchema.updatedAt), asc(productsSchema.id))
+      .limit(limit),
+    // products tombstones: deleted OR no-longer-published (archived/draft/
+    // scheduled). The complement of `updated`, so every changed product lands in
+    // exactly one bucket. Empty on first run (the device has nothing to remove).
+    since
+      ? db
+          .select({ id: productsSchema.id })
+          .from(productsSchema)
+          .where(
+            and(
+              eq(productsSchema.organizationId, orgId),
+              gt(productsSchema.updatedAt, since),
+              or(
+                eq(productsSchema.deleted, true),
+                ne(productsSchema.status, 'published'),
+              ),
+            ),
+          )
+          .orderBy(asc(productsSchema.updatedAt), asc(productsSchema.id))
+          .limit(limit)
+      : Promise.resolve([] as { id: string }[]),
+    db
+      .select()
+      .from(paymentMethodsSchema)
+      .where(
+        and(
+          eq(paymentMethodsSchema.organizationId, orgId),
+          since ? gt(paymentMethodsSchema.updatedAt, since) : undefined,
+        ),
+      )
+      .orderBy(asc(paymentMethodsSchema.updatedAt), asc(paymentMethodsSchema.id))
+      .limit(limit),
+    db
+      .select()
+      .from(customersSchema)
+      .where(
+        and(
+          eq(customersSchema.organizationId, orgId),
+          eq(customersSchema.deleted, false),
+          since ? gt(customersSchema.updatedAt, since) : undefined,
+        ),
+      )
+      .orderBy(asc(customersSchema.updatedAt), asc(customersSchema.id))
+      .limit(limit),
+    since
+      ? db
+          .select({ id: customersSchema.id })
+          .from(customersSchema)
+          .where(
+            and(
+              eq(customersSchema.organizationId, orgId),
+              gt(customersSchema.updatedAt, since),
+              eq(customersSchema.deleted, true),
+            ),
+          )
+          .orderBy(asc(customersSchema.updatedAt), asc(customersSchema.id))
+          .limit(limit)
+      : Promise.resolve([] as { id: string }[]),
+    db
+      .select()
+      .from(categoriesSchema)
+      .where(
+        and(
+          eq(categoriesSchema.organizationId, orgId),
+          since ? gt(categoriesSchema.updatedAt, since) : undefined,
+        ),
+      )
+      .orderBy(asc(categoriesSchema.updatedAt), asc(categoriesSchema.id))
+      .limit(limit),
+    db
+      .select()
+      .from(appSettingsSchema)
+      .where(
+        and(
+          eq(appSettingsSchema.organizationId, orgId),
+          since ? gt(appSettingsSchema.updatedAt, since) : undefined,
+        ),
+      )
+      .orderBy(asc(appSettingsSchema.updatedAt), asc(appSettingsSchema.key))
+      .limit(limit),
+    // employees: explicit column list so the bcrypt PIN hash + password hash are
+    // NEVER selected. The hash is delivered only via /api/pos/employees/secrets.
+    db
+      .select({
+        id: posUsersSchema.id,
+        name: posUsersSchema.name,
+        role: posUsersSchema.role,
+        active: posUsersSchema.active,
+        enabledModules: posUsersSchema.enabledModules,
+        permissions: posUsersSchema.permissions,
+        canConfirmTransfers: posUsersSchema.canConfirmTransfers,
+        updatedAt: posUsersSchema.updatedAt,
+      })
+      .from(posUsersSchema)
+      .where(
+        and(
+          eq(posUsersSchema.organizationId, orgId),
+          since ? gt(posUsersSchema.updatedAt, since) : undefined,
+        ),
+      )
+      .orderBy(asc(posUsersSchema.updatedAt), asc(posUsersSchema.id))
+      .limit(limit),
+  ]);
+
+  return NextResponse.json({
+    server_time: new Date().toISOString(),
+    products: {
+      updated: products.map(p => ({
+        id: p.id,
+        name: p.name,
+        barcode: p.barcode,
+        price: p.price,
+        cost: p.cost,
+        // Digital products report their remaining sales limit as virtual stock
+        // (or effectively-infinite), mirroring /pos/me so cart caps work offline.
+        stock: p.isDigital ? (p.digitalLimit ?? 999999) : p.stock,
+        category: p.category,
+        unit_type: p.unitType,
+        attributes: p.attributes,
+        is_wholesale: p.isWholesale,
+        is_digital: p.isDigital,
+        digital_limit: p.digitalLimit,
+        wholesale_tiers: parseWholesaleTiers(p.wholesaleTiers).map(t => ({
+          min_qty: t.minQty,
+          price: t.price,
+        })),
+        status: p.status,
+        updated_at: isoOrNull(p.updatedAt),
+      })),
+      deleted: productTombstones.map(p => p.id),
+    },
+    payment_methods: {
+      updated: paymentMethods.map(pm => ({
+        id: pm.id,
+        name: pm.name,
+        type: pm.type,
+        icon: pm.icon,
+        active: pm.active,
+        sort_order: pm.sortOrder,
+        details: pm.details,
+        updated_at: isoOrNull(pm.updatedAt),
+      })),
+      deleted: [],
+    },
+    customers: {
+      updated: customers.map(c => ({
+        id: c.id,
+        name: c.name,
+        document_id: c.documentId,
+        whatsapp: c.whatsapp,
+        email: c.email,
+        address: c.address,
+        notes: c.notes,
+        updated_at: isoOrNull(c.updatedAt),
+      })),
+      deleted: customerTombstones.map(c => c.id),
+    },
+    categories: {
+      updated: categories.map(c => ({
+        id: c.id,
+        name: c.name,
+        slug: c.slug,
+        updated_at: isoOrNull(c.updatedAt),
+      })),
+      deleted: [],
+    },
+    app_settings: {
+      updated: appSettings.map(s => ({
+        key: s.key,
+        value: s.value,
+        updated_at: isoOrNull(s.updatedAt),
+      })),
+      deleted: [],
+    },
+    employees: {
+      updated: employees.map(e => ({
+        id: e.id,
+        name: e.name,
+        role: e.role,
+        active: e.active,
+        enabled_modules: e.enabledModules,
+        permissions: e.permissions,
+        can_confirm_transfers: e.canConfirmTransfers,
+        updated_at: isoOrNull(e.updatedAt),
+      })),
+      deleted: [],
+    },
+    has_more: {
+      products: products.length === limit,
+      payment_methods: paymentMethods.length === limit,
+      customers: customers.length === limit,
+      categories: categories.length === limit,
+      app_settings: appSettings.length === limit,
+      employees: employees.length === limit,
+    },
+  });
 }

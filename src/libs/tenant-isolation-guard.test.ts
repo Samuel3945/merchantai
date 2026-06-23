@@ -48,6 +48,7 @@ const RAW_DB_ALLOWLIST = new Set<string>([
   'pos/cashiers/set-pin/route.ts',
   'pos/cashiers/verify-pin/route.ts',
   'pos/customers/[id]/route.ts',
+  'pos/employees/secrets/route.ts',
   'pos/me/route.ts',
   'pos/payment-methods/route.ts',
   'pos/sales/route.ts',
