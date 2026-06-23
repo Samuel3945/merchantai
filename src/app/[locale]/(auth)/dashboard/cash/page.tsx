@@ -4,7 +4,7 @@ import { setRequestLocale } from 'next-intl/server';
 import {
   getFraudAlerts,
   getTodayCollectionsByMethod,
-  listOpenCajas,
+  listCajas,
 } from '@/actions/cash';
 import { listPaymentMethods } from '@/actions/payment-methods';
 import {
@@ -26,10 +26,10 @@ export default async function DashboardCashPage(props: {
   const { orgRole } = await auth();
   const isAdmin = orgRole === 'org:admin';
 
-  const [collections, alerts, openCajas, methods] = await Promise.all([
+  const [collections, alerts, cajas, methods] = await Promise.all([
     getTodayCollectionsByMethod(),
     getFraudAlerts(14).catch(() => []),
-    listOpenCajas().catch(() => []),
+    listCajas().catch(() => []),
     listPaymentMethods({ activeOnly: true }).catch(() => []),
   ]);
 
@@ -88,7 +88,7 @@ export default async function DashboardCashPage(props: {
       />
       <div className="space-y-8">
         <CajasSupervision
-          openCajas={openCajas}
+          cajas={cajas}
           notArrivedCount={transferCounts.notArrived}
         />
         <CashClient collections={collections} alerts={alerts} />
