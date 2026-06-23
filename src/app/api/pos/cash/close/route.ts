@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { logAction, resolvePosActor } from '@/libs/audit-log';
 import {
@@ -13,6 +13,7 @@ import {
   getBlockCloseOnInvestigation,
   hasOpenInvestigations,
 } from '@/libs/transfer-reconciliation';
+import { normalizeIdempotencyKey } from '@/libs/uuid';
 // treasury-sweep-model: at-close handover retired (slice 1). Flag/toggle retired (slice 2).
 import { cashSessionsSchema, posTokensSchema } from '@/models/Schema';
 
@@ -22,6 +23,9 @@ export const dynamic = 'force-dynamic';
 type CloseBody = {
   countedAmount?: number | string;
   notes?: string | null;
+  // Offline-authoritative device key (optional — legacy clients omit it). Keys
+  // the close to a specific session and makes a replayed close idempotent.
+  clientSessionId?: string | null;
 };
 
 export async function POST(req: Request): Promise<NextResponse> {
@@ -46,6 +50,41 @@ export async function POST(req: Request): Promise<NextResponse> {
 
   const counted = toMoney(body.countedAmount);
 
+  // A present-but-malformed key normalizes to null → legacy close by token.
+  const clientSessionId = normalizeIdempotencyKey(body.clientSessionId);
+
+  // Idempotent close (belt): re-closing the same client_session_id returns the
+  // already-closed immutable record instead of erroring with "no open caja"
+  // (per the immutable-closed-records reconciliation design). A key we have
+  // never seen means the OPEN event has not synced yet — reject so the outbox
+  // retries it in order (open-before-close).
+  if (clientSessionId) {
+    const [existingByClient] = await db
+      .select()
+      .from(cashSessionsSchema)
+      .where(
+        and(
+          eq(cashSessionsSchema.organizationId, ctx.organizationId),
+          eq(cashSessionsSchema.clientSessionId, clientSessionId),
+        ),
+      )
+      .limit(1);
+    if (!existingByClient) {
+      return NextResponse.json(
+        {
+          error:
+            'No hay caja con ese client_session_id; sincroniza la apertura primero.',
+        },
+        { status: 404 },
+      );
+    }
+    if (existingByClient.status === 'closed') {
+      return NextResponse.json(toPosCashSession(existingByClient), {
+        status: 200,
+      });
+    }
+  }
+
   // Build attribution label: "employee (device)" when both are known, otherwise just cashierName
   let attribution = ctx.cashierName || 'Cajero';
   if (ctx.source === 'token' && ctx.tokenId) {
@@ -63,7 +102,23 @@ export async function POST(req: Request): Promise<NextResponse> {
 
   try {
     const session = await db.transaction(async (tx) => {
-      const open = await findOpenSession(tx, ctx.organizationId, ctx.tokenId);
+      // Device close targets its OWN session by client_session_id; legacy close
+      // falls back to the one open session for the token.
+      const open = clientSessionId
+        ? (
+            await tx
+              .select()
+              .from(cashSessionsSchema)
+              .where(
+                and(
+                  eq(cashSessionsSchema.organizationId, ctx.organizationId),
+                  eq(cashSessionsSchema.clientSessionId, clientSessionId),
+                  eq(cashSessionsSchema.status, 'open'),
+                ),
+              )
+              .limit(1)
+          )[0]
+        : await findOpenSession(tx, ctx.organizationId, ctx.tokenId);
       if (!open) {
         throw new Error('No hay caja abierta para cerrar.');
       }
