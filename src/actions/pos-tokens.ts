@@ -351,43 +351,6 @@ export async function unblockPosToken(
   return { ok: true, data: updated };
 }
 
-// Eliminar caja: borra la fila por completo. Irreversible; el dispositivo pierde
-// el acceso de inmediato y el cupo del plan queda libre.
-export async function deletePosToken(
-  id: string,
-): Promise<ActionResult<{ id: string; deviceName: string }>> {
-  const { userId, orgId } = await requireAdminContext();
-
-  const [deleted] = await db
-    .delete(posTokensSchema)
-    .where(
-      and(
-        eq(posTokensSchema.id, id),
-        eq(posTokensSchema.organizationId, orgId),
-      ),
-    )
-    .returning({
-      id: posTokensSchema.id,
-      deviceName: posTokensSchema.deviceName,
-    });
-
-  if (!deleted) {
-    return { ok: false, error: 'Caja no encontrada' };
-  }
-
-  await logAction({
-    organizationId: orgId,
-    actor: { type: 'user', id: userId },
-    action: 'pos_token.deleted',
-    entityType: 'pos_token',
-    entityId: id,
-    before: { deviceName: deleted.deviceName },
-  });
-
-  revalidatePath('/dashboard/pos-cajeros');
-  return { ok: true, data: deleted };
-}
-
 // Admin renombra la caja: cambia solo el deviceName. No toca el token ni el
 // sessionEpoch, así que el dispositivo sigue conectado; solo cambia la etiqueta
 // visible en el panel y en los modales.

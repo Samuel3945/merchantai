@@ -17,7 +17,6 @@ import {
   Plus,
   QrCode,
   RefreshCw,
-  Trash2,
   Unlock,
   Vault,
 } from 'lucide-react';
@@ -25,7 +24,6 @@ import { useCallback, useState, useTransition } from 'react';
 import {
   blockPosToken,
   createPosToken,
-  deletePosToken,
   forceLogoutPosToken,
   getPosDeviceQuota,
   listPosTokens,
@@ -42,7 +40,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Link } from '@/libs/I18nNavigation';
@@ -143,7 +140,6 @@ export function PosCajerosClient({
   const [cofres] = useState(initialCofres);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [activeToken, setActiveToken] = useState<TokenRow | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<TokenRow | null>(null);
   const [renameTarget, setRenameTarget] = useState<TokenRow | null>(null);
   const [addressTarget, setAddressTarget] = useState<TokenRow | null>(null);
   const [sweepTarget, setSweepTarget] = useState<TokenRow | null>(null);
@@ -223,26 +219,6 @@ export function PosCajerosClient({
         refresh();
       } catch {
         setError('No se pudo cambiar el control de stock');
-      }
-    });
-  };
-
-  const handleConfirmDelete = () => {
-    if (!deleteTarget) {
-      return;
-    }
-    const id = deleteTarget.id;
-    startTransition(async () => {
-      try {
-        const result = await deletePosToken(id);
-        if (!result.ok) {
-          setError(result.error);
-          return;
-        }
-        setDeleteTarget(null);
-        refresh();
-      } catch {
-        setError('No se pudo eliminar');
       }
     });
   };
@@ -525,14 +501,6 @@ export function PosCajerosClient({
                             </DropdownMenuItem>
                           </>
                         )}
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem
-                          variant="destructive"
-                          onClick={() => setDeleteTarget(t)}
-                        >
-                          <Trash2 className="size-4" />
-                          Eliminar caja
-                        </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
@@ -609,15 +577,6 @@ export function PosCajerosClient({
             refresh();
           }}
           onError={msg => setError(msg)}
-        />
-      )}
-
-      {deleteTarget && (
-        <DeleteCajaModal
-          token={deleteTarget}
-          pending={pending}
-          onCancel={() => setDeleteTarget(null)}
-          onConfirm={handleConfirmDelete}
         />
       )}
 
@@ -1205,107 +1164,6 @@ function SweepDestinationModal({
           </Button>
           <Button type="button" onClick={handleSave} disabled={submitting}>
             {submitting ? 'Guardando…' : 'Guardar'}
-          </Button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function DeleteCajaModal({
-  token,
-  pending,
-  onCancel,
-  onConfirm,
-}: {
-  token: TokenRow;
-  pending: boolean;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  const [confirmed, setConfirmed] = useState(false);
-
-  return (
-    <div className="
-      fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4
-    "
-    >
-      <div className="w-full max-w-md rounded-lg bg-background p-6 shadow-lg">
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="
-            flex items-center gap-2 text-lg font-semibold text-destructive
-          "
-          >
-            <Trash2 className="size-5" />
-            Eliminar caja
-          </h2>
-          <button
-            type="button"
-            onClick={onCancel}
-            className="
-              text-muted-foreground
-              hover:text-foreground
-            "
-          >
-            ✕
-          </button>
-        </div>
-
-        <p className="text-sm text-foreground">
-          Vas a eliminar
-          {' '}
-          <span className="font-semibold">{token.deviceName}</span>
-          .
-        </p>
-        <ul className="
-          mt-3 list-disc space-y-1 rounded-md bg-destructive/10 py-3 pr-3 pl-8
-          text-xs text-destructive
-        "
-        >
-          <li>El dispositivo perderá el acceso de inmediato.</li>
-          <li>Se libera un cupo de caja de tu plan.</li>
-          <li>Esta acción es permanente y no se puede deshacer.</li>
-        </ul>
-
-        <label className="mt-4 flex items-start gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={confirmed}
-            onChange={e => setConfirmed(e.target.checked)}
-            className="mt-0.5"
-          />
-          <span>Entiendo que esta acción es permanente.</span>
-        </label>
-
-        <div className="
-          mt-6 flex flex-col-reverse gap-2
-          sm:flex-row
-        "
-        >
-          <Button
-            type="button"
-            variant="outline"
-            className="sm:flex-1"
-            onClick={onCancel}
-            disabled={pending}
-          >
-            Cancelar
-          </Button>
-          <Button
-            type="button"
-            variant="destructive"
-            className="sm:flex-1"
-            onClick={onConfirm}
-            disabled={pending || !confirmed}
-          >
-            {pending
-              ? 'Eliminando…'
-              : (
-                  <>
-                    <Trash2 className="size-4" />
-                    Sí, eliminar caja
-                  </>
-                )}
           </Button>
         </div>
       </div>
