@@ -1,5 +1,7 @@
 import { and, count, eq, gte, sql, sum } from 'drizzle-orm';
 import { setRequestLocale } from 'next-intl/server';
+import { OnboardingForcedToggle } from '@/features/platform/OnboardingForcedToggle';
+import { isOnboardingForced } from '@/libs/platform/global-settings';
 import { getPlatformDb } from '@/libs/platform/platform-db';
 import {
   businessProfileSchema,
@@ -85,6 +87,7 @@ export default async function PlatformOverviewPage(props: {
   setRequestLocale(locale);
 
   const overview = await getOverview();
+  const onboardingForced = await isOnboardingForced();
 
   return (
     <div className="space-y-6">
@@ -146,6 +149,8 @@ export default async function PlatformOverviewPage(props: {
               </ul>
             )}
       </div>
+
+      <OnboardingForcedToggle initialEnabled={onboardingForced} />
     </div>
   );
 }

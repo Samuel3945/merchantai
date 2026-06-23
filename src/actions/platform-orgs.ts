@@ -7,6 +7,10 @@ import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
 import { getPlanEntitlementsBySlug, limitOf } from '@/libs/entitlements';
+import {
+  ONBOARDING_FORCED_KEY,
+  PLATFORM_GLOBAL_ORG_ID,
+} from '@/libs/platform/global-settings';
 import { requirePlatformOperator } from '@/libs/platform/operator';
 import {
   appSettingsSchema,
@@ -645,4 +649,42 @@ export async function setOrgSetting(
 
   revalidatePath('/platform/businesses');
   return { ok: true, data: { key: cleanKey } };
+}
+
+// Platform-wide switch (not per-org): force every new owner through the
+// onboarding wizard, or leave it OFF so the wizard is removed from the normal
+// flow and only the operator can open it for testing. Persisted under the
+// reserved global org id so no migration is needed. See libs/platform/global-settings.
+export async function setOnboardingForced(
+  enabled: boolean,
+): Promise<ActionResult<{ enabled: boolean }>> {
+  const operator = await requirePlatformOperator();
+
+  const value = enabled ? 'true' : 'false';
+
+  await db
+    .insert(appSettingsSchema)
+    .values({
+      organizationId: PLATFORM_GLOBAL_ORG_ID,
+      key: ONBOARDING_FORCED_KEY,
+      value,
+    })
+    .onConflictDoUpdate({
+      target: [appSettingsSchema.organizationId, appSettingsSchema.key],
+      set: { value },
+    });
+
+  await logAction({
+    organizationId: PLATFORM_GLOBAL_ORG_ID,
+    actor: { type: 'user', id: operator.userId },
+    action: enabled
+      ? 'platform.onboarding_forced_enabled'
+      : 'platform.onboarding_forced_disabled',
+    entityType: 'app_setting',
+    entityId: ONBOARDING_FORCED_KEY,
+    after: { value },
+  });
+
+  revalidatePath('/platform');
+  return { ok: true, data: { enabled } };
 }

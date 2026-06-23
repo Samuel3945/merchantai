@@ -11,6 +11,7 @@ import { DashboardHeader } from '@/features/dashboard/DashboardHeader';
 import { DashboardSidebar } from '@/features/dashboard/DashboardSidebar';
 import { ImpersonationBanner } from '@/features/dashboard/ImpersonationBanner';
 import { getPanelUserModules } from '@/libs/panel-session';
+import { isOnboardingForced } from '@/libs/platform/global-settings';
 
 type DashboardLayoutProps = {
   params: Promise<{ locale: string }>;
@@ -34,11 +35,14 @@ export default async function DashboardLayout(props: DashboardLayoutProps) {
   const { locale } = await props.params;
   setRequestLocale(locale);
 
-  // Onboarding gate — only org admins need to complete the wizard.
-  // Cashiers/employees consume the POS, not the dashboard, so they aren't redirected.
+  // Onboarding gate — only org admins need to complete the wizard, and only
+  // while the platform operator keeps onboarding FORCED (global switch in
+  // /platform). It defaults OFF: the operator configures businesses directly in
+  // Ajustes, so the wizard never blocks the dashboard. Cashiers/employees
+  // consume the POS, not the dashboard, so they aren't redirected.
   const { userId, orgId, orgRole } = await auth();
   const isOwner = orgRole === 'org:admin';
-  if (orgId && isOwner) {
+  if (orgId && isOwner && (await isOnboardingForced())) {
     const setting = await getAppSetting('onboarding_completed');
     if (setting.value !== 'true') {
       redirect('/onboarding');
