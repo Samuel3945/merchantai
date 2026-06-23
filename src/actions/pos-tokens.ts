@@ -3,7 +3,7 @@
 import type { ActionResult } from '@/libs/action-result';
 import { randomUUID } from 'node:crypto';
 import { auth, currentUser } from '@clerk/nextjs/server';
-import { and, count, desc, eq, sql } from 'drizzle-orm';
+import { and, count, desc, eq, ne, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
@@ -273,6 +273,9 @@ export async function listPosTokens() {
       storeId: posTokensSchema.storeId,
       deviceName: posTokensSchema.deviceName,
       createdBy: posTokensSchema.createdBy,
+      // Assigned default operator. Non-null = the owner-admin is this caja's
+      // default responsable ("el admin hace de cajero" ON). Null = OFF.
+      cashierId: posTokensSchema.cashierId,
       // Live operator (stamped on profile change), not a static assignment.
       currentCashierId: posTokensSchema.currentCashierId,
       currentCashierName: posUsersSchema.name,
@@ -732,61 +735,41 @@ export async function listOrgCashiers() {
   return rows;
 }
 
-// Every active operator of the org (owner-admin + employees), for the caja
-// operator selector. `role` lets the UI label the owner and decide whether a
-// hand-over to a non-admin employee is even possible.
-export async function listOrgOperators() {
-  const { orgId } = await requireAdminContext();
-
-  return db
-    .select({
-      id: posUsersSchema.id,
-      name: posUsersSchema.name,
-      role: posUsersSchema.role,
-    })
+// "Cashier employee" = an ACTIVE non-admin operator who can run the POS (module
+// 'pos'). They are the people who can take responsibility for a caja when the
+// admin steps back, so this count gates turning the admin off as the responsable.
+export async function countActiveCashierEmployees(orgId: string): Promise<number> {
+  const [row] = await db
+    .select({ value: count() })
     .from(posUsersSchema)
     .where(
       and(
         eq(posUsersSchema.organizationId, orgId),
         eq(posUsersSchema.active, true),
+        ne(posUsersSchema.role, 'admin'),
+        sql`'pos' = ANY(${posUsersSchema.enabledModules})`,
       ),
-    )
-    .orderBy(desc(posUsersSchema.role), posUsersSchema.name);
+    );
+  return Number(row?.value ?? 0);
 }
 
-// Reassigns the caja's DEFAULT operator (pos_tokens.cashier_id) — i.e. "hand the
-// caja over" from the owner-admin to an employee (and back). The target must be
-// an ACTIVE operator of the org, so the caja can never be left without a person:
-// the device selector is never empty and the "Responsable" is always someone.
-// Handing it AWAY from the admin is only possible once a non-admin employee
-// exists (the guard below rejects a target that is the admin themselves only
-// when the intent is to remove — here any valid active operator is accepted, and
-// the UI only offers employees as hand-over targets).
-export async function setCajaOperator(
+// Does the org have at least one cashier employee to take a caja's responsibility?
+// Drives the panel toggle: the admin can only step back as cashier when true.
+export async function hasCashierEmployees(): Promise<boolean> {
+  const { orgId } = await requireAdminContext();
+  return (await countActiveCashierEmployees(orgId)) > 0;
+}
+
+// Per-caja switch "el admin hace de cajero". ON (the default) makes the owner-
+// admin the caja's default responsable (cashier_id = owner operator). OFF clears
+// it (cashier_id = null) so each cashier employee identifies themselves on the
+// device. The admin can only turn it OFF when a cashier employee exists, so a
+// caja is NEVER left without anyone who can be responsible.
+export async function setAdminAsCashier(
   tokenId: string,
-  posUserId: string,
-): Promise<ActionResult<{ id: string; cashierId: string }>> {
+  enabled: boolean,
+): Promise<ActionResult<{ id: string; adminAsCashier: boolean }>> {
   const { userId, orgId } = await requireAdminContext();
-
-  const targetId = posUserId?.trim();
-  if (!targetId) {
-    return { ok: false, error: 'Elegí un operario para la caja' };
-  }
-
-  const [target] = await db
-    .select({ id: posUsersSchema.id })
-    .from(posUsersSchema)
-    .where(
-      and(
-        eq(posUsersSchema.id, targetId),
-        eq(posUsersSchema.organizationId, orgId),
-        eq(posUsersSchema.active, true),
-      ),
-    )
-    .limit(1);
-  if (!target) {
-    return { ok: false, error: 'El operario no existe o está inactivo' };
-  }
 
   const [current] = await db
     .select({ cashierId: posTokensSchema.cashierId })
@@ -802,9 +785,39 @@ export async function setCajaOperator(
     return { ok: false, error: 'Caja no encontrada' };
   }
 
+  let nextCashierId: string | null;
+  if (enabled) {
+    // Re-affirm the owner as the caja's responsable (provision if needed).
+    const clerkUser = await currentUser();
+    const operator = await ensureOwnerCashier(db, orgId, {
+      clerkUserId: userId,
+      email:
+        clerkUser?.primaryEmailAddress?.emailAddress
+        ?? clerkUser?.emailAddresses?.[0]?.emailAddress
+        ?? '',
+      name:
+        clerkUser?.fullName
+        || [clerkUser?.firstName, clerkUser?.lastName]
+          .filter(Boolean)
+          .join(' ')
+          .trim(),
+    });
+    nextCashierId = operator.id;
+  } else {
+    // Stepping the admin back is only allowed if someone else can be responsible.
+    if ((await countActiveCashierEmployees(orgId)) === 0) {
+      return {
+        ok: false,
+        error:
+          'No podés sacar al admin como cajero: primero dale permiso de caja a un empleado que se haga responsable.',
+      };
+    }
+    nextCashierId = null;
+  }
+
   const [updated] = await db
     .update(posTokensSchema)
-    .set({ cashierId: targetId })
+    .set({ cashierId: nextCashierId })
     .where(
       and(
         eq(posTokensSchema.id, tokenId),
@@ -816,14 +829,16 @@ export async function setCajaOperator(
       cashierId: posTokensSchema.cashierId,
     });
 
-  if (!updated || !updated.cashierId) {
+  if (!updated) {
     return { ok: false, error: 'Caja no encontrada' };
   }
 
   await logAction({
     organizationId: orgId,
     actor: { type: 'user', id: userId },
-    action: 'pos_token.operator_changed',
+    action: enabled
+      ? 'pos_token.admin_cashier_on'
+      : 'pos_token.admin_cashier_off',
     entityType: 'pos_token',
     entityId: tokenId,
     before: { cashierId: current.cashierId },
@@ -831,5 +846,8 @@ export async function setCajaOperator(
   });
 
   revalidatePath('/dashboard/pos-cajeros');
-  return { ok: true, data: { id: updated.id, cashierId: updated.cashierId } };
+  return {
+    ok: true,
+    data: { id: updated.id, adminAsCashier: updated.cashierId != null },
+  };
 }
