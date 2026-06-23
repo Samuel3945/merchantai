@@ -2,10 +2,12 @@
 
 import type { GastoRow } from '@/libs/gastos';
 import { ChevronDown, ChevronUp, Receipt, RotateCcw } from 'lucide-react';
-import { useCallback, useState, useTransition } from 'react';
+import { useCallback, useMemo, useState, useTransition } from 'react';
 import { correctGastoAction, listGastosAction } from '@/actions/treasury';
+import { DateRangePicker } from '@/components/DateRangePicker';
 import { Select } from '@/components/ui/select';
-import { cashInputCls, money } from '@/features/cash/cash-ui';
+import { money } from '@/features/cash/cash-ui';
+import { buildPresetOptions, todayBogota } from '@/utils/DateRange';
 import {
   TREASURY_EXPENSE_CATEGORIES,
   TREASURY_EXPENSE_CATEGORY_LABELS,
@@ -159,16 +161,21 @@ export function GastosHistory({
   initialStart,
   initialEnd,
 }: GastosHistoryProps) {
-  const today = new Date().toISOString().slice(0, 10);
-
   const [rows, setRows] = useState<GastoRow[]>(initialRows);
   const [total, setTotal] = useState<number>(initialTotal);
   const [start, setStart] = useState(initialStart);
   const [end, setEnd] = useState(initialEnd);
+  // Initial range is the current calendar month, i.e. the "Este mes" preset.
+  const [activePreset, setActivePreset] = useState<string | null>('mtd');
   const [category, setCategory] = useState('');
   const [expanded, setExpanded] = useState(true);
   const [isPending, startTransition] = useTransition();
   const [correctingId, setCorrectingId] = useState<string | null>(null);
+
+  const presetOptions = useMemo(
+    () => buildPresetOptions(['today', 'yesterday', '7d', '30d', 'mtd', 'lastMonth']),
+    [],
+  );
 
   const categoryOptions = [
     { value: '', label: 'Todas las categorías' },
@@ -193,18 +200,11 @@ export function GastosHistory({
     [],
   );
 
-  function onStartChange(val: string) {
-    setStart(val);
-    if (val && end) {
-      fetchGastos(val, end, category);
-    }
-  }
-
-  function onEndChange(val: string) {
-    setEnd(val);
-    if (start && val) {
-      fetchGastos(start, val, category);
-    }
+  function applyRange(next: { start: string; end: string; preset: string | null }) {
+    setStart(next.start);
+    setEnd(next.end);
+    setActivePreset(next.preset);
+    fetchGastos(next.start, next.end, category);
   }
 
   function onCategoryChange(val: string) {
@@ -259,44 +259,35 @@ export function GastosHistory({
 
       {expanded && (
         <>
-          {/* Filters */}
-          <div className="mt-4 flex flex-wrap gap-2">
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-muted-foreground">Desde</label>
-              <input
-                type="date"
-                value={start}
-                max={end || today}
-                onChange={e => onStartChange(e.target.value)}
-                className={`
-                  ${cashInputCls}
-                  h-9 text-sm
-                `}
+          {/* Filters — shared styled controls */}
+          <div className="
+            mt-4 grid gap-3
+            sm:grid-cols-2
+          "
+          >
+            <div className="text-xs">
+              <span className="mb-1 block text-muted-foreground">Periodo</span>
+              <DateRangePicker
+                start={start}
+                end={end}
+                compare={false}
+                showCompare={false}
+                activePreset={activePreset}
+                presets={presetOptions}
+                maxDate={todayBogota()}
+                onApply={applyRange}
+                triggerClassName="w-full"
               />
             </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-muted-foreground">Hasta</label>
-              <input
-                type="date"
-                value={end}
-                min={start}
-                max={today}
-                onChange={e => onEndChange(e.target.value)}
-                className={`
-                  ${cashInputCls}
-                  h-9 text-sm
-                `}
-              />
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-muted-foreground">Categoría</label>
+            <label className="text-xs">
+              <span className="mb-1 block text-muted-foreground">Categoría</span>
               <Select
                 value={category}
                 onValueChange={onCategoryChange}
                 options={categoryOptions}
                 placeholder="Todas"
               />
-            </div>
+            </label>
           </div>
 
           {/* Total bar */}
