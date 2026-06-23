@@ -1,90 +1,7 @@
-'use client';
-
 import type { TreasuryTimelineEntry } from '@/libs/treasury';
-import { ArrowDownToLine, ArrowRightLeft, ChevronRight } from 'lucide-react';
-import { money } from '@/features/cash/cash-ui';
-import { classifyTimelineDirection } from './utils';
-
-function formatDate(date: Date): string {
-  return new Intl.DateTimeFormat('es-CO', {
-    dateStyle: 'short',
-    timeStyle: 'short',
-  }).format(date);
-}
-
-function HistoryRow({ entry }: { entry: TreasuryTimelineEntry }) {
-  const direction = classifyTimelineDirection(entry);
-  const isMov = entry.fromAccount !== null && entry.toAccount !== null;
-  const isIn = direction === 'in';
-
-  return (
-    <div
-      className="
-        flex items-center gap-3.5 rounded-xl px-4 py-3.5 transition-colors
-        hover:bg-muted
-      "
-    >
-      {/* Icon */}
-      <span
-        className={`
-          flex size-9 shrink-0 items-center justify-center rounded-[10px]
-          ${isMov ? 'bg-chart-5/10 text-chart-5' : 'bg-success/10 text-success'}
-        `}
-      >
-        {isMov
-          ? <ArrowRightLeft className="size-[17px]" />
-          : <ArrowDownToLine className="size-[17px]" />}
-      </span>
-
-      {/* Label + meta */}
-      <div className="min-w-0 flex-1">
-        <div className="text-[13.5px] font-semibold">
-          {isMov ? 'Movimiento interno' : 'Entrada'}
-        </div>
-        <div className="mt-0.5 text-xs text-muted-foreground">
-          {isMov
-            ? (
-                <>
-                  {entry.fromAccount}
-                  {' '}
-                  <span className="opacity-60">→</span>
-                  {' '}
-                  {entry.toAccount}
-                  {' '}
-                  ·
-                  {' '}
-                  {formatDate(entry.createdAt)}
-                </>
-              )
-            : (
-                <>
-                  {entry.toAccount ?? entry.fromAccount}
-                  {' '}
-                  ·
-                  {' '}
-                  {formatDate(entry.createdAt)}
-                </>
-              )}
-        </div>
-      </div>
-
-      {/* Amount */}
-      <div
-        className={`
-          font-display text-[14.5px] font-[650] tabular-nums
-          ${isIn
-      ? 'text-success'
-      : isMov
-        ? 'text-secondary-foreground'
-        : `text-destructive`}
-        `}
-      >
-        {isIn ? '+ ' : ''}
-        {money(entry.amount)}
-      </div>
-    </div>
-  );
-}
+import { ChevronRight } from 'lucide-react';
+import { Link } from '@/libs/I18nNavigation';
+import { TimelineRow } from './TimelineRow';
 
 type TreasuryHistoryProps = {
   entries: TreasuryTimelineEntry[];
@@ -94,9 +11,8 @@ type TreasuryHistoryProps = {
 
 /**
  * "Historial de tesorería" section.
- * Shows recent treasury movements: Entrada (success, ArrowDownToLine icon) and
- * Movimiento interno (chart-5/info, ArrowRightLeft icon). Matches View B HistoryPanel.
- * "Ver todo" affordance is a no-op for slice A.
+ * Shows recent treasury movements via the shared TimelineRow. "Ver todo" links
+ * to the full-history page (/dashboard/tesoreria/historial) with filters.
  */
 export function TreasuryHistory({ entries, maxRows = 7 }: TreasuryHistoryProps) {
   const visible = entries.slice(0, maxRows);
@@ -129,8 +45,8 @@ export function TreasuryHistory({ entries, maxRows = 7 }: TreasuryHistoryProps) 
             Movimientos recientes, del más nuevo al más antiguo.
           </p>
         </div>
-        <button
-          type="button"
+        <Link
+          href="/dashboard/tesoreria/historial"
           className="
             flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs
             font-medium text-muted-foreground
@@ -140,13 +56,13 @@ export function TreasuryHistory({ entries, maxRows = 7 }: TreasuryHistoryProps) 
         >
           Ver todo
           <ChevronRight className="size-3.5" />
-        </button>
+        </Link>
       </div>
 
       {/* Rows */}
       <div className="mt-2 flex flex-col">
         {visible.map(entry => (
-          <HistoryRow key={entry.id} entry={entry} />
+          <TimelineRow key={entry.id} entry={entry} />
         ))}
       </div>
     </div>

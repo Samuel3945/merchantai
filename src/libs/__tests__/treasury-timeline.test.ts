@@ -1,7 +1,7 @@
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { listTreasuryTimeline } from '@/libs/treasury';
+import { listTreasuryTimeline, listTreasuryTimelinePage } from '@/libs/treasury';
 
 // ── PGlite-backed integration test for listTreasuryTimeline ─────────────────
 // The function reads treasury_movements ordered by created_at DESC and returns
@@ -318,5 +318,169 @@ describe('listTreasuryTimeline', () => {
 
     expect(rows[0]!.id).toBeDefined();
     expect(rows[0]!.createdAt).toBeInstanceOf(Date);
+  });
+});
+
+describe('listTreasuryTimelinePage', () => {
+  it('returns empty rows and total 0 when there are no movements', async () => {
+    const page = await listTreasuryTimelinePage(db, ORG, { limit: 25, offset: 0 });
+
+    expect(page.rows).toHaveLength(0);
+    expect(page.total).toBe(0);
+  });
+
+  it('paginates via limit/offset while reporting the full total', async () => {
+    const vaultId = await makeAccount('Caja fuerte', 'caja_fuerte');
+    const bancoId = await makeAccount('Nequi', 'banco');
+
+    // 3 movements with increasing created_at so order is deterministic.
+    for (let i = 0; i < 3; i++) {
+      await pg.query(
+        `INSERT INTO treasury_movements (id, organization_id, from_account_id, to_account_id, amount, type, created_by, created_at)
+         VALUES (gen_random_uuid(), $1, $2, $3, '${(i + 1) * 10}.00', 'transfer', 'owner', '2026-06-1${i} 10:00:00')`,
+        [ORG, vaultId, bancoId],
+      );
+    }
+
+    const firstPage = await listTreasuryTimelinePage(db, ORG, { limit: 2, offset: 0 });
+
+    expect(firstPage.rows).toHaveLength(2);
+    expect(firstPage.total).toBe(3);
+    // Newest first → amount 30 then 20.
+    expect(firstPage.rows[0]!.amount).toBe(30);
+    expect(firstPage.rows[1]!.amount).toBe(20);
+
+    const secondPage = await listTreasuryTimelinePage(db, ORG, { limit: 2, offset: 2 });
+
+    expect(secondPage.rows).toHaveLength(1);
+    expect(secondPage.total).toBe(3);
+    expect(secondPage.rows[0]!.amount).toBe(10);
+  });
+
+  it('filters by movement type', async () => {
+    const vaultId = await makeAccount('Caja fuerte', 'caja_fuerte');
+    const bancoId = await makeAccount('Nequi', 'banco');
+
+    await pg.query(
+      `INSERT INTO treasury_movements (id, organization_id, from_account_id, to_account_id, amount, type, created_by)
+       VALUES (gen_random_uuid(), $1, $2, $3, '100.00', 'transfer', 'owner')`,
+      [ORG, vaultId, bancoId],
+    );
+    await pg.query(
+      `INSERT INTO treasury_movements (id, organization_id, from_account_id, to_account_id, amount, type, created_by)
+       VALUES (gen_random_uuid(), $1, $2, $3, '200.00', 'consignacion', 'owner')`,
+      [ORG, vaultId, bancoId],
+    );
+
+    const page = await listTreasuryTimelinePage(db, ORG, {
+      type: 'consignacion',
+      limit: 25,
+      offset: 0,
+    });
+
+    expect(page.total).toBe(1);
+    expect(page.rows).toHaveLength(1);
+    expect(page.rows[0]!.type).toBe('consignacion');
+  });
+
+  it('filters by account on either the source or the destination', async () => {
+    const vaultId = await makeAccount('Caja fuerte', 'caja_fuerte');
+    const bancoId = await makeAccount('Nequi', 'banco');
+
+    // Movement 1: vault → banco (banco is the destination).
+    await pg.query(
+      `INSERT INTO treasury_movements (id, organization_id, from_account_id, to_account_id, amount, type, created_by)
+       VALUES (gen_random_uuid(), $1, $2, $3, '100.00', 'transfer', 'owner')`,
+      [ORG, vaultId, bancoId],
+    );
+    // Movement 2: banco → null gasto (banco is the source).
+    const expRes = await pg.query<{ id: string }>(
+      `INSERT INTO expenses (organization_id, amount, category, incurred_on, created_by)
+       VALUES ($1, '50.00', 'servicios', '2026-06-15', 'owner') RETURNING id`,
+      [ORG],
+    );
+    await pg.query(
+      `INSERT INTO treasury_movements (id, organization_id, from_account_id, to_account_id, amount, type, expense_id, created_by)
+       VALUES (gen_random_uuid(), $1, $2, NULL, '50.00', 'gasto', $3, 'owner')`,
+      [ORG, bancoId, expRes.rows[0]!.id],
+    );
+
+    const bancoPage = await listTreasuryTimelinePage(db, ORG, {
+      accountId: bancoId,
+      limit: 25,
+      offset: 0,
+    });
+
+    expect(bancoPage.total).toBe(2);
+
+    const vaultPage = await listTreasuryTimelinePage(db, ORG, {
+      accountId: vaultId,
+      limit: 25,
+      offset: 0,
+    });
+
+    expect(vaultPage.total).toBe(1);
+    expect(vaultPage.rows[0]!.amount).toBe(100);
+  });
+
+  it('filters by inclusive date range on the movement calendar date', async () => {
+    const vaultId = await makeAccount('Caja fuerte', 'caja_fuerte');
+    const bancoId = await makeAccount('Nequi', 'banco');
+
+    await pg.query(
+      `INSERT INTO treasury_movements (id, organization_id, from_account_id, to_account_id, amount, type, created_by, created_at)
+       VALUES (gen_random_uuid(), $1, $2, $3, '100.00', 'transfer', 'owner', '2026-06-10 10:00:00')`,
+      [ORG, vaultId, bancoId],
+    );
+    await pg.query(
+      `INSERT INTO treasury_movements (id, organization_id, from_account_id, to_account_id, amount, type, created_by, created_at)
+       VALUES (gen_random_uuid(), $1, $2, $3, '200.00', 'transfer', 'owner', '2026-06-20 10:00:00')`,
+      [ORG, vaultId, bancoId],
+    );
+
+    const fromMid = await listTreasuryTimelinePage(db, ORG, {
+      start: '2026-06-15',
+      limit: 25,
+      offset: 0,
+    });
+
+    expect(fromMid.total).toBe(1);
+    expect(fromMid.rows[0]!.amount).toBe(200);
+
+    const untilMid = await listTreasuryTimelinePage(db, ORG, {
+      end: '2026-06-15',
+      limit: 25,
+      offset: 0,
+    });
+
+    expect(untilMid.total).toBe(1);
+    expect(untilMid.rows[0]!.amount).toBe(100);
+
+    // Boundary is inclusive: end on the exact movement date includes it.
+    const inclusive = await listTreasuryTimelinePage(db, ORG, {
+      start: '2026-06-20',
+      end: '2026-06-20',
+      limit: 25,
+      offset: 0,
+    });
+
+    expect(inclusive.total).toBe(1);
+    expect(inclusive.rows[0]!.amount).toBe(200);
+  });
+
+  it('scopes results and total to the organization', async () => {
+    const vaultId = await makeAccount('Caja fuerte', 'caja_fuerte');
+    const bancoId = await makeAccount('Nequi', 'banco');
+
+    await pg.query(
+      `INSERT INTO treasury_movements (id, organization_id, from_account_id, to_account_id, amount, type, created_by)
+       VALUES (gen_random_uuid(), 'other-org', $1, $2, '999.00', 'transfer', 'owner')`,
+      [vaultId, bancoId],
+    );
+
+    const page = await listTreasuryTimelinePage(db, ORG, { limit: 25, offset: 0 });
+
+    expect(page.rows).toHaveLength(0);
+    expect(page.total).toBe(0);
   });
 });
