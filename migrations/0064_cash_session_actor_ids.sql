@@ -1,0 +1,23 @@
+-- Stable open/close attribution for cash sessions.
+--
+-- The "Responsable" of a cash session was stored only as a TEXT label
+-- (opened_by / closed_by). For a device-only turn that label was the caja's
+-- deviceName AT THAT MOMENT — a frozen snapshot. Renaming a caja therefore split
+-- its closure history across the old and new name in the "Responsable" filter,
+-- because a mutable label was being used as an identifier.
+--
+-- These two columns store the STABLE identity instead: pos_users.id (employee),
+-- the Clerk user id (dashboard owner), or NULL (device-only, no operator). The
+-- display name is resolved LIVE at read time, so a rename never fragments the
+-- history again. Nullable so every existing row stays valid: legacy rows keep
+-- their opened_by/closed_by TEXT as the display fallback (no backfill — the
+-- original person id was never recorded and cannot be recovered).
+--
+-- Hand-written (not drizzle-kit generated): regenerating migrations from the
+-- frozen baseline would also drop the pos_tokens sweep-destination FK and re-emit
+-- pre-existing snapshot drift (see Schema.ts).
+--
+-- prod: node scripts/db-migrate.mjs
+ALTER TABLE "cash_sessions" ADD COLUMN IF NOT EXISTS "opened_by_actor_id" text;
+--> statement-breakpoint
+ALTER TABLE "cash_sessions" ADD COLUMN IF NOT EXISTS "closed_by_actor_id" text;

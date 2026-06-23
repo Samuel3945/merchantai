@@ -150,6 +150,9 @@ export async function POST(req: Request): Promise<NextResponse> {
           posTokenId: ctx.tokenId,
           openingAmount: toMoney(counted),
           openedBy: attribution,
+          // Stable identity for live name resolution (see close route). NULL =
+          // device-only turn with no operator.
+          openedByActorId: ctx.cashierId ?? null,
           status: 'open',
           notes: body.notes ?? null,
           // Carry-over columns: only meaningful when a prior close exists to
