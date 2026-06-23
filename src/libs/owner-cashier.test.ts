@@ -62,6 +62,7 @@ function readOperator(id: string) {
       role: posUsersSchema.role,
       active: posUsersSchema.active,
       pin: posUsersSchema.pin,
+      email: posUsersSchema.email,
       clerkUserId: posUsersSchema.clerkUserId,
     })
     .from(posUsersSchema)
@@ -102,6 +103,10 @@ describe('ensureOwnerCashier', () => {
     expect(row?.clerkUserId).toBe('user_owner_1');
     expect(row?.pin).not.toBe(''); // bcrypt hash, not the raw pin
     expect(row?.pin).not.toBe('1234');
+    // A SYNTHETIC email (per Clerk id), never the owner's real one — pos_users.email
+    // is globally unique, so a real-email row could collide across orgs.
+    expect(row?.email).toBe('owner-user_owner_1@operator.local');
+    expect(row?.email).not.toBe('owner@shop.co');
   });
 
   it('is idempotent: a second call reuses the operator, never duplicates', async () => {

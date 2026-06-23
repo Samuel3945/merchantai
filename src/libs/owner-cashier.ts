@@ -107,15 +107,20 @@ export async function ensureOwnerCashier(
     }
   }
 
-  // 3. Fresh admin operator for the owner. Email is required + must be unique per
-  // org; fall back to a synthetic address when Clerk has none.
-  const safeEmail = email || `owner-${owner.clerkUserId}@operator.local`;
+  // 3. Fresh admin operator for the owner. Its email is only a unique key for the
+  // row — the owner signs into the PANEL via Clerk, never via this POS login — so
+  // use a SYNTHETIC address derived from the Clerk id. pos_users.email is UNIQUE
+  // GLOBALLY (not per-org): inserting the owner's REAL email could collide with a
+  // pos_user that email already has in another org and break caja creation. The
+  // synthetic address is unique per Clerk id, so it never collides. A real-email
+  // row in THIS org is still adopted above (step 2) before reaching here.
+  const operatorEmail = `owner-${owner.clerkUserId}@operator.local`;
   const [created] = await executor
     .insert(posUsersSchema)
     .values({
       organizationId: orgId,
       name: owner.name.trim() || 'Administrador',
-      email: safeEmail,
+      email: operatorEmail,
       passwordHash: await bcrypt.hash(randomUUID(), 10),
       pin: pinTrim ? await bcrypt.hash(pinTrim, 10) : '',
       role: 'admin',
