@@ -1,14 +1,14 @@
 'use client';
 
 import type { Direction } from './cash-ui';
-import type { CashMovement } from '@/libs/cash-helpers';
+import type { CajaMovementRow } from '@/actions/cash';
 import { useMemo, useState } from 'react';
 import { DateRangePicker } from '@/components/DateRangePicker';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
 import { buildPresetOptions, todayBogota } from '@/utils/DateRange';
 import { cn } from '@/utils/Helpers';
-import { actorLabel, dayKey, describeMovement, money, stamp } from './cash-ui';
+import { dayKey, describeMovement, money, stamp } from './cash-ui';
 
 type DirectionFilter = 'all' | Direction;
 
@@ -22,7 +22,7 @@ const PAGE_SIZE = 8;
  * entrada/salida — using the app's shared styled controls so the table stays
  * dense and uses the full width.
  */
-export function CashHistory(props: { movements: CashMovement[] }) {
+export function CashHistory(props: { movements: CajaMovementRow[] }) {
   const [start, setStart] = useState('');
   const [end, setEnd] = useState('');
   const [activePreset, setActivePreset] = useState<string | null>(null);
@@ -35,11 +35,14 @@ export function CashHistory(props: { movements: CashMovement[] }) {
     [],
   );
 
+  // Filter options key on the STABLE responsable key (actor id or 'device'), not
+  // the frozen createdBy string — so a caja rename never lists its old and new
+  // name as two responsables. The label is resolved live server-side.
   const actors = useMemo(() => {
     const seen = new Map<string, string>();
     for (const m of props.movements) {
-      if (!seen.has(m.createdBy)) {
-        seen.set(m.createdBy, actorLabel(m.createdBy));
+      if (!seen.has(m.responsableKey)) {
+        seen.set(m.responsableKey, m.responsableLabel);
       }
     }
     return [...seen.entries()]
@@ -57,7 +60,7 @@ export function CashHistory(props: { movements: CashMovement[] }) {
         if (direction !== 'all' && r.direction !== direction) {
           return false;
         }
-        if (actor !== 'all' && r.m.createdBy !== actor) {
+        if (actor !== 'all' && r.m.responsableKey !== actor) {
           return false;
         }
         const key = dayKey(r.m.createdAt);
@@ -277,7 +280,7 @@ export function CashHistory(props: { movements: CashMovement[] }) {
                           )}
                         </td>
                         <td className="px-3 py-2.5 text-muted-foreground">
-                          {actorLabel(r.m.createdBy)}
+                          {r.m.responsableLabel}
                         </td>
                         <td
                           className={cn(

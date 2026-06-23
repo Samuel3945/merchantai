@@ -118,11 +118,6 @@ export function stamp(value: Date | string): string {
   return stampFmt.format(new Date(value));
 }
 
-/** Manual movements store a readable name; auto (sale) ones store a Clerk id. */
-export function actorLabel(createdBy: string): string {
-  return createdBy.startsWith('user_') ? 'Sistema' : createdBy;
-}
-
 const rtf = new Intl.RelativeTimeFormat('es', { numeric: 'auto' });
 
 /** Bank-app style relative time, e.g. "hace 5 minutos". */

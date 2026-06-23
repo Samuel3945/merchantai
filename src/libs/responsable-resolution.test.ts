@@ -63,4 +63,28 @@ describe('resolveSessionResponsable', () => {
       label: 'Local Principal 1',
     });
   });
+
+  // Movement history feeds createdBy as BOTH actorId and label (cash_movements has
+  // no separate id column); the resolver must still classify each createdBy shape.
+  describe('movement createdBy (actorId === label)', () => {
+    function fromCreatedBy(createdBy: string) {
+      return resolve(createdBy, createdBy);
+    }
+
+    it('resolves a sale movement that stored the cashier id to the live name', () => {
+      // Pre-existing bug: this used to render the raw UUID. Now it shows the name.
+      expect(fromCreatedBy('user_pos_1')).toEqual({
+        key: 'user_pos_1',
+        label: 'Juan Pérez',
+      });
+    });
+
+    it('collapses a device-only movement (createdBy = old caja name) onto the live name', () => {
+      expect(fromCreatedBy('caja')).toEqual({ key: 'device', label: 'Local Principal 1' });
+    });
+
+    it('keeps a plain person name (manual movement by a named cashier) verbatim', () => {
+      expect(fromCreatedBy('Ana')).toEqual({ key: 'legacy:Ana', label: 'Ana' });
+    });
+  });
 });
