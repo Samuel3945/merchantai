@@ -7,25 +7,22 @@ import { useMemo, useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
 import { parseSpreadsheetRows } from '@/libs/spreadsheet-import';
 import { cn } from '@/utils/Helpers';
-import { bulkImportProducts } from './actions';
+import { bulkImportSuppliers } from './actions';
 import {
-  extractProductsFromImage,
-  extractProductsFromPdf,
+  extractSuppliersFromImage,
+  extractSuppliersFromPdf,
 } from './import-actions';
 import { recordsToDrafts, validateDraft } from './import-parse';
 
 const inputCls
   = 'h-8 w-full rounded-md border border-input bg-transparent px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50';
 
-const TEMPLATE = 'nombre,precio,costo,categoria,codigo de barras\nCoca-Cola 600ml,3000,2100,Bebidas,7702004001234\n';
+const TEMPLATE = 'nombre,telefono,correo,ciudad,nit\nDistribuidora Sur,3001234567,ventas@sur.co,Bogotá,900123456\n';
 
-export function ImportClient({
-  categoryNames,
+export function SuppliersImportClient({
   onImported,
 }: {
-  categoryNames: string[];
-  // Called after a successful import so a host (e.g. the products modal) can
-  // refresh its own list and categories. Optional: the standalone page omits it.
+  // Called after a successful import so the host can refresh its supplier list.
   onImported?: () => void;
 }) {
   const [drafts, setDrafts] = useState<DraftRow[]>([]);
@@ -58,8 +55,8 @@ export function ImportClient({
       try {
         const res
           = kind === 'pdf'
-            ? await extractProductsFromPdf(fd)
-            : await extractProductsFromImage(fd);
+            ? await extractSuppliersFromPdf(fd)
+            : await extractSuppliersFromImage(fd);
         if (res.ok) {
           setDrafts(recordsToDrafts(res.rows));
           setNotice(null);
@@ -69,8 +66,8 @@ export function ImportClient({
             res.reason === 'no_key'
               ? 'La IA no está disponible: configura tu API key de OpenAI en Integraciones (o en el servidor).'
               : kind === 'pdf'
-                ? 'No se detectaron productos en el PDF. Si es escaneado, probá con una foto.'
-                : 'No se detectaron productos en la imagen.',
+                ? 'No se detectaron proveedores en el PDF. Si es escaneado, probá con una foto.'
+                : 'No se detectaron proveedores en la imagen.',
           );
         }
       } catch {
@@ -132,25 +129,25 @@ export function ImportClient({
       return;
     }
     startTransition(async () => {
-      const res = await bulkImportProducts(
+      const res = await bulkImportSuppliers(
         valid.map(d => ({
           name: d.name,
-          barcode: d.barcode.trim() || null,
-          price: d.price.trim(),
-          cost: d.cost.trim() || null,
-          category: d.category.trim() || null,
+          phone: d.phone.trim() || null,
+          email: d.email.trim() || null,
+          city: d.city.trim() || null,
+          taxId: d.taxId.trim() || null,
         })),
       );
       setResult(res);
       // Keep rows that still need attention: the invalid ones, plus any valid
-      // rows the server rejected (e.g. duplicate barcode), matched by position.
+      // rows the server rejected (e.g. duplicate NIT), matched by position.
       const invalid = drafts.filter(
         d => (errorsById.get(d.id)?.length ?? 0) > 0,
       );
       const failedIdx = new Set(res.failed.map(f => f.row - 1));
       const stillFailing = valid.filter((_, i) => failedIdx.has(i));
       setDrafts([...invalid, ...stillFailing]);
-      // Let the host refresh its catalog once anything actually landed.
+      // Let the host refresh its supplier list once anything actually landed.
       if (res.created > 0) {
         onImported?.();
       }
@@ -161,12 +158,6 @@ export function ImportClient({
 
   return (
     <div className="space-y-4">
-      <datalist id="import-categories">
-        {categoryNames.map(name => (
-          <option key={name} value={name} />
-        ))}
-      </datalist>
-
       <div className="
         flex flex-wrap items-center gap-3 rounded-lg border bg-muted/30 p-4
       "
@@ -190,7 +181,7 @@ export function ImportClient({
         )}
         <a
           href={templateHref}
-          download="plantilla-productos.csv"
+          download="plantilla-proveedores.csv"
           className="
             ml-auto text-sm font-medium text-primary
             hover:underline
@@ -220,7 +211,7 @@ export function ImportClient({
             {' '}
             {result.created}
             {' '}
-            {result.created === 1 ? 'producto' : 'productos'}
+            {result.created === 1 ? 'proveedor' : 'proveedores'}
             .
           </p>
           {result.failed.length > 0 && (
@@ -252,16 +243,17 @@ export function ImportClient({
               <thead className="bg-muted/50 text-left text-xs uppercase">
                 <tr>
                   <th className="px-3 py-2">Nombre *</th>
-                  <th className="px-3 py-2">Precio *</th>
-                  <th className="px-3 py-2">Costo</th>
-                  <th className="px-3 py-2">Categoría</th>
-                  <th className="px-3 py-2">Código de barras</th>
+                  <th className="px-3 py-2">Teléfono</th>
+                  <th className="px-3 py-2">Correo</th>
+                  <th className="px-3 py-2">Ciudad</th>
+                  <th className="px-3 py-2">NIT</th>
                   <th className="px-3 py-2"></th>
                 </tr>
               </thead>
               <tbody>
                 {drafts.map((d) => {
                   const errs = errorsById.get(d.id) ?? [];
+                  const contactError = errs.includes('Falta teléfono o correo');
                   return (
                     <tr
                       key={d.id}
@@ -284,12 +276,23 @@ export function ImportClient({
                       </td>
                       <td className="px-3 py-2">
                         <input
-                          inputMode="decimal"
-                          value={d.price}
-                          onChange={e => updateRow(d.id, 'price', e.target.value)}
+                          inputMode="tel"
+                          value={d.phone}
+                          onChange={e => updateRow(d.id, 'phone', e.target.value)}
                           className={cn(
                             inputCls,
-                            errs.includes('Precio inválido') && `
+                            contactError && 'border-destructive',
+                          )}
+                        />
+                      </td>
+                      <td className="px-3 py-2">
+                        <input
+                          type="email"
+                          value={d.email}
+                          onChange={e => updateRow(d.id, 'email', e.target.value)}
+                          className={cn(
+                            inputCls,
+                            (contactError || errs.includes('Correo inválido')) && `
                               border-destructive
                             `,
                           )}
@@ -297,29 +300,15 @@ export function ImportClient({
                       </td>
                       <td className="px-3 py-2">
                         <input
-                          inputMode="decimal"
-                          value={d.cost}
-                          onChange={e => updateRow(d.id, 'cost', e.target.value)}
-                          className={cn(
-                            inputCls,
-                            errs.includes('Costo inválido') && `
-                              border-destructive
-                            `,
-                          )}
-                        />
-                      </td>
-                      <td className="px-3 py-2">
-                        <input
-                          list="import-categories"
-                          value={d.category}
-                          onChange={e => updateRow(d.id, 'category', e.target.value)}
+                          value={d.city}
+                          onChange={e => updateRow(d.id, 'city', e.target.value)}
                           className={inputCls}
                         />
                       </td>
                       <td className="px-3 py-2">
                         <input
-                          value={d.barcode}
-                          onChange={e => updateRow(d.id, 'barcode', e.target.value)}
+                          value={d.taxId}
+                          onChange={e => updateRow(d.id, 'taxId', e.target.value)}
                           className={cn(inputCls, 'font-mono')}
                         />
                       </td>
@@ -357,7 +346,7 @@ export function ImportClient({
             >
               {pending
                 ? 'Importando…'
-                : `Importar ${validCount} ${validCount === 1 ? 'producto' : 'productos'}`}
+                : `Importar ${validCount} ${validCount === 1 ? 'proveedor' : 'proveedores'}`}
             </Button>
           </div>
         </>

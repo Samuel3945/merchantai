@@ -7,47 +7,47 @@ import { extractText, getDocumentProxy } from 'unpdf';
 import { z } from 'zod';
 import { resolveAiAccess } from '@/libs/ai-import-access';
 
-// The generic .xlsx parser now lives in `@/libs/spreadsheet-import` so every
-// importer reuses it; clients import it from there directly.
+// The generic .xlsx parser lives in `@/libs/spreadsheet-import`; the client
+// imports it from there directly, so it is not re-exported here.
 
 const EXTRACT_MODEL = 'gpt-4o-mini'; // multimodal — reads images.
 
 const extractSchema = z.object({
-  products: z
+  suppliers: z
     .array(
       z.object({
-        name: z.string().describe('Nombre del producto'),
-        price: z
+        name: z.string().describe('Nombre del proveedor o de la persona de contacto'),
+        phone: z
           .string()
-          .describe('Precio de venta solo en números, sin símbolo. Vacío si no se ve.'),
-        category: z
-          .string()
-          .describe('Categoría comercial corta, o vacío si no se infiere.'),
+          .describe('Teléfono o celular, solo dígitos y signos. Vacío si no se ve.'),
+        email: z.string().describe('Correo electrónico, o vacío si no se ve.'),
+        city: z.string().describe('Ciudad, o vacío si no se infiere.'),
       }),
     )
-    .describe('Productos detectados en la imagen'),
+    .describe('Proveedores detectados en la imagen'),
 });
 
-type ExtractedProduct = z.infer<typeof extractSchema>['products'][number];
+type ExtractedSupplier = z.infer<typeof extractSchema>['suppliers'][number];
 
 type ExtractResult
   = | { ok: true; rows: Record<string, string>[]; remaining: number }
     | { ok: false; reason: 'no_key' | 'empty' };
 
-// Maps the model's products into the header-keyed rows recordsToDrafts expects.
-function productsToRows(products: ExtractedProduct[]): Record<string, string>[] {
-  return products
-    .filter(p => p.name.trim() !== '')
-    .map(p => ({
-      nombre: p.name.trim(),
-      precio: p.price.trim(),
-      categoria: p.category.trim(),
+// Maps the model's suppliers into the header-keyed rows recordsToDrafts expects.
+function suppliersToRows(suppliers: ExtractedSupplier[]): Record<string, string>[] {
+  return suppliers
+    .filter(s => s.name.trim() !== '')
+    .map(s => ({
+      nombre: s.name.trim(),
+      telefono: s.phone.trim(),
+      correo: s.email.trim(),
+      ciudad: s.city.trim(),
     }));
 }
 
-// AI extraction of products from a PHOTO (price list, shelf, invoice, handwritten
-// note) into the same header-keyed rows the grid consumes.
-export async function extractProductsFromImage(
+// AI extraction of suppliers from a PHOTO (a contact list, a stack of business
+// cards, an invoice header) into the same header-keyed rows the grid consumes.
+export async function extractSuppliersFromImage(
   formData: FormData,
 ): Promise<ExtractResult> {
   const { userId, orgId } = await auth();
@@ -76,7 +76,7 @@ export async function extractProductsFromImage(
         content: [
           {
             type: 'text',
-            text: 'Extrae todos los productos visibles en esta imagen (lista de precios, foto de estante, factura o nota escrita a mano). Para cada uno indica el nombre, el precio de venta (solo números) y una categoría comercial corta si puedes inferirla. Responde en español.',
+            text: 'Extrae todos los proveedores o contactos comerciales visibles en esta imagen (lista de contactos, tarjetas de presentación, encabezado de factura o nota escrita a mano). Para cada uno indica el nombre, el teléfono, el correo y la ciudad si puedes inferirla. Responde en español.',
           },
           { type: 'image', image },
         ],
@@ -84,18 +84,18 @@ export async function extractProductsFromImage(
     ],
   });
 
-  const rows = productsToRows(object.products);
+  const rows = suppliersToRows(object.suppliers);
   if (rows.length === 0) {
     return { ok: false, reason: 'empty' };
   }
   return { ok: true, rows, remaining: access.remaining };
 }
 
-// AI extraction from a text-based PDF (price list, catalog, invoice). The text is
-// extracted locally first — so a scanned/imageless PDF returns 'empty' without
-// spending a credit — then structured by the model. Scanned-PDF vision is out of
-// scope (use a photo for those).
-export async function extractProductsFromPdf(
+// AI extraction from a text-based PDF (contact list, supplier directory, invoice).
+// The text is extracted locally first — so a scanned/imageless PDF returns 'empty'
+// without spending a credit — then structured by the model. Scanned-PDF vision is
+// out of scope (use a photo for those).
+export async function extractSuppliersFromPdf(
   formData: FormData,
 ): Promise<ExtractResult> {
   const { userId, orgId } = await auth();
@@ -124,10 +124,10 @@ export async function extractProductsFromPdf(
   const { object } = await generateObject({
     model: openai(EXTRACT_MODEL),
     schema: extractSchema,
-    prompt: `Este es el texto extraído de un PDF de un negocio (lista de precios, catálogo o factura). Extrae todos los productos: nombre, precio de venta (solo números) y una categoría comercial corta si puedes inferirla. Ignora encabezados, totales, impuestos y texto que no sea un producto. Responde en español.\n\nTEXTO:\n${trimmed.slice(0, 12000)}`,
+    prompt: `Este es el texto extraído de un PDF de un negocio (lista de contactos, directorio de proveedores o factura). Extrae todos los proveedores: nombre, teléfono, correo y ciudad si puedes inferirla. Ignora encabezados, totales, impuestos y texto que no sea un proveedor. Responde en español.\n\nTEXTO:\n${trimmed.slice(0, 12000)}`,
   });
 
-  const rows = productsToRows(object.products);
+  const rows = suppliersToRows(object.suppliers);
   if (rows.length === 0) {
     return { ok: false, reason: 'empty' };
   }
