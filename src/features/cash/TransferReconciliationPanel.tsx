@@ -557,6 +557,145 @@ export function TransferReconciliationPanel(props: {
         onClose={() => setRecoveryModal(null)}
       />
 
+      {/* En investigación — surfaced at the top: it's the urgent money that
+          didn't arrive, so it sits right under "¿Cuánta plata entró hoy?" and
+          above the full reconciliation list. */}
+      {props.investigating.length > 0 && (
+        <div className="space-y-3">
+          <div>
+            <h3 className="font-display text-lg font-semibold">
+              En investigación
+            </h3>
+            <p className="text-sm text-muted-foreground">
+              No aparecieron en la cuenta. Hay que resolver qué pasó con cada
+              una: o se recupera o es pérdida.
+            </p>
+          </div>
+          <div className="
+            space-y-2 rounded-xl border border-destructive/40 p-2 ring-4
+            ring-destructive/5
+          "
+          >
+            {props.investigating.map(r => (
+              <Card key={r.id} className="border-destructive/20 p-4">
+                <div className="
+                  flex flex-wrap items-center justify-between gap-3
+                "
+                >
+                  <div className="flex min-w-0 items-center gap-3">
+                    <span className="
+                      flex size-9 shrink-0 items-center justify-center
+                      rounded-lg bg-destructive/10 text-destructive
+                    "
+                    >
+                      <AlertTriangle className="size-4" />
+                    </span>
+                    <div className="min-w-0">
+                      <div className="
+                        flex flex-wrap items-center gap-2 text-sm font-medium
+                      "
+                      >
+                        <span>{r.method}</span>
+                        <span className="font-display tabular-nums">
+                          {money(r.expectedAmount)}
+                        </span>
+                        <span className="
+                          inline-flex h-6 items-center rounded-full
+                          bg-destructive/10 px-2.5 text-xs font-semibold
+                          text-destructive
+                        "
+                        >
+                          Sin resolver
+                        </span>
+                      </div>
+                      <RowMeta row={r} />
+                    </div>
+                  </div>
+
+                  {/* Two realities for a transfer that didn't arrive: the money
+                      is recovered (Solución) or it's gone (Pérdida). */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {/* Solución groups the three recovery paths — all cashier-level */}
+                    <SolutionDropdown
+                      disabled={pending}
+                      onArrivedFull={() => run(() => confirmLateTransfer(r.id))}
+                      onArrivedPartial={() => {
+                        setPartialId(partialId === r.id ? null : r.id);
+                        setPartialAmount('');
+                      }}
+                      onFiado={() =>
+                        setFiadoModal({ rowId: r.id, expectedAmount: r.expectedAmount })}
+                    />
+
+                    {/* PÉRDIDA — admin-only. Loss is loss: no claim distinction.
+                        If the money shows up later it can still be recovered. */}
+                    {props.isAdmin && (
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        disabled={pending}
+                        onClick={() => run(() => resolveTransfer(r.id, 'loss'))}
+                      >
+                        Pérdida
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Partial arrival inline input */}
+                {partialId === r.id && (
+                  <div className="
+                    mt-3 space-y-2 rounded-lg border border-border bg-background
+                    p-3
+                  "
+                  >
+                    <div className="text-xs text-muted-foreground">
+                      Ingresá el monto que sí llegó. Se crea un nuevo registro
+                      por la diferencia.
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <input
+                        aria-label="Monto que llegó parcialmente"
+                        className={cn(cashInputCls, 'max-w-40')}
+                        type="number"
+                        inputMode="decimal"
+                        min="0.01"
+                        placeholder="Monto que llegó"
+                        value={partialAmount}
+                        onChange={e => setPartialAmount(e.target.value)}
+                      />
+                      <Button
+                        size="sm"
+                        disabled={pending || partialAmount === ''}
+                        onClick={() =>
+                          run(
+                            () => partialTransferArrival(r.id, partialAmount),
+                            () => {
+                              setPartialId(null);
+                              setPartialAmount('');
+                            },
+                          )}
+                      >
+                        Confirmar parcial
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={pending}
+                        onClick={() => setPartialId(null)}
+                      >
+                        Cancelar
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h2 className="font-display text-lg font-semibold">
@@ -701,7 +840,7 @@ export function TransferReconciliationPanel(props: {
               </div>
             )
           : (
-              <ul className="divide-y divide-border">
+              <ul className="max-h-112 divide-y divide-border overflow-y-auto">
                 {shown.map((r) => {
                   const isPending = r.status === 'pending';
                   const isConfirmed
@@ -949,142 +1088,6 @@ export function TransferReconciliationPanel(props: {
               </ul>
             )}
       </Card>
-
-      {props.investigating.length > 0 && (
-        <div className="space-y-3">
-          <div>
-            <h3 className="font-display text-lg font-semibold">
-              En investigación
-            </h3>
-            <p className="text-sm text-muted-foreground">
-              No aparecieron en la cuenta. Hay que resolver qué pasó con cada
-              una: o se recupera o es pérdida.
-            </p>
-          </div>
-          <div className="
-            space-y-2 rounded-xl border border-destructive/40 p-2 ring-4
-            ring-destructive/5
-          "
-          >
-            {props.investigating.map(r => (
-              <Card key={r.id} className="border-destructive/20 p-4">
-                <div className="
-                  flex flex-wrap items-center justify-between gap-3
-                "
-                >
-                  <div className="flex min-w-0 items-center gap-3">
-                    <span className="
-                      flex size-9 shrink-0 items-center justify-center
-                      rounded-lg bg-destructive/10 text-destructive
-                    "
-                    >
-                      <AlertTriangle className="size-4" />
-                    </span>
-                    <div className="min-w-0">
-                      <div className="
-                        flex flex-wrap items-center gap-2 text-sm font-medium
-                      "
-                      >
-                        <span>{r.method}</span>
-                        <span className="font-display tabular-nums">
-                          {money(r.expectedAmount)}
-                        </span>
-                        <span className="
-                          inline-flex h-6 items-center rounded-full
-                          bg-destructive/10 px-2.5 text-xs font-semibold
-                          text-destructive
-                        "
-                        >
-                          Sin resolver
-                        </span>
-                      </div>
-                      <RowMeta row={r} />
-                    </div>
-                  </div>
-
-                  {/* Two realities for a transfer that didn't arrive: the money
-                      is recovered (Solución) or it's gone (Pérdida). */}
-                  <div className="flex flex-wrap items-center gap-2">
-                    {/* Solución groups the three recovery paths — all cashier-level */}
-                    <SolutionDropdown
-                      disabled={pending}
-                      onArrivedFull={() => run(() => confirmLateTransfer(r.id))}
-                      onArrivedPartial={() => {
-                        setPartialId(partialId === r.id ? null : r.id);
-                        setPartialAmount('');
-                      }}
-                      onFiado={() =>
-                        setFiadoModal({ rowId: r.id, expectedAmount: r.expectedAmount })}
-                    />
-
-                    {/* PÉRDIDA — admin-only. Loss is loss: no claim distinction.
-                        If the money shows up later it can still be recovered. */}
-                    {props.isAdmin && (
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        disabled={pending}
-                        onClick={() => run(() => resolveTransfer(r.id, 'loss'))}
-                      >
-                        Pérdida
-                      </Button>
-                    )}
-                  </div>
-                </div>
-
-                {/* Partial arrival inline input */}
-                {partialId === r.id && (
-                  <div className="
-                    mt-3 space-y-2 rounded-lg border border-border bg-background
-                    p-3
-                  "
-                  >
-                    <div className="text-xs text-muted-foreground">
-                      Ingresá el monto que sí llegó. Se crea un nuevo registro
-                      por la diferencia.
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <input
-                        aria-label="Monto que llegó parcialmente"
-                        className={cn(cashInputCls, 'max-w-40')}
-                        type="number"
-                        inputMode="decimal"
-                        min="0.01"
-                        placeholder="Monto que llegó"
-                        value={partialAmount}
-                        onChange={e => setPartialAmount(e.target.value)}
-                      />
-                      <Button
-                        size="sm"
-                        disabled={pending || partialAmount === ''}
-                        onClick={() =>
-                          run(
-                            () => partialTransferArrival(r.id, partialAmount),
-                            () => {
-                              setPartialId(null);
-                              setPartialAmount('');
-                            },
-                          )}
-                      >
-                        Confirmar parcial
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={pending}
-                        onClick={() => setPartialId(null)}
-                      >
-                        Cancelar
-                      </Button>
-                    </div>
-                  </div>
-                )}
-
-              </Card>
-            ))}
-          </div>
-        </div>
-      )}
 
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <Clock className="size-3.5" />
