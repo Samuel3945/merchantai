@@ -1,0 +1,15 @@
+-- Add sale_idempotency_key column to sales for exactly-once mobile sync.
+--
+-- Nullable UUID so existing web POS and pos-merchatai clients continue to
+-- work unchanged (they submit no key; the server stores NULL). The partial
+-- UNIQUE index that enforces one-server-row-per-device-key is created
+-- CONCURRENTLY OUT OF BAND (see scripts/create-idempotency-index.sql) because
+-- Drizzle's prod migrate() wraps every file in a transaction and Postgres
+-- forbids CREATE INDEX CONCURRENTLY inside a transaction.
+--
+-- Zero-downtime: ALTER TABLE … ADD COLUMN on Postgres 11+ is metadata-only for
+-- nullable columns — no table rewrite, no ACCESS EXCLUSIVE lock held beyond the
+-- catalog update (~1 ms on prod).
+--
+-- prod: node scripts/db-migrate.mjs
+ALTER TABLE "sales" ADD COLUMN "sale_idempotency_key" uuid;
