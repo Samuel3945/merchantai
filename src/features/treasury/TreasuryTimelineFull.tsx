@@ -2,10 +2,12 @@
 
 import type { TreasuryTimelineEntry } from '@/libs/treasury';
 import { ArrowLeft } from 'lucide-react';
-import { useCallback, useState, useTransition } from 'react';
+import { useCallback, useMemo, useState, useTransition } from 'react';
 import { getTimelinePage } from '@/actions/treasury';
+import { DateRangePicker } from '@/components/DateRangePicker';
 import { Select } from '@/components/ui/select';
 import { Link } from '@/libs/I18nNavigation';
+import { buildPresetOptions, todayBogota } from '@/utils/DateRange';
 import {
   TREASURY_MOVEMENT_TYPE_LABELS,
   TREASURY_MOVEMENT_TYPES,
@@ -28,19 +30,13 @@ type TreasuryTimelineFullProps = {
   accounts: AccountOption[];
 };
 
-// Mirrors the Select trigger (components/ui/select.tsx) so date inputs and
-// selects render identically side by side: same height, background, radius,
-// text size and focus ring.
-const filterInputCls
-  = 'flex h-9 w-full items-center rounded-lg border border-input bg-muted px-3 text-sm text-foreground shadow-xs transition-colors outline-none hover:bg-muted/70 focus-visible:ring-2 focus-visible:ring-ring/50';
-
-const filterLabelCls = 'text-xs font-medium text-muted-foreground';
-
 /**
  * Full treasury history page: the complete movement timeline with date-range,
  * type and account filters plus "Cargar más" pagination. Reached from the
  * dashboard "Historial de tesorería" card's "Ver todo" link.
  *
+ * Uses the app's shared DateRangePicker + styled filter band (same as cash
+ * closures / sales / dashboard) so the controls match the rest of the product.
  * Changing any filter resets to page 1 and replaces the list; "Cargar más"
  * fetches the next page and appends. The server action owns gating and clamps
  * page size — this component only drives the query.
@@ -51,8 +47,6 @@ export function TreasuryTimelineFull({
   pageSize,
   accounts,
 }: TreasuryTimelineFullProps) {
-  const today = new Date().toISOString().slice(0, 10);
-
   const [rows, setRows] = useState<TreasuryTimelineEntry[]>(initialRows);
   const [total, setTotal] = useState<number>(initialTotal);
   const [page, setPage] = useState(1);
@@ -62,7 +56,13 @@ export function TreasuryTimelineFull({
     type: '',
     accountId: '',
   });
+  const [activePreset, setActivePreset] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+
+  const presetOptions = useMemo(
+    () => buildPresetOptions(['today', 'yesterday', '7d', '30d', 'mtd', 'lastMonth']),
+    [],
+  );
 
   const typeOptions = [
     { value: '', label: 'Todos los tipos' },
@@ -116,16 +116,27 @@ export function TreasuryTimelineFull({
     });
   }, [page, filters, pageSize]);
 
+  function applyRange(next: { start: string; end: string; preset: string | null }) {
+    setActivePreset(next.preset);
+    applyFilters({ ...filters, start: next.start, end: next.end });
+  }
+
+  function clearRange() {
+    setActivePreset(null);
+    applyFilters({ ...filters, start: '', end: '' });
+  }
+
+  const clearFilters = useCallback(() => {
+    setActivePreset(null);
+    applyFilters({ start: '', end: '', type: '', accountId: '' });
+  }, [applyFilters]);
+
   const hasMore = rows.length < total;
   const hasActiveFilters
     = filters.start !== ''
       || filters.end !== ''
       || filters.type !== ''
       || filters.accountId !== '';
-
-  const clearFilters = useCallback(() => {
-    applyFilters({ start: '', end: '', type: '', accountId: '' });
-  }, [applyFilters]);
 
   return (
     <div className="flex flex-col gap-[22px]">
@@ -142,91 +153,27 @@ export function TreasuryTimelineFull({
         Volver a Tesorería
       </Link>
 
-      <div className="
-        rounded-xl border border-border bg-card p-[18px] shadow-xs
-      "
-      >
+      <div className="rounded-xl border border-border bg-card shadow-xs">
         {/* Header */}
-        <div>
-          <h1 className="text-[17px] font-semibold tracking-tight">
-            Historial de tesorería
-          </h1>
-          <p className="mt-0.5 text-[13px] text-muted-foreground">
-            Todos los movimientos, del más nuevo al más antiguo.
-          </p>
-        </div>
-
-        {/* Filters */}
         <div className="
-          mt-4 grid grid-cols-2 gap-3
-          lg:grid-cols-4
+          flex flex-col gap-1 border-b border-border px-5 py-3
+          sm:flex-row sm:items-center sm:justify-between
         "
         >
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor="filter-desde" className={filterLabelCls}>
-              Desde
-            </label>
-            <input
-              id="filter-desde"
-              type="date"
-              value={filters.start}
-              max={filters.end || today}
-              onChange={e => applyFilters({ ...filters, start: e.target.value })}
-              className={filterInputCls}
-            />
+          <div>
+            <h1 className="text-sm font-semibold">Historial de tesorería</h1>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Todos los movimientos, del más nuevo al más antiguo.
+            </p>
           </div>
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor="filter-hasta" className={filterLabelCls}>
-              Hasta
-            </label>
-            <input
-              id="filter-hasta"
-              type="date"
-              value={filters.end}
-              min={filters.start}
-              max={today}
-              onChange={e => applyFilters({ ...filters, end: e.target.value })}
-              className={filterInputCls}
-            />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <label className={filterLabelCls}>Tipo</label>
-            <Select
-              value={filters.type}
-              onValueChange={v => applyFilters({ ...filters, type: v })}
-              options={typeOptions}
-              placeholder="Todos"
-            />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <label className={filterLabelCls}>Cuenta</label>
-            <Select
-              value={filters.accountId}
-              onValueChange={v => applyFilters({ ...filters, accountId: v })}
-              options={accountOptions}
-              placeholder="Todas"
-            />
-          </div>
-        </div>
-
-        {/* Count + clear */}
-        <div className="
-          mt-4 flex items-center justify-between gap-3 border-t border-border
-          pt-3
-        "
-        >
-          <span className="text-[13px] text-muted-foreground">
-            {isPending
-              ? 'Cargando…'
-              : `${total} movimiento${total !== 1 ? 's' : ''}`}
-          </span>
           {hasActiveFilters && (
             <button
               type="button"
               onClick={clearFilters}
               className="
-                text-[13px] font-medium text-muted-foreground transition-colors
-                hover:text-foreground
+                self-start text-xs font-medium text-primary
+                hover:underline
+                sm:self-auto
               "
             >
               Limpiar filtros
@@ -234,40 +181,95 @@ export function TreasuryTimelineFull({
           )}
         </div>
 
-        {/* Rows */}
-        {rows.length === 0
-          ? (
-              <p className="mt-4 text-center text-[13px] text-muted-foreground">
-                No hay movimientos con los filtros seleccionados.
-              </p>
-            )
-          : (
-              <>
-                <div className="mt-2 flex flex-col">
-                  {rows.map(entry => (
-                    <TimelineRow key={entry.id} entry={entry} />
-                  ))}
-                </div>
+        {/* Filters — shared styled controls */}
+        <div className="
+          grid gap-3 border-b border-border bg-muted/30 p-3
+          sm:grid-cols-2
+          lg:grid-cols-3
+        "
+        >
+          <div className="text-xs">
+            <span className="mb-1 block text-muted-foreground">Periodo</span>
+            <DateRangePicker
+              start={filters.start}
+              end={filters.end}
+              compare={false}
+              showCompare={false}
+              activePreset={activePreset}
+              presets={presetOptions}
+              maxDate={todayBogota()}
+              onApply={applyRange}
+              onClear={clearRange}
+              triggerClassName="w-full"
+            />
+          </div>
+          <label className="text-xs">
+            <span className="mb-1 block text-muted-foreground">Tipo</span>
+            <Select
+              value={filters.type}
+              onValueChange={v => applyFilters({ ...filters, type: v })}
+              options={typeOptions}
+              placeholder="Todos"
+            />
+          </label>
+          <label className="text-xs">
+            <span className="mb-1 block text-muted-foreground">Cuenta</span>
+            <Select
+              value={filters.accountId}
+              onValueChange={v => applyFilters({ ...filters, accountId: v })}
+              options={accountOptions}
+              placeholder="Todas"
+            />
+          </label>
+        </div>
 
-                {hasMore && (
-                  <div className="mt-3 flex justify-center">
-                    <button
-                      type="button"
-                      onClick={loadMore}
-                      disabled={isPending}
-                      className="
-                        rounded-md border border-border px-4 py-2 text-[13px]
-                        font-medium text-foreground transition-colors
-                        hover:bg-muted
-                        disabled:cursor-not-allowed disabled:opacity-40
-                      "
-                    >
-                      {isPending ? 'Cargando…' : 'Cargar más'}
-                    </button>
+        {/* Body */}
+        <div className="p-3">
+          <div className="px-1 pb-1">
+            <span className="text-[13px] text-muted-foreground">
+              {isPending
+                ? 'Cargando…'
+                : `${total} movimiento${total !== 1 ? 's' : ''}`}
+            </span>
+          </div>
+
+          {rows.length === 0
+            ? (
+                <p className="
+                  py-6 text-center text-[13px] text-muted-foreground
+                "
+                >
+                  No hay movimientos con los filtros seleccionados.
+                </p>
+              )
+            : (
+                <>
+                  <div className="flex flex-col">
+                    {rows.map(entry => (
+                      <TimelineRow key={entry.id} entry={entry} />
+                    ))}
                   </div>
-                )}
-              </>
-            )}
+
+                  {hasMore && (
+                    <div className="mt-3 flex justify-center">
+                      <button
+                        type="button"
+                        onClick={loadMore}
+                        disabled={isPending}
+                        className="
+                          rounded-md border border-border px-4 py-2 text-[13px]
+                          font-medium text-foreground transition-colors
+                          hover:bg-muted
+                          disabled:cursor-not-allowed disabled:opacity-40
+                        "
+                      >
+                        {isPending ? 'Cargando…' : 'Cargar más'}
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+        </div>
       </div>
     </div>
   );
