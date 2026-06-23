@@ -273,6 +273,14 @@ export const salesSchema = pgTable(
     // (scripts/create-idempotency-index.sql) — Drizzle's migrate() wraps files
     // in a transaction and Postgres forbids CONCURRENTLY inside a transaction.
     // Dev/test environments get the index via drizzle-kit push (non-concurrent).
+    //
+    // GUARDRAIL: migrations in this repo are hand-written and journal-registered.
+    // Do NOT run `drizzle-kit generate`/`push` against the frozen baseline to
+    // (re)create this index — generate would also try to emit the pre-existing
+    // 0050→0062 snapshot drift. In prod this partial index ships ONLY via the
+    // CONCURRENTLY runbook (scripts/README-idempotency-index.md). The declaration
+    // here exists so the index is documented in schema and picked up by isolated
+    // dev/test DBs, not so it is auto-generated into a migration.
     uniqueIndex('sales_org_idempotency_key_unique_idx')
       .on(table.organizationId, table.saleIdempotencyKey)
       .where(sql`${table.saleIdempotencyKey} IS NOT NULL`),

@@ -21,6 +21,16 @@ Step 3 (verify index is VALID before relying on it)
   The script prints a pg_stat_user_indexes row; confirm indisvalid = true.
 ```
 
+## Do NOT use drizzle-kit for this index
+
+Migrations in this repo are **hand-written and journal-registered**. Do NOT run
+`drizzle-kit generate` or `drizzle-kit push` against the frozen baseline to
+(re)create this index: `generate` would also emit the pre-existing 0050→0062
+snapshot drift, and `push` would build the index non-concurrently (a write lock
+on the high-write `sales` table). In production this partial UNIQUE index ships
+ONLY via the CONCURRENTLY runbook below. The Drizzle schema declares the index
+for documentation and isolated dev/test DBs, not for migration generation.
+
 ## Why not inside a migration file?
 
 `node scripts/db-migrate.mjs` uses Drizzle's `migrate()` which wraps each
