@@ -4,9 +4,7 @@ import { getTimeline, getTreasury, listGastosAction, listTreasuryAccounts } from
 import {
   getHandoverStatusForSessionsAction,
   listPendingHandoversAction,
-  listRecoverableLossesAction,
 } from '@/actions/treasury-placement';
-import { FaltantesSection } from '@/features/treasury/FaltantesSection';
 import { GastosHistory } from '@/features/treasury/GastosHistory';
 import { TreasuryHero } from '@/features/treasury/TreasuryHero';
 import { TreasuryHistory } from '@/features/treasury/TreasuryHistory';
@@ -43,7 +41,7 @@ export default async function TesoreriaPage(props: {
     .filter(a => a.type === 'caja' && a.sessionId)
     .map(a => a.sessionId!);
 
-  const [pendingHandoversResult, , lossesResult] = await Promise.all([
+  const [pendingHandoversResult] = await Promise.all([
     hasTransito
       ? listPendingHandoversAction().catch(() => ({ ok: false as const, error: '' }))
       : Promise.resolve({ ok: true as const, data: [] }),
@@ -54,12 +52,10 @@ export default async function TesoreriaPage(props: {
           error: '',
         }))
       : Promise.resolve({ ok: true as const, data: {} as Record<string, boolean> }),
-    listRecoverableLossesAction().catch(() => ({ ok: true as const, data: [] })),
   ]);
 
   const pendingHandovers = pendingHandoversResult.ok ? pendingHandoversResult.data : [];
   const pendingCount = pendingHandovers.length;
-  const losses = lossesResult?.ok ? lossesResult.data : [];
 
   // Account rows split for the placement queue
   const bankRows = treasuryAccountRows.filter(r => r.type === 'banco');
@@ -91,16 +87,7 @@ export default async function TesoreriaPage(props: {
         pendingCount={pendingCount}
       />
 
-      {/* 5. Faltantes / Pérdidas — recoverable losses */}
-      {losses.length > 0 && (
-        <FaltantesSection
-          losses={losses}
-          bankAccounts={bankRows}
-          cajaFuerteAccounts={cajaFuerteRows}
-        />
-      )}
-
-      {/* 6. Historial de tesorería */}
+      {/* 5. Historial de tesorería */}
       <TreasuryHistory entries={timelineEntries} />
 
       {/* 6. Historial de gastos — unified across all origins */}
