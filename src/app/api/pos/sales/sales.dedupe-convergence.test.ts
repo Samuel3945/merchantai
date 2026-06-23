@@ -203,6 +203,8 @@ const SCHEMA = `
     opened_by text NOT NULL,
     opening_amount numeric(12, 2) DEFAULT '0' NOT NULL,
     closed_by text,
+    opened_by_actor_id text,
+    closed_by_actor_id text,
     expected_amount numeric(12, 2),
     counted_amount numeric(12, 2),
     difference numeric(12, 2),

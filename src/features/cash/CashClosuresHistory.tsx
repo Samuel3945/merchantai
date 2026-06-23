@@ -1,6 +1,6 @@
 'use client';
 
-import type { CashSession } from '@/libs/cash-helpers';
+import type { CajaClosureRow } from '@/actions/cash';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState, useTransition } from 'react';
 import { recordCashCorrection } from '@/actions/cash';
@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
 import { buildPresetOptions, todayBogota } from '@/utils/DateRange';
 import { cn } from '@/utils/Helpers';
-import { actorLabel, cashInputCls, dayKey, money, stamp } from './cash-ui';
+import { cashInputCls, dayKey, money, stamp } from './cash-ui';
 
 type ResultFilter = 'all' | 'diff' | 'square';
 
@@ -55,7 +55,7 @@ const OUT_MOTIVOS = [
  * responsable and result (con diferencia / cuadradas) using the app's shared
  * styled controls. Mirrors CashHistory but rendered per closed session.
  */
-export function CashClosuresHistory(props: { sessions: CashSession[] }) {
+export function CashClosuresHistory(props: { sessions: CajaClosureRow[] }) {
   const [start, setStart] = useState('');
   const [end, setEnd] = useState('');
   const [activePreset, setActivePreset] = useState<string | null>(null);
@@ -134,12 +134,14 @@ export function CashClosuresHistory(props: { sessions: CashSession[] }) {
     [props.sessions],
   );
 
+  // Filter options key on the STABLE responsable key (actor id or 'device'), not
+  // the frozen label — so a caja rename never lists the old and new name as two
+  // separate responsables. The label shown is resolved live server-side.
   const actors = useMemo(() => {
     const seen = new Map<string, string>();
     for (const s of closed) {
-      const id = s.closedBy ?? '';
-      if (!seen.has(id)) {
-        seen.set(id, id ? actorLabel(id) : '—');
+      if (!seen.has(s.responsableKey)) {
+        seen.set(s.responsableKey, s.responsableLabel);
       }
     }
     return [...seen.entries()]
@@ -160,7 +162,7 @@ export function CashClosuresHistory(props: { sessions: CashSession[] }) {
         if (result === 'square' && r.diff !== 0) {
           return false;
         }
-        if (actor !== 'all' && (r.s.closedBy ?? '') !== actor) {
+        if (actor !== 'all' && r.s.responsableKey !== actor) {
           return false;
         }
         if (!r.s.closedAt) {
@@ -388,9 +390,7 @@ export function CashClosuresHistory(props: { sessions: CashSession[] }) {
                             flex items-center justify-between gap-2
                           "
                           >
-                            <span>
-                              {r.s.closedBy ? actorLabel(r.s.closedBy) : '—'}
-                            </span>
+                            <span>{r.s.responsableLabel}</span>
                             {r.diff !== 0 && (
                               <Button
                                 variant="ghost"

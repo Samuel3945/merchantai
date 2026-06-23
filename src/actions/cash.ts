@@ -19,6 +19,7 @@ import {
   findOrCreateOpenSession,
   INCOME_MOVEMENT_TYPES,
   recordCorrectionMovement,
+  resolveSessionResponsable,
   toMoney,
 } from '@/libs/cash-helpers';
 import { recomputeAndCacheCashThreshold } from '@/libs/cash-security-engine';
@@ -116,6 +117,8 @@ export async function closeCashSession(
           status: 'closed',
           closedAt: new Date(),
           closedBy: actor,
+          // Stable identity (Clerk owner) for live name resolution at read time.
+          closedByActorId: userId,
           countedAmount: counted,
           expectedAmount: toMoney(expected),
           difference: toMoney(difference),
@@ -281,6 +284,7 @@ export async function addCashMovement(
       const open = await findOrCreateOpenSession(tx, {
         organizationId: orgId,
         openedBy: actor,
+        openedByActorId: userId,
       });
 
       const [created] = await tx
@@ -397,6 +401,7 @@ export async function recordCashCorrection(
       const open = await findOrCreateOpenSession(tx, {
         organizationId: orgId,
         openedBy: actor,
+        openedByActorId: userId,
       });
       const created = await recordCorrectionMovement(tx, {
         organizationId: orgId,
@@ -628,6 +633,15 @@ export type CajaAdminAction = {
   createdAt: string;
 };
 
+// A closed session enriched with its responsable resolved for display: a STABLE
+// filter key (never a mutable name) plus the live label. For a device-only turn
+// the key is 'device' and the label is the caja's CURRENT name, so a rename never
+// fragments the closures history across old and new names.
+export type CajaClosureRow = CashSession & {
+  responsableKey: string;
+  responsableLabel: string;
+};
+
 export type CajaDetail = {
   posTokenId: string;
   deviceName: string | null;
@@ -637,7 +651,7 @@ export type CajaDetail = {
   expected: number;
   lastActivityAt: string | null;
   movements: CashMovement[];
-  closures: CashSession[];
+  closures: CajaClosureRow[];
   adminActions: CajaAdminAction[];
 };
 
@@ -752,16 +766,63 @@ export async function getCajaDetail(
     ? new Date(lastMovementAt).toISOString()
     : session?.openedAt.toISOString() ?? null;
 
+  // ── Responsable resolution (stable id → live name) ─────────────────────────
+  // opened_by/closed_by are a frozen LABEL: for a device-only turn they hold the
+  // caja's deviceName at that moment, so a rename used to split the closures
+  // filter across the old and new name. Resolve from the STABLE actor id instead;
+  // for a device-only turn fall back to the caja's CURRENT live name. Legacy rows
+  // (no actor id) whose label is one of the caja's own past/present names are
+  // treated as device-only too, so history collapses to one responsable with NO
+  // backfill (past names come from the pos_token rename audit trail above).
+  const liveCajaName = device.deviceName || 'Caja sin nombre';
+  const cajaNames = new Set<string>();
+  if (device.deviceName) {
+    cajaNames.add(device.deviceName);
+  }
+  for (const r of auditRows) {
+    for (const snap of [r.before, r.after]) {
+      const n = (snap as { deviceName?: unknown } | null)?.deviceName;
+      if (typeof n === 'string' && n) {
+        cajaNames.add(n);
+      }
+    }
+  }
+
+  const sessionActorIds = [
+    ...closures.map(c => c.closedByActorId),
+    session?.openedByActorId ?? null,
+  ].filter((x): x is string => !!x);
+  const sessionActorNames = await resolveActorNames(orgId, sessionActorIds);
+
+  const closuresEnriched: CajaClosureRow[] = closures.map((s) => {
+    const r = resolveSessionResponsable({
+      actorId: s.closedByActorId,
+      label: s.closedBy,
+      liveCajaName,
+      cajaNames,
+      actorNames: sessionActorNames,
+    });
+    return { ...s, responsableKey: r.key, responsableLabel: r.label };
+  });
+
   return {
     posTokenId,
     deviceName: device.deviceName,
     status: session ? 'open' : 'closed',
-    responsable: session?.openedBy ?? null,
+    responsable: session
+      ? resolveSessionResponsable({
+        actorId: session.openedByActorId,
+        label: session.openedBy,
+        liveCajaName,
+        cajaNames,
+        actorNames: sessionActorNames,
+      }).label
+      : null,
     openedAt: session?.openedAt.toISOString() ?? null,
     expected,
     lastActivityAt,
     movements,
-    closures,
+    closures: closuresEnriched,
     adminActions,
   };
 }

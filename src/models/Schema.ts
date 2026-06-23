@@ -423,6 +423,15 @@ export const cashSessionsSchema = pgTable(
     // server dedupe replays (idempotent open) and reconcile a concurrent open.
     // NULL for legacy/admin sessions (dashboard, web POS) that send no key.
     clientSessionId: uuid('client_session_id'),
+    // Stable identity of who opened/closed this session (pos_users uuid for an
+    // employee, Clerk `user_*` id for the dashboard owner, NULL for a device-only
+    // turn with no operator). The display name is resolved LIVE from this id at
+    // read time — never a frozen snapshot. The legacy opened_by/closed_by TEXT
+    // columns above stay as the historical fallback for rows written before this
+    // column existed; they must not be treated as identifiers (a caja name baked
+    // into them changes on rename). See actions/cash.ts#getCajaDetail.
+    openedByActorId: text('opened_by_actor_id'),
+    closedByActorId: text('closed_by_actor_id'),
   },
   table => [
     // One open session per POS device (caja). Each register operates its own till.

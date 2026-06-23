@@ -153,6 +153,10 @@ export async function POST(req: Request): Promise<NextResponse> {
           status: 'closed',
           closedAt: new Date(),
           closedBy: attribution,
+          // Stable identity for live name resolution. NULL = device-only turn
+          // (no operator): the responsable is the caja itself, shown by its
+          // current live name so a rename never splits the history.
+          closedByActorId: ctx.cashierId ?? null,
           countedAmount: counted,
           expectedAmount: toMoney(expected),
           difference: toMoney(difference),
