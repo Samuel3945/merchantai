@@ -170,7 +170,6 @@ export async function listSuppliers(
     const like = `%${search}%`;
     const searchFilter = or(
       ilike(suppliersSchema.name, like),
-      ilike(suppliersSchema.company, like),
       ilike(suppliersSchema.email, like),
       ilike(suppliersSchema.phone, like),
       ilike(suppliersSchema.city, like),
@@ -416,6 +415,88 @@ export async function setSupplierStatus(
 
   revalidatePath('/dashboard/suppliers');
   return row;
+}
+
+// One row of the suppliers importer, already mapped from CSV/Excel/PDF/photo.
+export type SupplierImportInput = {
+  name: string;
+  phone?: string | null;
+  email?: string | null;
+  city?: string | null;
+  taxId?: string | null;
+};
+
+export type ImportResult = {
+  created: number;
+  failed: { row: number; name: string; error: string }[];
+};
+
+const MAX_BULK_IMPORT = 2000;
+
+// Bulk supplier import (the commit step of the suppliers importer). Best-effort by
+// design: each row is its own insert, so one bad row (e.g. a duplicate NIT) is
+// reported without aborting the whole batch. Reuses supplierCreateSchema so an
+// imported supplier obeys the same rules as a single create (name + at least one
+// contact). The grid validates rows before they ever reach here. Suppliers carry
+// no product links on import — they are assigned later from the supplier modal.
+export async function bulkImportSuppliers(
+  rows: SupplierImportInput[],
+): Promise<ImportResult> {
+  const { userId, orgId } = await requireOrgId();
+  const slice = rows.slice(0, MAX_BULK_IMPORT);
+  const failed: ImportResult['failed'] = [];
+  let created = 0;
+
+  for (let i = 0; i < slice.length; i++) {
+    const raw = slice[i]!;
+    try {
+      const data = supplierCreateSchema.parse({
+        name: raw.name,
+        phone: raw.phone ?? null,
+        email: raw.email ?? null,
+        city: raw.city ?? null,
+        taxId: raw.taxId ?? null,
+      });
+
+      await db.insert(suppliersSchema).values({
+        organizationId: orgId,
+        name: data.name,
+        company: null,
+        phone: data.phone ?? null,
+        email: data.email ?? null,
+        city: data.city ?? null,
+        address: null,
+        taxId: data.taxId ?? null,
+        notes: null,
+        createdBy: userId,
+      });
+
+      created += 1;
+    } catch (err) {
+      failed.push({
+        row: i + 1,
+        name: raw.name?.trim() || '(sin nombre)',
+        error: isUniqueViolation(err)
+          ? DUP_TAX_ID
+          : err instanceof Error
+            ? err.message
+            : 'Error inesperado',
+      });
+    }
+  }
+
+  if (created > 0) {
+    await logAction({
+      organizationId: orgId,
+      actor: { type: 'user', id: userId },
+      action: 'supplier.bulk_imported',
+      entityType: 'supplier',
+      metadata: { created, failed: failed.length },
+    });
+    revalidatePath('/dashboard/suppliers');
+  }
+
+  return { created, failed };
 }
 
 export type ProductOption = { id: string; name: string };

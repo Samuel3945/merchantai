@@ -8,9 +8,17 @@ import type {
 } from './actions';
 import { useEffect, useRef, useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { cn } from '@/utils/Helpers';
 import { listSuppliers, setSupplierStatus } from './actions';
 import { SupplierModal } from './SupplierModal';
+import { SuppliersImportClient } from './SuppliersImportClient';
 
 const cop = new Intl.NumberFormat('es-CO', {
   style: 'currency',
@@ -104,9 +112,17 @@ export function SuppliersClient(props: {
   const [rows, setRows] = useState<SupplierListItem[]>(props.initial);
   const [search, setSearch] = useState('');
   const [open, setOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [editing, setEditing] = useState<SupplierListItem | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+
+  function reload() {
+    startTransition(async () => {
+      const data = await listSuppliers({ search });
+      setRows(data);
+    });
+  }
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const firstRender = useRef(true);
 
@@ -223,9 +239,12 @@ export function SuppliersClient(props: {
               <p className="mt-1 max-w-sm text-sm text-muted-foreground">
                 Agrega tu primer proveedor para registrar compras y pagos.
               </p>
-              <Button className="mt-5" onClick={openCreate}>
-                Crear proveedor
-              </Button>
+              <div className="mt-5 flex flex-wrap justify-center gap-2">
+                <Button onClick={openCreate}>Crear proveedor</Button>
+                <Button variant="secondary" onClick={() => setImportOpen(true)}>
+                  Importar proveedores
+                </Button>
+              </div>
             </div>
           )
         : (
@@ -235,10 +254,13 @@ export function SuppliersClient(props: {
                   type="search"
                   value={search}
                   onChange={e => setSearch(e.target.value)}
-                  placeholder="Buscar por nombre, empresa, correo, teléfono o ciudad"
+                  placeholder="Buscar por nombre, correo, teléfono o ciudad"
                   className={cn(inputCls, 'max-w-md')}
                 />
                 <Button onClick={openCreate}>Nuevo proveedor</Button>
+                <Button variant="secondary" onClick={() => setImportOpen(true)}>
+                  Importar
+                </Button>
                 <div className="ml-auto text-sm text-muted-foreground">
                   {rows.length}
                   {' '}
@@ -252,7 +274,6 @@ export function SuppliersClient(props: {
                   <thead className="bg-muted/50 text-left text-xs uppercase">
                     <tr>
                       <th className="px-3 py-2">Nombre</th>
-                      <th className="px-3 py-2">Empresa</th>
                       <th className="px-3 py-2">Teléfono</th>
                       <th className="px-3 py-2">Correo</th>
                       <th className="px-3 py-2">Productos</th>
@@ -266,7 +287,7 @@ export function SuppliersClient(props: {
                       ? (
                           <tr>
                             <td
-                              colSpan={8}
+                              colSpan={7}
                               className="
                                 px-3 py-8 text-center text-muted-foreground
                               "
@@ -279,7 +300,6 @@ export function SuppliersClient(props: {
                           rows.map(s => (
                             <tr key={s.id} className="border-t">
                               <td className="px-3 py-2 font-medium">{s.name}</td>
-                              <td className="px-3 py-2">{s.company ?? '—'}</td>
                               <td className="px-3 py-2 font-mono text-xs">
                                 {s.phone ?? '—'}
                               </td>
@@ -339,6 +359,22 @@ export function SuppliersClient(props: {
           onSaved={onSaved}
         />
       )}
+
+      <Dialog open={importOpen} onOpenChange={setImportOpen}>
+        <DialogContent className="
+          max-h-[85vh] w-[95vw] max-w-5xl overflow-y-auto
+        "
+        >
+          <DialogHeader>
+            <DialogTitle>Importar proveedores</DialogTitle>
+            <DialogDescription>
+              Subí un CSV, Excel, foto o PDF; revisá y corregí cada fila antes de
+              cargar tus proveedores.
+            </DialogDescription>
+          </DialogHeader>
+          <SuppliersImportClient onImported={reload} />
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

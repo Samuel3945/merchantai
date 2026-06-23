@@ -10,7 +10,7 @@ import { DatePicker } from '@/components/DatePicker';
 import { Button } from '@/components/ui/button';
 import { Combobox } from '@/components/ui/combobox';
 import { Select } from '@/components/ui/select';
-import { parseSpreadsheetRows } from '@/features/products/import-actions';
+import { parseSpreadsheetRows } from '@/libs/spreadsheet-import';
 import { cn } from '@/utils/Helpers';
 import { recordsToEntryDrafts, validateEntryDraft } from '../entry-import-parse';
 import { ENTRY_REASON_OPTIONS } from '../validation';
