@@ -679,6 +679,7 @@ function CreateTokenModal({
 }) {
   const [deviceName, setDeviceName] = useState('');
   const [addressId, setAddressId] = useState<string | null>(null);
+  const [adminPin, setAdminPin] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -688,6 +689,7 @@ function CreateTokenModal({
       const result = await createPosToken({
         deviceName,
         addressId,
+        adminPin: adminPin.trim() || null,
       });
       if (!result.ok) {
         onFailure(result);
@@ -737,6 +739,23 @@ function CreateTokenModal({
             />
           </div>
           <div>
+            <label htmlFor="pt-admin-pin" className={labelCls}>
+              PIN del administrador (opcional)
+            </label>
+            <input
+              id="pt-admin-pin"
+              type="password"
+              inputMode="numeric"
+              autoComplete="off"
+              pattern="[0-9]*"
+              maxLength={6}
+              placeholder="Ej. 1234 — dejalo vacío para entrar sin PIN"
+              value={adminPin}
+              onChange={e => setAdminPin(e.target.value.replace(/\D/g, ''))}
+              className={inputCls}
+            />
+          </div>
+          <div>
             <span className={labelCls}>Dirección / sucursal (opcional)</span>
             <div className="mt-1">
               <AddressPicker
@@ -752,9 +771,9 @@ function CreateTokenModal({
             text-muted-foreground
           "
           >
-            La caja abre solo con el código de acceso (escrito o escaneado). Cada
-            empleado responde por lo que hace con su PIN personal, que configura
-            en su perfil.
+            La caja queda asignada a vos (administrador) como responsable por
+            defecto y aparecés en el selector del dispositivo. Cuando tengas
+            empleados, podés entregarles la caja desde el menú de cada caja.
           </p>
 
           <div className="flex justify-end gap-2 pt-2">
