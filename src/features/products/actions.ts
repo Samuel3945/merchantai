@@ -715,6 +715,83 @@ export async function bulkAdjustPrice(
   return { updated: rows.length };
 }
 
+export type ProductUnitType = 'unit' | 'kg';
+
+// Bulk change of the unit of measure (unit <-> kg), set-wise. The unit is the
+// meaning of every stored quantity, so — exactly like the single-product edit —
+// it can only flip on products with NO sales and NO stock movements; changing it
+// after history exists would corrupt the FIFO ledger and stock math. A digital
+// product can never be sold by weight, so it's never converted to 'kg' either.
+// Mirrors bulkDeleteProducts: convert what qualifies, report the rest as skipped.
+export async function bulkSetUnitType(
+  ids: string[],
+  next: ProductUnitType,
+): Promise<{ updated: number; skipped: number }> {
+  const { userId, orgId } = await requireOrgAndUser();
+  const unique = [...new Set(ids)].slice(0, MAX_BULK);
+  if (unique.length === 0) {
+    return { updated: 0, skipped: 0 };
+  }
+
+  const { updatedIds, skipped } = await db.transaction(async (tx) => {
+    const targets = await tx
+      .select({
+        id: productsSchema.id,
+        unitType: productsSchema.unitType,
+        isDigital: productsSchema.isDigital,
+        hasSales: hasSalesSql,
+        hasMovements: hasMovementsSql,
+      })
+      .from(productsSchema)
+      .where(
+        and(
+          eq(productsSchema.organizationId, orgId),
+          eq(productsSchema.deleted, false),
+          inArray(productsSchema.id, unique),
+        ),
+      )
+      .for('update');
+
+    // Only rows whose unit actually differs are candidates; among those, history
+    // (or digital when converting to kg) blocks the change and counts as skipped.
+    const needChange = targets.filter(t => t.unitType !== next);
+    const convertible = needChange.filter(
+      t => !t.hasSales && !t.hasMovements && !(next === 'kg' && t.isDigital),
+    );
+    const skippedCount = needChange.length - convertible.length;
+
+    if (convertible.length === 0) {
+      return { updatedIds: [] as string[], skipped: skippedCount };
+    }
+
+    const toUpdate = convertible.map(t => t.id);
+    await tx
+      .update(productsSchema)
+      .set({ unitType: next })
+      .where(
+        and(
+          eq(productsSchema.organizationId, orgId),
+          inArray(productsSchema.id, toUpdate),
+        ),
+      );
+
+    return { updatedIds: toUpdate, skipped: skippedCount };
+  });
+
+  if (updatedIds.length > 0) {
+    await logAction({
+      organizationId: orgId,
+      actor: { type: 'user', id: userId },
+      action: 'product.bulk_unit_type_changed',
+      entityType: 'product',
+      metadata: { unitType: next, count: updatedIds.length, skipped, ids: updatedIds },
+    });
+    revalidatePath('/dashboard/products');
+  }
+
+  return { updated: updatedIds.length, skipped };
+}
+
 export type ImportProductInput = {
   name: string;
   barcode?: string | null;
