@@ -485,81 +485,131 @@ export async function getCurrentCash(): Promise<GetCurrentCashResult> {
   };
 }
 
-export type OpenCaja = {
+export type CajaSummary = {
+  // Device (posToken) id — also the React key and the link target. A caja IS the
+  // device, not the session, so it stays stable across open/close cycles.
   id: string;
-  posTokenId: string | null;
+  posTokenId: string;
   deviceName: string | null;
-  openedBy: string;
-  openedAt: string;
-  openingAmount: number;
+  status: 'open' | 'closed';
+  // Open: who is operating it now. Closed: who closed (or opened) the last turn.
+  responsable: string | null;
+  // Open: when the current turn started (drives "abierta desde" / duration).
+  // Closed/never-used: null.
+  openedAt: string | null;
+  // Live expected cash while open; 0 once closed (the till was counted & emptied).
   expected: number;
+  // Movements in the current open session; 0 when closed.
   movementCount: number;
-  // Timestamp of the most recent movement in the session, or openedAt when the
-  // session has no movements yet. Drives "última actividad" on the caja card.
-  lastActivityAt: string;
+  // Most recent movement (open) or close time (closed). Null when never used.
+  lastActivityAt: string | null;
+  // When the last turn was closed. Null while open or when never used.
+  closedAt: string | null;
 };
 
 /**
- * Every currently-open POS-device till (one per caja). Read-only overview so the
- * owner can watch each cashier's caja without touching it. The dashboard/admin
- * session (posTokenId = null) is intentionally excluded — it is a movement
- * container the owner opens implicitly, NOT a real point of sale, so it must not
- * surface as a "caja" in the supervision view.
+ * Every POS-device caja (active devices), open OR closed, for the supervision
+ * overview. A caja never disappears when its turn closes: the owner must be able
+ * to click into a closed caja to review everything that happened in it. Open
+ * cajas carry their live expected balance and activity; closed cajas carry their
+ * last responsable and close time. The implicit dashboard/admin session
+ * (posTokenId = null) is never a device, so it is naturally excluded.
  */
-export async function listOpenCajas(): Promise<OpenCaja[]> {
+export async function listCajas(): Promise<CajaSummary[]> {
   const { orgId } = await requireOrg();
-  const rows = await db
+
+  const devices = await db
     .select({
-      id: cashSessionsSchema.id,
-      posTokenId: cashSessionsSchema.posTokenId,
-      openedBy: cashSessionsSchema.openedBy,
-      openedAt: cashSessionsSchema.openedAt,
-      openingAmount: cashSessionsSchema.openingAmount,
+      id: posTokensSchema.id,
       deviceName: posTokensSchema.deviceName,
     })
-    .from(cashSessionsSchema)
-    .leftJoin(
-      posTokensSchema,
-      eq(posTokensSchema.id, cashSessionsSchema.posTokenId),
-    )
+    .from(posTokensSchema)
     .where(
       and(
-        eq(cashSessionsSchema.organizationId, orgId),
-        eq(cashSessionsSchema.status, 'open'),
-        // Only POS-device cajas — never the implicit dashboard/admin session.
-        isNotNull(cashSessionsSchema.posTokenId),
+        eq(posTokensSchema.organizationId, orgId),
+        eq(posTokensSchema.active, true),
       ),
     )
-    .orderBy(desc(cashSessionsSchema.openedAt));
+    .orderBy(desc(posTokensSchema.createdAt));
 
   return Promise.all(
-    rows.map(async (r) => {
-      const [expected, countRows] = await Promise.all([
-        computeExpectedAmount(db, {
-          id: r.id,
-          openingAmount: r.openingAmount,
-        }),
-        db
-          .select({
-            c: sql<number>`count(*)::int`,
-            lastAt: sql<string | null>`max(${cashMovementsSchema.createdAt})`,
-          })
-          .from(cashMovementsSchema)
-          .where(eq(cashMovementsSchema.sessionId, r.id)),
-      ]);
-      const lastAt = countRows[0]?.lastAt;
+    devices.map(async (device): Promise<CajaSummary> => {
+      // Latest session for this caja, regardless of state. Open if the current
+      // turn is live; otherwise the most recent closure.
+      const [session] = await db
+        .select()
+        .from(cashSessionsSchema)
+        .where(
+          and(
+            eq(cashSessionsSchema.organizationId, orgId),
+            eq(cashSessionsSchema.posTokenId, device.id),
+          ),
+        )
+        .orderBy(desc(cashSessionsSchema.openedAt))
+        .limit(1);
+
+      const base = {
+        id: device.id,
+        posTokenId: device.id,
+        deviceName: device.deviceName,
+      };
+
+      // A registered caja that nobody has ever opened.
+      if (!session) {
+        return {
+          ...base,
+          status: 'closed',
+          responsable: null,
+          openedAt: null,
+          expected: 0,
+          movementCount: 0,
+          lastActivityAt: null,
+          closedAt: null,
+        };
+      }
+
+      if (session.status === 'open') {
+        const [expected, countRows] = await Promise.all([
+          computeExpectedAmount(db, {
+            id: session.id,
+            openingAmount: session.openingAmount,
+          }),
+          db
+            .select({
+              c: sql<number>`count(*)::int`,
+              lastAt: sql<string | null>`max(${cashMovementsSchema.createdAt})`,
+            })
+            .from(cashMovementsSchema)
+            .where(eq(cashMovementsSchema.sessionId, session.id)),
+        ]);
+        const lastAt = countRows[0]?.lastAt;
+        return {
+          ...base,
+          status: 'open',
+          responsable: session.openedBy,
+          openedAt: session.openedAt.toISOString(),
+          expected,
+          movementCount: countRows[0]?.c ?? 0,
+          lastActivityAt: lastAt
+            ? new Date(lastAt).toISOString()
+            : session.openedAt.toISOString(),
+          closedAt: null,
+        };
+      }
+
+      // Closed: surface the last responsable and close time so the owner can
+      // still drill into the history.
       return {
-        id: r.id,
-        posTokenId: r.posTokenId,
-        deviceName: r.deviceName,
-        openedBy: r.openedBy,
-        openedAt: r.openedAt.toISOString(),
-        openingAmount: Number(r.openingAmount),
-        expected,
-        movementCount: countRows[0]?.c ?? 0,
-        lastActivityAt: lastAt
-          ? new Date(lastAt).toISOString()
-          : r.openedAt.toISOString(),
+        ...base,
+        status: 'closed',
+        responsable: session.closedBy ?? session.openedBy,
+        openedAt: session.openedAt.toISOString(),
+        expected: 0,
+        movementCount: 0,
+        lastActivityAt: session.closedAt
+          ? session.closedAt.toISOString()
+          : session.openedAt.toISOString(),
+        closedAt: session.closedAt ? session.closedAt.toISOString() : null,
       };
     }),
   );
@@ -767,7 +817,7 @@ export async function getFraudAlerts(days = 14): Promise<FraudAlert[]> {
         // Only REAL POS-device cajas count. The admin/panel session
         // (pos_token_id = null) is an implicit movement container the owner
         // never opens by hand — it stays open by design, so it must not raise a
-        // "caja abierta hace más de 24 horas" alert. Mirrors listOpenCajas.
+        // "caja abierta hace más de 24 horas" alert. Mirrors listCajas.
         isNotNull(cashSessionsSchema.posTokenId),
       ),
     );
