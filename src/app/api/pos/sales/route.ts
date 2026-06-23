@@ -77,11 +77,12 @@ async function loadSaleItemsAndPayments(saleId: string): Promise<{
   return { items, payments };
 }
 
-// Builds the 200 deduped response for an already-existing sale. Crucially it
-// first runs applyPostSaleSideEffects: if the original request died between the
-// sale commit and recordCashMovement, this retry completes the missing cash
-// movement (and any other unfinished side effect) — converging on exactly one
-// cash_movement / one set of side effects per sale_id without touching stock.
+// Builds the 200 deduped response for an already-existing sale. It first runs
+// applyPostSaleSideEffects as a CONVERGENCE retry: it completes the
+// session-agnostic effects the original may never have finished (customer spend,
+// transfer reconciliations, audit sentinel) and dedupes the cash movement,
+// without touching stock. A genuinely missing cash movement is NOT booked here
+// (the sale carries no cash_session_id) — it is logged and left for arqueo.
 async function dedupedResponse(
   sale: SaleRow,
   ctx: PosAuthContext,
@@ -94,6 +95,9 @@ async function dedupedResponse(
     notes: sale.notes,
     userId: ctx.cashierId ?? ctx.cashierName,
     createdBy: ctx.cashierId ?? ctx.cashierName ?? null,
+    // Deduped retry: complete the session-agnostic effects, but never create a
+    // missing cash movement into a possibly-different session.
+    isConvergenceRetry: true,
     audit: {
       actor: resolvePosActor(ctx),
       action: 'sale.created',
@@ -146,7 +150,37 @@ export async function POST(req: Request): Promise<NextResponse> {
   // Real business time of the sale (clamped). Web POS omits it → stamps now().
   const occurredAt = resolveOccurredAt(body.occurredAt, new Date());
 
-  // Regla portada de Tiendademo (pos.service.webSale): una venta que mueve
+  // Exactly-once dedupe: if the client sent a sale_idempotency_key, check
+  // whether we already have a row for it. This is the BELT of the
+  // belt-and-suspenders strategy; the SUSPENDERS are the partial UNIQUE index
+  // + 23505 catch inside the transaction (see below).
+  // Correctness without the index: this pre-SELECT covers the common case. It
+  // only misses a tight concurrent-retry race (two requests arrive at the same
+  // ms before either commits); the 23505 catch resolves that race.
+  // A present-but-malformed (non-UUID) key would hit the `uuid` column at the
+  // pre-SELECT and throw Postgres 22P02 (→ 500). Normalize it to null instead:
+  // no dedupe, normal create (back-compat with clients that send garbage).
+  // This runs BEFORE the open-cash gate below: an already-created sale satisfied
+  // that gate at create time, so a retry must converge regardless of the current
+  // caja state (e.g. it was closed between the original request and the retry).
+  const idempotencyKey = normalizeIdempotencyKey(body.sale_idempotency_key);
+  if (idempotencyKey) {
+    const [existing] = await db
+      .select()
+      .from(salesSchema)
+      .where(
+        and(
+          eq(salesSchema.organizationId, ctx.organizationId),
+          eq(salesSchema.saleIdempotencyKey, idempotencyKey),
+        ),
+      )
+      .limit(1);
+    if (existing) {
+      return dedupedResponse(existing, ctx, req);
+    }
+  }
+
+  // Regla portada de Tiendademo (pos.service.webSale): una venta NUEVA que mueve
   // efectivo exige una caja abierta. Los pagos 100% fiado no afectan la caja,
   // así que se permiten sin sesión abierta.
   const paymentMethods
@@ -166,33 +200,6 @@ export async function POST(req: Request): Promise<NextResponse> {
         },
         { status: 400 },
       );
-    }
-  }
-
-  // Exactly-once dedupe: if the client sent a sale_idempotency_key, check
-  // whether we already have a row for it. This is the BELT of the
-  // belt-and-suspenders strategy; the SUSPENDERS are the partial UNIQUE index
-  // + 23505 catch inside the transaction (see below).
-  // Correctness without the index: this pre-SELECT covers the common case. It
-  // only misses a tight concurrent-retry race (two requests arrive at the same
-  // ms before either commits); the 23505 catch resolves that race.
-  // A present-but-malformed (non-UUID) key would hit the `uuid` column at the
-  // pre-SELECT and throw Postgres 22P02 (→ 500). Normalize it to null instead:
-  // no dedupe, normal create (back-compat with clients that send garbage).
-  const idempotencyKey = normalizeIdempotencyKey(body.sale_idempotency_key);
-  if (idempotencyKey) {
-    const [existing] = await db
-      .select()
-      .from(salesSchema)
-      .where(
-        and(
-          eq(salesSchema.organizationId, ctx.organizationId),
-          eq(salesSchema.saleIdempotencyKey, idempotencyKey),
-        ),
-      )
-      .limit(1);
-    if (existing) {
-      return dedupedResponse(existing, ctx, req);
     }
   }
 

@@ -94,12 +94,15 @@ export async function POST(req: Request): Promise<NextResponse> {
   // Post-commit side effects for a synced sale, idempotent by sale_id and run by
   // BOTH the create path and the deduped paths (pre-SELECT belt + 23505 catch).
   // A retry that finds the sale already created still runs this so it completes
-  // anything the original sync attempt never finished — exactly one cash_movement
-  // and one set of side effects per sale_id, never re-touching stock.
+  // the session-agnostic effects the original never finished (customer spend,
+  // transfer reconciliations, audit sentinel), never re-touching stock. Cash is
+  // deduped but a MISSING movement is left for arqueo on convergence retries —
+  // see applyPostSaleSideEffects (a sale carries no cash_session_id).
   const runSideEffects = (
     saleId: string,
     total: string | number,
     notes: string | null,
+    isConvergenceRetry = false,
   ): Promise<void> =>
     applyPostSaleSideEffects({
       organizationId: orgId,
@@ -108,6 +111,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       notes,
       userId: cashierId ?? deviceName,
       createdBy: cashierId ?? deviceName ?? null,
+      isConvergenceRetry,
       audit: {
         actor: { type: 'cashier', id: cashierId ?? `device:${deviceName}` },
         action: 'sale.created',
@@ -148,10 +152,15 @@ export async function POST(req: Request): Promise<NextResponse> {
           )
           .limit(1);
         if (existingSale) {
-          // Deduped: complete any post-commit side effect the original never
-          // finished (e.g. it died before recordCashMovement → cash for a real
-          // sale never recorded → drawer shortage). Idempotent by sale_id.
-          await runSideEffects(existingSale.id, existingSale.total, existingSale.notes);
+          // Deduped: complete the session-agnostic side effects the original
+          // never finished. Idempotent by sale_id; a missing cash movement is
+          // left for arqueo (convergence retry → do not book the wrong session).
+          await runSideEffects(
+            existingSale.id,
+            existingSale.total,
+            existingSale.notes,
+            true,
+          );
           results.push({
             localId: queuedSale.localId,
             success: true,
@@ -387,8 +396,9 @@ export async function POST(req: Request): Promise<NextResponse> {
           )
           .limit(1);
         if (deduped) {
-          // Same convergence guarantee on the concurrent-retry race winner.
-          await runSideEffects(deduped.id, deduped.total, deduped.notes);
+          // Same convergence guarantee on the concurrent-retry race winner
+          // (convergence retry → dedupe cash, never book the wrong session).
+          await runSideEffects(deduped.id, deduped.total, deduped.notes, true);
           results.push({
             localId: queuedSale.localId,
             success: true,

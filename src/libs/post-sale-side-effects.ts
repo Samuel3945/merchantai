@@ -12,14 +12,21 @@ import { auditLogsSchema, salesSchema } from '@/models/Schema';
 // Post-commit side effects for a sale, shared by the create path AND the deduped
 // retry path of /api/pos/sales and /api/pos/sync.
 //
-// THE CONTRACT: for a given sale_id, exactly ONE cash_movement and ONE set of
-// side effects, regardless of which request finishes them — including a TRUE
-// concurrent double-submit of the same idempotency key (the create-path winner
-// racing the 23505-catch dedupe-path loser). The deduped path returns the
-// existing sale but must still run this routine so a retry COMPLETES any side
-// effect the original never finished (e.g. it died between the sale commit and
-// recordCashMovement → cash for a real sale never recorded → drawer shortage at
-// close).
+// THE CONTRACT: for a given sale_id, AT MOST ONE cash_movement and exactly ONE
+// set of the other side effects, regardless of which request finishes them —
+// including a TRUE concurrent double-submit of the same idempotency key (the
+// create-path winner racing the 23505-catch dedupe-path loser). The deduped path
+// returns the existing sale but still runs this routine so a retry COMPLETES the
+// session-agnostic effects the original never finished (customer-spend bump,
+// transfer reconciliations, audit sentinel).
+//
+// CASH IS DIFFERENT — it is session-scoped and a sale carries no
+// cash_session_id. The deduped/convergence path therefore DEDUPES the cash
+// movement (never doubles it) but does NOT create a MISSING one: booking a late
+// movement into "the latest open session" would credit the cash to the wrong
+// arqueo window. A genuinely missing cash movement (original died before
+// recordCashMovement) is logged and left for the arqueo reconciliation flow, not
+// silently booked. Only the create path (isConvergenceRetry=false) books cash.
 //
 // HOW EXACTLY-ONCE IS GUARANTEED: all DB side effects run inside a SINGLE
 // db.transaction that FIRST acquires a row lock on the sale (SELECT … FOR
@@ -58,14 +65,22 @@ export type PostSaleSideEffectArgs = {
   // recordCashMovement / customer upsert attribution.
   userId: string;
   createdBy: string | null;
-  // NOTE: cash scoping is NOT a caller input. The cash movement is scoped to the
-  // PERSISTED sale.posTokenId, read under the FOR UPDATE lock inside
-  // applyPostSaleSideEffects, so the create path and the deduped path always
-  // converge on the same cash session no matter which request finishes them.
-  // Audit trail. The audit `sale.created` row is the universal "side effects
-  // already applied" sentinel — it exists for every sale regardless of payment
-  // method (cash, fiado, transfer), so it gates the non-idempotent customer
-  // upsert even when there is no cash movement.
+  // NOTE: cash device scoping is NOT a caller input. The cash movement is scoped
+  // to the PERSISTED sale.posTokenId (the device), read under the FOR UPDATE lock
+  // inside applyPostSaleSideEffects. posTokenId is the DEVICE, not the session —
+  // see the CASH IS DIFFERENT note in the header for why the convergence path
+  // does not create a missing movement.
+  // Convergence flag. The create path leaves this false (it just created the sale
+  // and books cash into the open session). The deduped/retry path sets it true so
+  // a missing cash movement is left for arqueo instead of booked into the wrong
+  // session. Every other effect still converges on both paths.
+  isConvergenceRetry?: boolean;
+  // Audit trail. The audit `sale.created` row is the "side effects already
+  // applied" sentinel. INVARIANT: this routine is the only writer of a
+  // `sale.created` audit row for a POS sale, so the sentinel uniquely means
+  // "applyPostSaleSideEffects completed for this sale". It exists for every sale
+  // regardless of payment method (cash, fiado, transfer), so it gates the
+  // non-idempotent customer upsert even when there is no cash movement.
   audit: {
     actor: AuditActor;
     action: string;
@@ -79,6 +94,10 @@ export type PostSaleSideEffectArgs = {
 export async function applyPostSaleSideEffects(
   args: PostSaleSideEffectArgs,
 ): Promise<void> {
+  // True only on the run that actually applies the effects (writes the sentinel).
+  // A normal deduped retry finds the sentinel and skips, so it must NOT re-fire
+  // the e-invoice emission below.
+  let applied = false;
   // Serialize every converger of this sale on a row lock so the check-then-write
   // of the sentinel is atomic: the second concurrent request blocks here until
   // the first commits, then sees the sentinel and skips.
@@ -128,6 +147,9 @@ export async function applyPostSaleSideEffects(
         userId: args.userId,
         posTokenId: locked.posTokenId,
         executor: tx,
+        // Convergence retries dedupe cash but never create a missing movement
+        // (unknown session). Only the create path books cash.
+        createIfMissing: !args.isConvergenceRetry,
       });
 
       await applyInvoiceCustomerUpsert({
@@ -156,6 +178,9 @@ export async function applyPostSaleSideEffects(
         executor: tx,
         throwOnError: true,
       });
+
+      // Reached only when the sentinel was absent and every effect just ran.
+      applied = true;
     })
     // A side-effect failure must NEVER roll back or fail the already-committed
     // sale. Swallow and let the next retry converge (the lock makes that safe) —
@@ -172,8 +197,12 @@ export async function applyPostSaleSideEffects(
 
   // OUTSIDE the lock: emit the electronic invoice if a provider is configured.
   // A DIAN provider network call must never run while we hold a sale row lock.
-  // Not awaited — a failed emission leaves the sale retriable in Facturas, and
-  // provider-side dedup of an already-emitted invoice is the backstop for the
-  // rare concurrent case.
-  void maybeAutoEmitInvoice(args.organizationId, args.saleId);
+  // Only fired on the run that actually applied the effects — a plain deduped
+  // retry (sentinel already present) skips it, so a double-tap does not trigger a
+  // second provider call. Not awaited — a failed emission leaves the sale
+  // retriable in Facturas, and provider-side dedup is the backstop for the rare
+  // concurrent case.
+  if (applied) {
+    void maybeAutoEmitInvoice(args.organizationId, args.saleId);
+  }
 }

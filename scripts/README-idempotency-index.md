@@ -51,7 +51,17 @@ Then re-run the script.
 
 ## What happens before the index exists?
 
-The application code uses a pre-SELECT dedupe check (belt), so correctness
-is maintained even while the index is not yet built or is still building.
-The index (suspenders) closes the concurrent-retry race window. Both are
-needed for the full exactly-once guarantee under concurrent traffic.
+The application code uses a pre-SELECT dedupe check (belt). This makes
+**sequential** retries exactly-once (the common case: a device re-sending the
+same sale after a timeout). It is the ONLY protection until the index is built.
+
+⚠️ **Until `indisvalid = true`, TRUE-CONCURRENT double-submits are NOT
+protected.** Two requests with the same key that both pass the pre-SELECT before
+either commits will BOTH insert → two sales, double stock decrement, double cash.
+The partial UNIQUE index (suspenders) + the 23505 catch is what closes that race.
+
+Therefore treat Step 2 as part of the SAME release as Step 1 — do not leave
+devices emitting idempotency keys for an extended window with no valid index, and
+prefer a single low-traffic maintenance window so the gap between column and index
+is minimal. The pre-SELECT keeps single-flight correct in the meantime, not
+concurrent correctness.

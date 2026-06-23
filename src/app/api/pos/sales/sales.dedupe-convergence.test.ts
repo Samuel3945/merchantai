@@ -1,16 +1,24 @@
 /**
  * POST /api/pos/sales — deduped side-effect convergence (TDD: RED → GREEN)
  *
- * The critical correctness fix: if the ORIGINAL request died between the sale
- * commit and recordCashMovement, the cash for a real sale is never recorded →
- * drawer shortage at close. A deduped retry must COMPLETE the missing
- * post-commit side effects (cash movement) without re-decrementing stock or
- * re-emitting a FIFO exit.
+ * The critical correctness fix: a deduped retry must CONVERGE the
+ * session-agnostic side effects the original may never have finished (the
+ * customers.totalSpent bump, transfer reconciliations, the sale.created audit
+ * sentinel) without re-decrementing stock or re-emitting a FIFO exit.
  *
- * Net guarantee asserted here: for a given sale_id, exactly ONE cash_movement,
- * exactly ONE customers.totalSpent bump, exactly ONE sale.created audit row, and
- * the FIFO stock stays single-decremented — no matter which request finishes the
- * side effects.
+ * CASH IS DELIBERATELY EXEMPT. A cash_movement is session-scoped but a sale
+ * carries no cash_session_id, so a convergence retry cannot know which arqueo
+ * window the cash belonged to. It therefore DEDUPES an existing movement (never
+ * doubles it) but does NOT book a MISSING one — booking it into "the latest open
+ * session" could credit the cash to the wrong window. A genuinely missing cash
+ * movement is logged and left for the arqueo reconciliation flow. Only the
+ * create path books cash.
+ *
+ * Net guarantee asserted here: for a given sale_id, AT MOST ONE cash_movement
+ * (and none created on the convergence path), exactly ONE customers.totalSpent
+ * bump per surviving-or-rewritten sentinel, exactly ONE sale.created audit row,
+ * and the FIFO stock stays single-decremented — no matter which request finishes
+ * the side effects.
  *
  * This test uses the REAL recordCashMovement, the REAL applyInvoiceCustomerUpsert
  * and the REAL logAction (none of them mocked), so the audit-log sentinel and the
@@ -30,6 +38,8 @@
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { logger } from '@/libs/Logger';
 
 import { POST } from './route';
 
@@ -60,9 +70,12 @@ vi.mock('@/libs/einvoice/emit', () => ({
   maybeAutoEmitInvoice: vi.fn(async () => {}),
 }));
 // recordSaleTransferReconciliations is NOT mocked: the REAL helper runs against
-// PGLite so the most-changed money-path converger (transfer reconciliations) is
-// proven to insert exactly ONE row per transfer payment and to stay at one under
-// the crash-window retry (onConflictDoNothing on the UNIQUE(sale_payment) index).
+// PGLite so it participates in the convergence transaction. NOTE: the sales here
+// are cash (Efectivo), so the helper short-circuits before inserting — its own
+// exactly-once guarantee (onConflictDoNothing on UNIQUE(sale_payment)) is proven
+// by the dedicated transfer-reconciliation suites (src/libs/transfer-
+// reconciliation*.test.ts), not here. This suite proves cash-movement and
+// customer-spend convergence under the crash-window retry.
 // applyInvoiceCustomerUpsert is NOT mocked: the real one bumps
 // customers.totalSpent, so the "spend bumped exactly once" convergence assertion
 // has teeth.
@@ -415,9 +428,10 @@ describe('POST /api/pos/sales — deduped side-effect convergence', () => {
     expect(await saleCreatedAuditCount(body.id)).toBe(1);
   });
 
-  it('P1.2 — deduped retry COMPLETES missing side effects (crash-window recovery)', async () => {
+  it('P1.2 — deduped retry converges the sentinel but LEAVES missing cash for arqueo', async () => {
     await seedProduct(10);
     await openSession();
+    const warnSpy = vi.spyOn(logger, 'warn');
 
     // 1) First request: creates the sale + items + payments + FIFO exit. We then
     //    simulate the side-effect transaction NEVER having committed (the new
@@ -451,8 +465,9 @@ describe('POST /api/pos/sales — deduped side-effect convergence', () => {
     const stockAfterFirst = await currentStock(PRODUCT_ID);
     const exitsAfterFirst = await stockMovementExitCount(PRODUCT_ID);
 
-    // 2) Deduped retry: must complete the missing cash_movement + sentinel, NOT
-    //    re-create the sale, NOT re-decrement stock, NOT re-emit a FIFO exit.
+    // 2) Deduped retry: must re-write the missing sentinel but NOT book the
+    //    missing cash (left for arqueo), NOT re-create the sale, NOT re-decrement
+    //    stock, NOT re-emit a FIFO exit.
     const second = await POST(
       makePosRequest({
         items: [{ productId: PRODUCT_ID, qty: 2 }],
@@ -464,15 +479,24 @@ describe('POST /api/pos/sales — deduped side-effect convergence', () => {
     expect(second.status).toBe(200);
     expect((await second.json()).deduped).toBe(true);
 
-    // Exactly ONE cash_movement now exists for the sale (the retry completed it).
-    expect(await cashMovementCountForSale(saleId)).toBe(1);
-    // Exactly ONE sentinel now exists (the retry re-wrote it inside the lock).
+    // Cash STAYS missing: the convergence path never books a cash movement into a
+    // possibly-wrong session. The gap is left for the arqueo reconciliation flow.
+    expect(await cashMovementCountForSale(saleId)).toBe(0);
+    // ...and the skip is OBSERVABLE, not silent (so arqueo has a trail).
+    expect(warnSpy).toHaveBeenCalledWith(
+      'post_sale_cash_convergence_skipped',
+      expect.objectContaining({ saleId }),
+    );
+    // The converger still ran: exactly ONE sentinel now exists (re-written inside
+    // the lock), proving cash was DELIBERATELY skipped, not merely forgotten.
     expect(await saleCreatedAuditCount(saleId)).toBe(1);
     // Still exactly one sale row.
     expect(await salesCount()).toBe(1);
     // FIFO untouched: stock single-decremented, no second exit movement.
     expect(await currentStock(PRODUCT_ID)).toBe(stockAfterFirst);
     expect(await stockMovementExitCount(PRODUCT_ID)).toBe(exitsAfterFirst);
+
+    warnSpy.mockRestore();
   });
 
   it('P1.2 — deduped retry after a COMPLETE original adds no second cash_movement', async () => {
@@ -554,8 +578,9 @@ describe('POST /api/pos/sales — deduped side-effect convergence', () => {
     expect(second.status).toBe(200);
     expect((await second.json()).deduped).toBe(true);
 
-    // The retry completed the missing cash + sentinel...
-    expect(await cashMovementCountForSale(saleId)).toBe(1);
+    // The retry re-wrote the missing sentinel but LEFT the missing cash for
+    // arqueo (never booked into a possibly-wrong session)...
+    expect(await cashMovementCountForSale(saleId)).toBe(0);
     expect(await saleCreatedAuditCount(saleId)).toBe(1);
     // ...but the non-idempotent spend was bumped EXACTLY ONCE, not twice. The
     // retry re-ran applyInvoiceCustomerUpsert (because the sentinel was gone),
@@ -653,9 +678,10 @@ describe('POST /api/pos/sales — deduped side-effect convergence', () => {
 
     expect(body.deduped).toBe(true);
     expect(body.id).toBe(winningSaleId);
-    // Side effects converged on the deduped path under the row lock: exactly one
-    // cash_movement and exactly one sale.created sentinel.
-    expect(await cashMovementCountForSale(winningSaleId)).toBe(1);
+    // Side effects converged on the deduped path under the row lock: the
+    // sale.created sentinel was written, but the missing cash movement is left
+    // for arqueo (the convergence path never books a possibly-wrong session).
+    expect(await cashMovementCountForSale(winningSaleId)).toBe(0);
     expect(await saleCreatedAuditCount(winningSaleId)).toBe(1);
     // No second sale row.
     expect(await salesCount()).toBe(1);
