@@ -239,6 +239,12 @@ export async function findOpenSession(
 
 type ResponsableResolution = { key: string; label: string };
 
+// Shown when a turn has no identified person — only legacy device-only rows hit
+// this now, since new cajas are always assigned a real operator (the owner-admin
+// by default, see libs/owner-cashier.ts). The responsable is a PERSON or this
+// honest marker, NEVER the caja name (a caja is not a responsable).
+const NO_OPERATOR_LABEL = 'Sin identificar';
+
 /**
  * Resolve a cash session's responsable for display from its STABLE identity, not
  * the frozen opened_by/closed_by TEXT label. That label was a snapshot: for a
@@ -248,23 +254,22 @@ type ResponsableResolution = { key: string; label: string };
  * Resolution order:
  *  1. `actorId` resolves to a live person name (pos_users / Clerk) → key=actorId.
  *  2. No actor id (device-only or legacy), OR a legacy label that is one of the
- *     caja's own past/present names → the responsable IS the caja: key='device',
- *     label = the caja's CURRENT live name. This collapses every device turn —
- *     old rows included — onto one option with NO backfill.
+ *     caja's own past/present names → there is no identified person: key='device',
+ *     label = "Sin identificar". This collapses every person-less turn — old rows
+ *     included — onto ONE option, and never shows the caja name as a responsable.
  *  3. A legacy label we can't tie to an id (e.g. a dashboard owner name written
  *     before actor ids existed) is kept verbatim, keyed so it stays distinct.
  *
  * `cajaNames` is the set of every name the caja has had (current + rename audit
- * trail), so step 2 recognises a frozen old name as "the caja".
+ * trail), so step 2 recognises a frozen old caja name as "no person".
  */
 export function resolveSessionResponsable(args: {
   actorId: string | null;
   label: string | null;
-  liveCajaName: string;
   cajaNames: ReadonlySet<string>;
   actorNames: ReadonlyMap<string, string>;
 }): ResponsableResolution {
-  const { actorId, label, liveCajaName, cajaNames, actorNames } = args;
+  const { actorId, label, cajaNames, actorNames } = args;
   if (actorId) {
     const name = actorNames.get(actorId);
     if (name) {
@@ -272,7 +277,7 @@ export function resolveSessionResponsable(args: {
     }
   }
   if (!label || cajaNames.has(label)) {
-    return { key: 'device', label: liveCajaName };
+    return { key: 'device', label: NO_OPERATOR_LABEL };
   }
   return { key: `legacy:${label}`, label };
 }
