@@ -2,12 +2,13 @@
 
 import type { ActionResult } from '@/libs/action-result';
 import { randomUUID } from 'node:crypto';
-import { auth } from '@clerk/nextjs/server';
+import { auth, currentUser } from '@clerk/nextjs/server';
 import { and, count, desc, eq, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
 import { getOrgEntitlements, limitOf } from '@/libs/entitlements';
+import { ensureOwnerCashier } from '@/libs/owner-cashier';
 import { POS_DEVICES_LIMIT_REACHED } from '@/libs/plan-limits';
 import {
   orgAddressesSchema,
@@ -109,6 +110,11 @@ export type CreatePosTokenInput = {
   deviceName: string;
   /** Branch address for this caja (org_addresses.id). */
   addressId?: string | null;
+  /**
+   * PIN for the owner-admin operator. Used only the first time the owner becomes
+   * an operator (when their operator profile still has no PIN); ignored after.
+   */
+  adminPin?: string | null;
 };
 
 // Register names must be unique per org (case-insensitive): audit trails and
@@ -163,22 +169,49 @@ export async function createPosToken(
 
   const addressId = await resolveOrgAddressId(orgId, input.addressId);
 
-  // A caja is born with no operator, no assignment and no device PIN: it opens
-  // with the token only (typed or scanned). Per-operator accountability is the
-  // employee's personal PIN, verified on profile change at the device.
-  const [row] = await db
-    .insert(posTokensSchema)
-    .values({
-      organizationId: orgId,
-      deviceName,
-      createdBy: userId,
-      addressId,
-    })
-    .returning();
+  // Owner identity for the admin operator (email/name come from Clerk).
+  const clerkUser = await currentUser();
+  const owner = {
+    clerkUserId: userId,
+    email:
+      clerkUser?.primaryEmailAddress?.emailAddress
+      ?? clerkUser?.emailAddresses?.[0]?.emailAddress
+      ?? '',
+    name:
+      clerkUser?.fullName
+      || [clerkUser?.firstName, clerkUser?.lastName]
+        .filter(Boolean)
+        .join(' ')
+        .trim(),
+  };
 
-  if (!row) {
-    throw new Error('Failed to create POS token');
-  }
+  // A caja is born ASSIGNED to a real operator (never null): the owner-admin by
+  // default, so the device "¿quién sos?" selector is never empty and the
+  // "Responsable" is always a person, not the caja. The owner can later hand the
+  // caja to an employee (setCajaOperator). The PIN, when given, is set on the
+  // owner operator's first caja.
+  const { row, operatorId } = await db.transaction(async (tx) => {
+    const operator = await ensureOwnerCashier(
+      tx,
+      orgId,
+      owner,
+      input.adminPin ?? undefined,
+    );
+    const [created] = await tx
+      .insert(posTokensSchema)
+      .values({
+        organizationId: orgId,
+        deviceName,
+        createdBy: userId,
+        addressId,
+        cashierId: operator.id,
+      })
+      .returning();
+    if (!created) {
+      throw new Error('Failed to create POS token');
+    }
+    return { row: created, operatorId: operator.id };
+  });
 
   await logAction({
     organizationId: orgId,
@@ -189,6 +222,7 @@ export async function createPosToken(
     after: {
       deviceName: row.deviceName,
       addressId: row.addressId,
+      cashierId: operatorId,
     },
   });
 
@@ -696,4 +730,106 @@ export async function listOrgCashiers() {
     .orderBy(posUsersSchema.name);
 
   return rows;
+}
+
+// Every active operator of the org (owner-admin + employees), for the caja
+// operator selector. `role` lets the UI label the owner and decide whether a
+// hand-over to a non-admin employee is even possible.
+export async function listOrgOperators() {
+  const { orgId } = await requireAdminContext();
+
+  return db
+    .select({
+      id: posUsersSchema.id,
+      name: posUsersSchema.name,
+      role: posUsersSchema.role,
+    })
+    .from(posUsersSchema)
+    .where(
+      and(
+        eq(posUsersSchema.organizationId, orgId),
+        eq(posUsersSchema.active, true),
+      ),
+    )
+    .orderBy(desc(posUsersSchema.role), posUsersSchema.name);
+}
+
+// Reassigns the caja's DEFAULT operator (pos_tokens.cashier_id) — i.e. "hand the
+// caja over" from the owner-admin to an employee (and back). The target must be
+// an ACTIVE operator of the org, so the caja can never be left without a person:
+// the device selector is never empty and the "Responsable" is always someone.
+// Handing it AWAY from the admin is only possible once a non-admin employee
+// exists (the guard below rejects a target that is the admin themselves only
+// when the intent is to remove — here any valid active operator is accepted, and
+// the UI only offers employees as hand-over targets).
+export async function setCajaOperator(
+  tokenId: string,
+  posUserId: string,
+): Promise<ActionResult<{ id: string; cashierId: string }>> {
+  const { userId, orgId } = await requireAdminContext();
+
+  const targetId = posUserId?.trim();
+  if (!targetId) {
+    return { ok: false, error: 'Elegí un operario para la caja' };
+  }
+
+  const [target] = await db
+    .select({ id: posUsersSchema.id })
+    .from(posUsersSchema)
+    .where(
+      and(
+        eq(posUsersSchema.id, targetId),
+        eq(posUsersSchema.organizationId, orgId),
+        eq(posUsersSchema.active, true),
+      ),
+    )
+    .limit(1);
+  if (!target) {
+    return { ok: false, error: 'El operario no existe o está inactivo' };
+  }
+
+  const [current] = await db
+    .select({ cashierId: posTokensSchema.cashierId })
+    .from(posTokensSchema)
+    .where(
+      and(
+        eq(posTokensSchema.id, tokenId),
+        eq(posTokensSchema.organizationId, orgId),
+      ),
+    )
+    .limit(1);
+  if (!current) {
+    return { ok: false, error: 'Caja no encontrada' };
+  }
+
+  const [updated] = await db
+    .update(posTokensSchema)
+    .set({ cashierId: targetId })
+    .where(
+      and(
+        eq(posTokensSchema.id, tokenId),
+        eq(posTokensSchema.organizationId, orgId),
+      ),
+    )
+    .returning({
+      id: posTokensSchema.id,
+      cashierId: posTokensSchema.cashierId,
+    });
+
+  if (!updated || !updated.cashierId) {
+    return { ok: false, error: 'Caja no encontrada' };
+  }
+
+  await logAction({
+    organizationId: orgId,
+    actor: { type: 'user', id: userId },
+    action: 'pos_token.operator_changed',
+    entityType: 'pos_token',
+    entityId: tokenId,
+    before: { cashierId: current.cashierId },
+    after: { cashierId: updated.cashierId },
+  });
+
+  revalidatePath('/dashboard/pos-cajeros');
+  return { ok: true, data: { id: updated.id, cashierId: updated.cashierId } };
 }

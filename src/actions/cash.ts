@@ -775,15 +775,14 @@ export async function getCajaDetail(
     ? new Date(lastMovementAt).toISOString()
     : session?.openedAt.toISOString() ?? null;
 
-  // ── Responsable resolution (stable id → live name) ─────────────────────────
-  // opened_by/closed_by are a frozen LABEL: for a device-only turn they hold the
-  // caja's deviceName at that moment, so a rename used to split the closures
-  // filter across the old and new name. Resolve from the STABLE actor id instead;
-  // for a device-only turn fall back to the caja's CURRENT live name. Legacy rows
-  // (no actor id) whose label is one of the caja's own past/present names are
-  // treated as device-only too, so history collapses to one responsable with NO
-  // backfill (past names come from the pos_token rename audit trail above).
-  const liveCajaName = device.deviceName || 'Caja sin nombre';
+  // ── Responsable resolution (stable id → live person name) ──────────────────
+  // opened_by/closed_by (and movement createdBy) are a frozen LABEL; for a legacy
+  // device-only turn they held the caja's deviceName at that moment. Resolve from
+  // the STABLE actor id instead. Legacy rows whose label is one of the caja's own
+  // past/present names have no identified person, so they collapse onto a single
+  // "Sin identificar" responsable (never the caja name) with NO backfill — past
+  // names come from the pos_token rename audit trail below. New cajas always have
+  // an assigned operator (libs/owner-cashier.ts), so this is only a legacy path.
   const cajaNames = new Set<string>();
   if (device.deviceName) {
     cajaNames.add(device.deviceName);
@@ -815,7 +814,6 @@ export async function getCajaDetail(
     const r = resolveSessionResponsable({
       actorId: s.closedByActorId,
       label: s.closedBy,
-      liveCajaName,
       cajaNames,
       actorNames: sessionActorNames,
     });
@@ -826,7 +824,6 @@ export async function getCajaDetail(
     const r = resolveSessionResponsable({
       actorId: m.createdBy,
       label: m.createdBy,
-      liveCajaName,
       cajaNames,
       actorNames: sessionActorNames,
     });
@@ -841,7 +838,6 @@ export async function getCajaDetail(
       ? resolveSessionResponsable({
         actorId: session.openedByActorId,
         label: session.openedBy,
-        liveCajaName,
         cajaNames,
         actorNames: sessionActorNames,
       }).label

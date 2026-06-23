@@ -5,9 +5,9 @@ import { resolveSessionResponsable } from './cash-helpers';
 // history across the old and new name in the "Responsable" filter, because the
 // frozen opened_by/closed_by label (the caja's deviceName at that moment) was
 // used as the identifier. resolveSessionResponsable resolves from the STABLE
-// identity instead, so every device turn collapses onto the caja's CURRENT name.
+// identity instead; a person-less turn collapses onto ONE "Sin identificar"
+// option — never the caja name (a caja is not a responsable).
 describe('resolveSessionResponsable', () => {
-  const liveCajaName = 'Local Principal 1';
   // Every name the caja has ever had (current + rename audit trail).
   const cajaNames = new Set(['Local Principal 1', 'caja']);
   const actorNames = new Map([['user_pos_1', 'Juan Pérez']]);
@@ -16,27 +16,26 @@ describe('resolveSessionResponsable', () => {
     return resolveSessionResponsable({
       actorId,
       label,
-      liveCajaName,
       cajaNames,
       actorNames,
     });
   }
 
-  it('collapses old and new caja names onto ONE device responsable (the bug)', () => {
+  it('collapses old and new caja names onto ONE person-less responsable (the bug)', () => {
     // A close recorded BEFORE the rename (frozen old name) and one recorded after.
     const beforeRename = resolve(null, 'caja');
     const afterRename = resolve(null, 'Local Principal 1');
 
-    // Same stable key → one filter option, both labelled with the current name.
+    // Same stable key → one filter option, never the caja name.
     expect(beforeRename.key).toBe('device');
     expect(afterRename.key).toBe('device');
     expect(beforeRename.key).toBe(afterRename.key);
-    expect(beforeRename.label).toBe('Local Principal 1');
-    expect(afterRename.label).toBe('Local Principal 1');
+    expect(beforeRename.label).toBe('Sin identificar');
+    expect(afterRename.label).toBe('Sin identificar');
   });
 
-  it('a null label (device-only, no operator) resolves to the live caja name', () => {
-    expect(resolve(null, null)).toEqual({ key: 'device', label: 'Local Principal 1' });
+  it('a null label (device-only, no operator) resolves to "Sin identificar"', () => {
+    expect(resolve(null, null)).toEqual({ key: 'device', label: 'Sin identificar' });
   });
 
   it('resolves a known actor id to the LIVE person name, keyed by the id', () => {
@@ -55,12 +54,12 @@ describe('resolveSessionResponsable', () => {
     expect(r.key).not.toBe('device');
   });
 
-  it('falls back to the caja when the actor id is unknown but the label is a caja name', () => {
+  it('falls back to "Sin identificar" when the actor id is unknown and the label is a caja name', () => {
     // Stale/unresolvable id (e.g. a deactivated employee) + a caja-name label →
-    // treat as the caja rather than leaking a raw id into the UI.
+    // no identified person, rather than leaking a raw id or the caja name.
     expect(resolve('user_missing', 'caja')).toEqual({
       key: 'device',
-      label: 'Local Principal 1',
+      label: 'Sin identificar',
     });
   });
 
@@ -79,8 +78,8 @@ describe('resolveSessionResponsable', () => {
       });
     });
 
-    it('collapses a device-only movement (createdBy = old caja name) onto the live name', () => {
-      expect(fromCreatedBy('caja')).toEqual({ key: 'device', label: 'Local Principal 1' });
+    it('collapses a device-only movement (createdBy = old caja name) to "Sin identificar"', () => {
+      expect(fromCreatedBy('caja')).toEqual({ key: 'device', label: 'Sin identificar' });
     });
 
     it('keeps a plain person name (manual movement by a named cashier) verbatim', () => {
