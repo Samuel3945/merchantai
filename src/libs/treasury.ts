@@ -1,5 +1,5 @@
 import type { db } from '@/libs/DB';
-import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import {
   computeCashBreakdown,
   findOpenSession,
@@ -1142,6 +1142,17 @@ export type TreasuryTimelineEntry = {
  * @param organizationId - org to scope results
  * @param limit - max rows to return (default 100)
  */
+// Columns selected for every timeline read — shared by the recent-view and the
+// filtered/paginated full-history query so both resolve identically.
+const TIMELINE_MOVEMENT_FIELDS = {
+  id: treasuryMovementsSchema.id,
+  createdAt: treasuryMovementsSchema.createdAt,
+  type: treasuryMovementsSchema.type,
+  fromAccountId: treasuryMovementsSchema.fromAccountId,
+  toAccountId: treasuryMovementsSchema.toAccountId,
+  amount: treasuryMovementsSchema.amount,
+};
+
 export async function listTreasuryTimeline(
   executor: Executor,
   organizationId: string,
@@ -1149,19 +1160,34 @@ export async function listTreasuryTimeline(
 ): Promise<TreasuryTimelineEntry[]> {
   // Fetch movements ordered newest-first.
   const movements = await executor
-    .select({
-      id: treasuryMovementsSchema.id,
-      createdAt: treasuryMovementsSchema.createdAt,
-      type: treasuryMovementsSchema.type,
-      fromAccountId: treasuryMovementsSchema.fromAccountId,
-      toAccountId: treasuryMovementsSchema.toAccountId,
-      amount: treasuryMovementsSchema.amount,
-    })
+    .select(TIMELINE_MOVEMENT_FIELDS)
     .from(treasuryMovementsSchema)
     .where(eq(treasuryMovementsSchema.organizationId, organizationId))
     .orderBy(desc(treasuryMovementsSchema.createdAt))
     .limit(limit);
 
+  return resolveTimelineEntries(executor, organizationId, movements);
+}
+
+type RawTimelineMovement = {
+  id: string;
+  createdAt: Date;
+  type: string;
+  fromAccountId: string | null;
+  toAccountId: string | null;
+  amount: string | null;
+};
+
+/**
+ * Resolves raw treasury_movements rows into display-ready timeline entries by
+ * looking up the from/to account names in a single query. Pure mapping — no
+ * ordering or filtering happens here (the caller owns the query shape).
+ */
+async function resolveTimelineEntries(
+  executor: Executor,
+  organizationId: string,
+  movements: RawTimelineMovement[],
+): Promise<TreasuryTimelineEntry[]> {
   if (movements.length === 0) {
     return [];
   }
@@ -1206,6 +1232,79 @@ export async function listTreasuryTimeline(
     toAccount: m.toAccountId ? (nameMap.get(m.toAccountId) ?? null) : null,
     amount: Number.parseFloat(m.amount ?? '0') || 0,
   }));
+}
+
+export type TreasuryTimelineFilter = {
+  /** Inclusive lower bound on the movement's calendar date (YYYY-MM-DD). */
+  start?: string;
+  /** Inclusive upper bound on the movement's calendar date (YYYY-MM-DD). */
+  end?: string;
+  /** Movement type (treasury_movement_type). Omit for all types. */
+  type?: string;
+  /** Match movements where this account is the source OR the destination. */
+  accountId?: string;
+};
+
+export type TreasuryTimelinePage = {
+  rows: TreasuryTimelineEntry[];
+  /** Total rows matching the filter, ignoring limit/offset — drives pagination. */
+  total: number;
+};
+
+/**
+ * Filtered + paginated treasury timeline for the full-history page. Same
+ * read-only semantics as listTreasuryTimeline (newest-first, account names
+ * resolved) plus optional date-range / type / account filters and a total count.
+ *
+ * Date filters compare on the calendar date of created_at via a ::date cast, so
+ * they are timezone-agnostic against the stored naive timestamp. `args.limit` is
+ * the page size and `args.offset` the rows to skip (page index * limit).
+ */
+export async function listTreasuryTimelinePage(
+  executor: Executor,
+  organizationId: string,
+  args: TreasuryTimelineFilter & { limit: number; offset: number },
+): Promise<TreasuryTimelinePage> {
+  const conditions = [eq(treasuryMovementsSchema.organizationId, organizationId)];
+
+  if (args.start) {
+    conditions.push(sql`${treasuryMovementsSchema.createdAt}::date >= ${args.start}::date`);
+  }
+  if (args.end) {
+    conditions.push(sql`${treasuryMovementsSchema.createdAt}::date <= ${args.end}::date`);
+  }
+  if (args.type) {
+    conditions.push(sql`${treasuryMovementsSchema.type} = ${args.type}`);
+  }
+  if (args.accountId) {
+    conditions.push(
+      or(
+        eq(treasuryMovementsSchema.fromAccountId, args.accountId),
+        eq(treasuryMovementsSchema.toAccountId, args.accountId),
+      )!,
+    );
+  }
+
+  const whereClause = and(...conditions);
+
+  const [movements, totalRows] = await Promise.all([
+    executor
+      .select(TIMELINE_MOVEMENT_FIELDS)
+      .from(treasuryMovementsSchema)
+      .where(whereClause)
+      .orderBy(desc(treasuryMovementsSchema.createdAt))
+      .limit(args.limit)
+      .offset(args.offset),
+    executor
+      .select({ value: count() })
+      .from(treasuryMovementsSchema)
+      .where(whereClause),
+  ]);
+
+  const total = totalRows[0]?.value ?? 0;
+  const rows = await resolveTimelineEntries(executor, organizationId, movements);
+
+  return { rows, total };
 }
 
 // ── Slice E: confirmed-transfer → bank deposit bridge ─────────────────────────

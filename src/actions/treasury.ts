@@ -1,7 +1,7 @@
 'use server';
 
 import type { ActionResult } from '@/libs/action-result';
-import type { TreasuryAccount, TreasuryAccountRow, TreasuryTimelineEntry } from '@/libs/treasury';
+import type { TreasuryAccount, TreasuryAccountRow, TreasuryTimelineEntry, TreasuryTimelinePage } from '@/libs/treasury';
 import { auth, currentUser } from '@clerk/nextjs/server';
 import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
@@ -15,6 +15,7 @@ import {
   getTreasuryPosition,
   listTreasuryAccounts as listTreasuryAccountsLib,
   listTreasuryTimeline as listTreasuryTimelineLib,
+  listTreasuryTimelinePage as listTreasuryTimelinePageLib,
   recordBankConsignacion,
   recordContainerTransfer,
   recordGastoOutflow,
@@ -373,6 +374,31 @@ export async function getTimeline(
 ): Promise<TreasuryTimelineEntry[]> {
   const { orgId } = await requirePanelModule('cash');
   return listTreasuryTimelineLib(db, orgId, limit);
+}
+
+/**
+ * Filtered + paginated treasury timeline for the full-history page. Gated by
+ * requirePanelModule('cash'). Page size is clamped to [1, 100]; page is 1-based.
+ */
+export async function getTimelinePage(input: {
+  start?: string;
+  end?: string;
+  type?: string;
+  accountId?: string;
+  page?: number;
+  pageSize?: number;
+}): Promise<TreasuryTimelinePage> {
+  const { orgId } = await requirePanelModule('cash');
+  const pageSize = Math.min(Math.max(input.pageSize ?? 25, 1), 100);
+  const page = Math.max(1, input.page ?? 1);
+  return listTreasuryTimelinePageLib(db, orgId, {
+    start: input.start,
+    end: input.end,
+    type: input.type,
+    accountId: input.accountId,
+    limit: pageSize,
+    offset: (page - 1) * pageSize,
+  });
 }
 
 // ── Slice 2: Unified gastos history ──────────────────────────────────────────
