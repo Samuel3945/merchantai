@@ -5,7 +5,6 @@ import { ArrowLeft } from 'lucide-react';
 import { useCallback, useState, useTransition } from 'react';
 import { getTimelinePage } from '@/actions/treasury';
 import { Select } from '@/components/ui/select';
-import { cashInputCls } from '@/features/cash/cash-ui';
 import { Link } from '@/libs/I18nNavigation';
 import {
   TREASURY_MOVEMENT_TYPE_LABELS,
@@ -28,6 +27,14 @@ type TreasuryTimelineFullProps = {
   pageSize: number;
   accounts: AccountOption[];
 };
+
+// Mirrors the Select trigger (components/ui/select.tsx) so date inputs and
+// selects render identically side by side: same height, background, radius,
+// text size and focus ring.
+const filterInputCls
+  = 'flex h-9 w-full items-center rounded-lg border border-input bg-muted px-3 text-sm text-foreground shadow-xs transition-colors outline-none hover:bg-muted/70 focus-visible:ring-2 focus-visible:ring-ring/50';
+
+const filterLabelCls = 'text-xs font-medium text-muted-foreground';
 
 /**
  * Full treasury history page: the complete movement timeline with date-range,
@@ -110,6 +117,15 @@ export function TreasuryTimelineFull({
   }, [page, filters, pageSize]);
 
   const hasMore = rows.length < total;
+  const hasActiveFilters
+    = filters.start !== ''
+      || filters.end !== ''
+      || filters.type !== ''
+      || filters.accountId !== '';
+
+  const clearFilters = useCallback(() => {
+    applyFilters({ start: '', end: '', type: '', accountId: '' });
+  }, [applyFilters]);
 
   return (
     <div className="flex flex-col gap-[22px]">
@@ -141,36 +157,40 @@ export function TreasuryTimelineFull({
         </div>
 
         {/* Filters */}
-        <div className="mt-4 flex flex-wrap gap-2">
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-muted-foreground">Desde</label>
+        <div className="
+          mt-4 grid grid-cols-2 gap-3
+          lg:grid-cols-4
+        "
+        >
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="filter-desde" className={filterLabelCls}>
+              Desde
+            </label>
             <input
+              id="filter-desde"
               type="date"
               value={filters.start}
               max={filters.end || today}
               onChange={e => applyFilters({ ...filters, start: e.target.value })}
-              className={`
-                ${cashInputCls}
-                h-9 text-sm
-              `}
+              className={filterInputCls}
             />
           </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-muted-foreground">Hasta</label>
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="filter-hasta" className={filterLabelCls}>
+              Hasta
+            </label>
             <input
+              id="filter-hasta"
               type="date"
               value={filters.end}
               min={filters.start}
               max={today}
               onChange={e => applyFilters({ ...filters, end: e.target.value })}
-              className={`
-                ${cashInputCls}
-                h-9 text-sm
-              `}
+              className={filterInputCls}
             />
           </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-muted-foreground">Tipo</label>
+          <div className="flex flex-col gap-1.5">
+            <label className={filterLabelCls}>Tipo</label>
             <Select
               value={filters.type}
               onValueChange={v => applyFilters({ ...filters, type: v })}
@@ -178,8 +198,8 @@ export function TreasuryTimelineFull({
               placeholder="Todos"
             />
           </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-muted-foreground">Cuenta</label>
+          <div className="flex flex-col gap-1.5">
+            <label className={filterLabelCls}>Cuenta</label>
             <Select
               value={filters.accountId}
               onValueChange={v => applyFilters({ ...filters, accountId: v })}
@@ -189,10 +209,10 @@ export function TreasuryTimelineFull({
           </div>
         </div>
 
-        {/* Count bar */}
+        {/* Count + clear */}
         <div className="
-          mt-3 flex items-center justify-between rounded-lg bg-muted/50 px-4
-          py-2.5
+          mt-4 flex items-center justify-between gap-3 border-t border-border
+          pt-3
         "
         >
           <span className="text-[13px] text-muted-foreground">
@@ -200,6 +220,18 @@ export function TreasuryTimelineFull({
               ? 'Cargando…'
               : `${total} movimiento${total !== 1 ? 's' : ''}`}
           </span>
+          {hasActiveFilters && (
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="
+                text-[13px] font-medium text-muted-foreground transition-colors
+                hover:text-foreground
+              "
+            >
+              Limpiar filtros
+            </button>
+          )}
         </div>
 
         {/* Rows */}
