@@ -642,6 +642,15 @@ export type CajaClosureRow = CashSession & {
   responsableLabel: string;
 };
 
+// A movement enriched with its responsable resolved for display — same contract
+// as CajaClosureRow: a STABLE filter key (never the frozen createdBy string) plus
+// the live label, so a caja rename never lists its old and new name as two
+// separate "Quién" options in the movement history.
+export type CajaMovementRow = CashMovement & {
+  responsableKey: string;
+  responsableLabel: string;
+};
+
 export type CajaDetail = {
   posTokenId: string;
   deviceName: string | null;
@@ -650,7 +659,7 @@ export type CajaDetail = {
   openedAt: string | null;
   expected: number;
   lastActivityAt: string | null;
-  movements: CashMovement[];
+  movements: CajaMovementRow[];
   closures: CajaClosureRow[];
   adminActions: CajaAdminAction[];
 };
@@ -788,9 +797,17 @@ export async function getCajaDetail(
     }
   }
 
+  // cash_movements.createdBy is the same overloaded TEXT field: sometimes a stable
+  // id (sale path stores ctx.cashierId), sometimes a person name, sometimes the
+  // caja deviceName (device-only manual movements / sweeps). Feed every createdBy
+  // through the same resolver — resolveActorNames only resolves the id-shaped ones
+  // (uuid / user_*), so plain names and caja names fall through untouched and are
+  // handled by the cajaNames/live-name branch. This also fixes a pre-existing bug:
+  // sale movements showed the raw cashier UUID instead of the cashier name.
   const sessionActorIds = [
     ...closures.map(c => c.closedByActorId),
     session?.openedByActorId ?? null,
+    ...movements.map(m => m.createdBy),
   ].filter((x): x is string => !!x);
   const sessionActorNames = await resolveActorNames(orgId, sessionActorIds);
 
@@ -803,6 +820,17 @@ export async function getCajaDetail(
       actorNames: sessionActorNames,
     });
     return { ...s, responsableKey: r.key, responsableLabel: r.label };
+  });
+
+  const movementsEnriched: CajaMovementRow[] = movements.map((m) => {
+    const r = resolveSessionResponsable({
+      actorId: m.createdBy,
+      label: m.createdBy,
+      liveCajaName,
+      cajaNames,
+      actorNames: sessionActorNames,
+    });
+    return { ...m, responsableKey: r.key, responsableLabel: r.label };
   });
 
   return {
@@ -821,7 +849,7 @@ export async function getCajaDetail(
     openedAt: session?.openedAt.toISOString() ?? null,
     expected,
     lastActivityAt,
-    movements,
+    movements: movementsEnriched,
     closures: closuresEnriched,
     adminActions,
   };
