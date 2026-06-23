@@ -238,6 +238,14 @@ export const salesSchema = pgTable(
     // so a future offline-capable client can ship the true sale time and have
     // analytics (e.g. caja saturation) measure on it instead of sync time.
     occurredAt: timestamp('occurred_at', { mode: 'date' }).defaultNow().notNull(),
+    // Device-generated UUID v4 for exactly-once mobile sync. Nullable so the
+    // web POS and pos-merchatai clients (which send no key) keep working — those
+    // rows land with NULL. A partial UNIQUE index on (organization_id,
+    // sale_idempotency_key) WHERE NOT NULL enforces one server row per device
+    // key and is created CONCURRENTLY out of band (scripts/create-idempotency-index.sql)
+    // to avoid locking the high-write sales table. The Drizzle schema declares
+    // the index so dev/test environments pick it up via drizzle-kit push.
+    saleIdempotencyKey: uuid('sale_idempotency_key'),
   },
   table => [
     // Sales listings and date-range reports scan by org + time window.
@@ -259,6 +267,23 @@ export const salesSchema = pgTable(
       table.organizationId,
       table.saleNumber,
     ),
+    // Partial UNIQUE index for exactly-once mobile sync. NULL rows (web POS,
+    // pos-merchatai) are excluded so many NULLs coexist without violating
+    // uniqueness. In production this index is created CONCURRENTLY out of band
+    // (scripts/create-idempotency-index.sql) — Drizzle's migrate() wraps files
+    // in a transaction and Postgres forbids CONCURRENTLY inside a transaction.
+    // Dev/test environments get the index via drizzle-kit push (non-concurrent).
+    //
+    // GUARDRAIL: migrations in this repo are hand-written and journal-registered.
+    // Do NOT run `drizzle-kit generate`/`push` against the frozen baseline to
+    // (re)create this index — generate would also try to emit the pre-existing
+    // 0050→0062 snapshot drift. In prod this partial index ships ONLY via the
+    // CONCURRENTLY runbook (scripts/README-idempotency-index.md). The declaration
+    // here exists so the index is documented in schema and picked up by isolated
+    // dev/test DBs, not so it is auto-generated into a migration.
+    uniqueIndex('sales_org_idempotency_key_unique_idx')
+      .on(table.organizationId, table.saleIdempotencyKey)
+      .where(sql`${table.saleIdempotencyKey} IS NOT NULL`),
   ],
 );
 

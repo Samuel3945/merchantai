@@ -1,14 +1,14 @@
 import { and, asc, eq, sql } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { touchLastSync, validatePosToken } from '@/actions/pos-tokens';
-import { applyInvoiceCustomerUpsert } from '@/features/customers/post-sale-hook';
-import { recordCashMovement, toMoney } from '@/libs/cash-helpers';
+import { toMoney } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import { createFiado } from '@/libs/fiados';
 import { fiadoAmountFor } from '@/libs/fiados-math';
 import { consumeFifoExits } from '@/libs/fifo-cogs';
+import { applyPostSaleSideEffects } from '@/libs/post-sale-side-effects';
 import { assignNextSaleNumber } from '@/libs/sale-number';
-import { recordSaleTransferReconciliations } from '@/libs/transfer-reconciliation';
+import { normalizeIdempotencyKey } from '@/libs/uuid';
 import {
   productsSchema,
   saleItemsSchema,
@@ -43,6 +43,9 @@ type QueuedSale = {
   notes?: string | null;
   payments?: QueuedSalePayment[];
   queuedAt?: string;
+  // Device-generated UUID v4 for exactly-once mobile sync. Absent for the
+  // legacy pos-merchatai client (back-compat: stored as null, no dedupe).
+  sale_idempotency_key?: string | null;
 };
 
 type SyncBody = {
@@ -88,13 +91,86 @@ export async function POST(req: Request): Promise<NextResponse> {
 
   const results: SyncResult[] = [];
 
+  // Post-commit side effects for a synced sale, idempotent by sale_id and run by
+  // BOTH the create path and the deduped paths (pre-SELECT belt + 23505 catch).
+  // A retry that finds the sale already created still runs this so it completes
+  // the session-agnostic effects the original never finished (customer spend,
+  // transfer reconciliations, audit sentinel), never re-touching stock. Cash is
+  // deduped but a MISSING movement is left for arqueo on convergence retries —
+  // see applyPostSaleSideEffects (a sale carries no cash_session_id).
+  const runSideEffects = (
+    saleId: string,
+    total: string | number,
+    notes: string | null,
+    isConvergenceRetry = false,
+  ): Promise<void> =>
+    applyPostSaleSideEffects({
+      organizationId: orgId,
+      saleId,
+      total,
+      notes,
+      userId: cashierId ?? deviceName,
+      createdBy: cashierId ?? deviceName ?? null,
+      isConvergenceRetry,
+      audit: {
+        actor: { type: 'cashier', id: cashierId ?? `device:${deviceName}` },
+        action: 'sale.created',
+        after: { id: saleId, total },
+        metadata: { source: 'sync', deviceName },
+      },
+    });
+
   for (const queuedSale of queued) {
+    // Exactly-once dedupe key — declared here so the catch block can reference
+    // it for the 23505 re-SELECT suspenders path. A present-but-malformed
+    // (non-UUID) key would hit the `uuid` column and throw 22P02, permanently
+    // rejecting this localId on every retry; normalize it to null instead (no
+    // dedupe, normal create — back-compat with clients that send garbage).
+    const batchIdempotencyKey = normalizeIdempotencyKey(
+      queuedSale.sale_idempotency_key,
+    );
+
     try {
       if (!queuedSale.items?.length) {
         throw new Error('Sale must include at least one item');
       }
 
-      const { saleId, total: saleTotal } = await db.transaction(async (tx) => {
+      // Belt (pre-SELECT) before the insert transaction.
+      if (batchIdempotencyKey) {
+        const [existingSale] = await db
+          .select({
+            id: salesSchema.id,
+            total: salesSchema.total,
+            notes: salesSchema.notes,
+          })
+          .from(salesSchema)
+          .where(
+            and(
+              eq(salesSchema.organizationId, orgId),
+              eq(salesSchema.saleIdempotencyKey, batchIdempotencyKey),
+            ),
+          )
+          .limit(1);
+        if (existingSale) {
+          // Deduped: complete the session-agnostic side effects the original
+          // never finished. Idempotent by sale_id; a missing cash movement is
+          // left for arqueo (convergence retry → do not book the wrong session).
+          await runSideEffects(
+            existingSale.id,
+            existingSale.total,
+            existingSale.notes,
+            true,
+          );
+          results.push({
+            localId: queuedSale.localId,
+            success: true,
+            serverSaleId: existingSale.id,
+          });
+          continue;
+        }
+      }
+
+      const { saleId, total: saleTotal, notes: saleNotes } = await db.transaction(async (tx) => {
         let total = 0;
         const itemsToInsert: {
           productId: string;
@@ -184,6 +260,7 @@ export async function POST(req: Request): Promise<NextResponse> {
             notes: queuedSale.notes ?? null,
             cashierId,
             posTokenId: posToken.id,
+            saleIdempotencyKey: batchIdempotencyKey ?? undefined,
           })
           .returning({ id: salesSchema.id });
 
@@ -292,21 +369,44 @@ export async function POST(req: Request): Promise<NextResponse> {
         serverSaleId: saleId,
       });
 
-      await recordCashMovement(saleId, saleTotal, {
-        organizationId: orgId,
-        userId: cashierId ?? deviceName,
-        posTokenId: posToken.id,
-      }).catch(() => null);
-
-      await recordSaleTransferReconciliations(saleId).catch(() => null);
-
-      await applyInvoiceCustomerUpsert({
-        organizationId: orgId,
-        notes: queuedSale.notes ?? null,
-        total: saleTotal,
-        createdBy: cashierId ?? deviceName ?? null,
-      }).catch(() => null);
+      await runSideEffects(saleId, saleTotal, saleNotes);
     } catch (err) {
+      // Suspenders: concurrent-retry race resolved via 23505 unique violation.
+      // If two retries with the same key arrive concurrently, one commits and
+      // the other hits the partial UNIQUE index. Re-SELECT and return success.
+      if (
+        batchIdempotencyKey
+        && err !== null
+        && typeof err === 'object'
+        && 'code' in err
+        && (err as { code: string }).code === '23505'
+      ) {
+        const [deduped] = await db
+          .select({
+            id: salesSchema.id,
+            total: salesSchema.total,
+            notes: salesSchema.notes,
+          })
+          .from(salesSchema)
+          .where(
+            and(
+              eq(salesSchema.organizationId, orgId),
+              eq(salesSchema.saleIdempotencyKey, batchIdempotencyKey),
+            ),
+          )
+          .limit(1);
+        if (deduped) {
+          // Same convergence guarantee on the concurrent-retry race winner
+          // (convergence retry → dedupe cash, never book the wrong session).
+          await runSideEffects(deduped.id, deduped.total, deduped.notes, true);
+          results.push({
+            localId: queuedSale.localId,
+            success: true,
+            serverSaleId: deduped.id,
+          });
+          continue;
+        }
+      }
       results.push({
         localId: queuedSale.localId,
         success: false,

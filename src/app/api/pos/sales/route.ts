@@ -1,19 +1,19 @@
 import type { SQL } from 'drizzle-orm';
+import type { PosAuthContext } from '@/libs/pos-auth';
 import { and, desc, eq, gte, ilike, lt, lte, or, sql } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
-import { applyInvoiceCustomerUpsert } from '@/features/customers/post-sale-hook';
-import { logAction, resolvePosActor } from '@/libs/audit-log';
-import { findOpenSession, recordCashMovement, toMoney } from '@/libs/cash-helpers';
+import { resolvePosActor } from '@/libs/audit-log';
+import { findOpenSession, toMoney } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
-import { maybeAutoEmitInvoice } from '@/libs/einvoice/emit';
 import { createFiado } from '@/libs/fiados';
 import { fiadoAmountFor } from '@/libs/fiados-math';
 import { consumeFifoExits } from '@/libs/fifo-cogs';
 import { requirePosAuth } from '@/libs/pos-auth';
 import { salePaymentsAggJson } from '@/libs/pos-sales-payments-agg';
+import { applyPostSaleSideEffects } from '@/libs/post-sale-side-effects';
 import { assignNextSaleNumber } from '@/libs/sale-number';
 import { resolveOccurredAt } from '@/libs/sale-occurred-at';
-import { recordSaleTransferReconciliations } from '@/libs/transfer-reconciliation';
+import { normalizeIdempotencyKey } from '@/libs/uuid';
 import { wholesaleUnitPrice } from '@/libs/wholesale';
 import {
   productsSchema,
@@ -45,7 +45,85 @@ type CreateSaleBody = {
   // Optional real sale time (ISO) for offline-capable clients. Omitted by the
   // always-online web POS, in which case the server stamps the current time.
   occurredAt?: string | null;
+  // Device-generated UUID v4 for exactly-once mobile sync. Absent for the web
+  // POS and pos-merchatai (back-compat: treated as null, no dedupe check).
+  sale_idempotency_key?: string | null;
 };
+
+function clientIp(req: Request): string | null {
+  const forwarded = req.headers.get('x-forwarded-for');
+  return (
+    forwarded?.split(',')[0]?.trim()
+    || req.headers.get('x-real-ip')
+    || null
+  );
+}
+
+type SaleRow = typeof salesSchema.$inferSelect;
+
+// Re-loads a sale's items + payments so a deduped response matches the create
+// response shape ({ ...sale, items, payments }) instead of returning a bare row.
+async function loadSaleItemsAndPayments(saleId: string): Promise<{
+  items: (typeof saleItemsSchema.$inferSelect)[];
+  payments: (typeof salePaymentsSchema.$inferSelect)[];
+}> {
+  const [items, payments] = await Promise.all([
+    db.select().from(saleItemsSchema).where(eq(saleItemsSchema.saleId, saleId)),
+    db
+      .select()
+      .from(salePaymentsSchema)
+      .where(eq(salePaymentsSchema.saleId, saleId)),
+  ]);
+  return { items, payments };
+}
+
+// Builds the 200 deduped response for an already-existing sale. It first runs
+// applyPostSaleSideEffects as a CONVERGENCE retry: it completes the
+// session-agnostic effects the original may never have finished (customer spend,
+// transfer reconciliations, audit sentinel) and dedupes the cash movement,
+// without touching stock. A genuinely missing cash movement is NOT booked here
+// (the sale carries no cash_session_id) — it is logged and left for arqueo.
+async function dedupedResponse(
+  sale: SaleRow,
+  ctx: PosAuthContext,
+  req: Request,
+): Promise<NextResponse> {
+  await applyPostSaleSideEffects({
+    organizationId: ctx.organizationId,
+    saleId: sale.id,
+    total: sale.total,
+    notes: sale.notes,
+    userId: ctx.cashierId ?? ctx.cashierName,
+    createdBy: ctx.cashierId ?? ctx.cashierName ?? null,
+    // Deduped retry: complete the session-agnostic effects, but never create a
+    // missing cash movement into a possibly-different session.
+    isConvergenceRetry: true,
+    audit: {
+      actor: resolvePosActor(ctx),
+      action: 'sale.created',
+      after: {
+        id: sale.id,
+        total: sale.total,
+        paymentType: sale.paymentType,
+        status: sale.status,
+      },
+      metadata: {
+        paymentType: sale.paymentType,
+        cashierName: ctx.cashierName,
+        source: ctx.source,
+        deduped: true,
+      },
+      ip: clientIp(req),
+      userAgent: req.headers.get('user-agent'),
+    },
+  });
+
+  const { items, payments } = await loadSaleItemsAndPayments(sale.id);
+  return NextResponse.json(
+    { ...sale, items, payments, deduped: true },
+    { status: 200 },
+  );
+}
 
 export async function POST(req: Request): Promise<NextResponse> {
   const { ctx, errorResponse } = await requirePosAuth(req);
@@ -72,7 +150,37 @@ export async function POST(req: Request): Promise<NextResponse> {
   // Real business time of the sale (clamped). Web POS omits it → stamps now().
   const occurredAt = resolveOccurredAt(body.occurredAt, new Date());
 
-  // Regla portada de Tiendademo (pos.service.webSale): una venta que mueve
+  // Exactly-once dedupe: if the client sent a sale_idempotency_key, check
+  // whether we already have a row for it. This is the BELT of the
+  // belt-and-suspenders strategy; the SUSPENDERS are the partial UNIQUE index
+  // + 23505 catch inside the transaction (see below).
+  // Correctness without the index: this pre-SELECT covers the common case. It
+  // only misses a tight concurrent-retry race (two requests arrive at the same
+  // ms before either commits); the 23505 catch resolves that race.
+  // A present-but-malformed (non-UUID) key would hit the `uuid` column at the
+  // pre-SELECT and throw Postgres 22P02 (→ 500). Normalize it to null instead:
+  // no dedupe, normal create (back-compat with clients that send garbage).
+  // This runs BEFORE the open-cash gate below: an already-created sale satisfied
+  // that gate at create time, so a retry must converge regardless of the current
+  // caja state (e.g. it was closed between the original request and the retry).
+  const idempotencyKey = normalizeIdempotencyKey(body.sale_idempotency_key);
+  if (idempotencyKey) {
+    const [existing] = await db
+      .select()
+      .from(salesSchema)
+      .where(
+        and(
+          eq(salesSchema.organizationId, ctx.organizationId),
+          eq(salesSchema.saleIdempotencyKey, idempotencyKey),
+        ),
+      )
+      .limit(1);
+    if (existing) {
+      return dedupedResponse(existing, ctx, req);
+    }
+  }
+
+  // Regla portada de Tiendademo (pos.service.webSale): una venta NUEVA que mueve
   // efectivo exige una caja abierta. Los pagos 100% fiado no afectan la caja,
   // así que se permiten sin sesión abierta.
   const paymentMethods
@@ -196,6 +304,7 @@ export async function POST(req: Request): Promise<NextResponse> {
           cashierId: ctx.cashierId,
           posTokenId: ctx.source === 'token' ? ctx.tokenId : null,
           occurredAt,
+          saleIdempotencyKey: idempotencyKey ?? undefined,
         })
         .returning();
 
@@ -302,59 +411,69 @@ export async function POST(req: Request): Promise<NextResponse> {
       return { ...sale, items: insertedItems, payments: insertedPayments };
     });
 
-    await recordCashMovement(result.id, result.total, {
+    // Post-commit side effects, idempotent by sale_id and shared with the
+    // deduped path (see applyPostSaleSideEffects). A retry that finds the sale
+    // already created still runs this routine to complete anything the original
+    // request never finished.
+    await applyPostSaleSideEffects({
       organizationId: ctx.organizationId,
-      userId: ctx.cashierId ?? ctx.cashierName,
-      posTokenId: ctx.tokenId,
-    }).catch(() => null);
-
-    await recordSaleTransferReconciliations(result.id).catch(() => null);
-
-    await applyInvoiceCustomerUpsert({
-      organizationId: ctx.organizationId,
-      notes: result.notes,
+      saleId: result.id,
       total: result.total,
+      notes: result.notes,
+      userId: ctx.cashierId ?? ctx.cashierName,
       createdBy: ctx.cashierId ?? ctx.cashierName ?? null,
-    }).catch(() => null);
-
-    // Best-effort: emit the electronic invoice if a provider is configured.
-    // Not awaited — a failed emission leaves the sale retriable in Facturas.
-    void maybeAutoEmitInvoice(ctx.organizationId, result.id);
-
-    const forwarded = req.headers.get('x-forwarded-for');
-    const ip
-      = forwarded?.split(',')[0]?.trim()
-        || req.headers.get('x-real-ip')
-        || null;
-
-    await logAction({
-      organizationId: ctx.organizationId,
-      actor: resolvePosActor(ctx),
-      action: 'sale.created',
-      entityType: 'sale',
-      entityId: result.id,
-      after: {
-        id: result.id,
-        total: result.total,
-        paymentType: result.paymentType,
-        status: result.status,
-        itemCount: result.items.length,
+      audit: {
+        actor: resolvePosActor(ctx),
+        action: 'sale.created',
+        after: {
+          id: result.id,
+          total: result.total,
+          paymentType: result.paymentType,
+          status: result.status,
+          itemCount: result.items.length,
+        },
+        metadata: {
+          paymentType,
+          cashierName: ctx.cashierName,
+          source: ctx.source,
+          payments: result.payments.map(p => ({
+            method: p.method,
+            amount: p.amount,
+          })),
+        },
+        ip: clientIp(req),
+        userAgent: req.headers.get('user-agent'),
       },
-      metadata: {
-        paymentType,
-        cashierName: ctx.cashierName,
-        source: ctx.source,
-        payments: result.payments.map(p => ({
-          method: p.method,
-          amount: p.amount,
-        })),
-      },
-      ip,
-      userAgent: req.headers.get('user-agent'),
     });
 
     return NextResponse.json(result, { status: 201 });
   } catch (err) {
+    // Suspenders: concurrent-retry race resolved via unique-constraint violation.
+    // Two retries arriving at the same moment both pass the pre-SELECT (no row
+    // yet), one commits, the other hits the partial UNIQUE index → 23505. We
+    // re-SELECT the winner and return it as deduped (200). No stock is double-
+    // decremented because the losing transaction was rolled back by Postgres.
+    if (
+      idempotencyKey
+      && err !== null
+      && typeof err === 'object'
+      && 'code' in err
+      && (err as { code: string }).code === '23505'
+    ) {
+      const [deduped] = await db
+        .select()
+        .from(salesSchema)
+        .where(
+          and(
+            eq(salesSchema.organizationId, ctx.organizationId),
+            eq(salesSchema.saleIdempotencyKey, idempotencyKey),
+          ),
+        )
+        .limit(1);
+      if (deduped) {
+        return dedupedResponse(deduped, ctx, req);
+      }
+    }
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Error al registrar venta' },
       { status: 400 },

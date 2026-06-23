@@ -1,6 +1,7 @@
 import { auth } from '@clerk/nextjs/server';
 import { and, desc, eq, gte, isNull, lte, sql } from 'drizzle-orm';
 import { db } from '@/libs/DB';
+import { logger } from '@/libs/Logger';
 import { formatSaleNumber } from '@/libs/sale-number';
 import {
   cashMovementsSchema,
@@ -435,12 +436,30 @@ export async function computeExpectedAmount(
 export async function recordCashMovement(
   saleId: string,
   total: number | string,
-  ctx?: { organizationId: string; userId: string; posTokenId?: string | null },
+  ctx?: {
+    organizationId: string;
+    userId: string;
+    posTokenId?: string | null;
+    // Optional executor. Defaults to the pooled db (back-compat). The post-sale
+    // convergence path passes its locked tx so the existence check + insert run
+    // inside the same serialized transaction (exactly-once cash movement).
+    executor?: Executor;
+    // Whether a MISSING cash movement may be created. The create path (default)
+    // books the cash into the currently-open session. The deduped/convergence
+    // path passes `false`: it still DEDUPES (never doubles an existing movement)
+    // but must NOT create a missing one, because a sale carries no
+    // cash_session_id — booking a late movement into "the latest open session"
+    // (or auto-opening one) would credit the cash to the WRONG arqueo window.
+    // A genuinely missing movement is left for the arqueo reconciliation flow.
+    createIfMissing?: boolean;
+  },
 ): Promise<CashMovement | null> {
   let userId: string | undefined;
   let orgId: string | undefined;
   // Scope the till to the device that made the sale (null/omitted = admin/org).
   const posTokenId = ctx?.posTokenId;
+  const executor: Executor = ctx?.executor ?? db;
+  const createIfMissing = ctx?.createIfMissing ?? true;
 
   if (ctx) {
     userId = ctx.userId;
@@ -455,33 +474,12 @@ export async function recordCashMovement(
     return null;
   }
 
-  // Auto-create a minimal session when cash enters the drawer so the cash is
-  // always accounted for. No silent gaps that surface as unexplained surpluses
-  // at closing time.
-  let open = await findOpenSession(db, orgId, posTokenId);
-  if (!open) {
-    const [autoSession] = await db
-      .insert(cashSessionsSchema)
-      .values({
-        organizationId: orgId,
-        posTokenId: posTokenId ?? null,
-        openedBy: userId,
-        openingAmount: '0',
-        status: 'open',
-        notes: 'Auto-abierta por venta en efectivo (no había caja abierta)',
-      })
-      .returning();
-    open = autoSession;
-    if (!open) {
-      return null;
-    }
-  }
-
-  // One lookup feeds both the cash-detection fallback (paymentType) and the
-  // human-readable movement label (saleNumber). Using the per-org sale number
-  // keeps the Caja ledger consistent with the Sales view (#1001) instead of a
-  // raw UUID prefix.
-  const [sale] = await db
+  // Resolve the cash portion BEFORE touching any session, so a non-cash sale
+  // (fiado/transfer) never auto-creates a phantom session. One lookup feeds both
+  // the cash-detection fallback (paymentType) and the human-readable movement
+  // label (saleNumber) — the per-org sale number keeps the Caja ledger
+  // consistent with the Sales view (#1001) instead of a raw UUID prefix.
+  const [sale] = await executor
     .select({
       paymentType: salesSchema.paymentType,
       saleNumber: salesSchema.saleNumber,
@@ -490,7 +488,7 @@ export async function recordCashMovement(
     .where(eq(salesSchema.id, saleId))
     .limit(1);
 
-  const [cashRow] = await db
+  const [cashRow] = await executor
     .select({
       sum: sql<string>`COALESCE(SUM(${salePaymentsSchema.amount}), 0)::text`,
     })
@@ -517,7 +515,63 @@ export async function recordCashMovement(
     return null;
   }
 
-  const [created] = await db
+  // Idempotency by sale_id: a sale's cash movement is recorded exactly once,
+  // no matter how many times this runs (deduped retry, crash-window recovery).
+  // The sale_movement row is the sentinel — if it already exists for this sale,
+  // return it instead of inserting a second one (which would inflate expected
+  // cash and surface as a phantom surplus at close).
+  const [already] = await executor
+    .select()
+    .from(cashMovementsSchema)
+    .where(
+      and(
+        eq(cashMovementsSchema.organizationId, orgId),
+        eq(cashMovementsSchema.saleId, saleId),
+        eq(cashMovementsSchema.type, 'sale'),
+      ),
+    )
+    .limit(1);
+  if (already) {
+    return already;
+  }
+
+  // No movement yet. On the deduped/convergence path we must not book it (see
+  // createIfMissing above): leave the gap for arqueo and make it observable
+  // instead of crediting the cash to the wrong session.
+  if (!createIfMissing) {
+    logger.warn('post_sale_cash_convergence_skipped', {
+      organizationId: orgId,
+      saleId,
+      reason:
+        'cash movement missing on deduped/convergence path; sale carries no '
+        + 'cash_session_id, so it is left for the arqueo reconciliation flow',
+    });
+    return null;
+  }
+
+  // Create path: book the cash into the currently-open session for this device,
+  // auto-opening a minimal session if none exists so the cash is never silently
+  // lost (no gaps that surface as unexplained surpluses at closing time).
+  let open = await findOpenSession(executor, orgId, posTokenId);
+  if (!open) {
+    const [autoSession] = await executor
+      .insert(cashSessionsSchema)
+      .values({
+        organizationId: orgId,
+        posTokenId: posTokenId ?? null,
+        openedBy: userId,
+        openingAmount: '0',
+        status: 'open',
+        notes: 'Auto-abierta por venta en efectivo (no había caja abierta)',
+      })
+      .returning();
+    open = autoSession;
+    if (!open) {
+      return null;
+    }
+  }
+
+  const [created] = await executor
     .insert(cashMovementsSchema)
     .values({
       sessionId: open.id,
