@@ -6,10 +6,12 @@
 // produced it — we log to the runtime logger and swallow the error.
 
 import type { PosAuthContext } from '@/libs/pos-auth';
+import { clerkClient } from '@clerk/nextjs/server';
+import { and, eq, inArray } from 'drizzle-orm';
 import { headers } from 'next/headers';
 import { db } from '@/libs/DB';
 import { logger } from '@/libs/Logger';
-import { auditLogsSchema } from '@/models/Schema';
+import { auditLogsSchema, posUsersSchema } from '@/models/Schema';
 
 export type AuditActorType = 'user' | 'cashier' | 'system' | 'api';
 
@@ -70,6 +72,66 @@ export function resolvePosActor(ctx: PosAuthContext): AuditActor {
     type: 'cashier',
     id: ctx.cashierId ?? `device:${ctx.cashierName}`,
   };
+}
+
+const ACTOR_UUID_RE
+  = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Resolve audit actor ids to human-readable names. POS cashiers (UUID) come from
+ * pos_users (org-scoped); panel admins (`user_*`) from Clerk (best-effort);
+ * anything else stays as its raw id. Returns a Map keyed by actor id.
+ */
+export async function resolveActorNames(
+  organizationId: string,
+  actorIds: string[],
+): Promise<Map<string, string>> {
+  const names = new Map<string, string>();
+  const ids = [...new Set(actorIds.filter(Boolean))];
+  if (ids.length === 0) {
+    return names;
+  }
+
+  const uuidIds = ids.filter(id => ACTOR_UUID_RE.test(id));
+  const clerkIds = ids.filter(id => id.startsWith('user_'));
+
+  if (uuidIds.length > 0) {
+    const users = await db
+      .select({ id: posUsersSchema.id, name: posUsersSchema.name })
+      .from(posUsersSchema)
+      .where(
+        and(
+          eq(posUsersSchema.organizationId, organizationId),
+          inArray(posUsersSchema.id, uuidIds),
+        ),
+      );
+    for (const u of users) {
+      names.set(u.id, u.name);
+    }
+  }
+
+  if (clerkIds.length > 0) {
+    try {
+      const client = await clerkClient();
+      const { data } = await client.users.getUserList({
+        userId: clerkIds,
+        limit: clerkIds.length,
+      });
+      for (const u of data) {
+        names.set(
+          u.id,
+          u.fullName
+          || [u.firstName, u.lastName].filter(Boolean).join(' ').trim()
+          || u.primaryEmailAddress?.emailAddress
+          || u.id,
+        );
+      }
+    } catch {
+      // Clerk unavailable → those actors fall back to their raw id.
+    }
+  }
+
+  return names;
 }
 
 export async function logAction(input: LogActionInput): Promise<void> {

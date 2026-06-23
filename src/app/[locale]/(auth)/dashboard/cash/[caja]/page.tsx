@@ -3,6 +3,7 @@ import { setRequestLocale } from 'next-intl/server';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getCajaDetail } from '@/actions/cash';
+import { CajaActionsHistory } from '@/features/cash/CajaActionsHistory';
 import { money, relativeTime } from '@/features/cash/cash-ui';
 import { CashClosuresHistory } from '@/features/cash/CashClosuresHistory';
 import { CashHistory } from '@/features/cash/CashHistory';
@@ -98,6 +99,7 @@ export default async function CajaDetailPage(props: {
       </div>
 
       <div className="mt-6 space-y-6">
+        <CajaActionsHistory actions={detail.adminActions} />
         <CashClosuresHistory sessions={detail.closures} />
         <CashHistory movements={detail.movements} />
       </div>

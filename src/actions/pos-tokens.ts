@@ -506,7 +506,7 @@ export async function setPosTokenAllowOversell(
 export async function regeneratePosToken(
   id: string,
 ): Promise<ActionResult<{ id: string; token: string }>> {
-  const { orgId } = await requireAdminContext();
+  const { userId, orgId } = await requireAdminContext();
 
   const newToken = randomUUID();
   const [updated] = await db
@@ -527,6 +527,14 @@ export async function regeneratePosToken(
     return { ok: false, error: 'Caja no encontrada' };
   }
 
+  await logAction({
+    organizationId: orgId,
+    actor: { type: 'user', id: userId },
+    action: 'pos_token.access_regenerated',
+    entityType: 'pos_token',
+    entityId: id,
+  });
+
   revalidatePath('/dashboard/pos-cajeros');
   return { ok: true, data: updated };
 }
@@ -537,7 +545,7 @@ export async function regeneratePosToken(
 export async function forceLogoutPosToken(
   id: string,
 ): Promise<ActionResult<{ id: string }>> {
-  const { orgId } = await requireAdminContext();
+  const { userId, orgId } = await requireAdminContext();
 
   const [updated] = await db
     .update(posTokensSchema)
@@ -553,6 +561,14 @@ export async function forceLogoutPosToken(
   if (!updated) {
     return { ok: false, error: 'Caja no encontrada' };
   }
+
+  await logAction({
+    organizationId: orgId,
+    actor: { type: 'user', id: userId },
+    action: 'pos_token.session_closed',
+    entityType: 'pos_token',
+    entityId: id,
+  });
 
   revalidatePath('/dashboard/pos-cajeros');
   return { ok: true, data: updated };
