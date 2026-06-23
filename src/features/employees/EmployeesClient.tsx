@@ -23,7 +23,6 @@ import {
 } from 'lucide-react';
 import { useCallback, useState, useTransition } from 'react';
 import {
-  deleteEmployee,
   invite,
   listEmployees,
   listPendingInvitations,
@@ -328,9 +327,6 @@ export function EmployeesClient({
   const [lastEmailSent, setLastEmailSent] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [limitError, setLimitError] = useState<LimitErrorPayload | null>(null);
-  // When deleteEmployee returns has_history, stores the employee id so we can
-  // show a "Deactivate instead" fallback prompt.
-  const [deleteHistoryId, setDeleteHistoryId] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
   const refresh = useCallback(() => {
@@ -432,35 +428,6 @@ export function EmployeesClient({
     });
   };
 
-  const handleDelete = async (emp: EmployeeRow) => {
-    const ok = await confirm({
-      title: `¿Eliminar a ${emp.name}?`,
-      description:
-        'Esto elimina al empleado de forma permanente. Solo se pueden eliminar empleados sin historial de ventas, movimientos o entregas.',
-      confirmText: 'Eliminar',
-      tone: 'destructive',
-    });
-    if (!ok) {
-      return;
-    }
-    startTransition(async () => {
-      try {
-        const result = await deleteEmployee(emp.id);
-        if (!result.ok) {
-          if (result.code === 'has_history') {
-            setDeleteHistoryId(emp.id);
-          } else {
-            setError(result.error);
-          }
-          return;
-        }
-        refresh();
-      } catch {
-        setError('No se pudo eliminar al empleado');
-      }
-    });
-  };
-
   return (
     <div className="space-y-8">
       {error && (
@@ -519,42 +486,6 @@ export function EmployeesClient({
           >
             Descartar
           </button>
-        </div>
-      )}
-
-      {deleteHistoryId && (
-        <div className="
-          rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm
-          text-amber-900
-        "
-        >
-          <div className="font-semibold">No se puede eliminar — el empleado tiene historial</div>
-          <div className="mt-1">
-            Este empleado tiene ventas, movimientos de caja o entregas registradas. Para quitarle
-            el acceso sin perder los registros, desactivalo en su lugar.
-          </div>
-          <div className="mt-2 flex gap-3">
-            <button
-              type="button"
-              className="underline"
-              onClick={() => {
-                const emp = employees.find(e => e.id === deleteHistoryId);
-                if (emp) {
-                  handleToggleActive(emp);
-                }
-                setDeleteHistoryId(null);
-              }}
-            >
-              Desactivar en su lugar
-            </button>
-            <button
-              type="button"
-              className="underline"
-              onClick={() => setDeleteHistoryId(null)}
-            >
-              Cerrar
-            </button>
-          </div>
         </div>
       )}
 
@@ -682,15 +613,6 @@ export function EmployeesClient({
                       Resetear PIN
                     </Button>
                   )}
-                  <Button
-                    size="sm"
-                    variant="destructive"
-                    onClick={() => handleDelete(emp)}
-                    disabled={pending}
-                    title="Eliminar al empleado de forma permanente (solo si no tiene historial)"
-                  >
-                    Eliminar
-                  </Button>
                 </td>
               </tr>
             ))}
