@@ -48,6 +48,7 @@ import {
   bulkAdjustPrice,
   bulkDeleteProducts,
   bulkSetProductStatus,
+  bulkSetUnitType,
   createProduct,
   deleteProduct,
   listCategories,
@@ -259,6 +260,25 @@ export function ProductsClient({
   // Only virgin products (no sales/movements) can be deleted — same rule as the
   // per-row delete, surfaced so the bulk button can disable when none qualify.
   const deletableSelectedCount = useMemo(
+    () => selectedVisible.filter(r => !r.hasSales && !r.hasMovements).length,
+    [selectedVisible],
+  );
+
+  // Unit-change is only offered for a homogeneous selection so the target is
+  // unambiguous (all 'unit' -> 'kg', all 'kg' -> 'unit'). Digital products have
+  // no real unit, so any digital in the mix makes the selection non-convertible.
+  // Returns the shared unit, or null when mixed / empty / contains a digital.
+  const selectedUnitType = useMemo<'unit' | 'kg' | null>(() => {
+    if (selectedVisible.length === 0 || selectedVisible.some(r => r.isDigital)) {
+      return null;
+    }
+    const first = selectedVisible[0]!.unitType;
+    return selectedVisible.every(r => r.unitType === first) ? first : null;
+  }, [selectedVisible]);
+  // Within a homogeneous selection, only products without history can flip — the
+  // unit is the meaning of every stored quantity, so changing it after sales or
+  // movements would corrupt the FIFO ledger (same guard as the single edit).
+  const convertibleUnitCount = useMemo(
     () => selectedVisible.filter(r => !r.hasSales && !r.hasMovements).length,
     [selectedVisible],
   );
@@ -549,6 +569,55 @@ export function ProductsClient({
     );
   }
 
+  async function handleBulkUnitType() {
+    // selectedUnitType is null while the button is disabled; bail defensively.
+    if (selectedUnitType === null) {
+      return;
+    }
+    const target = selectedUnitType === 'unit' ? 'kg' : 'unit';
+    const ids = [...selected];
+    const convertible = convertibleUnitCount;
+    if (convertible === 0) {
+      toast.error(
+        'Ninguno se puede cambiar: todos tienen ventas o movimientos.',
+      );
+      return;
+    }
+    const blocked = selectedVisible.length - convertible;
+    const targetLabel = target === 'kg' ? 'venta por kilo (Kg)' : 'venta por unidad';
+    const ok = await confirm({
+      title: `Cambiar ${convertible} ${convertible === 1 ? 'producto' : 'productos'} a ${targetLabel}`,
+      description: `${
+        blocked > 0
+          ? `${blocked} se omitirán porque ya tienen ventas o movimientos.\n\n`
+          : ''
+      }Su precio pasará a interpretarse ${
+        target === 'kg' ? 'por kilo' : 'por unidad'
+      }. Revísalo después del cambio.`,
+      confirmText: 'Cambiar unidad',
+    });
+    if (!ok) {
+      return;
+    }
+    startTransition(async () => {
+      try {
+        const { updated, skipped } = await bulkSetUnitType(ids, target);
+        if (updated > 0) {
+          toast.success(
+            `${updated} ${updated === 1 ? 'producto cambiado' : 'productos cambiados'} a ${
+              target === 'kg' ? 'Kg' : 'unidad'
+            }${skipped > 0 ? ` · ${skipped} omitidos` : ''}.`,
+          );
+        } else {
+          toast({ description: 'No se cambió ningún producto.' });
+        }
+        fetchRows();
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Error inesperado');
+      }
+    });
+  }
+
   async function handleBulkDelete() {
     const ids = [...selected];
     const deletable = selectedVisible.filter(
@@ -649,8 +718,11 @@ export function ProductsClient({
         <BulkActionBar
           count={selectedVisible.length}
           deletableCount={deletableSelectedCount}
+          selectedUnitType={selectedUnitType}
+          convertibleCount={convertibleUnitCount}
           pending={pending}
           onRaisePrice={() => setPriceDialogOpen(true)}
+          onConvertUnitType={handleBulkUnitType}
           onPublish={handleBulkPublish}
           onArchive={handleBulkArchive}
           onDelete={handleBulkDelete}
