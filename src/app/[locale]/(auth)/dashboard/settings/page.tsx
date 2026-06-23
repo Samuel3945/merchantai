@@ -27,6 +27,9 @@ const KEYS = [
   'modules.suppliers',
   'modules.facturas',
   'fiado-enabled',
+  // AI preview gate (default OFF, flipped per-org by the operator in /platform).
+  // Domicilios rides with it, so its module toggle is hidden until AI is on.
+  'modules.ai',
   // E-invoicing (Factus/DIAN)
   'fiscal_nit',
   'fiscal_einvoice_provider',
@@ -94,6 +97,7 @@ export default async function DashboardSettingsPage(props: {
           'modules.suppliers': asBool(map['modules.suppliers'], true),
           'modules.facturas': asBool(map['modules.facturas'], true),
         }}
+        aiPreviewEnabled={asBool(map['modules.ai'], false)}
         fiscal={{
           fiscal_nit: map.fiscal_nit,
           fiscal_einvoice_provider: map.fiscal_einvoice_provider,

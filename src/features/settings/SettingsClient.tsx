@@ -41,6 +41,9 @@ export type SettingsClientProps = {
   returns: ReturnsTabValues;
   transferSecurity: TransferSecurityTabValues;
   isAdmin: boolean;
+  // When AI preview is off the Domicilios module does not exist for this org,
+  // so its toggle is hidden from the Módulos tab.
+  aiPreviewEnabled: boolean;
 };
 
 export function SettingsClient({
@@ -52,6 +55,7 @@ export function SettingsClient({
   returns: returnsValues,
   transferSecurity,
   isAdmin,
+  aiPreviewEnabled,
 }: SettingsClientProps) {
   const tabs = isAdmin
     ? [...BASE_TABS, TRANSFER_SECURITY_TAB, AUDIT_TAB]
@@ -92,7 +96,9 @@ export function SettingsClient({
             fiadoEnabled={fiadoEnabled}
           />
         )}
-        {activeTab === 'modules' && <ModulesTab initial={modules} />}
+        {activeTab === 'modules' && (
+          <ModulesTab initial={modules} aiPreviewEnabled={aiPreviewEnabled} />
+        )}
         {activeTab === 'fiscal' && <FiscalTab initial={fiscal} />}
         {activeTab === 'returns' && <ReturnsTab initial={returnsValues} />}
         {activeTab === 'transfer-security' && isAdmin && (
