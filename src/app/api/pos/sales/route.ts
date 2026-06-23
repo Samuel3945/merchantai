@@ -45,6 +45,9 @@ type CreateSaleBody = {
   // Optional real sale time (ISO) for offline-capable clients. Omitted by the
   // always-online web POS, in which case the server stamps the current time.
   occurredAt?: string | null;
+  // Device-generated UUID v4 for exactly-once mobile sync. Absent for the web
+  // POS and pos-merchatai (back-compat: treated as null, no dedupe check).
+  sale_idempotency_key?: string | null;
 };
 
 export async function POST(req: Request): Promise<NextResponse> {
@@ -92,6 +95,30 @@ export async function POST(req: Request): Promise<NextResponse> {
         },
         { status: 400 },
       );
+    }
+  }
+
+  // Exactly-once dedupe: if the client sent a sale_idempotency_key, check
+  // whether we already have a row for it. This is the BELT of the
+  // belt-and-suspenders strategy; the SUSPENDERS are the partial UNIQUE index
+  // + 23505 catch inside the transaction (see below).
+  // Correctness without the index: this pre-SELECT covers the common case. It
+  // only misses a tight concurrent-retry race (two requests arrive at the same
+  // ms before either commits); the 23505 catch resolves that race.
+  const idempotencyKey = body.sale_idempotency_key?.trim() || null;
+  if (idempotencyKey) {
+    const [existing] = await db
+      .select()
+      .from(salesSchema)
+      .where(
+        and(
+          eq(salesSchema.organizationId, ctx.organizationId),
+          eq(salesSchema.saleIdempotencyKey, idempotencyKey),
+        ),
+      )
+      .limit(1);
+    if (existing) {
+      return NextResponse.json({ ...existing, deduped: true }, { status: 200 });
     }
   }
 
@@ -196,6 +223,7 @@ export async function POST(req: Request): Promise<NextResponse> {
           cashierId: ctx.cashierId,
           posTokenId: ctx.source === 'token' ? ctx.tokenId : null,
           occurredAt,
+          saleIdempotencyKey: idempotencyKey ?? undefined,
         })
         .returning();
 
@@ -355,6 +383,32 @@ export async function POST(req: Request): Promise<NextResponse> {
 
     return NextResponse.json(result, { status: 201 });
   } catch (err) {
+    // Suspenders: concurrent-retry race resolved via unique-constraint violation.
+    // Two retries arriving at the same moment both pass the pre-SELECT (no row
+    // yet), one commits, the other hits the partial UNIQUE index → 23505. We
+    // re-SELECT the winner and return it as deduped (200). No stock is double-
+    // decremented because the losing transaction was rolled back by Postgres.
+    if (
+      idempotencyKey
+      && err !== null
+      && typeof err === 'object'
+      && 'code' in err
+      && (err as { code: string }).code === '23505'
+    ) {
+      const [deduped] = await db
+        .select()
+        .from(salesSchema)
+        .where(
+          and(
+            eq(salesSchema.organizationId, ctx.organizationId),
+            eq(salesSchema.saleIdempotencyKey, idempotencyKey),
+          ),
+        )
+        .limit(1);
+      if (deduped) {
+        return NextResponse.json({ ...deduped, deduped: true }, { status: 200 });
+      }
+    }
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Error al registrar venta' },
       { status: 400 },

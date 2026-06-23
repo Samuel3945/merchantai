@@ -43,6 +43,9 @@ type QueuedSale = {
   notes?: string | null;
   payments?: QueuedSalePayment[];
   queuedAt?: string;
+  // Device-generated UUID v4 for exactly-once mobile sync. Absent for the
+  // legacy pos-merchatai client (back-compat: stored as null, no dedupe).
+  sale_idempotency_key?: string | null;
 };
 
 type SyncBody = {
@@ -89,9 +92,35 @@ export async function POST(req: Request): Promise<NextResponse> {
   const results: SyncResult[] = [];
 
   for (const queuedSale of queued) {
+    // Exactly-once dedupe key — declared here so the catch block can reference
+    // it for the 23505 re-SELECT suspenders path.
+    const batchIdempotencyKey = queuedSale.sale_idempotency_key?.trim() || null;
+
     try {
       if (!queuedSale.items?.length) {
         throw new Error('Sale must include at least one item');
+      }
+
+      // Belt (pre-SELECT) before the insert transaction.
+      if (batchIdempotencyKey) {
+        const [existingSale] = await db
+          .select({ id: salesSchema.id })
+          .from(salesSchema)
+          .where(
+            and(
+              eq(salesSchema.organizationId, orgId),
+              eq(salesSchema.saleIdempotencyKey, batchIdempotencyKey),
+            ),
+          )
+          .limit(1);
+        if (existingSale) {
+          results.push({
+            localId: queuedSale.localId,
+            success: true,
+            serverSaleId: existingSale.id,
+          });
+          continue;
+        }
       }
 
       const { saleId, total: saleTotal } = await db.transaction(async (tx) => {
@@ -184,6 +213,7 @@ export async function POST(req: Request): Promise<NextResponse> {
             notes: queuedSale.notes ?? null,
             cashierId,
             posTokenId: posToken.id,
+            saleIdempotencyKey: batchIdempotencyKey ?? undefined,
           })
           .returning({ id: salesSchema.id });
 
@@ -307,6 +337,35 @@ export async function POST(req: Request): Promise<NextResponse> {
         createdBy: cashierId ?? deviceName ?? null,
       }).catch(() => null);
     } catch (err) {
+      // Suspenders: concurrent-retry race resolved via 23505 unique violation.
+      // If two retries with the same key arrive concurrently, one commits and
+      // the other hits the partial UNIQUE index. Re-SELECT and return success.
+      if (
+        batchIdempotencyKey
+        && err !== null
+        && typeof err === 'object'
+        && 'code' in err
+        && (err as { code: string }).code === '23505'
+      ) {
+        const [deduped] = await db
+          .select({ id: salesSchema.id })
+          .from(salesSchema)
+          .where(
+            and(
+              eq(salesSchema.organizationId, orgId),
+              eq(salesSchema.saleIdempotencyKey, batchIdempotencyKey),
+            ),
+          )
+          .limit(1);
+        if (deduped) {
+          results.push({
+            localId: queuedSale.localId,
+            success: true,
+            serverSaleId: deduped.id,
+          });
+          continue;
+        }
+      }
       results.push({
         localId: queuedSale.localId,
         success: false,
