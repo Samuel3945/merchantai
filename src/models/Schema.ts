@@ -1801,10 +1801,11 @@ export const treasuryAccountsSchema = pgTable(
   },
   t => [
     index('treasury_accounts_org_idx').on(t.organizationId, t.type),
-    uniqueIndex('treasury_accounts_org_name_unique').on(
-      t.organizationId,
-      t.name,
-    ),
+    // Name is unique only among ACTIVE accounts, so deleting an account frees
+    // its name for reuse (partial index — see migration 0072).
+    uniqueIndex('treasury_accounts_org_name_unique')
+      .on(t.organizationId, t.name)
+      .where(sql`${t.active} = true`),
   ],
 );
 

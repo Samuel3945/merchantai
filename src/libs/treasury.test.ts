@@ -181,9 +181,9 @@ const DDL = `
     payment_method_id uuid REFERENCES payment_methods(id) ON DELETE RESTRICT,
     pos_token_id uuid REFERENCES pos_tokens(id) ON DELETE SET NULL,
     created_at timestamp DEFAULT now() NOT NULL,
-    updated_at timestamp DEFAULT now() NOT NULL,
-    CONSTRAINT treasury_accounts_org_name_unique UNIQUE (organization_id, name)
+    updated_at timestamp DEFAULT now() NOT NULL
   );
+  CREATE UNIQUE INDEX treasury_accounts_org_name_unique ON treasury_accounts (organization_id, name) WHERE active = true;
 
   CREATE TABLE treasury_movements (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
@@ -2037,6 +2037,36 @@ describe('deleteTreasuryAccountToPending', () => {
         createdBy: 'owner',
       }),
     ).rejects.toThrow(/no encontrada o ya eliminada/i);
+  });
+
+  it('frees the name after deletion — a same-named account can be recreated', async () => {
+    const id = await makeAccount('banco', 'Bancolombia', 100);
+    await deleteTreasuryAccountToPending(db, {
+      accountId: id,
+      organizationId: ORG,
+      createdBy: 'owner',
+    });
+
+    // Recreating with the EXACT same name must NOT throw now that the unique
+    // index is scoped to active accounts (partial index, migration 0072).
+    const recreated = await createTreasuryAccount(db, {
+      organizationId: ORG,
+      type: 'banco',
+      name: 'Bancolombia',
+      openingBalance: 0,
+      createdBy: 'owner',
+    });
+
+    expect(recreated.name).toBe('Bancolombia');
+    expect(recreated.id).not.toBe(id);
+  });
+
+  it('still blocks two ACTIVE accounts from sharing a name', async () => {
+    await makeAccount('caja_fuerte', 'Caja duplicada', 0);
+
+    await expect(
+      makeAccount('caja_fuerte', 'Caja duplicada', 0),
+    ).rejects.toThrow(/ya existe una cuenta con el nombre/i);
   });
 });
 

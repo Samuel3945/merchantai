@@ -505,6 +505,13 @@
       "when": 1781900000009,
       "tag": "0071_supplier_payment_caja_funding",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1781900000010,
+      "tag": "0072_treasury_unique_name_active_only",
+      "breakpoints": true
     }
   ]
 }
