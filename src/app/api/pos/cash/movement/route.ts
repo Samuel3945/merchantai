@@ -11,6 +11,10 @@ import {
 import { db } from '@/libs/DB';
 import { requirePosAuth } from '@/libs/pos-auth';
 import { recordPosGastoBridge } from '@/libs/pos-gasto-bridge';
+import {
+  getSupplierOutstanding,
+  recordSupplierPayment,
+} from '@/libs/supplier-invoice-payment';
 import { recordInflowSourceDebit } from '@/libs/treasury';
 import { cashMovementsSchema, suppliersSchema } from '@/models/Schema';
 
@@ -136,7 +140,7 @@ export async function POST(req: Request): Promise<NextResponse> {
   }
 
   try {
-    const movement = await db.transaction(async (tx) => {
+    const result = await db.transaction(async (tx) => {
       const open = await findOpenSession(tx, ctx.organizationId, ctx.tokenId);
       if (!open) {
         throw new Error('No hay caja abierta. Abre la caja primero.');
@@ -159,12 +163,114 @@ export async function POST(req: Request): Promise<NextResponse> {
         treasuryMovementId = treasuryRow.id;
       }
 
-      // gasto-treasury-unification slice 1: POS→P&L bridge.
-      // When type='expense', dual-write: expenses (P&L anchor) + cash_movements
-      // (with expense_id back-pointer). All other types keep the plain insert.
+      // gasto-treasury-unification + supplier-payment-unify:
+      // When type='expense' with a supplierId that has outstanding debt → SETTLE
+      //   (recordSupplierPayment with caja funding — no expenses row, no P&L).
+      // When type='expense' with no debt or no supplierId → GASTO BRIDGE
+      //   (recordPosGastoBridge — dual-write expenses + cash_movements, P&L anchor).
+      // All other types keep the plain insert.
       let created: typeof cashMovementsSchema.$inferSelect | undefined;
+      // Extra settle metadata returned in response (undefined for non-settle paths).
+      let settleOutcome: { outcome: 'settled'; appliedTotal: number; excess: number; settledPayables: number } | undefined;
 
-      if (type === 'expense') {
+      if (type === 'expense' && supplierId) {
+        // Check whether this supplier has outstanding payables inside the tx.
+        const outstanding = await getSupplierOutstanding(
+          tx,
+          ctx.organizationId,
+          supplierId,
+        );
+
+        if (outstanding.totalOutstanding > 0) {
+          // SETTLE PATH — caja-funded, no P&L, no expenses row.
+          const amtNum = Number.parseFloat(amount);
+          const settleResult = await recordSupplierPayment(tx, {
+            organizationId: ctx.organizationId,
+            supplierId,
+            fundingSource: { kind: 'caja', sessionId: open.id },
+            amount: amtNum,
+            createdBy: ctx.cashierName || 'Cajero',
+            note: reason,
+          });
+
+          // Use the cashMovementId threaded back from the last chunk — avoids
+          // a heuristic re-query that could return a cross-payment row (oldest).
+          const lastChunk = settleResult.breakdown[settleResult.breakdown.length - 1];
+          if (lastChunk?.cashMovementId) {
+            const [row] = await tx
+              .select()
+              .from(cashMovementsSchema)
+              .where(eq(cashMovementsSchema.id, lastChunk.cashMovementId))
+              .limit(1);
+            created = row;
+          }
+
+          settleOutcome = {
+            outcome: 'settled',
+            appliedTotal: settleResult.appliedTotal,
+            excess: settleResult.excess,
+            settledPayables: settleResult.breakdown.length,
+          };
+
+          await logAction({
+            organizationId: ctx.organizationId,
+            actor: resolvePosActor(ctx),
+            action: 'pos.supplier.settled',
+            entityType: 'supplier_payment',
+            entityId: supplierId,
+            after: {
+              supplierId,
+              amount,
+              appliedTotal: settleResult.appliedTotal,
+              excess: settleResult.excess,
+              settledPayables: settleResult.breakdown.length,
+            },
+            metadata: { cashierName: ctx.cashierName, sessionId: open.id },
+            ip:
+              req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+              || req.headers.get('x-real-ip')
+              || null,
+            userAgent: req.headers.get('user-agent'),
+          });
+        } else {
+          // GASTO BRIDGE — supplier has no debt; treat as plain expense.
+          const bridge = await recordPosGastoBridge(tx, {
+            organizationId: ctx.organizationId,
+            sessionId: open.id,
+            amount,
+            reason,
+            supplierId,
+            createdBy: ctx.cashierName || 'Cajero',
+          });
+          const [row] = await tx
+            .select()
+            .from(cashMovementsSchema)
+            .where(eq(cashMovementsSchema.id, bridge.movementId))
+            .limit(1);
+          created = row;
+
+          await logAction({
+            organizationId: ctx.organizationId,
+            actor: resolvePosActor(ctx),
+            action: 'pos.gasto.bridged',
+            entityType: 'expense',
+            entityId: bridge.expenseId,
+            after: {
+              expenseId: bridge.expenseId,
+              movementId: bridge.movementId,
+              amount,
+              reason,
+            },
+            metadata: { cashierName: ctx.cashierName, sessionId: open.id },
+            ip:
+              req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+              || req.headers.get('x-real-ip')
+              || null,
+            userAgent: req.headers.get('user-agent'),
+          });
+        }
+      } else if (type === 'expense') {
+        // GASTO BRIDGE — no supplier link; standard P&L expense.
         const bridge = await recordPosGastoBridge(tx, {
           organizationId: ctx.organizationId,
           sessionId: open.id,
@@ -224,10 +330,17 @@ export async function POST(req: Request): Promise<NextResponse> {
       if (!created) {
         throw new Error('No se pudo registrar el movimiento');
       }
-      return created;
+      return { movement: created, settle: settleOutcome };
     });
 
-    return NextResponse.json(movement, { status: 201 });
+    // Response contract: includes settle metadata when outcome='settled'.
+    if (result.settle) {
+      return NextResponse.json(
+        { ...result.movement, ...result.settle },
+        { status: 201 },
+      );
+    }
+    return NextResponse.json({ ...result.movement, outcome: 'gasto' }, { status: 201 });
   } catch (err) {
     return NextResponse.json(
       {

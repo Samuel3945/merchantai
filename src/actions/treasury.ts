@@ -3,11 +3,16 @@
 import type { ActionResult } from '@/libs/action-result';
 import type { TreasuryAccount, TreasuryAccountRow, TreasuryTimelineEntry, TreasuryTimelinePage } from '@/libs/treasury';
 import { auth, currentUser } from '@clerk/nextjs/server';
+import { and, eq, inArray } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
 import { toMoney } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import { requirePanelModule } from '@/libs/panel-session';
+import {
+  getSupplierOutstanding,
+  recordSupplierPayment,
+} from '@/libs/supplier-invoice-payment';
 import {
   createTreasuryAccount,
   deactivateTreasuryAccount,
@@ -20,6 +25,7 @@ import {
   recordContainerTransfer,
   recordGastoOutflow,
 } from '@/libs/treasury';
+import { supplierPayablesSchema, suppliersSchema } from '@/models/Schema';
 
 const CASH_PATH = '/dashboard/cash';
 const TESORERIA_PATH = '/dashboard/tesoreria';
@@ -357,6 +363,137 @@ export async function recordGasto(input: {
     return {
       ok: false,
       error: err instanceof Error ? err.message : 'Error al registrar el gasto',
+    };
+  }
+}
+
+// ── recordSupplierPaymentFromConsole ─────────────────────────────────────────
+// Treasury-funded supplier payment from the treasury console (owner/panel).
+// Settles the supplier's open/partial payables oldest-first from a chosen
+// cofre/banco account. No P&L entry — this is an ASSET debit (supplier debt
+// settlement), not a gasto. Use recordGasto for generic P&L expenses.
+//
+// Gated by requirePanelModule('cash'). Reuses recordSupplierPayment with
+// fundingSource:{kind:'treasury', accountId}.
+
+export async function recordSupplierPaymentFromConsole(input: {
+  supplierId: string;
+  fromAccountId: string;
+  amount: number | string;
+  note?: string | null;
+}): Promise<ActionResult<{ appliedTotal: number; excess: number; settledPayables: number }>> {
+  const { userId, orgId } = await requirePanelModule('cash');
+
+  if (!input.supplierId?.trim()) {
+    return { ok: false, error: 'Proveedor requerido' };
+  }
+  if (!input.fromAccountId?.trim()) {
+    return { ok: false, error: 'Contenedor de origen requerido' };
+  }
+  const amt = Number.parseFloat(toMoney(input.amount));
+  if (amt <= 0) {
+    return { ok: false, error: 'El monto debe ser mayor a 0' };
+  }
+
+  const actor = await getActorName(userId);
+
+  try {
+    const result = await recordSupplierPayment(db, {
+      organizationId: orgId,
+      supplierId: input.supplierId,
+      fundingSource: { kind: 'treasury', accountId: input.fromAccountId },
+      amount: amt,
+      createdBy: actor,
+      note: input.note ?? null,
+    });
+
+    await logAction({
+      organizationId: orgId,
+      actor: { type: 'user', id: userId },
+      action: 'treasury.supplier.settled',
+      entityType: 'supplier_payment',
+      entityId: input.supplierId,
+      after: {
+        supplierId: input.supplierId,
+        fromAccountId: input.fromAccountId,
+        amount: amt,
+        appliedTotal: result.appliedTotal,
+        excess: result.excess,
+      },
+    });
+
+    revalidatePath(CASH_PATH);
+    revalidatePath(TESORERIA_PATH);
+    return {
+      ok: true,
+      data: {
+        appliedTotal: result.appliedTotal,
+        excess: result.excess,
+        settledPayables: result.breakdown.length,
+      },
+    };
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Error al registrar el pago a proveedor',
+    };
+  }
+}
+
+// ── listSuppliersWithOutstanding ─────────────────────────────────────────────
+// Returns suppliers that have open/partial payables (totalOutstanding > 0).
+// Used by the treasury console "Pagar proveedor" modal to populate the supplier
+// picker with only actionable suppliers.
+
+export type SupplierOutstandingRow = {
+  supplierId: string;
+  name: string;
+  totalOutstanding: number;
+};
+
+export async function listSuppliersWithOutstanding(): Promise<
+  ActionResult<SupplierOutstandingRow[]>
+> {
+  const { orgId } = await requirePanelModule('cash');
+
+  try {
+    // Find supplier IDs with at least one open/partial payable for this org.
+    const payableSupplierIds = await db
+      .selectDistinct({ supplierId: supplierPayablesSchema.supplierId })
+      .from(supplierPayablesSchema)
+      .where(
+        and(
+          eq(supplierPayablesSchema.organizationId, orgId),
+          inArray(supplierPayablesSchema.status, ['open', 'partial']),
+        ),
+      );
+
+    if (payableSupplierIds.length === 0) {
+      return { ok: true, data: [] };
+    }
+
+    const supplierIds = payableSupplierIds.map(r => r.supplierId);
+
+    const suppliers = await db
+      .select({ id: suppliersSchema.id, name: suppliersSchema.name })
+      .from(suppliersSchema)
+      .where(
+        inArray(suppliersSchema.id, supplierIds),
+      );
+
+    const rows: SupplierOutstandingRow[] = [];
+    for (const s of suppliers) {
+      const outstanding = await getSupplierOutstanding(db, orgId, s.id);
+      if (outstanding.totalOutstanding > 0) {
+        rows.push({ supplierId: s.id, name: s.name, totalOutstanding: outstanding.totalOutstanding });
+      }
+    }
+
+    return { ok: true, data: rows };
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Error al obtener proveedores con saldo',
     };
   }
 }

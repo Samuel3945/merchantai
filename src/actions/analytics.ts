@@ -56,7 +56,6 @@ export type CashFlowReport = {
 };
 
 const INCOME_TYPES = sql`('sale', 'deposit')`;
-const EXPENSE_TYPES = sql`('expense', 'salary', 'inventory_purchase')`;
 
 export async function getCashFlow(
   start: string,
@@ -70,7 +69,7 @@ export async function getCashFlow(
     db.execute(sql`
       SELECT
         COALESCE(SUM(amount) FILTER (WHERE type IN ${INCOME_TYPES}), 0)::float8 AS income,
-        COALESCE(SUM(amount) FILTER (WHERE type IN ${EXPENSE_TYPES}), 0)::float8 AS expenses
+        COALESCE(SUM(amount) FILTER (WHERE (type = 'expense' AND expense_id IS NOT NULL) OR type IN ('salary','inventory_purchase')), 0)::float8 AS expenses
       FROM cash_movements
       WHERE organization_id = ${orgId}
         AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
@@ -82,6 +81,7 @@ export async function getCashFlow(
       WHERE organization_id = ${orgId}
         AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
             BETWEEN ${s}::date AND ${e}::date
+        AND NOT (type = 'expense' AND expense_id IS NULL)
       GROUP BY type
       ORDER BY amount DESC
     `),
@@ -89,7 +89,7 @@ export async function getCashFlow(
       SELECT
         to_char((created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date, 'YYYY-MM-DD') AS day,
         COALESCE(SUM(amount) FILTER (WHERE type IN ${INCOME_TYPES}), 0)::float8 AS income,
-        COALESCE(SUM(amount) FILTER (WHERE type IN ${EXPENSE_TYPES}), 0)::float8 AS expenses
+        COALESCE(SUM(amount) FILTER (WHERE (type = 'expense' AND expense_id IS NOT NULL) OR type IN ('salary','inventory_purchase')), 0)::float8 AS expenses
       FROM cash_movements
       WHERE organization_id = ${orgId}
         AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date

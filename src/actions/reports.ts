@@ -615,12 +615,12 @@ export async function getFinanceBreakdown(
     db.execute(sql`
       SELECT
         COALESCE(SUM(amount) FILTER (
-          WHERE type IN ('expense','salary','inventory_purchase')
+          WHERE ((type = 'expense' AND expense_id IS NOT NULL) OR type IN ('salary','inventory_purchase'))
             AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
                 = (now() AT TIME ZONE 'America/Bogota')::date
         ), 0)::float8 AS expenses_today,
         COALESCE(SUM(amount) FILTER (
-          WHERE type IN ('expense','salary','inventory_purchase')
+          WHERE ((type = 'expense' AND expense_id IS NOT NULL) OR type IN ('salary','inventory_purchase'))
             AND date_trunc('month', (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota'))
                 = date_trunc('month', (now() AT TIME ZONE 'America/Bogota'))
         ), 0)::float8 AS expenses_month

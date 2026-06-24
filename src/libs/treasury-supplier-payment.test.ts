@@ -182,18 +182,41 @@ const DDL = `
     ON supplier_payables (stock_movement_id)
     WHERE stock_movement_id IS NOT NULL;
 
-  -- Supplier payments ledger: one row per payment event (migration 0065)
-  -- treasury_movement_id is NOT NULL after migration 0066 (Slice 2 fix).
+  -- Supplier payments ledger: one row per payment event (migration 0065 + 0071).
+  -- Migration 0071: treasury_movement_id nullable; cash_movement_id added;
+  -- CHECK exactly one funding source set.
+  CREATE TABLE cash_movements (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+    session_id uuid NOT NULL REFERENCES cash_sessions(id) ON DELETE CASCADE,
+    organization_id text NOT NULL,
+    type "cash_movement_type" NOT NULL,
+    amount numeric(12,2) NOT NULL,
+    reason text NOT NULL,
+    category text,
+    authorized_by text,
+    created_by text NOT NULL,
+    sale_id uuid,
+    supplier_id uuid,
+    corrects_session_id uuid,
+    origin text,
+    treasury_movement_id uuid,
+    expense_id uuid,
+    created_at timestamp DEFAULT now() NOT NULL
+  );
+
   CREATE TABLE supplier_payments (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     organization_id text NOT NULL,
     supplier_id text NOT NULL,
     payable_id uuid REFERENCES supplier_payables(id) ON DELETE SET NULL,
-    treasury_movement_id uuid NOT NULL REFERENCES treasury_movements(id) ON DELETE RESTRICT,
+    treasury_movement_id uuid REFERENCES treasury_movements(id) ON DELETE RESTRICT,
+    cash_movement_id uuid REFERENCES cash_movements(id) ON DELETE RESTRICT,
     amount numeric(12,2) NOT NULL,
     note text,
     created_by text,
-    created_at timestamp DEFAULT now() NOT NULL
+    created_at timestamp DEFAULT now() NOT NULL,
+    CONSTRAINT supplier_payments_funding_source_chk
+      CHECK (num_nonnulls(treasury_movement_id, cash_movement_id) = 1)
   );
 `;
 
@@ -219,6 +242,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   // FK order: children before parents.
   await pg.exec('DELETE FROM supplier_payments');
+  await pg.exec('DELETE FROM cash_movements');
   await pg.exec('DELETE FROM supplier_payables');
   await pg.exec('DELETE FROM supplier_purchases');
   await pg.exec('DELETE FROM treasury_movements');
@@ -662,9 +686,9 @@ describe('recordSupplierPaymentOutflow — TenantDb proxy regression', () => {
     expect(payment.rows[0]!.amount).toBe('600.00');
   });
 
-  it('supplier_payments.treasury_movement_id is always non-null (NOT NULL constraint enforced)', async () => {
-    // Attempt to insert a supplier_payments row WITHOUT a treasury_movement_id.
-    // With the NOT NULL constraint (migration 0066), this MUST fail.
+  it('supplier_payments requires exactly one funding source (num_nonnulls=1 CHECK enforced)', async () => {
+    // Attempt to insert a supplier_payments row with NEITHER funding source set.
+    // With the num_nonnulls=1 CHECK (migration 0071), this MUST fail.
     await seedPayable(PAYABLE_ID_2, 100);
 
     await expect(

@@ -1,6 +1,7 @@
 import { relations, sql } from 'drizzle-orm';
 import {
   boolean,
+  check,
   date,
   index,
   integer,
@@ -2425,6 +2426,9 @@ export const supplierPayablesSchema = pgTable(
 );
 
 // Ledger: one row per payment event. Many rows may reference the same payable.
+// Migration 0071: exactly-one funding source enforced by DB CHECK.
+// - treasury-funded: treasury_movement_id set, cash_movement_id NULL.
+// - caja-funded:     cash_movement_id set, treasury_movement_id NULL.
 export const supplierPaymentsSchema = pgTable(
   'supplier_payments',
   {
@@ -2437,11 +2441,21 @@ export const supplierPaymentsSchema = pgTable(
       () => supplierPayablesSchema.id,
       { onDelete: 'set null' },
     ),
-    // The salida treasury_movements row. NOT NULL + RESTRICT: every payment must
-    // reference a real ledger entry (migration 0066 enforces NOT NULL in prod).
-    treasuryMovementId: uuid('treasury_movement_id')
-      .notNull()
-      .references(() => treasuryMovementsSchema.id, { onDelete: 'restrict' }),
+    // Treasury-funded path: the salida treasury_movements row.
+    // NULL for caja-funded rows (migration 0071 drops NOT NULL).
+    // Enforced non-null at app layer for treasury-funded payments.
+    treasuryMovementId: uuid('treasury_movement_id').references(
+      () => treasuryMovementsSchema.id,
+      { onDelete: 'restrict' },
+    ),
+    // Caja-funded path (migration 0071): the expense cash_movements row written
+    // by recordCajaPayableSettle. NULL for treasury-funded rows.
+    // CHECK (num_nonnulls(treasury_movement_id, cash_movement_id) = 1) ensures
+    // exactly one funding source is set.
+    cashMovementId: uuid('cash_movement_id').references(
+      () => cashMovementsSchema.id,
+      { onDelete: 'restrict' },
+    ),
     amount: numeric('amount', { precision: 12, scale: 2 }).notNull(),
     note: text('note'),
     createdBy: text('created_by'),
@@ -2459,6 +2473,13 @@ export const supplierPaymentsSchema = pgTable(
     index('supplier_payments_org_created_idx').on(
       table.organizationId,
       table.createdAt,
+    ),
+    // Migration 0071: exactly-one funding source enforced at the DB layer.
+    // treasury-funded: treasury_movement_id set, cash_movement_id NULL.
+    // caja-funded:     cash_movement_id set, treasury_movement_id NULL.
+    check(
+      'supplier_payments_funding_source_chk',
+      sql`num_nonnulls(${table.treasuryMovementId}, ${table.cashMovementId}) = 1`,
     ),
   ],
 );
