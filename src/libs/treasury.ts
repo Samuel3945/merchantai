@@ -12,6 +12,8 @@ import {
   expensesSchema,
   paymentMethodsSchema,
   posTokensSchema,
+  supplierPayablesSchema,
+  supplierPaymentsSchema,
   transferReconciliationsSchema,
   treasuryAccountsSchema,
   treasuryMovementsSchema,
@@ -1636,4 +1638,213 @@ export async function countPendingHandovers(
     count: Number(row?.count ?? 0),
     total: Number.parseFloat(row?.total ?? '0') || 0,
   };
+}
+
+// ── Supplier payment outflow ──────────────────────────────────────────────────
+
+/**
+ * Input for a supplier payment that debits a treasury container.
+ * Payments are ASSETS (inventory purchase), never P&L — no expenses row.
+ */
+export type SupplierPaymentOutflowInput = {
+  organizationId: string;
+  /** Treasury container to debit (caja_fuerte | banco | caja, active, in-org). */
+  fromAccountId: string;
+  amount: number | string;
+  supplierId: string;
+  /** null only for future ad-hoc payments; v1 always set. */
+  payableId: string | null;
+  note?: string | null;
+  createdBy: string;
+};
+
+export type SupplierPaymentOutflowResult = {
+  paymentId: string;
+  treasuryMovementId: string;
+  payableStatus: 'open' | 'partial' | 'paid';
+};
+
+/**
+ * Records a supplier payment as a treasury SALIDA (not gasto — ASSET, not P&L).
+ *
+ * Copied verbatim from recordInflowSourceDebit / recordGastoOutflow (D5):
+ * org-wide balance scan, same balance guard pattern, same isRealDb tx wrapping.
+ *
+ * Writes:
+ *   1. treasury_movements (type='salida', from=container, to=null) — NO expense_id.
+ *   2. supplier_payments (payableId, treasuryMovementId, amount) — atomically.
+ *   3. supplier_payables UPDATE: paid_amount += amount, status recomputed.
+ *
+ * Constraints (REQ-4.x):
+ *   - amount ≤ 0 → throw.
+ *   - balance < amount → throw "saldo insuficiente".
+ *   - payable.status === 'paid' → throw.
+ *   - amount > outstanding + 0.005 epsilon → throw "excede el saldo pendiente".
+ *   - treasury_movement_id on supplier_payments is ALWAYS non-null (migration 0066).
+ *
+ * Does NOT call recordPosGastoBridge or recordGastoOutflow.
+ */
+export async function recordSupplierPaymentOutflow(
+  executor: Executor,
+  input: SupplierPaymentOutflowInput,
+): Promise<SupplierPaymentOutflowResult> {
+  const amt = Number.parseFloat(toMoney(input.amount));
+
+  if (amt <= 0) {
+    throw new Error(
+      `monto inválido: el pago debe ser mayor a cero (got ${String(input.amount)})`,
+    );
+  }
+
+  const doWork = async (tx: Executor): Promise<SupplierPaymentOutflowResult> => {
+    // 1. Load + validate source container (same as recordGastoOutflow).
+    const [source] = await tx
+      .select({
+        id: treasuryAccountsSchema.id,
+        active: treasuryAccountsSchema.active,
+        openingBalance: treasuryAccountsSchema.openingBalance,
+      })
+      .from(treasuryAccountsSchema)
+      .where(
+        and(
+          eq(treasuryAccountsSchema.id, input.fromAccountId),
+          eq(treasuryAccountsSchema.organizationId, input.organizationId),
+        ),
+      )
+      .limit(1);
+
+    if (!source || !source.active) {
+      throw new Error(
+        'cuenta de origen inactiva o no encontrada — container inactive or not found',
+      );
+    }
+
+    // 2. Org-wide balance scan — VERBATIM from recordInflowSourceDebit (D5).
+    const [movRow] = await tx
+      .select({
+        credits: sql<string>`COALESCE(SUM(${treasuryMovementsSchema.amount}) FILTER (WHERE ${treasuryMovementsSchema.toAccountId} = ${input.fromAccountId}), 0)::text`,
+        debits: sql<string>`COALESCE(SUM(${treasuryMovementsSchema.amount}) FILTER (WHERE ${treasuryMovementsSchema.fromAccountId} = ${input.fromAccountId}), 0)::text`,
+      })
+      .from(treasuryMovementsSchema)
+      .where(eq(treasuryMovementsSchema.organizationId, input.organizationId));
+
+    const opening = Number.parseFloat(source.openingBalance ?? '0') || 0;
+    const credits = Number.parseFloat(movRow?.credits ?? '0') || 0;
+    const debits = Number.parseFloat(movRow?.debits ?? '0') || 0;
+    const currentBalance = balanceForAccount(opening, credits, debits);
+
+    if (currentBalance < amt) {
+      throw new Error(
+        `saldo insuficiente: balance ${currentBalance.toFixed(2)}, requested ${amt.toFixed(2)}`,
+      );
+    }
+
+    // 3. If payableId: validate payable status + outstanding cap (SELECT ... FOR UPDATE).
+    let payableStatus: 'open' | 'partial' | 'paid' = 'open';
+    let newPaidAmount = amt;
+
+    if (input.payableId) {
+      const [payable] = await tx
+        .select({
+          id: supplierPayablesSchema.id,
+          organizationId: supplierPayablesSchema.organizationId,
+          totalAmount: supplierPayablesSchema.totalAmount,
+          paidAmount: supplierPayablesSchema.paidAmount,
+          status: supplierPayablesSchema.status,
+        })
+        .from(supplierPayablesSchema)
+        .where(eq(supplierPayablesSchema.id, input.payableId))
+        .for('update')
+        .limit(1);
+
+      if (!payable) {
+        throw new Error(`payable not found: ${input.payableId}`);
+      }
+
+      if (payable.organizationId !== input.organizationId) {
+        throw new Error('payable does not belong to this organization');
+      }
+
+      if (payable.status === 'paid') {
+        throw new Error('payable already paid — no additional payments accepted');
+      }
+
+      const totalAmt = Number.parseFloat(payable.totalAmount);
+      const alreadyPaid = Number.parseFloat(payable.paidAmount);
+      const outstanding = totalAmt - alreadyPaid;
+
+      if (amt > outstanding + 0.005) {
+        throw new Error(
+          `excede el saldo pendiente de la compra: outstanding ${outstanding.toFixed(2)}, requested ${amt.toFixed(2)}`,
+        );
+      }
+
+      newPaidAmount = alreadyPaid + amt;
+      payableStatus = newPaidAmount >= totalAmt - 0.005 ? 'paid' : 'partial';
+    }
+
+    // 4. INSERT treasury_movements salida — NO expenseId, NO category P&L.
+    const [movement] = await tx
+      .insert(treasuryMovementsSchema)
+      .values({
+        organizationId: input.organizationId,
+        fromAccountId: input.fromAccountId,
+        toAccountId: null,
+        amount: toMoney(amt),
+        type: 'salida',
+        reason: input.note ?? 'Pago a proveedor',
+        createdBy: input.createdBy,
+      })
+      .returning({ id: treasuryMovementsSchema.id });
+
+    if (!movement) {
+      throw new Error('treasury_movements: supplier payment insert returned no row');
+    }
+
+    // 5. INSERT supplier_payments — treasury_movement_id is NEVER null (REQ-4.2, migration 0066).
+    const [payment] = await tx
+      .insert(supplierPaymentsSchema)
+      .values({
+        organizationId: input.organizationId,
+        supplierId: input.supplierId,
+        payableId: input.payableId ?? null,
+        treasuryMovementId: movement.id,
+        amount: toMoney(amt),
+        note: input.note ?? null,
+        createdBy: input.createdBy,
+      })
+      .returning({ id: supplierPaymentsSchema.id });
+
+    if (!payment) {
+      throw new Error('supplier_payments: insert returned no row');
+    }
+
+    // 6. UPDATE supplier_payables: bump paid_amount + recompute status.
+    if (input.payableId) {
+      await tx
+        .update(supplierPayablesSchema)
+        .set({
+          paidAmount: newPaidAmount.toFixed(2),
+          status: payableStatus,
+          updatedAt: new Date(),
+        })
+        .where(eq(supplierPayablesSchema.id, input.payableId));
+    }
+
+    return {
+      paymentId: payment.id,
+      treasuryMovementId: movement.id,
+      payableStatus,
+    };
+  };
+
+  // When executor is the real `db`, wrap in a transaction for atomicity.
+  // When executor is already a tx (from a parent transaction), use it directly.
+  const isRealDb = typeof (executor as { transaction?: unknown }).transaction === 'function';
+  if (isRealDb) {
+    return (executor as typeof import('@/libs/DB').db).transaction(
+      tx => doWork(tx as unknown as Executor),
+    );
+  }
+  return doWork(executor);
 }
