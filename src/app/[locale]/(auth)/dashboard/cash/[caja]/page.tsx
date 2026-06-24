@@ -4,9 +4,10 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getCajaDetail } from '@/actions/cash';
 import { CajaActionsHistory } from '@/features/cash/CajaActionsHistory';
+import { CajaDetailTabs } from '@/features/cash/CajaDetailTabs';
 import { money, relativeTime } from '@/features/cash/cash-ui';
+import { CashActivityTimeline } from '@/features/cash/CashActivityTimeline';
 import { CashClosuresHistory } from '@/features/cash/CashClosuresHistory';
-import { CashHistory } from '@/features/cash/CashHistory';
 
 function Field(props: {
   label: string;
@@ -98,10 +99,12 @@ export default async function CajaDetailPage(props: {
         </div>
       </div>
 
-      <div className="mt-6 space-y-6">
-        <CajaActionsHistory actions={detail.adminActions} />
-        <CashClosuresHistory sessions={detail.closures} />
-        <CashHistory movements={detail.movements} />
+      <div className="mt-6">
+        <CajaDetailTabs
+          activity={<CashActivityTimeline movements={detail.movements} />}
+          closures={<CashClosuresHistory sessions={detail.closures} />}
+          audit={<CajaActionsHistory actions={detail.adminActions} />}
+        />
       </div>
     </>
   );
