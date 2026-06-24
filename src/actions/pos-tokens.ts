@@ -40,6 +40,81 @@ async function resolveOrgAddressId(
   return row ? row.id : null;
 }
 
+// ── Audit label resolvers ────────────────────────────────────────────────────
+// A real audit stores READABLE before/after values, never raw UUIDs. We resolve
+// the human label at WRITE time and freeze it into the audit blob, so the trail
+// shows what the value WAS at that moment even if the address/account/cashier is
+// later renamed or deleted. The id is kept alongside only for traceability.
+
+/** Readable branch label for an address id (null = "Sin sucursal"). */
+async function resolveAddressLabel(
+  orgId: string,
+  addressId: string | null,
+): Promise<string> {
+  if (!addressId) {
+    return 'Sin sucursal';
+  }
+  const [row] = await db
+    .select({
+      name: orgAddressesSchema.name,
+      address: orgAddressesSchema.address,
+    })
+    .from(orgAddressesSchema)
+    .where(
+      and(
+        eq(orgAddressesSchema.id, addressId),
+        eq(orgAddressesSchema.organizationId, orgId),
+      ),
+    )
+    .limit(1);
+  if (!row) {
+    return 'Sucursal eliminada';
+  }
+  return row.name?.trim() || row.address;
+}
+
+/** Readable treasury account name for an account id (null = "Sin destino"). */
+async function resolveAccountLabel(
+  orgId: string,
+  accountId: string | null,
+): Promise<string> {
+  if (!accountId) {
+    return 'Sin destino';
+  }
+  const [row] = await db
+    .select({ name: treasuryAccountsSchema.name })
+    .from(treasuryAccountsSchema)
+    .where(
+      and(
+        eq(treasuryAccountsSchema.id, accountId),
+        eq(treasuryAccountsSchema.organizationId, orgId),
+      ),
+    )
+    .limit(1);
+  return row?.name ?? 'Cuenta eliminada';
+}
+
+/** Readable cashier name for a pos_users id (null = "Sin cajero asignado"). */
+async function resolveCashierLabel(
+  orgId: string,
+  cashierId: string | null,
+): Promise<string> {
+  if (!cashierId) {
+    return 'Sin cajero asignado';
+  }
+  const [row] = await db
+    .select({ name: posUsersSchema.name })
+    .from(posUsersSchema)
+    .where(
+      and(
+        eq(posUsersSchema.id, cashierId),
+        eq(posUsersSchema.organizationId, orgId),
+      ),
+    )
+    .limit(1);
+  return row?.name ?? 'Cajero eliminado';
+}
+
 type PosToken = typeof posTokensSchema.$inferSelect;
 
 type PosLimitMeta = {
@@ -487,14 +562,18 @@ export async function setPosTokenAddress(
     return { ok: false, error: 'Caja no encontrada' };
   }
 
+  const [beforeAddress, afterAddress] = await Promise.all([
+    resolveAddressLabel(orgId, current.addressId),
+    resolveAddressLabel(orgId, updated.addressId),
+  ]);
   await logAction({
     organizationId: orgId,
     actor: { type: 'user', id: userId },
     action: 'pos_token.address_changed',
     entityType: 'pos_token',
     entityId: id,
-    before: { addressId: current.addressId },
-    after: { addressId: updated.addressId },
+    before: { addressId: current.addressId, address: beforeAddress },
+    after: { addressId: updated.addressId, address: afterAddress },
   });
 
   revalidatePath('/dashboard/pos-cajeros');
@@ -509,6 +588,17 @@ export async function setPosTokenAllowOversell(
   allow: boolean,
 ): Promise<ActionResult<{ id: string; allowOversell: boolean }>> {
   const { userId, orgId } = await requireAdminContext();
+
+  const [current] = await db
+    .select({ allowOversell: posTokensSchema.allowOversell })
+    .from(posTokensSchema)
+    .where(
+      and(eq(posTokensSchema.id, id), eq(posTokensSchema.organizationId, orgId)),
+    )
+    .limit(1);
+  if (!current) {
+    return { ok: false, error: 'Caja no encontrada' };
+  }
 
   const [updated] = await db
     .update(posTokensSchema)
@@ -531,7 +621,8 @@ export async function setPosTokenAllowOversell(
     action: 'pos_token.oversell_changed',
     entityType: 'pos_token',
     entityId: id,
-    after: { allowOversell: allow },
+    before: { allowOversell: current.allowOversell },
+    after: { allowOversell: updated.allowOversell },
   });
 
   revalidatePath('/dashboard/pos-cajeros');
@@ -685,6 +776,22 @@ export async function setPosTokenSweepDestination(
     }
   }
 
+  const [current] = await db
+    .select({
+      destinationId: posTokensSchema.defaultSweepDestinationAccountId,
+    })
+    .from(posTokensSchema)
+    .where(
+      and(
+        eq(posTokensSchema.id, posTokenId),
+        eq(posTokensSchema.organizationId, orgId),
+      ),
+    )
+    .limit(1);
+  if (!current) {
+    return { ok: false, error: 'Caja no encontrada' };
+  }
+
   const [updated] = await db
     .update(posTokensSchema)
     .set({ defaultSweepDestinationAccountId: accountId })
@@ -700,13 +807,24 @@ export async function setPosTokenSweepDestination(
     return { ok: false, error: 'Caja no encontrada' };
   }
 
+  const [beforeDestination, afterDestination] = await Promise.all([
+    resolveAccountLabel(orgId, current.destinationId),
+    resolveAccountLabel(orgId, accountId),
+  ]);
   await logAction({
     organizationId: orgId,
     actor: { type: 'user', id: userId },
     action: 'pos_token.sweep_destination_changed',
     entityType: 'pos_token',
     entityId: posTokenId,
-    after: { defaultSweepDestinationAccountId: accountId },
+    before: {
+      defaultSweepDestinationAccountId: current.destinationId,
+      destination: beforeDestination,
+    },
+    after: {
+      defaultSweepDestinationAccountId: accountId,
+      destination: afterDestination,
+    },
   });
 
   revalidatePath('/dashboard/pos-cajeros');
@@ -833,6 +951,10 @@ export async function setAdminAsCashier(
     return { ok: false, error: 'Caja no encontrada' };
   }
 
+  const [beforeCashier, afterCashier] = await Promise.all([
+    resolveCashierLabel(orgId, current.cashierId),
+    resolveCashierLabel(orgId, updated.cashierId),
+  ]);
   await logAction({
     organizationId: orgId,
     actor: { type: 'user', id: userId },
@@ -841,8 +963,8 @@ export async function setAdminAsCashier(
       : 'pos_token.admin_cashier_off',
     entityType: 'pos_token',
     entityId: tokenId,
-    before: { cashierId: current.cashierId },
-    after: { cashierId: updated.cashierId },
+    before: { cashierId: current.cashierId, cashier: beforeCashier },
+    after: { cashierId: updated.cashierId, cashier: afterCashier },
   });
 
   revalidatePath('/dashboard/pos-cajeros');

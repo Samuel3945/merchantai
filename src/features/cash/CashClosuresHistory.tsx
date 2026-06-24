@@ -53,7 +53,7 @@ const OUT_MOTIVOS = [
  * Permanent closure (arqueo) history. Every closed session is kept forever, so
  * this browses the full record and filters it client-side by date range,
  * responsable and result (con diferencia / cuadradas) using the app's shared
- * styled controls. Mirrors CashHistory but rendered per closed session.
+ * styled controls, rendered as one card per closed session.
  */
 export function CashClosuresHistory(props: { sessions: CajaClosureRow[] }) {
   const [start, setStart] = useState('');
@@ -62,6 +62,8 @@ export function CashClosuresHistory(props: { sessions: CajaClosureRow[] }) {
   const [actor, setActor] = useState('all');
   const [result, setResult] = useState<ResultFilter>('all');
   const [page, setPage] = useState(0);
+  // Which closure card is expanded to its full breakdown (one at a time).
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -334,80 +336,139 @@ export function CashClosuresHistory(props: { sessions: CajaClosureRow[] }) {
             </div>
           )
         : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="
-                    border-b border-border text-left text-xs
-                    text-muted-foreground
-                  "
+            <ul className="space-y-3 p-3">
+              {pageRows.map((r) => {
+                const sign = r.diff > 0 ? '+' : '';
+                const isOpen = expandedId === r.s.id;
+                const squared = r.diff === 0;
+                return (
+                  <li
+                    key={r.s.id}
+                    className="
+                      rounded-xl border border-border bg-card/60 shadow-xs
+                    "
                   >
-                    <th className="px-5 py-2 font-medium">Fecha de cierre</th>
-                    <th className="px-3 py-2 text-right font-medium">Contado</th>
-                    <th className="px-3 py-2 text-right font-medium">Esperado</th>
-                    <th className="px-3 py-2 text-right font-medium">Diferencia</th>
-                    <th className="px-5 py-2 font-medium">Responsable</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {pageRows.map((r) => {
-                    const sign = r.diff > 0 ? '+' : '';
-                    return (
-                      <tr key={r.s.id}>
-                        <td className="
-                          px-5 py-2.5 whitespace-nowrap text-muted-foreground
+                    <div className="flex flex-col gap-3 p-4">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="
+                          font-display font-semibold whitespace-nowrap
                           tabular-nums
                         "
                         >
                           {r.s.closedAt ? stamp(r.s.closedAt) : '—'}
-                        </td>
-                        <td className="
-                          px-3 py-2.5 text-right font-medium tabular-nums
-                        "
-                        >
-                          {money(r.s.countedAmount)}
-                        </td>
-                        <td className="
-                          px-3 py-2.5 text-right text-muted-foreground
-                          tabular-nums
-                        "
-                        >
-                          {money(r.s.expectedAmount)}
-                        </td>
-                        <td
+                        </div>
+                        <span
                           className={cn(
-                            'px-3 py-2.5 text-right font-semibold tabular-nums',
-                            r.diff === 0 && 'text-success',
-                            r.diff > 0 && 'text-success',
-                            r.diff < 0 && 'text-destructive',
+                            `
+                              inline-flex items-center rounded-full px-2 py-0.5
+                              text-xs font-medium
+                            `,
+                            squared
+                              ? 'bg-success/10 text-success'
+                              : 'bg-destructive/10 text-destructive',
                           )}
                         >
-                          {sign}
-                          {money(r.diff)}
-                        </td>
-                        <td className="px-5 py-2.5 text-muted-foreground">
-                          <div className="
-                            flex items-center justify-between gap-2
+                          {squared ? 'Cuadró' : 'Con diferencia'}
+                        </span>
+                      </div>
+
+                      <dl className="grid grid-cols-3 gap-2 text-sm">
+                        <div>
+                          <dt className="text-xs text-muted-foreground">
+                            Apertura
+                          </dt>
+                          <dd className="mt-0.5 font-medium tabular-nums">
+                            {money(r.s.openingAmount)}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt className="text-xs text-muted-foreground">
+                            Cierre
+                          </dt>
+                          <dd className="mt-0.5 font-medium tabular-nums">
+                            {money(r.s.countedAmount)}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt className="text-xs text-muted-foreground">
+                            Diferencia
+                          </dt>
+                          <dd
+                            className={cn(
+                              'mt-0.5 font-semibold tabular-nums',
+                              squared && 'text-success',
+                              r.diff > 0 && 'text-success',
+                              r.diff < 0 && 'text-destructive',
+                            )}
+                          >
+                            {sign}
+                            {money(r.diff)}
+                          </dd>
+                        </div>
+                      </dl>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpandedId(isOpen ? null : r.s.id)}
+                        className="
+                          self-start text-xs font-medium text-primary
+                          hover:underline
+                        "
+                      >
+                        {isOpen ? 'Ocultar detalle' : 'Ver detalle'}
+                      </button>
+                    </div>
+
+                    {isOpen && (
+                      <div className="
+                        space-y-2 border-t border-border bg-muted/30 p-4 text-sm
+                      "
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-muted-foreground">
+                            Esperado en caja
+                          </span>
+                          <span className="font-medium tabular-nums">
+                            {money(r.s.expectedAmount)}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-muted-foreground">
+                            Apertura
+                          </span>
+                          <span className="
+                            whitespace-nowrap text-muted-foreground tabular-nums
                           "
                           >
-                            <span>{r.s.responsableLabel}</span>
-                            {r.diff !== 0 && (
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => openCorrect(r.s.id, r.diff)}
-                              >
-                                Corregir
-                              </Button>
-                            )}
+                            {r.s.openedAt ? stamp(r.s.openedAt) : '—'}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-muted-foreground">
+                            Responsable
+                          </span>
+                          <span className="font-medium">
+                            {r.s.responsableLabel}
+                          </span>
+                        </div>
+                        {r.diff !== 0 && (
+                          <div className="pt-1">
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              onClick={() => openCorrect(r.s.id, r.diff)}
+                            >
+                              Corregir diferencia
+                            </Button>
                           </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                        )}
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
           )}
 
       {pageCount > 1 && (
