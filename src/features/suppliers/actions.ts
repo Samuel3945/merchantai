@@ -602,6 +602,8 @@ export async function listOpenPayables(
       supplierId: supplierPayablesSchema.supplierId,
       totalAmount: supplierPayablesSchema.totalAmount,
       paidAmount: supplierPayablesSchema.paidAmount,
+      // creditedAmount: sum of all return credits applied (migration 0068).
+      creditedAmount: supplierPayablesSchema.creditedAmount,
       status: supplierPayablesSchema.status,
       purchasedAt: supplierPayablesSchema.purchasedAt,
       // supplier name: null when supplier has been deleted (orphan payable)
@@ -635,8 +637,11 @@ export async function listOpenPayables(
     productName: r.productName ?? null,
     totalAmount: r.totalAmount,
     paidAmount: r.paidAmount,
+    // outstanding = total − paid − credited (migration 0068: subtract credits too).
     outstanding: (
-      Number.parseFloat(r.totalAmount) - Number.parseFloat(r.paidAmount)
+      Number.parseFloat(r.totalAmount)
+      - Number.parseFloat(r.paidAmount)
+      - Number.parseFloat(r.creditedAmount ?? '0')
     ).toFixed(2),
     status: r.status as 'open' | 'partial',
     purchasedAt: r.purchasedAt,
