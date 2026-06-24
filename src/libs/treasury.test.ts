@@ -25,6 +25,8 @@ import {
   recordContainerTransfer,
   recordGastoOutflow,
   recordHandoverMovement,
+  recordInflowSourceDebit,
+  recordSupplierPaymentOutflow,
   resolveBancoForMethod,
   seedOpeningBalance,
 } from '@/libs/treasury';
@@ -3146,5 +3148,235 @@ describe('getSupplierKpisForOrg', () => {
     const kpis = await getSupplierKpisForOrg(db as unknown as Executor, ORG);
 
     expect(kpis.paidThisMonth).toBe('0');
+  });
+});
+
+// ── Container lock SQL-emission tests ────────────────────────────────────────
+//
+// What these tests prove:
+//   - Each helper issues a query containing "FOR UPDATE" on treasury_accounts
+//     before the SUM FILTER balance scan query.
+//   - The lock targets the SOURCE account id, not the destination.
+//   - The container lock precedes the payable FOR UPDATE in recordSupplierPaymentOutflow
+//     (container → payable global lock order, design D3).
+//
+// What these tests do NOT prove:
+//   - The concurrency race condition is fixed. PGLite is single-connection and
+//     cannot model two truly overlapping transactions. The race fix rests on the
+//     ordered-lock proof documented in design #441 and the code structure here.
+//   - FOR UPDATE actually serializes writes in PGLite — PGLite holds the lock
+//     correctly for a single connection but cannot simulate two concurrent txs.
+//
+// Approach: create a Drizzle instance with a custom Logger that captures every
+// SQL string emitted, including those inside db.transaction() callbacks (which
+// use a PGLite transaction client invisible to pg.query spies). Assert that FOR
+// UPDATE on treasury_accounts precedes the SUM FILTER balance scan.
+
+const LOCK_SRC_A = '11111111-0000-0000-0000-000000000001';
+const LOCK_SRC_B = '11111111-0000-0000-0000-000000000002';
+const LOCK_DST = '11111111-0000-0000-0000-000000000003';
+
+async function seedLockAccount(
+  id: string,
+  openingBalance: number,
+  type: 'caja_fuerte' | 'banco' | 'transito' | 'caja' = 'caja_fuerte',
+): Promise<void> {
+  await pg.query(
+    `INSERT INTO treasury_accounts (id, organization_id, type, name, opening_balance, active, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, true, now(), now())
+     ON CONFLICT DO NOTHING`,
+    [id, ORG, type, `lock-test-${id.slice(-4)}`, openingBalance.toFixed(2)],
+  );
+}
+
+/**
+ * Returns a Drizzle executor that logs every SQL query into `captured[]`.
+ * The logger approach captures queries inside db.transaction() callbacks too,
+ * unlike a pg.query spy (which only sees root-level queries, not tx-client ones).
+ */
+function makeLoggingDb(captured: Array<{ sql: string; params: unknown[] }>): Executor {
+  const logger = {
+    logQuery(sql: string, params: unknown[]) {
+      captured.push({ sql, params });
+    },
+  };
+  return drizzle(pg, { logger }) as unknown as Executor;
+}
+
+describe('container lock SQL-emission — recordInflowSourceDebit', () => {
+  it('emits FOR UPDATE on treasury_accounts before the SUM FILTER balance scan', async () => {
+    await seedLockAccount(LOCK_SRC_A, 5000);
+
+    const captured: Array<{ sql: string; params: unknown[] }> = [];
+    const loggingDb = makeLoggingDb(captured);
+
+    await recordInflowSourceDebit(loggingDb, {
+      organizationId: ORG,
+      fromAccountId: LOCK_SRC_A,
+      amount: 100,
+      reason: 'test',
+      createdBy: 'tester',
+    });
+
+    const sqls = captured.map(c => c.sql.toLowerCase());
+    const forUpdateIdx = sqls.findIndex(s =>
+      s.includes('for update') && s.includes('treasury_accounts'),
+    );
+    const sumFilterIdx = sqls.findIndex(s =>
+      s.includes('sum(') && s.includes('filter'),
+    );
+
+    // forUpdateIdx >= 0: FOR UPDATE on treasury_accounts emitted
+    expect(forUpdateIdx).toBeGreaterThanOrEqual(0);
+    // sumFilterIdx >= 0: SUM FILTER balance scan emitted
+    expect(sumFilterIdx).toBeGreaterThanOrEqual(0);
+    // lock precedes scan
+    expect(forUpdateIdx).toBeLessThan(sumFilterIdx);
+    // The lock query params contain the source account id
+    expect(captured[forUpdateIdx]!.params).toContain(LOCK_SRC_A);
+  });
+});
+
+describe('container lock SQL-emission — recordGastoOutflow', () => {
+  it('emits FOR UPDATE on treasury_accounts before the SUM FILTER balance scan', async () => {
+    await seedLockAccount(LOCK_SRC_A, 5000);
+
+    const captured: Array<{ sql: string; params: unknown[] }> = [];
+    const loggingDb = makeLoggingDb(captured);
+
+    await recordGastoOutflow(loggingDb, {
+      organizationId: ORG,
+      fromAccountId: LOCK_SRC_A,
+      amount: 50,
+      category: 'test',
+      incurredOn: '2026-01-01',
+      createdBy: 'tester',
+    });
+
+    const sqls = captured.map(c => c.sql.toLowerCase());
+    const forUpdateIdx = sqls.findIndex(s =>
+      s.includes('for update') && s.includes('treasury_accounts'),
+    );
+    const sumFilterIdx = sqls.findIndex(s =>
+      s.includes('sum(') && s.includes('filter'),
+    );
+
+    expect(forUpdateIdx).toBeGreaterThanOrEqual(0); // FOR UPDATE on treasury_accounts emitted
+    expect(sumFilterIdx).toBeGreaterThanOrEqual(0); // SUM FILTER balance scan emitted
+    expect(forUpdateIdx).toBeLessThan(sumFilterIdx); // lock precedes scan
+    expect(captured[forUpdateIdx]!.params).toContain(LOCK_SRC_A);
+  });
+});
+
+describe('container lock SQL-emission — recordContainerTransfer (source only)', () => {
+  it('emits FOR UPDATE on the SOURCE id before the SUM FILTER balance scan; destination id absent from lock params', async () => {
+    await seedLockAccount(LOCK_SRC_A, 5000, 'caja_fuerte');
+    await seedLockAccount(LOCK_DST, 0, 'transito');
+
+    const captured: Array<{ sql: string; params: unknown[] }> = [];
+    const loggingDb = makeLoggingDb(captured);
+
+    await recordContainerTransfer(loggingDb, {
+      organizationId: ORG,
+      fromAccountId: LOCK_SRC_A,
+      toAccountId: LOCK_DST,
+      amount: 100,
+      createdBy: 'tester',
+    });
+
+    const sqls = captured.map(c => c.sql.toLowerCase());
+    const forUpdateIdx = sqls.findIndex(s =>
+      s.includes('for update') && s.includes('treasury_accounts'),
+    );
+    const sumFilterIdx = sqls.findIndex(s =>
+      s.includes('sum(') && s.includes('filter'),
+    );
+
+    expect(forUpdateIdx).toBeGreaterThanOrEqual(0); // FOR UPDATE on treasury_accounts emitted
+    expect(sumFilterIdx).toBeGreaterThanOrEqual(0); // SUM FILTER balance scan emitted
+    expect(forUpdateIdx).toBeLessThan(sumFilterIdx); // lock precedes scan
+    // Lock params contain the SOURCE id, not the destination
+    expect(captured[forUpdateIdx]!.params).toContain(LOCK_SRC_A);
+    expect(captured[forUpdateIdx]!.params).not.toContain(LOCK_DST);
+  });
+});
+
+describe('container lock SQL-emission — recordBankConsignacion (source only)', () => {
+  it('emits FOR UPDATE on the SOURCE id before the SUM FILTER balance scan; destination id absent from lock params', async () => {
+    await seedLockAccount(LOCK_SRC_A, 5000, 'caja_fuerte');
+    await seedLockAccount(LOCK_DST, 0, 'banco');
+
+    const captured: Array<{ sql: string; params: unknown[] }> = [];
+    const loggingDb = makeLoggingDb(captured);
+
+    await recordBankConsignacion(loggingDb, {
+      organizationId: ORG,
+      fromAccountId: LOCK_SRC_A,
+      toBankAccountId: LOCK_DST,
+      amount: 200,
+      createdBy: 'tester',
+    });
+
+    const sqls = captured.map(c => c.sql.toLowerCase());
+    const forUpdateIdx = sqls.findIndex(s =>
+      s.includes('for update') && s.includes('treasury_accounts'),
+    );
+    const sumFilterIdx = sqls.findIndex(s =>
+      s.includes('sum(') && s.includes('filter'),
+    );
+
+    expect(forUpdateIdx).toBeGreaterThanOrEqual(0); // FOR UPDATE on treasury_accounts emitted
+    expect(sumFilterIdx).toBeGreaterThanOrEqual(0); // SUM FILTER balance scan emitted
+    expect(forUpdateIdx).toBeLessThan(sumFilterIdx); // lock precedes scan
+    expect(captured[forUpdateIdx]!.params).toContain(LOCK_SRC_A);
+    expect(captured[forUpdateIdx]!.params).not.toContain(LOCK_DST);
+  });
+});
+
+// ── Container lock SQL-emission — container-before-payable ordering ───────────
+
+describe('recordSupplierPaymentOutflow — container lock precedes payable lock (D3)', () => {
+  const PAYABLE_LOCK_ID = '22222222-0000-0000-cccc-000000000001';
+  const SUPPLIER_LOCK_ID = '00000000-0000-0000-aaaa-000000000002';
+
+  beforeEach(async () => {
+    await pg.query(
+      `INSERT INTO supplier_payables
+         (id, organization_id, supplier_id, total_amount, paid_amount, status, purchased_at, created_at, updated_at)
+       VALUES ($1, $2, $3, '1000.00', '0', 'open', now(), now(), now())
+       ON CONFLICT DO NOTHING`,
+      [PAYABLE_LOCK_ID, ORG, SUPPLIER_LOCK_ID],
+    );
+  });
+
+  it('emits treasury_accounts FOR UPDATE before supplier_payables FOR UPDATE', async () => {
+    await seedLockAccount(LOCK_SRC_B, 5000, 'caja_fuerte');
+
+    const captured: Array<{ sql: string; params: unknown[] }> = [];
+    const loggingDb = makeLoggingDb(captured);
+
+    await recordSupplierPaymentOutflow(loggingDb, {
+      organizationId: ORG,
+      fromAccountId: LOCK_SRC_B,
+      amount: 100,
+      supplierId: SUPPLIER_LOCK_ID,
+      payableId: PAYABLE_LOCK_ID,
+      createdBy: 'tester',
+    });
+
+    const sqls = captured.map(c => c.sql.toLowerCase());
+    // treasury_accounts FOR UPDATE
+    const containerLockIdx = sqls.findIndex(s =>
+      s.includes('for update') && s.includes('treasury_accounts'),
+    );
+    // supplier_payables FOR UPDATE (Drizzle .for('update') emits "for update" in the query)
+    const payableLockIdx = sqls.findIndex(s =>
+      s.includes('for update') && s.includes('supplier_payables'),
+    );
+
+    expect(containerLockIdx).toBeGreaterThanOrEqual(0); // container FOR UPDATE emitted
+    expect(payableLockIdx).toBeGreaterThanOrEqual(0); // payable FOR UPDATE emitted
+    // container lock (treasury_accounts) must precede payable lock (supplier_payables)
+    expect(containerLockIdx).toBeLessThan(payableLockIdx);
   });
 });

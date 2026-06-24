@@ -515,6 +515,80 @@ export function balanceForAccount(
   return Number.parseFloat((opening + credits - debits).toFixed(2));
 }
 
+// ── Container row-locking helpers ────────────────────────────────────────────
+//
+// Closes the design-D5 gap: concurrent debits from the same treasury container
+// can both pass the balance guard and overdraw it when the aggregate balance
+// read is unlocked. Fix: acquire a SELECT … FOR UPDATE on the SOURCE row(s)
+// BEFORE the balance scan, inside the existing tx, so concurrent debits from the
+// same container serialize on the row lock.
+//
+// Lock-ordering rule (D2): ALL account-row locks are always acquired in ascending
+// UUID order via a single SQL statement. This guarantees no two concurrent txs
+// ever request the same rows in opposite order → deadlock-free by the classic
+// ordered-locking proof (see design document engram #441).
+
+/**
+ * Pure helper — deduplicate and sort account IDs into ascending order.
+ *
+ * Always sorting before locking is the ordered-locking invariant: every caller
+ * that must lock ≥2 rows will request them in the same order regardless of how
+ * the caller received the IDs. No DB access; safe to unit-test in isolation.
+ */
+export function orderAccountIdsForLock(ids: string[]): string[] {
+  return [...new Set(ids)].sort();
+}
+
+/**
+ * Acquire a SELECT … FOR UPDATE on the specified treasury_accounts rows.
+ *
+ * Implementation: Drizzle ORM query with `.orderBy(id).for('update')` chained
+ * together — type-safe and compatible with the TenantDb proxy (both 'orderBy'
+ * and 'for' are in SELECT_CHAIN in db-context.ts). This is DISTINCT from
+ * getRemainingForHandover which uses a raw sql`` template for its WHERE clause;
+ * here the WHERE uses the typed Drizzle helpers (eq / inArray) and only the
+ * lock and ordering are chained DSL methods.
+ *
+ * The single statement locks all requested rows in ascending-id order in one
+ * round-trip, satisfying the ordered-locking invariant (D2). Multi-row deadlock
+ * safety requires acquiring ALL needed account ids in ONE call (so they are
+ * locked in ascending id order); never lock accounts across separate calls in a tx.
+ *
+ * Must be called INSIDE a transaction. The lock is held until the outer tx
+ * commits or rolls back. Passing an empty ids array is a no-op (returns early).
+ *
+ * Only SOURCE (debited) accounts need a lock — destination accounts are credits
+ * and have no overdraw risk (D1).
+ */
+export async function lockAccountsForUpdate(
+  executor: Executor,
+  organizationId: string,
+  ids: string[],
+): Promise<void> {
+  if (ids.length === 0) {
+    return;
+  }
+  const ordered = orderAccountIdsForLock(ids);
+  // Drizzle ORM: typed schema object (not a raw alias) keeps the call compatible
+  // with the TenantDb proxy (which intercepts .from(schemaTable) and validates
+  // the table name). ORDER BY + FOR UPDATE are chained via .orderBy() and .for()
+  // — both are in SELECT_CHAIN (db-context.ts:108) so they pass through cleanly.
+  // When executor is a TenantDb the org filter is automatically applied; the
+  // explicit eq(organizationId) below is redundant but harmless — it is the
+  // source-of-truth guard when executor is a raw Drizzle db or tx.
+  await executor
+    .select({ id: treasuryAccountsSchema.id })
+    .from(treasuryAccountsSchema)
+    .where(
+      and(
+        eq(treasuryAccountsSchema.organizationId, organizationId),
+        inArray(treasuryAccountsSchema.id, ordered),
+      ),
+    )
+    .orderBy(treasuryAccountsSchema.id)
+    .for('update');
+}
+
 type TransferInput = {
   organizationId: string;
   fromAccountId: string;
@@ -544,6 +618,11 @@ export async function recordContainerTransfer(
   const amt = Number.parseFloat(toMoney(input.amount));
 
   // Load both accounts in one query to avoid two round-trips.
+  // NOTE: this read happens BEFORE lockAccountsForUpdate below. That is an
+  // accepted limitation: `active` and `openingBalance` are static/seed data
+  // (account deactivation is a rare admin op, openingBalance never changes
+  // after seeding) and are NOT part of the balance-overdraw race this change
+  // targets. The critical balance scan runs AFTER the lock is acquired.
   const accounts = await executor
     .select()
     .from(treasuryAccountsSchema)
@@ -567,6 +646,12 @@ export async function recordContainerTransfer(
       'cuenta de destino inactiva o no encontrada — container inactive or not found',
     );
   }
+
+  // Serialize concurrent debits on the SOURCE row only (D1 — destinations are
+  // credits; locking them widens deadlock surface with no benefit).
+  // Single-source lock → trivially ordered; ordered-locking rule (D2) still
+  // satisfied because lockAccountsForUpdate always sorts by ascending id.
+  await lockAccountsForUpdate(executor, input.organizationId, [input.fromAccountId]);
 
   // Compute current source balance via movements ledger.
   const [movRow] = await executor
@@ -644,6 +729,11 @@ export async function recordBankConsignacion(
   const amt = Number.parseFloat(toMoney(input.amount));
 
   // Load both accounts.
+  // NOTE: this read happens BEFORE lockAccountsForUpdate below. That is an
+  // accepted limitation: `active` and `openingBalance` are static/seed data
+  // (account deactivation is a rare admin op, openingBalance never changes
+  // after seeding) and are NOT part of the balance-overdraw race this change
+  // targets. The critical balance scan runs AFTER the lock is acquired.
   const accounts = await executor
     .select()
     .from(treasuryAccountsSchema)
@@ -667,6 +757,10 @@ export async function recordBankConsignacion(
       'cuenta bancaria inactiva o no encontrada — container inactive or not found',
     );
   }
+
+  // Serialize concurrent debits on the SOURCE (cash → banco). The destination
+  // (banco) is a credit — no overdraw risk — so we lock source only (D1).
+  await lockAccountsForUpdate(executor, input.organizationId, [input.fromAccountId]);
 
   // Compute source balance.
   const [movRow] = await executor
@@ -773,37 +867,45 @@ export async function recordGastoOutflow(
     );
   }
 
-  // Compute current balance for the source container.
-  const [movRow] = await executor
-    .select({
-      credits: sql<string>`COALESCE(SUM(${treasuryMovementsSchema.amount}) FILTER (WHERE ${treasuryMovementsSchema.toAccountId} = ${input.fromAccountId}), 0)::text`,
-      debits: sql<string>`COALESCE(SUM(${treasuryMovementsSchema.amount}) FILTER (WHERE ${treasuryMovementsSchema.fromAccountId} = ${input.fromAccountId}), 0)::text`,
-    })
-    .from(treasuryMovementsSchema)
-    .where(eq(treasuryMovementsSchema.organizationId, input.organizationId));
+  const doInserts = async (tx: Executor): Promise<string> => {
+    // Serialize concurrent debits on the source row. The lock MUST be acquired
+    // inside the tx (doInserts) so it is held until the outer tx commits/rolls
+    // back. Acquiring it here, before the balance scan, ensures two concurrent
+    // txs on the same container serialize at this point rather than both reading
+    // a sufficient balance and both committing an overdraw.
+    await lockAccountsForUpdate(tx, input.organizationId, [input.fromAccountId]);
 
-  const opening = Number.parseFloat(source.openingBalance ?? '0') || 0;
-  const credits = Number.parseFloat(movRow?.credits ?? '0') || 0;
-  const debits = Number.parseFloat(movRow?.debits ?? '0') || 0;
-  const currentBalance = balanceForAccount(opening, credits, debits);
+    // Re-read balance INSIDE the tx (after lock) — this is the authoritative
+    // check. Concurrent txs serialized by the lock will see the committed debit.
+    const [movRow] = await tx
+      .select({
+        credits: sql<string>`COALESCE(SUM(${treasuryMovementsSchema.amount}) FILTER (WHERE ${treasuryMovementsSchema.toAccountId} = ${input.fromAccountId}), 0)::text`,
+        debits: sql<string>`COALESCE(SUM(${treasuryMovementsSchema.amount}) FILTER (WHERE ${treasuryMovementsSchema.fromAccountId} = ${input.fromAccountId}), 0)::text`,
+      })
+      .from(treasuryMovementsSchema)
+      .where(eq(treasuryMovementsSchema.organizationId, input.organizationId));
 
-  if (currentBalance < amt) {
-    throw new Error(
-      `saldo insuficiente: balance ${currentBalance.toFixed(2)}, requested ${amt.toFixed(2)}`,
-    );
-  }
+    const opening = Number.parseFloat(source.openingBalance ?? '0') || 0;
+    const credits = Number.parseFloat(movRow?.credits ?? '0') || 0;
+    const debits = Number.parseFloat(movRow?.debits ?? '0') || 0;
+    const currentBalance = balanceForAccount(opening, credits, debits);
 
-  // Per-handover guard (ADR-5 C2): re-check inside executor.
-  if (input.handoverMovementId) {
-    const remaining = await getRemainingForHandover(executor, input.handoverMovementId, input.organizationId);
-    if (amt > remaining + 0.005) {
+    if (currentBalance < amt) {
       throw new Error(
-        `excede el saldo pendiente del cierre: remaining ${remaining.toFixed(2)}, requested ${amt.toFixed(2)}`,
+        `saldo insuficiente: balance ${currentBalance.toFixed(2)}, requested ${amt.toFixed(2)}`,
       );
     }
-  }
 
-  const doInserts = async (tx: Executor): Promise<string> => {
+    // Per-handover guard (ADR-5 C2): re-check inside tx.
+    if (input.handoverMovementId) {
+      const remaining = await getRemainingForHandover(tx, input.handoverMovementId, input.organizationId);
+      if (amt > remaining + 0.005) {
+        throw new Error(
+          `excede el saldo pendiente del cierre: remaining ${remaining.toFixed(2)}, requested ${amt.toFixed(2)}`,
+        );
+      }
+    }
+
     // 1. Insert expenses row (P&L — schema unchanged).
     const [expense] = await tx
       .insert(expensesSchema)
@@ -845,8 +947,15 @@ export async function recordGastoOutflow(
     return expense.id;
   };
 
-  // When executor is the real `db`, wrap in a transaction for atomicity.
-  // When executor is already a tx (passed from a parent transaction), use it directly.
+  // When executor is the top-level `db` singleton, open a dedicated transaction.
+  // When executor is already a transaction object (e.g. a Drizzle tx passed from
+  // a parent transaction, or a TenantDb tx proxy), call doInserts directly — the
+  // `.transaction` property is still present on a Drizzle tx (it exposes the
+  // underlying tx), so this check is NOT a reliable "is-standalone" test.
+  // In practice, standalone callers pass the `db` singleton (has `.transaction`
+  // as a function on the module), while callers inside a parent tx pass the tx
+  // object directly and this branch is not reached. If a tx is passed directly,
+  // doInserts nests a SAVEPOINT (harmless; rollback still propagates to the parent).
   const isRealDb = typeof (executor as { transaction?: unknown }).transaction === 'function';
   if (isRealDb) {
     return (executor as typeof import('@/libs/DB').db).transaction(tx => doInserts(tx as unknown as Executor));
@@ -979,6 +1088,11 @@ export async function recordInflowSourceDebit(
       'cuenta de origen inactiva o no encontrada — source container inactive or not found',
     );
   }
+
+  // Serialize concurrent debits: lock the source row before the balance scan so
+  // two concurrent txs on the same container cannot both read a sufficient balance
+  // and both commit an overdraw. Lock acquired here; released at outer tx commit.
+  await lockAccountsForUpdate(executor, input.organizationId, [input.fromAccountId]);
 
   // Compute current source balance via movements ledger.
   const [movRow] = await executor
@@ -1719,13 +1833,15 @@ export async function recordSupplierPaymentOutflow(
       );
     }
 
-    // 2. Org-wide balance scan — VERBATIM from recordInflowSourceDebit (D5).
-    // NOTE (design D5 / accepted limitation): this aggregate is NOT row-locked.
-    // FOR UPDATE is placed on the payable row only. Concurrent debits from the
-    // same container within overlapping transactions are not serialized — the
-    // balance may appear sufficient to two callers simultaneously. This mirrors
-    // recordInflowSourceDebit and recordGastoOutflow; container-level locking
-    // is deferred as a future hardening change.
+    // 2. Lock the SOURCE container BEFORE the balance scan AND before the payable
+    // FOR UPDATE (D3 — global lock order: treasury_accounts → supplier_payables).
+    // This ensures: (a) concurrent debits from the same container serialize at this
+    // point; (b) no tx can take the payable lock before the container lock, so no
+    // cross-table cycle is possible (no other helper locks supplier_payables, making
+    // the treasury_accounts → supplier_payables order globally consistent).
+    await lockAccountsForUpdate(tx, input.organizationId, [input.fromAccountId]);
+
+    // 3. Org-wide balance scan (AFTER container lock — see note above).
     const [movRow] = await tx
       .select({
         credits: sql<string>`COALESCE(SUM(${treasuryMovementsSchema.amount}) FILTER (WHERE ${treasuryMovementsSchema.toAccountId} = ${input.fromAccountId}), 0)::text`,
@@ -1745,7 +1861,8 @@ export async function recordSupplierPaymentOutflow(
       );
     }
 
-    // 3. If payableId: validate payable status + outstanding cap (SELECT ... FOR UPDATE).
+    // 4. If payableId: validate payable status + outstanding cap (SELECT ... FOR UPDATE).
+    // Container lock is already held — payable lock acquired after (treasury_accounts → supplier_payables order).
     let payableStatus: 'open' | 'partial' | 'paid' = 'open';
     let newPaidAmount = amt;
 
@@ -1789,7 +1906,7 @@ export async function recordSupplierPaymentOutflow(
       payableStatus = newPaidAmount >= totalAmt - 0.005 ? 'paid' : 'partial';
     }
 
-    // 4. INSERT treasury_movements salida — NO expenseId, NO category P&L.
+    // 5. INSERT treasury_movements salida — NO expenseId, NO category P&L.
     const [movement] = await tx
       .insert(treasuryMovementsSchema)
       .values({
@@ -1807,7 +1924,7 @@ export async function recordSupplierPaymentOutflow(
       throw new Error('treasury_movements: supplier payment insert returned no row');
     }
 
-    // 5. INSERT supplier_payments — treasury_movement_id is NEVER null (REQ-4.2, migration 0066).
+    // 6. INSERT supplier_payments — treasury_movement_id is NEVER null (REQ-4.2, migration 0066).
     const [payment] = await tx
       .insert(supplierPaymentsSchema)
       .values({
@@ -1825,7 +1942,7 @@ export async function recordSupplierPaymentOutflow(
       throw new Error('supplier_payments: insert returned no row');
     }
 
-    // 6. UPDATE supplier_payables: bump paid_amount + recompute status.
+    // 7. UPDATE supplier_payables: bump paid_amount + recompute status.
     if (input.payableId) {
       await tx
         .update(supplierPayablesSchema)

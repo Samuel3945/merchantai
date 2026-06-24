@@ -11,6 +11,7 @@ import { requirePanelModule } from '@/libs/panel-session';
 import {
   getHandoverStatusForSessions,
   getOrCreatePendingAccount,
+  lockAccountsForUpdate,
   recordBankConsignacion,
   recordContainerTransfer,
   recordGastoOutflow,
@@ -353,6 +354,13 @@ export async function reclassifyAutoSweep(
       }
 
       const amtNum = Number.parseFloat(String(amount));
+
+      // Acquire both account locks in ascending-id order up front so the global
+      // ordered-lock invariant (D2) holds literally for this tx, regardless of any
+      // future caller that might lock transito before a cofre.
+      // recordContainerTransfer will re-lock each source row inside its own call —
+      // those are no-ops because Postgres re-entrant row locks are idempotent.
+      await lockAccountsForUpdate(tx, orgId, [oldCofreId, transitoId]);
 
       // Step 1: reverse the original placement (cofre A → transito).
       // No handoverMovementId — this is a compensating ledger entry, not a placement.
