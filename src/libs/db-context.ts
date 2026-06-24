@@ -51,6 +51,7 @@ const TENANT_TABLES: ReadonlySet<string> = new Set([
   'supplier_payables',
   'supplier_payments',
   'supplier_payable_credits',
+  'supplier_refunds',
   // Treasury containers and ledger (accessed via helpers; proxy adds org filter).
   'treasury_accounts',
   'treasury_movements',
