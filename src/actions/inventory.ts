@@ -2,6 +2,7 @@
 
 import type { SQL } from 'drizzle-orm';
 import type { SmartStockSettings } from '@/actions/smart-stock';
+import type { TreasuryAccountRow } from '@/libs/treasury';
 import { auth, clerkClient } from '@clerk/nextjs/server';
 import { and, desc, eq, gt, gte, inArray, isNotNull, lte, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
@@ -11,6 +12,10 @@ import { db } from '@/libs/db-context';
 import { fifoBatchOrder } from '@/libs/fifo-cogs';
 import { requirePanelModule } from '@/libs/panel-session';
 import { insertPurchasePayable } from '@/libs/supplier-payables';
+import {
+  listTreasuryAccounts as listTreasuryAccountsLib,
+  recordSupplierPaymentOutflow,
+} from '@/libs/treasury';
 import {
   expirationRiskCacheSchema,
   productsSchema,
@@ -62,6 +67,12 @@ export type RecordMovementInput = {
   expiresAt?: string | null;
   saleId?: string | null;
   notes?: string | null;
+  // ── Pay-at-entry (S2-T4, REQ-3.x) — optional, additive, no breaking change ──
+  // Only read when reason === 'purchase'. Existing callers without these fields
+  // default to 'unpaid' and no outflow is written.
+  paymentStatus?: 'unpaid' | 'full' | 'partial' | null;
+  paymentAmount?: string | null;
+  paymentAccountId?: string | null;
 };
 
 export type StockMovement = typeof stockMovementsSchema.$inferSelect;
@@ -124,6 +135,34 @@ export async function recordMovement(input: RecordMovementInput) {
     }
     if (product.isPerishable && !input.expiresAt) {
       throw new Error('La fecha de caducidad es obligatoria para productos perecederos');
+    }
+  }
+
+  // Defense in depth: server-side payment field validation for purchase entries.
+  // The Zod refinement in entryFormSchema runs only on the client; enforce the
+  // same rules here so the money path cannot be reached with invalid fields
+  // regardless of the caller. Callers that omit payment fields default to
+  // 'unpaid' and bypass this guard (no breaking change for existing callers).
+  if (input.reason === 'purchase') {
+    const pStatus = input.paymentStatus ?? 'unpaid';
+    if (pStatus === 'full' || pStatus === 'partial') {
+      if (!input.paymentAccountId) {
+        throw new Error(
+          'Seleccioná el contenedor de donde sale el dinero',
+        );
+      }
+    }
+    if (pStatus === 'partial') {
+      const amt = Number(input.paymentAmount);
+      const total = input.qty * Number(input.unitCost ?? '0');
+      if (!input.paymentAmount || !Number.isFinite(amt) || amt <= 0) {
+        throw new Error('El monto parcial debe ser mayor a 0');
+      }
+      if (amt >= total) {
+        throw new Error(
+          'El monto parcial debe ser menor al total de la compra (usá "Sí, pagué el total" para pago completo)',
+        );
+      }
     }
   }
 
@@ -217,7 +256,7 @@ export async function recordMovement(input: RecordMovementInput) {
         throw new Error('stock movement insert returned no id');
       }
       const movementId = movement.id as string;
-      await insertPurchasePayable(tx, {
+      const newPayable = await insertPurchasePayable(tx, {
         organizationId: orgId,
         supplierId: input.supplierId,
         stockMovementId: movementId,
@@ -226,6 +265,33 @@ export async function recordMovement(input: RecordMovementInput) {
         createdBy: userId,
         notes: null,
       });
+
+      // Pay-at-entry (REQ-3.x, S2-T4): if the user already paid or partially
+      // paid at entry time, debit the chosen container in the SAME tx.
+      // Balance/cap errors roll back lot + payable + payment all-or-nothing.
+      // 'unpaid'/missing → payable stays open, no outflow written (REQ-3.2).
+      const pStatus = input.paymentStatus ?? 'unpaid';
+      if (
+        (pStatus === 'full' || pStatus === 'partial')
+        && input.paymentAccountId
+      ) {
+        const totalAmount = input.qty * Number(unitCost);
+        const payAmt
+          = pStatus === 'full'
+            ? totalAmount
+            : Number(input.paymentAmount ?? '0');
+
+        // biome-ignore lint/suspicious/noExplicitAny: TenantDb tx is structurally compatible with Executor at runtime
+        await recordSupplierPaymentOutflow(tx as any, {
+          organizationId: orgId,
+          fromAccountId: input.paymentAccountId,
+          amount: payAmt,
+          supplierId: input.supplierId,
+          payableId: newPayable.id,
+          note: null,
+          createdBy: userId,
+        });
+      }
     }
 
     return { movement, product: updated, stockBefore: product.stock };
@@ -788,4 +854,31 @@ export async function bulkRecordEntries(
   }
 
   return { created, failed };
+}
+
+// ── listPaymentContainers (S2-T4 companion) ───────────────────────────────────
+// Returns active treasury containers (caja, caja_fuerte, banco) for the org.
+// Called from EntryModal to populate the ContainerSelector for pay-at-entry.
+// Excludes 'transito' (Pendiente de ubicar) — purchases must not land there.
+// Requires 'inventory' module (same gate as the entry form).
+
+export type PaymentContainer = {
+  id: string;
+  name: string;
+  type: 'caja' | 'caja_fuerte' | 'banco';
+};
+
+export async function listPaymentContainers(): Promise<PaymentContainer[]> {
+  const { orgId } = await requirePanelModule('inventory');
+  const rawDb = db.unsafeNoOrgFilter(
+    'listPaymentContainers: treasury_accounts queried directly with explicit org filter',
+  );
+  const accounts: TreasuryAccountRow[] = await listTreasuryAccountsLib(rawDb, orgId);
+  return accounts
+    .filter(a => a.type === 'caja' || a.type === 'caja_fuerte' || a.type === 'banco')
+    .map(a => ({
+      id: a.id,
+      name: a.name,
+      type: a.type as 'caja' | 'caja_fuerte' | 'banco',
+    }));
 }

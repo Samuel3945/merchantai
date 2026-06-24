@@ -108,6 +108,24 @@ export const entryFormSchema = z
       .trim()
       .optional()
       .transform(v => (v || null)),
+    // ── Pay-at-entry (REQ-3.x, S2-T3) — additive/optional, no breaking change ──
+    // Only meaningful when reason === 'purchase'. Other entry types ignore these.
+    paymentStatus: z
+      .enum(['unpaid', 'full', 'partial'])
+      .default('unpaid'),
+    // Required and > 0 only when paymentStatus === 'partial'.
+    paymentAmount: z
+      .string()
+      .trim()
+      .optional()
+      .transform(v => (v || null)),
+    // UUID of the treasury container to debit. Required when paymentStatus is
+    // 'full' or 'partial'.
+    paymentAccountId: z
+      .string()
+      .trim()
+      .optional()
+      .transform(v => (v || null)),
   })
   .superRefine((data, ctx) => {
     if (data.reason === 'manual' && !data.notes) {
@@ -123,6 +141,35 @@ export const entryFormSchema = z
         path: ['supplierId'],
         message: 'Elegí un proveedor',
       });
+    }
+    // Payment validation: full/partial require an account; partial requires amount.
+    if (
+      data.reason === 'purchase'
+      && (data.paymentStatus === 'full' || data.paymentStatus === 'partial')
+      && !data.paymentAccountId
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['paymentAccountId'],
+        message: 'Seleccioná el contenedor de donde sale el dinero',
+      });
+    }
+    if (data.reason === 'purchase' && data.paymentStatus === 'partial') {
+      const amt = Number(data.paymentAmount);
+      const total = Number(data.qty) * Number(data.unitCost);
+      if (!data.paymentAmount || amt <= 0) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['paymentAmount'],
+          message: 'El monto parcial debe ser mayor a 0',
+        });
+      } else if (amt >= total) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['paymentAmount'],
+          message: 'El monto parcial debe ser menor al total (usá "Sí, pagué el total" para pago completo)',
+        });
+      }
     }
   });
 

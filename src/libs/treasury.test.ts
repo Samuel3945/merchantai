@@ -227,13 +227,13 @@ const DDL = `
     ON supplier_payables (stock_movement_id)
     WHERE stock_movement_id IS NOT NULL;
 
-  -- Supplier payments ledger: one row per payment event (migration 0065)
+  -- Supplier payments ledger: one row per payment event (migration 0065+0066)
   CREATE TABLE supplier_payments (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     organization_id text NOT NULL,
     supplier_id text NOT NULL,
     payable_id uuid REFERENCES supplier_payables(id) ON DELETE SET NULL,
-    treasury_movement_id uuid REFERENCES treasury_movements(id) ON DELETE RESTRICT,
+    treasury_movement_id uuid NOT NULL REFERENCES treasury_movements(id) ON DELETE RESTRICT,
     amount numeric(12,2) NOT NULL,
     note text,
     created_by text,
@@ -3007,13 +3007,31 @@ describe('getSupplierKpisForOrg', () => {
 
   // SC-4.2 — paidThisMonth sums payments in current month
   it('SC-4.2: paidThisMonth sums supplier_payments in current month only', async () => {
-    // Insert two payments this month and one last month.
+    // Seed a treasury account + one movement per payment (treasury_movement_id NOT NULL).
     await pg.query(
-      `INSERT INTO supplier_payments (id, organization_id, supplier_id, amount, created_at)
-       VALUES
-         (gen_random_uuid(), $1, 'sup-1', '300.00', now()),
-         (gen_random_uuid(), $1, 'sup-1', '700.00', now()),
-         (gen_random_uuid(), $1, 'sup-1', '500.00', now() - interval '2 months')`,
+      `WITH acct AS (
+         INSERT INTO treasury_accounts (id, organization_id, type, name, opening_balance, active, created_at, updated_at)
+         VALUES ('00000000-0000-4200-0000-000000000001', $1, 'caja', 'KPI-SC42', 0, true, now(), now())
+         RETURNING id
+       ),
+       m1 AS (
+         INSERT INTO treasury_movements (organization_id, from_account_id, amount, type, created_by)
+         SELECT $1, id, 300.00, 'salida', 'test' FROM acct RETURNING id
+       ),
+       m2 AS (
+         INSERT INTO treasury_movements (organization_id, from_account_id, amount, type, created_by)
+         SELECT $1, id, 700.00, 'salida', 'test' FROM acct RETURNING id
+       ),
+       m3 AS (
+         INSERT INTO treasury_movements (organization_id, from_account_id, amount, type, created_by)
+         SELECT $1, id, 500.00, 'salida', 'test' FROM acct RETURNING id
+       )
+       INSERT INTO supplier_payments (id, organization_id, supplier_id, treasury_movement_id, amount, created_at)
+       SELECT gen_random_uuid(), $1, 'sup-1', m1.id, 300.00, now() FROM m1
+       UNION ALL
+       SELECT gen_random_uuid(), $1, 'sup-1', m2.id, 700.00, now() FROM m2
+       UNION ALL
+       SELECT gen_random_uuid(), $1, 'sup-1', m3.id, 500.00, now() - interval '2 months' FROM m3`,
       [ORG],
     );
 
@@ -3025,12 +3043,21 @@ describe('getSupplierKpisForOrg', () => {
   // SC-4.2-tz — Bogota timezone: a payment timestamped in the prior Bogota month
   // must NOT appear in paidThisMonth even if it looks recent in UTC.
   it('SC-4.2-tz: payment in prior Bogota month is excluded from paidThisMonth', async () => {
-    // Insert one payment explicitly timestamped in the previous Bogota calendar month.
+    // Seed a treasury account + movement (treasury_movement_id NOT NULL).
     await pg.query(
-      `INSERT INTO supplier_payments (id, organization_id, supplier_id, amount, created_at)
-       VALUES
-         (gen_random_uuid(), $1, 'sup-tz', '999.00',
-          date_trunc('month', now() AT TIME ZONE 'America/Bogota') - interval '1 day')`,
+      `WITH acct AS (
+         INSERT INTO treasury_accounts (id, organization_id, type, name, opening_balance, active, created_at, updated_at)
+         VALUES ('00000000-0000-4201-0000-000000000001', $1, 'caja', 'KPI-SC42TZ', 0, true, now(), now())
+         RETURNING id
+       ),
+       mov AS (
+         INSERT INTO treasury_movements (organization_id, from_account_id, amount, type, created_by)
+         SELECT $1, id, 999.00, 'salida', 'test' FROM acct RETURNING id
+       )
+       INSERT INTO supplier_payments (id, organization_id, supplier_id, treasury_movement_id, amount, created_at)
+       SELECT gen_random_uuid(), $1, 'sup-tz', mov.id, 999.00,
+              date_trunc('month', now() AT TIME ZONE 'America/Bogota') - interval '1 day'
+       FROM mov`,
       [ORG],
     );
 
@@ -3061,9 +3088,19 @@ describe('getSupplierKpisForOrg', () => {
   // SC-4.5 — org-scoped: other org's data is excluded
   it('SC-4.5: KPIs are org-scoped — other org data excluded', async () => {
     const OTHER_ORG = 'org-other';
+    // Seed treasury account + movement under OTHER_ORG (treasury_movement_id NOT NULL).
     await pg.query(
-      `INSERT INTO supplier_payments (id, organization_id, supplier_id, amount, created_at)
-       VALUES (gen_random_uuid(), $1, 'sup-x', '9999.00', now())`,
+      `WITH acct AS (
+         INSERT INTO treasury_accounts (id, organization_id, type, name, opening_balance, active, created_at, updated_at)
+         VALUES ('00000000-0000-4500-0000-000000000001', $1, 'caja', 'KPI-SC45', 0, true, now(), now())
+         RETURNING id
+       ),
+       mov AS (
+         INSERT INTO treasury_movements (organization_id, from_account_id, amount, type, created_by)
+         SELECT $1, id, 9999.00, 'salida', 'test' FROM acct RETURNING id
+       )
+       INSERT INTO supplier_payments (id, organization_id, supplier_id, treasury_movement_id, amount, created_at)
+       SELECT gen_random_uuid(), $1, 'sup-x', mov.id, 9999.00, now() FROM mov`,
       [OTHER_ORG],
     );
     await pg.query(

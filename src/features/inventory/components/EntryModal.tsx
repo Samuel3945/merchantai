@@ -1,8 +1,8 @@
 'use client';
 
-import type { InventoryProduct, MovementReason } from '@/actions/inventory';
-import { useState, useTransition } from 'react';
-import { recordMovement } from '@/actions/inventory';
+import type { InventoryProduct, MovementReason, PaymentContainer } from '@/actions/inventory';
+import { useEffect, useState, useTransition } from 'react';
+import { listPaymentContainers, recordMovement } from '@/actions/inventory';
 import { DatePicker } from '@/components/DatePicker';
 import { Button } from '@/components/ui/button';
 import {
@@ -19,11 +19,14 @@ import {
   entryFormSchema,
   reasonRequiresNotes,
 } from '../validation';
+import { ContainerSelector } from './ContainerSelector';
 import { SupplierSelect } from './SupplierSelect';
 
 const inputCls
   = 'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50';
 const labelCls = 'text-sm font-medium';
+
+type PaymentStatus = 'unpaid' | 'full' | 'partial';
 
 export function EntryModal({
   product,
@@ -40,18 +43,69 @@ export function EntryModal({
   const [expiresAt, setExpiresAt] = useState('');
   const [reason, setReason] = useState<MovementReason>('purchase');
   const [notes, setNotes] = useState('');
+
+  // Pay-at-entry state — only active when reason === 'purchase'.
+  const [paymentStatus, setPaymentStatus] = useState<PaymentStatus>('unpaid');
+  const [paymentAccountId, setPaymentAccountId] = useState('');
+  const [paymentAmount, setPaymentAmount] = useState('');
+  const [containers, setContainers] = useState<PaymentContainer[]>([]);
+  const [containerError, setContainerError] = useState<string | null>(null);
+
   const [pending, startTransition] = useTransition();
 
   const needsNotes = reasonRequiresNotes(reason);
   const needsSupplier = reason === 'purchase';
   const needsExpiry = product.isPerishable;
-  // Every visible field is mandatory before the entry can be confirmed.
+  const needsPayment = reason === 'purchase';
+  const needsContainer = needsPayment && (paymentStatus === 'full' || paymentStatus === 'partial');
+  const needsPartialAmount = needsPayment && paymentStatus === 'partial';
+
+  // Load payment containers when the user selects "purchase" as the reason.
+  useEffect(() => {
+    if (reason !== 'purchase') {
+      return;
+    }
+    let active = true;
+    listPaymentContainers()
+      .then((rows) => {
+        if (active) {
+          setContainerError(null);
+          setContainers(rows);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setContainerError(
+            'No se pudieron cargar los contenedores. Recargá la página.',
+          );
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [reason]);
+
+  // When the reason changes away from purchase, reset payment state.
+  function handleReasonChange(v: MovementReason) {
+    setReason(v);
+    if (v !== 'purchase') {
+      setPaymentStatus('unpaid');
+      setPaymentAccountId('');
+      setPaymentAmount('');
+    }
+  }
+
+  const totalCost = Number(qty) * Number(unitCost);
+
+  // Every visible field must be valid before confirm is enabled.
   const canConfirm
     = Number(qty) > 0
       && Number(unitCost) > 0
       && (!needsSupplier || supplierId.trim().length > 0)
       && (!needsExpiry || expiresAt.trim().length > 0)
-      && (!needsNotes || notes.trim().length > 0);
+      && (!needsNotes || notes.trim().length > 0)
+      && (!needsContainer || paymentAccountId.trim().length > 0)
+      && (!needsPartialAmount || (Number(paymentAmount) > 0 && Number(paymentAmount) < totalCost));
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -62,6 +116,9 @@ export function EntryModal({
       expiresAt,
       reason,
       notes,
+      paymentStatus,
+      paymentAmount: paymentStatus === 'partial' ? paymentAmount : undefined,
+      paymentAccountId: needsContainer ? paymentAccountId : undefined,
     });
     if (!parsed.success) {
       toast.error(parsed.error.issues[0]?.message ?? 'Revisá los datos');
@@ -78,6 +135,9 @@ export function EntryModal({
           supplierId: parsed.data.supplierId,
           expiresAt: parsed.data.expiresAt,
           notes: parsed.data.notes,
+          paymentStatus: parsed.data.paymentStatus,
+          paymentAmount: parsed.data.paymentAmount,
+          paymentAccountId: parsed.data.paymentAccountId,
         });
         toast.success(`Entrada registrada para "${product.name}"`);
         onSuccess();
@@ -119,7 +179,7 @@ export function EntryModal({
             <label className={labelCls}>Motivo</label>
             <Select
               value={reason}
-              onValueChange={v => setReason(v as MovementReason)}
+              onValueChange={v => handleReasonChange(v as MovementReason)}
               options={ENTRY_REASON_OPTIONS.map(o => ({
                 value: o.value,
                 label: o.label,
@@ -183,6 +243,62 @@ export function EntryModal({
               />
             </div>
           )}
+
+          {/* ── ¿Ya se pagó? — pay-at-entry (REQ-3.1, SC-2.x) ────────────── */}
+          {needsPayment && (
+            <>
+              <div>
+                <label className={labelCls}>¿Ya se pagó?</label>
+                <Select
+                  value={paymentStatus}
+                  onValueChange={v => setPaymentStatus(v as PaymentStatus)}
+                  options={[
+                    { value: 'unpaid', label: 'No, queda pendiente' },
+                    { value: 'full', label: 'Sí, pagué el total' },
+                    { value: 'partial', label: 'Sí, pagué una parte' },
+                  ]}
+                />
+              </div>
+              {needsContainer && (
+                <div>
+                  <label className={labelCls}>
+                    ¿De dónde sale el dinero?
+                    {' '}
+                    <span className="text-destructive">*</span>
+                  </label>
+                  <ContainerSelector
+                    accounts={containers}
+                    value={paymentAccountId}
+                    onChange={setPaymentAccountId}
+                  />
+                  {containerError && (
+                    <p className="mt-1 text-sm text-destructive">{containerError}</p>
+                  )}
+                </div>
+              )}
+              {needsPartialAmount && (
+                <div>
+                  <label className={labelCls}>
+                    Monto que pagás ahora
+                    {' '}
+                    <span className="text-destructive">*</span>
+                  </label>
+                  <input
+                    required
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    max={totalCost > 0 ? totalCost : undefined}
+                    value={paymentAmount}
+                    onChange={e => setPaymentAmount(e.target.value)}
+                    className={inputCls}
+                    placeholder={totalCost > 0 ? `Máximo ${totalCost.toFixed(2)}` : ''}
+                  />
+                </div>
+              )}
+            </>
+          )}
+
           <DialogFooter>
             <Button type="button" variant="secondary" onClick={onClose}>
               Cancelar
