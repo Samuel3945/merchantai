@@ -217,6 +217,7 @@ const DDL = `
     stock_movement_id uuid,
     total_amount numeric(12,2) NOT NULL,
     paid_amount numeric(12,2) DEFAULT '0' NOT NULL,
+    credited_amount numeric(12,2) DEFAULT '0' NOT NULL,
     status "supplier_payable_status" DEFAULT 'open' NOT NULL,
     purchased_at timestamp DEFAULT now() NOT NULL,
     notes text,

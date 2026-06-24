@@ -189,6 +189,13 @@ export const exitFormSchema = z
       .trim()
       .optional()
       .transform(v => (v || null)),
+    // Optional: when reason === 'return_supplier', the supplier whose payables
+    // should be reduced. Omitting it keeps this a pure inventory exit (back-compat).
+    supplierId: z
+      .string()
+      .trim()
+      .optional()
+      .transform(v => (v || null)),
   })
   .superRefine((data, ctx) => {
     if (data.reason === 'manual' && !data.notes) {

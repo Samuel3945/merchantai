@@ -192,7 +192,7 @@ const DDL = `
     created_at timestamp DEFAULT now() NOT NULL
   );
 
-  -- Supplier payables: one header per purchase entry (migration 0065)
+  -- Supplier payables: one header per purchase entry (migration 0065 + 0068)
   CREATE TABLE supplier_payables (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     organization_id text NOT NULL,
@@ -200,6 +200,7 @@ const DDL = `
     stock_movement_id uuid REFERENCES stock_movements(id) ON DELETE RESTRICT,
     total_amount numeric(12,2) NOT NULL,
     paid_amount numeric(12,2) DEFAULT '0' NOT NULL,
+    credited_amount numeric(12,2) DEFAULT '0' NOT NULL,
     status "supplier_payable_status" DEFAULT 'open' NOT NULL,
     purchased_at timestamp DEFAULT now() NOT NULL,
     notes text,
