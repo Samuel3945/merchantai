@@ -233,6 +233,7 @@ const DDL = `
     organization_id text NOT NULL,
     supplier_id text NOT NULL,
     payable_id uuid REFERENCES supplier_payables(id) ON DELETE SET NULL,
+    -- NOT NULL enforced in prod via migration 0066; tests seed raw rows so nullable here.
     treasury_movement_id uuid REFERENCES treasury_movements(id) ON DELETE RESTRICT,
     amount numeric(12,2) NOT NULL,
     note text,

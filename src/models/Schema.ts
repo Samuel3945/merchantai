@@ -2375,11 +2375,11 @@ export const supplierPaymentsSchema = pgTable(
       () => supplierPayablesSchema.id,
       { onDelete: 'set null' },
     ),
-    // The salida treasury_movements row. RESTRICT: ledger row must not be orphaned.
-    treasuryMovementId: uuid('treasury_movement_id').references(
-      () => treasuryMovementsSchema.id,
-      { onDelete: 'restrict' },
-    ),
+    // The salida treasury_movements row. NOT NULL + RESTRICT: every payment must
+    // reference a real ledger entry (migration 0066 enforces NOT NULL in prod).
+    treasuryMovementId: uuid('treasury_movement_id')
+      .notNull()
+      .references(() => treasuryMovementsSchema.id, { onDelete: 'restrict' }),
     amount: numeric('amount', { precision: 12, scale: 2 }).notNull(),
     note: text('note'),
     createdBy: text('created_by'),

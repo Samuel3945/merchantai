@@ -2,6 +2,7 @@
 
 import type { SQL } from 'drizzle-orm';
 import type { SmartStockSettings } from '@/actions/smart-stock';
+import type { TreasuryAccountRow } from '@/libs/treasury';
 import { auth, clerkClient } from '@clerk/nextjs/server';
 import { and, desc, eq, gt, gte, inArray, isNotNull, lte, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
@@ -11,7 +12,10 @@ import { db } from '@/libs/db-context';
 import { fifoBatchOrder } from '@/libs/fifo-cogs';
 import { requirePanelModule } from '@/libs/panel-session';
 import { insertPurchasePayable } from '@/libs/supplier-payables';
-import { recordSupplierPaymentOutflow } from '@/libs/treasury';
+import {
+  listTreasuryAccounts as listTreasuryAccountsLib,
+  recordSupplierPaymentOutflow,
+} from '@/libs/treasury';
 import {
   expirationRiskCacheSchema,
   productsSchema,
@@ -822,4 +826,33 @@ export async function bulkRecordEntries(
   }
 
   return { created, failed };
+}
+
+// ── listPaymentContainers (S2-T4 companion) ───────────────────────────────────
+// Returns active treasury containers (caja, caja_fuerte, banco) for the org.
+// Called from EntryModal to populate the ContainerSelector for pay-at-entry.
+// Excludes 'transito' (Pendiente de ubicar) — purchases must not land there.
+// Requires 'inventory' module (same gate as the entry form).
+
+export type PaymentContainer = {
+  id: string;
+  name: string;
+  type: 'caja' | 'caja_fuerte' | 'banco';
+};
+
+export async function listPaymentContainers(): Promise<PaymentContainer[]> {
+  await requirePanelModule('inventory');
+  const tdb = await db();
+  const orgId = tdb.orgId;
+  const rawDb = db.unsafeNoOrgFilter(
+    'listPaymentContainers: treasury_accounts queried directly with explicit org filter',
+  );
+  const accounts: TreasuryAccountRow[] = await listTreasuryAccountsLib(rawDb, orgId);
+  return accounts
+    .filter(a => a.type === 'caja' || a.type === 'caja_fuerte' || a.type === 'banco')
+    .map(a => ({
+      id: a.id,
+      name: a.name,
+      type: a.type as 'caja' | 'caja_fuerte' | 'banco',
+    }));
 }
