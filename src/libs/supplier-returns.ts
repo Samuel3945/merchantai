@@ -5,6 +5,12 @@ import {
   supplierPayablesSchema,
 } from '@/models/Schema';
 
+// Executor is typed as `any` to bridge three compatible-but-structurally-distinct
+// types: plain Drizzle db (PGLite tests), Drizzle tx handle, and TenantDb / TenantDb-tx.
+// All exported function signatures are explicit; call sites are type-checked.
+// biome-ignore lint/suspicious/noExplicitAny: bridges Drizzle db/tx/TenantDb structural mismatch
+type Executor = any;
+
 // ── writeLotReturnCredit ──────────────────────────────────────────────────────
 //
 // Lot-specific credit write: targets ONE payable (the lot's own payable), NOT the
@@ -84,12 +90,6 @@ export async function writeLotReturnCredit(
     })
     .where(eq(supplierPayablesSchema.id, payableId));
 }
-
-// Executor is typed as `any` to bridge three compatible-but-structurally-distinct
-// types: plain Drizzle db (PGLite tests), Drizzle tx handle, and TenantDb / TenantDb-tx.
-// All exported function signatures are explicit; call sites are type-checked.
-// biome-ignore lint/suspicious/noExplicitAny: bridges Drizzle db/tx/TenantDb structural mismatch
-type Executor = any;
 
 // ── applyReturnCredit ─────────────────────────────────────────────────────────
 //

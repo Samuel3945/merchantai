@@ -211,8 +211,8 @@ export function ProductLotsDrawer({
                           </p>
                         )}
                       </div>
-                      {/* "Devolver al proveedor" button — only when lot has a linked payable */}
-                      {l.payableId != null && l.unitCost != null && (
+                      {/* "Devolver al proveedor" button — only when lot has a linked payable, supplier, and unit cost */}
+                      {l.payableId != null && l.supplierId != null && l.unitCost != null && (
                         <div className="mt-3 border-t pt-3">
                           <button
                             type="button"

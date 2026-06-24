@@ -1,8 +1,8 @@
 'use client';
 
-import type { PaymentContainer, ProductLot } from '@/actions/inventory';
+import type { ProductLot, RefundContainer } from '@/actions/inventory';
 import { useEffect, useState, useTransition } from 'react';
-import { listPaymentContainers } from '@/actions/inventory';
+import { listRefundContainers } from '@/actions/inventory';
 import { returnLot } from '@/actions/supplier-returns';
 import { Button } from '@/components/ui/button';
 import {
@@ -45,7 +45,7 @@ export function LotReturnModal({
 }) {
   const [qty, setQty] = useState('1');
   const [containerId, setContainerId] = useState('');
-  const [containers, setContainers] = useState<PaymentContainer[]>([]);
+  const [containers, setContainers] = useState<RefundContainer[]>([]);
   const [containerError, setContainerError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
@@ -70,13 +70,23 @@ export function LotReturnModal({
       && (!needsContainer || containerId.length > 0)
       && !pending;
 
-  // Load containers whenever the computed refundPortion becomes > 0.
+  // Clear stale container selection when needsContainer transitions to false.
+  // Avoids a confusing server error if the split re-evaluates under a concurrent
+  // payment and the previously-selected container is no longer relevant.
+  useEffect(() => {
+    if (!needsContainer) {
+      setContainerId('');
+    }
+  }, [needsContainer]);
+
+  // Load refund-eligible containers (caja_fuerte / banco only) when refundPortion > 0.
+  // Live POS cajas are excluded to prevent arqueo leaks.
   useEffect(() => {
     if (!needsContainer) {
       return;
     }
     let active = true;
-    listPaymentContainers()
+    listRefundContainers()
       .then((rows) => {
         if (active) {
           setContainerError(null);
@@ -113,6 +123,10 @@ export function LotReturnModal({
           toast.error('La cantidad supera las unidades disponibles en este lote');
         } else if (msg.includes('refund_container_required')) {
           toast.error('Seleccioná un contenedor para recibir el reembolso');
+        } else if (msg.includes('lot_not_found')) {
+          toast.error('El lote no fue encontrado. Recargá la página.');
+        } else if (msg.includes('payable_required')) {
+          toast.error('Este lote no tiene una deuda registrada con el proveedor.');
         } else {
           toast.error(msg);
         }

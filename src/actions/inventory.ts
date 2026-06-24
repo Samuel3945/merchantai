@@ -944,3 +944,31 @@ export async function listPaymentContainers(): Promise<PaymentContainer[]> {
       type: a.type as 'caja' | 'caja_fuerte' | 'banco',
     }));
 }
+
+// ── listRefundContainers ──────────────────────────────────────────────────────
+// Returns ONLY caja_fuerte and banco containers for supplier refund destinations.
+// Excludes live POS cajas (type='caja') to prevent arqueo leaks: injecting cash
+// into a live caja bypasses the blind cash-session closing count.
+// Design: POS-caja refunds are deferred; refunds must land in a non-session
+// container (caja_fuerte or banco) only.
+
+export type RefundContainer = {
+  id: string;
+  name: string;
+  type: 'caja_fuerte' | 'banco';
+};
+
+export async function listRefundContainers(): Promise<RefundContainer[]> {
+  const { orgId } = await requirePanelModule('inventory');
+  const rawDb = db.unsafeNoOrgFilter(
+    'listRefundContainers: treasury_accounts queried directly with explicit org filter',
+  );
+  const accounts: TreasuryAccountRow[] = await listTreasuryAccountsLib(rawDb, orgId);
+  return accounts
+    .filter(a => a.type === 'caja_fuerte' || a.type === 'banco')
+    .map(a => ({
+      id: a.id,
+      name: a.name,
+      type: a.type as 'caja_fuerte' | 'banco',
+    }));
+}

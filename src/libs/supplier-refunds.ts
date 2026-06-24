@@ -90,7 +90,7 @@ export async function returnLot(
     .for('update');
 
   if (!lot) {
-    throw new Error('qty_exceeds_remaining'); // lot not found — treat as guard failure
+    throw new Error('lot_not_found');
   }
 
   const remaining = Number(lot.remainingQty ?? 0);
@@ -116,6 +116,14 @@ export async function returnLot(
       ),
     )
     .for('update');
+
+  // Guard: a lot with no linked payable has no debt context — a direct call
+  // would produce a refund row with payable_id=null and no outstanding, which
+  // is semantically incomplete. The UI already hides the button for payable-less
+  // lots; this guard closes the direct-call path.
+  if (!payable) {
+    throw new Error('payable_required');
+  }
 
   // ── Step 3: Compute split math with fresh values ──────────────────────────
 

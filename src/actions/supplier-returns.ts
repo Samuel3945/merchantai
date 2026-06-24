@@ -2,10 +2,12 @@
 
 import type { ReturnLotResult } from '@/libs/supplier-refunds';
 import { auth } from '@clerk/nextjs/server';
+import { eq } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { db } from '@/libs/db-context';
 import { requirePanelModule } from '@/libs/panel-session';
 import { returnLot as returnLotLib } from '@/libs/supplier-refunds';
+import { treasuryAccountsSchema } from '@/models/Schema';
 
 const INVENTORY_PATH = '/dashboard/inventory';
 
@@ -51,6 +53,26 @@ export async function returnLot(
   }
 
   const tdb = await db();
+
+  // Defense-in-depth: reject a refund targeting a live POS caja (type='caja').
+  // Injecting cash into an open caja bypasses the blind cash-session arqueo
+  // (the closing count would mismatch). Only caja_fuerte and banco are valid.
+  if (input.refundContainerId) {
+    const rawDb = db.unsafeNoOrgFilter(
+      'supplier-returns returnLot: container type guard with explicit id filter',
+    );
+    const [account] = await rawDb
+      .select({ type: treasuryAccountsSchema.type })
+      .from(treasuryAccountsSchema)
+      .where(eq(treasuryAccountsSchema.id, input.refundContainerId));
+
+    if (!account) {
+      throw new Error('refund_container_not_found');
+    }
+    if (account.type === 'caja') {
+      throw new Error('refund_container_invalid: POS cajas are not allowed as refund destinations');
+    }
+  }
 
   const result = await tdb.transaction(async (tx) => {
     return returnLotLib(tx, {

@@ -132,6 +132,25 @@ const DDL = `
     handover_movement_id uuid,
     cash_session_id uuid,
     created_by text NOT NULL,
+    created_at timestamp DEFAULT now() NOT NULL,
+    CONSTRAINT treasury_mov_one_external CHECK (
+      num_nonnulls(from_account_id, to_account_id) = 2
+      OR (
+        num_nonnulls(from_account_id, to_account_id) = 1
+        AND type::text IN ('entrada', 'salida', 'gasto', 'consignacion', 'adjustment', 'handover', 'refund')
+      )
+    )
+  );
+
+  CREATE TABLE supplier_payments (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+    organization_id text NOT NULL,
+    supplier_id text NOT NULL,
+    payable_id uuid REFERENCES supplier_payables(id) ON DELETE SET NULL,
+    treasury_movement_id uuid NOT NULL REFERENCES treasury_movements(id) ON DELETE RESTRICT,
+    amount numeric(12,2) NOT NULL,
+    note text,
+    created_by text,
     created_at timestamp DEFAULT now() NOT NULL
   );
 
@@ -171,6 +190,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await pg.exec('DELETE FROM supplier_refunds');
+  await pg.exec('DELETE FROM supplier_payments');
   await pg.exec('DELETE FROM treasury_movements');
   await pg.exec('DELETE FROM supplier_payable_credits');
   await pg.exec('DELETE FROM supplier_payables');
@@ -394,9 +414,9 @@ describe('returnLot — SR-12: pure refund when payable is fully paid', () => {
       createdBy: 'user-sr12b',
     });
 
-    // Assert no supplier_payments row was created
+    // Assert no supplier_payments row was created (paidThisMonth KPI untouched)
     const payments = await pg.query<{ count: string }>(
-      `SELECT COUNT(*) as count FROM supplier_payable_credits`,
+      `SELECT COUNT(*) as count FROM supplier_payments`,
       [],
     );
 
@@ -582,5 +602,47 @@ describe('supplier_refunds — SR-16: TenantDb proxy — supplier_refunds must b
     expect(() => {
       tdb.insert(fakeTable);
     }).toThrow(/not registered as a tenant table/);
+  });
+});
+
+// ── SR-17: treasury_mov_one_external CHECK constraint ─────────────────────────
+// Proves the highest-risk migration change: the rewritten CHECK now permits
+// one-sided 'refund' rows (from=null, to=container) and still rejects one-sided
+// 'transfer' rows (which must always have both sides).
+
+describe('treasury_movements CHECK — SR-17: one-sided refund OK, one-sided transfer rejected', () => {
+  it('INSERTs a one-sided refund row (to=container, from=null) without error', async () => {
+    await seedContainer();
+
+    await expect(
+      pg.query(
+        `INSERT INTO treasury_movements
+           (organization_id, from_account_id, to_account_id, amount, type, created_by)
+         VALUES ($1, NULL, $2, '100.00', 'refund', 'user-sr17a')`,
+        [ORG, CONTAINER_ID],
+      ),
+    ).resolves.toBeDefined();
+
+    const rows = await pg.query<{ type: string; from_account_id: string | null }>(
+      `SELECT type, from_account_id FROM treasury_movements WHERE organization_id = $1`,
+      [ORG],
+    );
+
+    expect(rows.rows).toHaveLength(1);
+    expect(rows.rows[0]!.type).toBe('refund');
+    expect(rows.rows[0]!.from_account_id).toBeNull();
+  });
+
+  it('REJECTs a one-sided transfer row (from=null, to=container) with a CHECK violation', async () => {
+    await seedContainer();
+
+    await expect(
+      pg.query(
+        `INSERT INTO treasury_movements
+           (organization_id, from_account_id, to_account_id, amount, type, created_by)
+         VALUES ($1, NULL, $2, '100.00', 'transfer', 'user-sr17b')`,
+        [ORG, CONTAINER_ID],
+      ),
+    ).rejects.toThrow(/treasury_mov_one_external|check.*constraint|violates/i);
   });
 });

@@ -48,7 +48,7 @@ CREATE TABLE "supplier_refunds" (
   "amount" numeric(12,2) NOT NULL,
   "note" text,
   "created_by" text,
-  "created_at" timestamptz DEFAULT now() NOT NULL
+  "created_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
 
