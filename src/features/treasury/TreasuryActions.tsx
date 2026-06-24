@@ -4,7 +4,7 @@ import type { SupplierInvoiceRow, SupplierOutstandingRow } from '@/actions/treas
 import type { TreasuryAccountRow } from '@/libs/treasury';
 import { ArrowRightLeft, Building2, Plus, Tag } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { useEffect, useState, useTransition } from 'react';
+import { type ReactNode, useEffect, useState, useTransition } from 'react';
 import { getSupplierInvoicesAction, listSuppliersWithOutstanding, recordGasto, recordSupplierPaymentFromConsole } from '@/actions/treasury';
 import { Button } from '@/components/ui/button';
 import {
@@ -20,6 +20,32 @@ import {
 import { validateGasto } from './gastoValidation';
 
 // ── Registrar gasto modal ─────────────────────────────────────────────────────
+
+/**
+ * Labeled field wrapper for the gasto form. Each field gets a plain-language
+ * question as a persistent label plus an optional one-line hint, so a
+ * non-technical shop owner understands exactly what to enter (the placeholder
+ * alone disappears as soon as they start typing).
+ */
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label className="text-[13.5px] font-medium text-foreground">{label}</label>
+      {hint && (
+        <p className="text-[11.5px] leading-snug text-muted-foreground">{hint}</p>
+      )}
+      {children}
+    </div>
+  );
+}
 
 function GastoModal({
   accountRows,
@@ -110,7 +136,9 @@ function GastoModal({
             Registrar gasto
           </span>
           <p className="mt-0.5 text-[12.5px] text-muted-foreground">
-            Una salida de plata desde una caja fuerte o cuenta bancaria.
+            Anotá un pago que hiciste con la plata del negocio (arriendo,
+            servicios, domicilios, etc.). Decinos de dónde salió la plata y por
+            qué la gastaste.
           </p>
         </div>
 
@@ -122,42 +150,66 @@ function GastoModal({
           {hasEligible
             ? (
                 <>
-                  <Select
-                    value={fromAccountId}
-                    onValueChange={setFromAccountId}
-                    options={fromOptions}
-                    placeholder="Desde (contenedor de origen)"
-                  />
-                  <Select
-                    value={category}
-                    onValueChange={setCategory}
-                    options={categoryOptions}
-                    placeholder="Categoría del gasto"
-                  />
-                  <input
-                    className={cashInputCls}
-                    placeholder={
+                  <Field
+                    label="¿De dónde sale la plata?"
+                    hint="Elegí la caja fuerte o la cuenta del banco de donde vas a sacar el dinero para pagar."
+                  >
+                    <Select
+                      value={fromAccountId}
+                      onValueChange={setFromAccountId}
+                      options={fromOptions}
+                      placeholder="Elegí un lugar"
+                    />
+                  </Field>
+                  <Field
+                    label="¿Qué tipo de gasto es?"
+                    hint="Sirve para ordenar tus gastos y ver en qué se te va la plata."
+                  >
+                    <Select
+                      value={category}
+                      onValueChange={setCategory}
+                      options={categoryOptions}
+                      placeholder="Elegí una categoría"
+                    />
+                  </Field>
+                  <Field
+                    label={
                       category === 'otros'
-                        ? 'Motivo del gasto (requerido para Otros)'
-                        : 'Descripción (opcional)'
+                        ? '¿Por qué pagaste esto? (obligatorio)'
+                        : '¿Por qué pagaste esto? (opcional)'
                     }
-                    value={description}
-                    onChange={e => setDescription(e.target.value)}
-                  />
-                  <input
-                    className={cashInputCls}
-                    type="number"
-                    inputMode="decimal"
-                    min="0"
-                    step="any"
-                    placeholder="Monto"
-                    value={amount}
-                    onChange={e => setAmount(e.target.value)}
-                  />
-                  <div className="flex flex-col gap-1">
-                    <label className="text-xs text-muted-foreground">
-                      Fecha del gasto
-                    </label>
+                    hint="Escribilo en pocas palabras para acordarte después."
+                  >
+                    <input
+                      className={cashInputCls}
+                      placeholder={
+                        category === 'otros'
+                          ? 'Ej: arreglo del freezer'
+                          : 'Ej: recibo de luz de junio'
+                      }
+                      value={description}
+                      onChange={e => setDescription(e.target.value)}
+                    />
+                  </Field>
+                  <Field
+                    label="¿Cuánto pagaste?"
+                    hint="El valor total de la salida de plata, en pesos."
+                  >
+                    <input
+                      className={cashInputCls}
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      step="any"
+                      placeholder="Ej: 50000"
+                      value={amount}
+                      onChange={e => setAmount(e.target.value)}
+                    />
+                  </Field>
+                  <Field
+                    label="¿Qué día fue el gasto?"
+                    hint="Si fue hoy, dejalo como está."
+                  >
                     <input
                       className={cashInputCls}
                       type="date"
@@ -165,7 +217,7 @@ function GastoModal({
                       max={today}
                       onChange={e => setIncurredOn(e.target.value)}
                     />
-                  </div>
+                  </Field>
                   {error && (
                     <div className="text-xs text-destructive">{error}</div>
                   )}
@@ -173,8 +225,8 @@ function GastoModal({
               )
             : (
                 <p className="text-xs text-muted-foreground">
-                  Necesitás al menos una caja fuerte o cuenta bancaria para
-                  registrar gastos.
+                  Para registrar un gasto primero necesitás una caja fuerte o una
+                  cuenta de banco. Creá una con el botón «Agregar lugar».
                 </p>
               )}
         </div>
