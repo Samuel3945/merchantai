@@ -1,11 +1,11 @@
 'use client';
 
-import type { SupplierOutstandingRow } from '@/actions/treasury';
+import type { SupplierInvoiceRow, SupplierOutstandingRow } from '@/actions/treasury';
 import type { TreasuryAccountRow } from '@/libs/treasury';
 import { ArrowRightLeft, Building2, Plus, Tag } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { useState, useTransition } from 'react';
-import { listSuppliersWithOutstanding, recordGasto, recordSupplierPaymentFromConsole } from '@/actions/treasury';
+import { useEffect, useState, useTransition } from 'react';
+import { getSupplierInvoicesAction, listSuppliersWithOutstanding, recordGasto, recordSupplierPaymentFromConsole } from '@/actions/treasury';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -233,6 +233,35 @@ function SupplierPaymentModal({
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [invoices, setInvoices] = useState<SupplierInvoiceRow[]>([]);
+  const [loadingInvoices, setLoadingInvoices] = useState(false);
+
+  // Fetch per-invoice breakdown whenever the selected supplier changes.
+  // The `active` flag guards against stale responses when the supplier changes quickly.
+  useEffect(() => {
+    if (!supplierId) {
+      return;
+    }
+    let active = true;
+    Promise.resolve().then(async () => {
+      if (!active) {
+        return;
+      }
+      setLoadingInvoices(true);
+      setInvoices([]);
+      const res = await getSupplierInvoicesAction(supplierId);
+      if (!active) {
+        return;
+      }
+      if (res.ok) {
+        setInvoices(res.data);
+      }
+      setLoadingInvoices(false);
+    });
+    return () => {
+      active = false;
+    };
+  }, [supplierId]);
 
   const eligible = accountRows.filter(
     a => a.type === 'caja_fuerte' || a.type === 'banco',
@@ -254,6 +283,9 @@ function SupplierPaymentModal({
       });
     }
     if (!isOpen) {
+      setSupplierId('');
+      setInvoices([]);
+      setLoadingInvoices(false);
       onClose();
     }
   }
@@ -297,6 +329,7 @@ function SupplierPaymentModal({
         setFromAccountId('');
         setAmount('');
         setNote('');
+        setInvoices([]);
         setSuppliers([]); // force reload next open
         onClose();
         router.refresh();
@@ -357,10 +390,57 @@ function SupplierPaymentModal({
                         placeholder="Proveedor con deuda"
                       />
                       {selectedSupplier && (
-                        <p className="text-[11.5px] text-muted-foreground">
-                          Deuda total: $
-                          {selectedSupplier.totalOutstanding.toLocaleString('es-CO')}
-                        </p>
+                        <div className="space-y-1">
+                          <p className="text-[11.5px] text-muted-foreground">
+                            Deuda total: $
+                            {selectedSupplier.totalOutstanding.toLocaleString('es-CO')}
+                          </p>
+                          {loadingInvoices && (
+                            <p className="text-[11px] text-muted-foreground">
+                              Cargando facturas…
+                            </p>
+                          )}
+                          {!loadingInvoices && invoices.length === 0 && (
+                            <p className="text-[11px] text-muted-foreground">
+                              Sin facturas registradas.
+                            </p>
+                          )}
+                          {!loadingInvoices && invoices.length > 0 && (
+                            <ul className="mt-1 space-y-0.5">
+                              {invoices.map(inv => (
+                                <li
+                                  key={inv.payableId}
+                                  className="
+                                    flex items-center justify-between
+                                    text-[11px] text-muted-foreground
+                                  "
+                                >
+                                  <span className="truncate">
+                                    {inv.invoiceNumber
+                                      ? `N° ${inv.invoiceNumber}`
+                                      : `Sin N° · ${new Date(inv.purchasedAt).toLocaleDateString('es-CO', { year: 'numeric', month: '2-digit', day: '2-digit' })}`}
+                                  </span>
+                                  <span
+                                    className="
+                                      ml-3 shrink-0 font-medium tabular-nums
+                                    "
+                                  >
+                                    {`$${inv.outstanding.toLocaleString('es-CO')}`}
+                                    {' '}
+                                    <span className={
+                                      inv.status === 'partial'
+                                        ? 'text-blue-500'
+                                        : 'text-amber-500'
+                                    }
+                                    >
+                                      {`(${inv.status === 'partial' ? 'Parcial' : 'Pendiente'})`}
+                                    </span>
+                                  </span>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
                       )}
                       <Select
                         value={fromAccountId}
