@@ -1,10 +1,10 @@
 import { setRequestLocale } from 'next-intl/server';
 import { notFound } from 'next/navigation';
-import { fetchClientDetail } from '@/actions/fiados';
+import { fetchClientDetail } from '@/actions/creditos';
+import { CreditoDetailClient } from '@/features/creditos/CreditoDetailClient';
 import { TitleBar } from '@/features/dashboard/TitleBar';
-import { FiadoDetailClient } from '@/features/fiados/FiadoDetailClient';
 
-export default async function FiadoDetailPage(props: {
+export default async function CreditoDetailPage(props: {
   params: Promise<{ locale: string; clientKey: string }>;
 }) {
   const { locale, clientKey } = await props.params;
@@ -19,9 +19,9 @@ export default async function FiadoDetailPage(props: {
     <>
       <TitleBar
         title={detail.client.name}
-        description="Detalle del fiado e historial de movimientos."
+        description="Detalle del crédito e historial de movimientos."
       />
-      <FiadoDetailClient detail={detail} />
+      <CreditoDetailClient detail={detail} />
     </>
   );
 }

@@ -17,7 +17,7 @@ type Executor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 // Methods whose money lands in a bank/wallet account (not the physical drawer)
 // and therefore must be reconciled against the statement. Cash is the arqueo,
 // handled by cash_movements. Tarjeta/datáfono settles through the acquirer on
-// its own cycle and is intentionally OUT of scope for now. The fiado credit
+// its own cycle and is intentionally OUT of scope for now. The credito credit
 // portion is not money-in at all.
 const CASH_TOKENS = ['efectivo', 'cash'];
 const CARD_TOKENS = ['tarjeta', 'datafono', 'datáfono', 'card'];
@@ -27,7 +27,7 @@ export function methodNeedsReconciliation(method: string | null): boolean {
   if (!m) {
     return false;
   }
-  if (/fiado/.test(m)) {
+  if (/credito/.test(m)) {
     return false;
   }
   if (CASH_TOKENS.some(t => m.includes(t))) {
@@ -100,12 +100,12 @@ export async function recordSaleTransferReconciliations(
     .onConflictDoNothing();
 }
 
-// Creates ONE reconciliation row for a digital fiado abono and returns its id so
-// the covered fiado_movements can link to it (via transfer_reconciliation_id,
+// Creates ONE reconciliation row for a digital credito abono and returns its id so
+// the covered credito_movements can link to it (via transfer_reconciliation_id,
 // the digital twin of cash_movement_id). One real transfer = one row, even when
-// the abono pays down several fiados. Runs INSIDE the abono transaction because
+// the abono pays down several creditos. Runs INSIDE the abono transaction because
 // the movements must link it; the insert is trivial so the rollback risk is low.
-export async function createFiadoTransferReconciliation(
+export async function createCreditoTransferReconciliation(
   executor: Executor,
   args: {
     organizationId: string;
@@ -341,9 +341,9 @@ export async function bulkConfirmPending(
 // ── Investigation + resolution (F3) ──────────────────────────────────────────
 // A not_arrived transfer is NOT credit — it is a discrepancy to investigate. The
 // cashier on duty explains the comprobante they confirmed; the owner then closes
-// it with an outcome. 'receivable' (honest known customer -> fiado) is the only
-// outcome that needs orchestration (it touches the fiados ledger), so it lives in
-// the action layer to avoid a fiados <-> reconciliation import cycle. The lib
+// it with an outcome. 'receivable' (honest known customer -> credito) is the only
+// outcome that needs orchestration (it touches the creditos ledger), so it lives in
+// the action layer to avoid a creditos <-> reconciliation import cycle. The lib
 // here only does the tenant-scoped reads and the status writes.
 
 export type ResolutionType = NonNullable<TransferReconciliation['resolutionType']>;
@@ -377,7 +377,7 @@ export async function getReconciliationById(
 }
 
 // Resolves the originating sale + its customer notes for a sale-sourced row, so
-// the action can decide whether 'receivable' (fiado) is even possible.
+// the action can decide whether 'receivable' (credito) is even possible.
 export async function getReconciliationSale(
   executor: Executor,
   salePaymentId: string,
@@ -391,9 +391,9 @@ export async function getReconciliationSale(
   return row ?? null;
 }
 
-// Closes the investigation with an outcome. The fiado for 'receivable' is created
-// by the caller (action layer) and passed in as resolutionFiadoId.
-// `status` MUST be supplied by the action layer: 'resolved' for all loss/fiado/
+// Closes the investigation with an outcome. The credito for 'receivable' is created
+// by the caller (action layer) and passed in as resolutionCreditoId.
+// `status` MUST be supplied by the action layer: 'resolved' for all loss/credito/
 // cashier-liability paths; 'confirmed' for late-arrival (reuses confirmReconciliation).
 // `claimOpen` is only set for PÉRDIDA+RECLAMO (loss + active claim).
 export async function setReconciliationResolution(
@@ -404,7 +404,7 @@ export async function setReconciliationResolution(
     resolutionType: ResolutionType;
     resolvedBy: string;
     status: 'resolved' | 'confirmed';
-    resolutionFiadoId?: string | null;
+    resolutionCreditoId?: string | null;
     claimOpen?: boolean;
   },
 ): Promise<TransferReconciliation | null> {
@@ -415,7 +415,7 @@ export async function setReconciliationResolution(
       resolutionType: args.resolutionType,
       resolvedBy: args.resolvedBy,
       resolvedAt: new Date(),
-      resolutionFiadoId: args.resolutionFiadoId ?? null,
+      resolutionCreditoId: args.resolutionCreditoId ?? null,
       claimOpen: args.claimOpen ?? false,
     })
     .where(
@@ -525,7 +525,7 @@ export async function splitPartialArrival(
 
   // 2. Insert the remainder row. Inherits org, method, and salePaymentId from
   //    the original — the remainder is now the SINGLE live row holding that
-  //    sale_payment_id, so backfill idempotency holds and a later FIADO
+  //    sale_payment_id, so backfill idempotency holds and a later CREDITO
   //    resolution can still resolve the sale via getReconciliationSale. No
   //    resolution fields (claimOpen stays false by default, recoveryOfId null).
   const [remainderRow] = await executor

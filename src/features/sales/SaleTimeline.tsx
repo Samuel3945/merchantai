@@ -12,7 +12,7 @@ function money(v: string): string {
   return Number.isFinite(n) ? moneyFmt.format(n) : v;
 }
 
-// Compact day + time stamp: a sale's lifecycle can span days (a fiado paid weeks
+// Compact day + time stamp: a sale's lifecycle can span days (a credito paid weeks
 // later), so each beat carries its own date, not just the hour.
 const stampFmt = new Intl.DateTimeFormat('es-CO', {
   day: '2-digit',

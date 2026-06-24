@@ -1,12 +1,12 @@
 'use client';
 
-import type { ClientDetail, FiadoTimelineEntry } from '@/actions/fiados';
+import type { ClientDetail, CreditoTimelineEntry } from '@/actions/creditos';
 import { useState, useTransition } from 'react';
-import { abonarFiado, extenderPlazo } from '@/actions/fiados';
+import { abonarCredito, extenderPlazo } from '@/actions/creditos';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
-import { dueStateLabel, FIADO_PAYMENT_METHODS } from '@/libs/fiados-shared';
+import { CREDITO_PAYMENT_METHODS, dueStateLabel } from '@/libs/creditos-shared';
 import { Link, useRouter } from '@/libs/I18nNavigation';
 import { cn } from '@/utils/Helpers';
 import {
@@ -20,7 +20,7 @@ const inputCls
   = 'flex h-10 w-full rounded-lg border border-input bg-card px-3 text-sm outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring/30';
 
 const METHOD_LABEL = new Map<string, string>(
-  FIADO_PAYMENT_METHODS.map(m => [m.value, m.label]),
+  CREDITO_PAYMENT_METHODS.map(m => [m.value, m.label]),
 );
 
 function todayPlus(days: number): string {
@@ -31,7 +31,7 @@ function todayPlus(days: number): string {
 
 // ── Timeline ─────────────────────────────────────────────────────────────────
 
-function timelineCopy(m: FiadoTimelineEntry): {
+function timelineCopy(m: CreditoTimelineEntry): {
   title: string;
   amount: string | null;
   detail: string | null;
@@ -78,7 +78,7 @@ function timelineCopy(m: FiadoTimelineEntry): {
   }
 }
 
-function Timeline({ entries }: { entries: FiadoTimelineEntry[] }) {
+function Timeline({ entries }: { entries: CreditoTimelineEntry[] }) {
   if (entries.length === 0) {
     return (
       <div className="text-sm text-muted-foreground">Sin movimientos.</div>
@@ -179,7 +179,7 @@ function AbonoPanel({
     setError(null);
     startTransition(async () => {
       try {
-        await abonarFiado({
+        await abonarCredito({
           clientKey,
           amount: n,
           method,
@@ -212,7 +212,7 @@ function AbonoPanel({
         <Select
           value={method}
           onValueChange={setMethod}
-          options={FIADO_PAYMENT_METHODS.map(m => ({
+          options={CREDITO_PAYMENT_METHODS.map(m => ({
             value: m.value,
             label: m.label,
           }))}
@@ -236,10 +236,10 @@ function AbonoPanel({
 }
 
 function ExtenderPanel({
-  fiadoId,
+  creditoId,
   onDone,
 }: {
-  fiadoId: string;
+  creditoId: string;
   onDone: () => void;
 }) {
   const [newDate, setNewDate] = useState(() => todayPlus(15));
@@ -251,7 +251,7 @@ function ExtenderPanel({
     setError(null);
     startTransition(async () => {
       try {
-        await extenderPlazo({ fiadoId, newDueDate: newDate, reason: reason.trim() || null });
+        await extenderPlazo({ creditoId, newDueDate: newDate, reason: reason.trim() || null });
         onDone();
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Error al extender');
@@ -293,15 +293,15 @@ function ExtenderPanel({
 
 // ── Root ─────────────────────────────────────────────────────────────────────
 
-export function FiadoDetailClient({ detail }: { detail: ClientDetail }) {
+export function CreditoDetailClient({ detail }: { detail: ClientDetail }) {
   const router = useRouter();
   const [panel, setPanel] = useState<null | 'abono' | 'extender'>(null);
-  const { client, fiados, timeline } = detail;
+  const { client, creditos, timeline } = detail;
   const meta = DUE_STATE_META[client.dueState];
   const isPaid = client.balance <= 0;
-  // Extend operates on the most-urgent still-pending fiado.
-  const urgentFiadoId
-    = fiados.find(f => f.status === 'pending')?.id ?? fiados[0]?.id ?? '';
+  // Extend operates on the most-urgent still-pending credito.
+  const urgentCreditoId
+    = creditos.find(f => f.status === 'pending')?.id ?? creditos[0]?.id ?? '';
 
   function done() {
     setPanel(null);
@@ -311,13 +311,13 @@ export function FiadoDetailClient({ detail }: { detail: ClientDetail }) {
   return (
     <div className="space-y-6">
       <Link
-        href="/dashboard/fiados"
+        href="/dashboard/creditos"
         className="
           text-sm text-muted-foreground
           hover:underline
         "
       >
-        ← Volver a fiados
+        ← Volver a creditos
       </Link>
 
       <div className="
@@ -408,15 +408,15 @@ export function FiadoDetailClient({ detail }: { detail: ClientDetail }) {
           {panel === 'abono' && (
             <AbonoPanel clientKey={client.clientKey} balance={client.balance} onDone={done} />
           )}
-          {panel === 'extender' && urgentFiadoId && (
-            <ExtenderPanel fiadoId={urgentFiadoId} onDone={done} />
+          {panel === 'extender' && urgentCreditoId && (
+            <ExtenderPanel creditoId={urgentCreditoId} onDone={done} />
           )}
 
-          {/* Per-fiado breakdown */}
+          {/* Per-credito breakdown */}
           <div className="rounded-xl border bg-card p-4">
-            <div className="mb-2 text-sm font-medium">Fiados de este cliente</div>
+            <div className="mb-2 text-sm font-medium">Créditos de este cliente</div>
             <ul className="space-y-2">
-              {fiados.map((f) => {
+              {creditos.map((f) => {
                 const fm = DUE_STATE_META[f.dueState];
                 return (
                   <li

@@ -11,9 +11,9 @@ import { and, eq, isNull } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { ActionValidationError } from '@/libs/action-result';
 import { logAction } from '@/libs/audit-log';
+import { createCredito } from '@/libs/creditos';
 import { findOrCreateCustomer } from '@/libs/customers';
 import { db } from '@/libs/DB';
-import { createFiado } from '@/libs/fiados';
 import { requirePanelModule } from '@/libs/panel-session';
 import {
   bulkConfirmPending,
@@ -503,7 +503,7 @@ export async function confirmAllPendingTransfers(
 // Input for the captured customer when resolving as 'receivable'.
 // When supplied (by the View B capture UI), the cashier gives a name + at least
 // one contact (whatsapp or documentId) and a real customers row is found-or-created.
-export type FiadoCustomerInput = {
+export type CreditoCustomerInput = {
   customerName: string;
   whatsapp?: string | null;
   documentId?: string | null;
@@ -511,8 +511,8 @@ export type FiadoCustomerInput = {
 
 // Closes the investigation of a not_arrived / mismatch transfer with an outcome.
 // 'receivable' accepts an OPTIONAL customerInput: when a name is provided, a real
-// customers row is found-or-created and the fiado is linked to it (customer_id set);
-// when it is absent (the current panel button), it falls back to a legacy fiado
+// customers row is found-or-created and the credito is linked to it (customer_id set);
+// when it is absent (the current panel button), it falls back to a legacy credito
 // with a null customer_id so the existing flow keeps working until the capture UI
 // is wired in the View B redesign.
 // 'loss' and 'cashier_liability' just record the outcome; the audit trail is the
@@ -523,7 +523,7 @@ export type FiadoCustomerInput = {
 export async function resolveTransfer(
   id: string,
   resolutionType: ResolutionType,
-  customerInput?: FiadoCustomerInput,
+  customerInput?: CreditoCustomerInput,
   claimOpen?: boolean,
 ): Promise<ActionResult<TransferReconciliation>> {
   const { userId, orgId } = await requirePanelModule(MODULE);
@@ -559,11 +559,11 @@ export async function resolveTransfer(
         );
       }
 
-      let resolutionFiadoId: string | null = null;
+      let resolutionCreditoId: string | null = null;
       if (resolutionType === 'receivable') {
         if (!row.salePaymentId) {
           throw new ActionValidationError(
-            'Solo una venta con cliente puede pasar a fiado',
+            'Solo una venta con cliente puede pasar a crédito',
           );
         }
 
@@ -583,7 +583,7 @@ export async function resolveTransfer(
         // caller passes explicit customer data (the View B capture modal),
         // find-or-create a real customers row and link it (ADR-7: dedup on
         // whatsapp first, then documentId). When it is absent (the current
-        // panel button), fall back to a legacy fiado with a null customer_id so
+        // panel button), fall back to a legacy credito with a null customer_id so
         // the existing flow keeps working until the capture UI is wired.
         let customerId: string | null = null;
         const capturedName = customerInput?.customerName?.trim() ?? '';
@@ -598,7 +598,7 @@ export async function resolveTransfer(
           customerId = customer.id;
         }
 
-        const fiado = await createFiado(tx, {
+        const credito = await createCredito(tx, {
           organizationId: orgId,
           saleId: sale.saleId,
           originalAmount: owed,
@@ -606,10 +606,10 @@ export async function resolveTransfer(
           customerId,
           notes: sale.notes,
         });
-        if (!fiado) {
-          throw new ActionValidationError('No se pudo crear el fiado');
+        if (!credito) {
+          throw new ActionValidationError('No se pudo crear el crédito');
         }
-        resolutionFiadoId = fiado.id;
+        resolutionCreditoId = credito.id;
       }
 
       const updated = await setReconciliationResolution(tx, {
@@ -618,7 +618,7 @@ export async function resolveTransfer(
         resolutionType,
         resolvedBy: actor,
         status: 'resolved',
-        resolutionFiadoId,
+        resolutionCreditoId,
         claimOpen: resolutionType === 'loss' ? (claimOpen ?? false) : false,
       });
       if (!updated) {
@@ -635,7 +635,7 @@ export async function resolveTransfer(
       entityId: resolved.id,
       after: {
         resolutionType: resolved.resolutionType,
-        resolutionFiadoId: resolved.resolutionFiadoId,
+        resolutionCreditoId: resolved.resolutionCreditoId,
       },
     });
     revalidatePath(CASH_PATH);

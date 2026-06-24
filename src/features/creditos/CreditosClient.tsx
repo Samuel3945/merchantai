@@ -1,24 +1,24 @@
 'use client';
 
-import type { ClientDebt, FiadosOverview } from '@/actions/fiados';
-import type { FiadoDueState } from '@/libs/fiados-shared';
+import type { ClientDebt, CreditosOverview } from '@/actions/creditos';
+import type { CreditoDueState } from '@/libs/creditos-shared';
 import type { RangeOption } from '@/utils/DateRange';
 import { Search, X } from 'lucide-react';
 import { useId, useMemo, useState, useTransition } from 'react';
 import {
-  abonarFiado,
+  abonarCredito,
   extenderPlazo,
-  fetchFiadosHistory,
-  fetchFiadosOverview,
-} from '@/actions/fiados';
+  fetchCreditosHistory,
+  fetchCreditosOverview,
+} from '@/actions/creditos';
 import { DateRangePicker } from '@/components/DateRangePicker';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
 import {
+  CREDITO_PAYMENT_METHODS,
   dueStateLabel,
-  FIADO_PAYMENT_METHODS,
-} from '@/libs/fiados-shared';
+} from '@/libs/creditos-shared';
 import { Link } from '@/libs/I18nNavigation';
 import { addDays, todayBogota } from '@/utils/DateRange';
 import { cn } from '@/utils/Helpers';
@@ -59,7 +59,7 @@ function MetricCard({
 
 // ── Progress bar (saldo pagado) ──────────────────────────────────────────────
 
-function ProgressBar({ pct, state }: { pct: number; state: FiadoDueState }) {
+function ProgressBar({ pct, state }: { pct: number; state: CreditoDueState }) {
   return (
     <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
       <div
@@ -102,7 +102,7 @@ function AbonarForm({
     setNotice(null);
     startTransition(async () => {
       try {
-        const result = await abonarFiado({
+        const result = await abonarCredito({
           clientKey: client.clientKey,
           amount: n,
           method,
@@ -163,7 +163,7 @@ function AbonarForm({
             id={methodId}
             value={method}
             onValueChange={setMethod}
-            options={FIADO_PAYMENT_METHODS.map(m => ({
+            options={CREDITO_PAYMENT_METHODS.map(m => ({
               value: m.value,
               label: m.label,
             }))}
@@ -234,7 +234,7 @@ function ExtenderForm({
     startTransition(async () => {
       try {
         await extenderPlazo({
-          fiadoId: client.fiadoIds[0] ?? '',
+          creditoId: client.creditoIds[0] ?? '',
           newDueDate: newDate,
           reason: reason.trim() || null,
         });
@@ -391,11 +391,11 @@ function ClientCard({
           {' '}
           {relativeTime(client.lastMovementAt)}
         </span>
-        {client.fiadoCount > 1 && (
+        {client.creditoCount > 1 && (
           <span>
-            {client.fiadoCount}
+            {client.creditoCount}
             {' '}
-            fiados
+            créditos
           </span>
         )}
       </div>
@@ -411,7 +411,7 @@ function ClientCard({
           </Button>
         )}
         <Button size="sm" variant="secondary" asChild>
-          <Link href={`/dashboard/fiados/${encodeURIComponent(client.clientKey)}`}>
+          <Link href={`/dashboard/creditos/${encodeURIComponent(client.clientKey)}`}>
             Ver detalle
           </Link>
         </Button>
@@ -468,7 +468,7 @@ function EmptyState() {
 
 // ── Root ─────────────────────────────────────────────────────────────────────
 
-type Filter = 'all' | FiadoDueState;
+type Filter = 'all' | CreditoDueState;
 type Tab = 'pending' | 'history';
 
 // "Al día" was dropped: a tendero reads it as "no debe nada", but it actually
@@ -549,8 +549,8 @@ function filterAndSortClients(
   });
 }
 
-export function FiadosClient({ initial }: { initial: FiadosOverview }) {
-  const [data, setData] = useState<FiadosOverview>(initial);
+export function CreditosClient({ initial }: { initial: CreditosOverview }) {
+  const [data, setData] = useState<CreditosOverview>(initial);
   const [history, setHistory] = useState<ClientDebt[] | null>(null);
   const [tab, setTab] = useState<Tab>('pending');
   const [filter, setFilter] = useState<Filter>('all');
@@ -561,7 +561,7 @@ export function FiadosClient({ initial }: { initial: FiadosOverview }) {
   const [sort, setSort] = useState<SortKey>('balance_desc');
   const [pending, startTransition] = useTransition();
 
-  // Fiado-specific presets filter by due date (overdue + upcoming), unlike the
+  // Credito-specific presets filter by due date (overdue + upcoming), unlike the
   // dashboard's past-only windows. The range picker itself is the same.
   const presetOptions = useMemo<RangeOption[]>(() => {
     const today = todayBogota();
@@ -582,8 +582,8 @@ export function FiadosClient({ initial }: { initial: FiadosOverview }) {
   function reload() {
     startTransition(async () => {
       const [fresh, hist] = await Promise.all([
-        fetchFiadosOverview(),
-        history !== null ? fetchFiadosHistory() : Promise.resolve(null),
+        fetchCreditosOverview(),
+        history !== null ? fetchCreditosHistory() : Promise.resolve(null),
       ]);
       setData(fresh);
       if (hist) {
@@ -596,7 +596,7 @@ export function FiadosClient({ initial }: { initial: FiadosOverview }) {
     setTab('history');
     if (history === null) {
       startTransition(async () => {
-        setHistory(await fetchFiadosHistory());
+        setHistory(await fetchCreditosHistory());
       });
     }
   }
@@ -657,7 +657,7 @@ export function FiadosClient({ initial }: { initial: FiadosOverview }) {
               text-muted-foreground
             "
             >
-              Todavía no hay fiados pagados en el historial.
+              Todavía no hay créditos pagados en el historial.
             </div>
           )
         : (
@@ -800,7 +800,7 @@ export function FiadosClient({ initial }: { initial: FiadosOverview }) {
               value={search}
               onChange={e => setSearch(e.target.value)}
               placeholder="Buscar por nombre o teléfono…"
-              aria-label="Buscar fiado"
+              aria-label="Buscar crédito"
               className="
                 h-9 w-full rounded-lg border border-input bg-card px-9 text-sm
                 outline-none
@@ -840,7 +840,7 @@ export function FiadosClient({ initial }: { initial: FiadosOverview }) {
             value={sort}
             onValueChange={v => setSort(v as SortKey)}
             options={SORT_OPTIONS}
-            aria-label="Ordenar fiados"
+            aria-label="Ordenar créditos"
             className="
               h-9
               sm:w-52

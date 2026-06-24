@@ -34,7 +34,7 @@ const AUDIT_TAB: Tab = { key: 'audit', label: 'Auditoría' };
 
 export type SettingsClientProps = {
   initialPaymentMethods: PaymentMethodRow[];
-  fiadoEnabled: boolean;
+  creditoEnabled: boolean;
   business: BusinessTabValues;
   modules: ModulesTabValues;
   fiscal: FiscalTabValues;
@@ -48,7 +48,7 @@ export type SettingsClientProps = {
 
 export function SettingsClient({
   initialPaymentMethods,
-  fiadoEnabled,
+  creditoEnabled,
   business,
   modules,
   fiscal,
@@ -93,7 +93,7 @@ export function SettingsClient({
         {activeTab === 'payment-methods' && (
           <PaymentMethodsClient
             initialMethods={initialPaymentMethods}
-            fiadoEnabled={fiadoEnabled}
+            creditoEnabled={creditoEnabled}
           />
         )}
         {activeTab === 'modules' && (

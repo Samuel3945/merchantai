@@ -9,7 +9,7 @@
  *   S-12: cashier cannot mark PÉRDIDA (loss)
  *   S-13: cashier cannot mark CARGO A CAJERO (cashier_liability)
  *   S-14: cashier cannot trigger RECUPERACIÓN (recoverTransfer — future PR5 action)
- *   S-15: cashier CAN resolve FIADO (receivable) — gate must NOT fire
+ *   S-15: cashier CAN resolve CREDITO (receivable) — gate must NOT fire
  */
 
 import { PGlite } from '@electric-sql/pglite';
@@ -90,7 +90,7 @@ const SETUP_SQL = `
     resolution_type "transfer_resolution_type",
     resolved_by text,
     resolved_at timestamp,
-    resolution_fiado_id uuid,
+    resolution_credito_id uuid,
     claim_open boolean DEFAULT false NOT NULL,
     recovery_of_id uuid,
     remainder_reconciliation_id uuid,
@@ -225,12 +225,12 @@ describe('S-14: admin-only gate — cashier cannot trigger recoverTransfer', () 
   });
 });
 
-// ── S-15: Cashier CAN resolve FIADO (receivable) ─────────────────────────────
+// ── S-15: Cashier CAN resolve CREDITO (receivable) ─────────────────────────────
 // The admin gate must NOT fire for resolutionType='receivable'.
 // The action will still fail (no salePaymentId on the row), but the error
 // MUST be a business-logic validation, not a permission error.
 
-describe('S-15: cashier permission — FIADO resolution is cashier-level', () => {
+describe('S-15: cashier permission — CREDITO resolution is cashier-level', () => {
   it('does not return a permission error when org:member resolves as receivable', async () => {
     const { resolveTransfer } = await import('./transfer-reconciliation');
     h.orgRole = 'org:member';
@@ -246,7 +246,7 @@ describe('S-15: cashier permission — FIADO resolution is cashier-level', () =>
       // Must NOT be a permission error
       expect(result.error).not.toMatch(/propietario|admin/i);
       // Should be the business guard for missing sale link
-      expect(result.error).toMatch(/venta|fiado|saldo|cliente/i);
+      expect(result.error).toMatch(/venta|credito|saldo|cliente/i);
     }
   });
 

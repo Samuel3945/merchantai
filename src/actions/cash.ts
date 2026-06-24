@@ -1052,7 +1052,7 @@ export type MethodCollection = { name: string; amount: number };
 export type TodayCollections = { methods: MethodCollection[]; total: number };
 
 /**
- * Today's collections (sales + fiado abonos) bucketed by the org's REAL payment
+ * Today's collections (sales + credito abonos) bucketed by the org's REAL payment
  * methods — not a fixed Efectivo/Nequi/Daviplata list. If the business does not
  * have a Nequi method, Nequi never shows. Amounts are matched to each configured
  * method by name (case-insensitive); the cash method also absorbs the generic
@@ -1082,12 +1082,12 @@ export async function getTodayCollectionsByMethod(): Promise<TodayCollections> {
         FROM sale_payments sp
         JOIN sales s ON s.id = sp.sale_id
         WHERE s.organization_id = ${orgId}
-          AND sp.method NOT ILIKE '%fiado%'
+          AND sp.method NOT ILIKE '%credito%'
           AND (sp.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
               = (now() AT TIME ZONE 'America/Bogota')::date
         UNION ALL
         SELECT fm.method AS method, fm.amount AS amount
-        FROM fiado_movements fm
+        FROM credito_movements fm
         WHERE fm.organization_id = ${orgId}
           AND fm.type = 'payment'
           AND (fm.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
@@ -1111,7 +1111,7 @@ export async function getTodayCollectionsByMethod(): Promise<TodayCollections> {
   const result: MethodCollection[] = [];
   let total = 0;
   for (const m of methods) {
-    // Fiado/credit is a debt, not money into a method — never a collection bucket.
+    // Credito/credit is a debt, not money into a method — never a collection bucket.
     if (m.type === 'credit') {
       continue;
     }

@@ -30,7 +30,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { useConfirm } from '@/components/ui/confirm';
 import { Switch } from '@/components/ui/switch';
-import { FiadoTermField } from '@/features/settings/FiadoTermField';
+import { CreditoTermField } from '@/features/settings/CreditoTermField';
 import { ToggleRow } from './fields';
 import { useSettingSave } from './useSettingSave';
 
@@ -44,7 +44,7 @@ type TransferDetails = {
   notes?: string;
 };
 
-// Cash and credit (fiado) are system-managed and never appear as editable rows.
+// Cash and credit (credito) are system-managed and never appear as editable rows.
 function isEditable(type: PaymentMethodType): boolean {
   return type !== 'cash' && type !== 'credit';
 }
@@ -61,10 +61,10 @@ const labelCls = 'text-xs font-medium text-muted-foreground';
 
 export function PaymentMethodsClient({
   initialMethods,
-  fiadoEnabled: initialFiado,
+  creditoEnabled: initialCredito,
 }: {
   initialMethods: PaymentMethodRow[];
-  fiadoEnabled: boolean;
+  creditoEnabled: boolean;
 }) {
   const confirm = useConfirm();
   const [methods, setMethods] = useState(initialMethods);
@@ -72,7 +72,7 @@ export function PaymentMethodsClient({
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
-  const [fiado, setFiado] = useState(initialFiado);
+  const [credito, setCredito] = useState(initialCredito);
   const { save } = useSettingSave();
 
   const editableMethods = methods.filter(m => isEditable(m.type));
@@ -82,10 +82,10 @@ export function PaymentMethodsClient({
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
-  const handleToggleFiado = (next: boolean) => {
-    setFiado(next);
-    save('fiado-enabled', next ? 'true' : 'false', { notifyConfigChange: true })
-      .catch(() => setFiado(!next));
+  const handleToggleCredito = (next: boolean) => {
+    setCredito(next);
+    save('credito-enabled', next ? 'true' : 'false', { notifyConfigChange: true })
+      .catch(() => setCredito(!next));
   };
 
   const handleDragEnd = (event: DragEndEvent) => {
@@ -188,7 +188,7 @@ export function PaymentMethodsClient({
       <div>
         <h2 className="text-lg font-semibold">Métodos del sistema</h2>
         <p className="text-sm text-muted-foreground">
-          Efectivo siempre está disponible. El fiado se activa con un toque.
+          Efectivo siempre está disponible. El crédito se activa con un toque.
         </p>
       </div>
 
@@ -214,13 +214,13 @@ export function PaymentMethodsClient({
         </div>
 
         <ToggleRow
-          label="Fiado / Crédito"
+          label="Crédito"
           description="Permite registrar ventas a crédito con saldo pendiente del cliente."
-          initial={fiado}
-          onCommit={handleToggleFiado}
+          initial={credito}
+          onCommit={handleToggleCredito}
         />
 
-        {fiado && <FiadoTermField />}
+        {credito && <CreditoTermField />}
       </div>
 
       <div className="flex items-center justify-between pt-2">

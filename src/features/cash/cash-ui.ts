@@ -52,7 +52,7 @@ const TYPE_META: Record<CashMovementType, TypeMeta> = {
   inventory_purchase: { direction: 'out', label: 'Compra de inventario' },
   withdrawal: { direction: 'out', label: 'Retiro de seguridad' },
   advance: { direction: 'out', label: 'Vale de empleado' },
-  fiado_payment: { direction: 'in', label: 'Cobro de fiado' },
+  credito_payment: { direction: 'in', label: 'Cobro de crédito' },
   reclassification: { direction: 'in', label: 'Reclasificación' },
 };
 

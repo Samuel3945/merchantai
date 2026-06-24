@@ -53,7 +53,7 @@ const DDL = `
     resolution_type "transfer_resolution_type",
     resolved_by text,
     resolved_at timestamp,
-    resolution_fiado_id uuid,
+    resolution_credito_id uuid,
     claim_open boolean DEFAULT false NOT NULL,
     recovery_of_id uuid,
     remainder_reconciliation_id uuid,

@@ -1,11 +1,11 @@
 'use client';
 
-import type { FiadoAgingBucket } from '@/actions/analytics';
-import type { FiadoReportRow } from '@/actions/reports';
+import type { CreditoAgingBucket } from '@/actions/analytics';
+import type { CreditoReportRow } from '@/actions/reports';
 import type { Column } from '@/features/reports/DataTable';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { getFiadosAging } from '@/actions/analytics';
-import { getFiadoReport } from '@/actions/reports';
+import { getCreditosAging } from '@/actions/analytics';
+import { getCreditoReport } from '@/actions/reports';
 import { DataTable } from '@/features/reports/DataTable';
 import { ChartCard, ColumnBars } from '@/features/reports/ReportCharts';
 import { ReportShell } from '@/features/reports/ReportShell';
@@ -31,7 +31,7 @@ function riskBadge(risk: string) {
   );
 }
 
-const columns: Column<FiadoReportRow>[] = [
+const columns: Column<CreditoReportRow>[] = [
   { header: 'Cliente', key: 'clientName' },
   { header: 'Ventas', key: 'saleCount', align: 'right' },
   {
@@ -51,14 +51,14 @@ const columns: Column<FiadoReportRow>[] = [
 
 const pdfCols = columns.map(c => ({ header: c.header, key: c.key, align: c.align }));
 
-export default function FiadosReportPage() {
-  const [rows, setRows] = useState<FiadoReportRow[]>([]);
-  const [aging, setAging] = useState<FiadoAgingBucket[]>([]);
+export default function CreditosReportPage() {
+  const [rows, setRows] = useState<CreditoReportRow[]>([]);
+  const [aging, setAging] = useState<CreditoAgingBucket[]>([]);
 
   const load = useCallback(async () => {
     const [report, buckets] = await Promise.all([
-      getFiadoReport(),
-      getFiadosAging(),
+      getCreditoReport(),
+      getCreditosAging(),
     ]);
     setRows(report);
     setAging(buckets);
@@ -66,10 +66,10 @@ export default function FiadosReportPage() {
 
   return (
     <ReportShell
-      title="Fiados pendientes"
+      title="Créditos pendientes"
       showDateRange={false}
-      onExportCSV={() => exportToCSV(rows as unknown as Record<string, unknown>[], 'fiados')}
-      onExportPDF={() => exportToPDF('Fiados pendientes', rows as unknown as Record<string, unknown>[], pdfCols)}
+      onExportCSV={() => exportToCSV(rows as unknown as Record<string, unknown>[], 'creditos')}
+      onExportPDF={() => exportToPDF('Créditos pendientes', rows as unknown as Record<string, unknown>[], pdfCols)}
     >
       {() => (
         <LoadOnce onLoad={load}>
@@ -97,7 +97,7 @@ export default function FiadosReportPage() {
               />
             </ChartCard>
           )}
-          <DataTable columns={columns} rows={rows} emptyMessage="Sin fiados pendientes" />
+          <DataTable columns={columns} rows={rows} emptyMessage="Sin créditos pendientes" />
         </LoadOnce>
       )}
     </ReportShell>

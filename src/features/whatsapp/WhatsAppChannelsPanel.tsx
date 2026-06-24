@@ -27,11 +27,11 @@ const CAPABILITIES: { key: string; label: string; sub: string }[] = [
   { key: 'products_lookup', label: 'Consultar productos', sub: 'Precios y disponibilidad' },
   { key: 'sales_query', label: 'Consultar ventas', sub: 'Lectura de reportes' },
   { key: 'orders', label: 'Tomar pedidos', sub: 'Crea ventas en POS' },
-  { key: 'fiados', label: 'Gestionar fiados', sub: 'Registrar y consultar' },
+  { key: 'creditos', label: 'Gestionar creditos', sub: 'Registrar y consultar' },
   { key: 'inventory_query', label: 'Consultar inventario', sub: 'Stock y alertas' },
   { key: 'cash_query', label: 'Consultar caja', sub: 'Solo lectura' },
   { key: 'price_changes', label: 'Cambiar precios', sub: 'Confirmación en chat' },
-  { key: 'alerts', label: 'Enviar alertas', sub: 'Stock bajo, fiados, caja' },
+  { key: 'alerts', label: 'Enviar alertas', sub: 'Stock bajo, creditos, caja' },
 ];
 
 const STATUS_LABEL: Record<WhatsAppChannelRow['status'], string> = {

@@ -52,7 +52,7 @@ export default function VentasMetodoPage() {
           <div className="space-y-4">
             <ChartCard
               title="Distribución por método de pago"
-              description="Si el grueso es fiado o transferencia, es plata que aún no tenés en mano."
+              description="Si el grueso es crédito o transferencia, es plata que aún no tenés en mano."
             >
               <DonutChart
                 data={rows as unknown as Record<string, unknown>[]}

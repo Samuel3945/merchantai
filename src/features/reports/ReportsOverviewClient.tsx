@@ -416,7 +416,7 @@ export function ReportsOverviewClient({ initial }: { initial: ReportsOverview })
               ? `${data.payment.topPct.toFixed(0)}% de las ventas · ${data.payment.methodCount} métodos`
               : 'Sin ventas en el período'
           }
-          explanation="Cómo te paga la gente. Si mucho es fiado o transferencia, ojo: es plata que todavía no tenés en mano."
+          explanation="Cómo te paga la gente. Si mucho es crédito o transferencia, ojo: es plata que todavía no tenés en mano."
           href="/dashboard/reports/ventas-metodo"
         />
 
@@ -461,12 +461,12 @@ export function ReportsOverviewClient({ initial }: { initial: ReportsOverview })
         />
 
         <ReportCard
-          title="Fiados pendientes"
-          value={money(data.fiados.totalOwed)}
-          secondary={`${data.fiados.clients} clientes · ${data.fiados.highRisk} riesgo alto`}
+          title="Créditos pendientes"
+          value={money(data.creditos.totalOwed)}
+          secondary={`${data.creditos.clients} clientes · ${data.creditos.highRisk} riesgo alto`}
           explanation="Plata que te deben y todavía no cobraste. Mientras más vieja la deuda, más difícil de recuperar. Cobrá los rojos primero."
-          tone={data.fiados.highRisk > 0 ? 'warn' : 'default'}
-          href="/dashboard/reports/fiados"
+          tone={data.creditos.highRisk > 0 ? 'warn' : 'default'}
+          href="/dashboard/reports/creditos"
         />
 
         <ReportCard

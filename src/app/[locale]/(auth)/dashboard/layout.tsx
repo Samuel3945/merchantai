@@ -84,20 +84,20 @@ export default async function DashboardLayout(props: DashboardLayoutProps) {
     }
   }
 
-  // Module-gated nav: hide Fiados/Empleados when their toggle is off so the menu
+  // Module-gated nav: hide Creditos/Empleados when their toggle is off so the menu
   // reflects exactly what the business has enabled in settings. We pass plain
   // booleans (not the built groups) because the nav groups carry Lucide icon
   // components, which cannot cross the Server→Client boundary as props. The
   // client nav components filter locally via buildNavGroups.
   const [
-    fiadoSetting,
+    creditoSetting,
     employeesSetting,
     deliverySetting,
     facturasSetting,
     suppliersSetting,
     aiSetting,
   ] = await Promise.all([
-    getAppSetting('fiado-enabled'),
+    getAppSetting('credito-enabled'),
     getAppSetting('modules.employees'),
     getAppSetting('modules.delivery'),
     getAppSetting('modules.facturas'),
@@ -110,7 +110,7 @@ export default async function DashboardLayout(props: DashboardLayoutProps) {
   // use case), so it stays hidden until AI preview is on AND its own toggle is.
   const aiEnabled = aiSetting.value === 'true';
   const navFlags: NavModuleFlags = {
-    fiado: fiadoSetting.value !== 'false',
+    credito: creditoSetting.value !== 'false',
     employees: employeesSetting.value !== 'false',
     delivery: aiEnabled && deliverySetting.value !== 'false',
     facturas: facturasSetting.value !== 'false',

@@ -3,7 +3,7 @@ import {
   daysUntilDue,
   deriveDueState,
   dueStateLabel,
-} from '@/libs/fiados-shared';
+} from '@/libs/creditos-shared';
 
 // Noon UTC keeps the local calendar date stable across UTC and the Americas, so
 // these day-difference assertions don't flake on the CI timezone.

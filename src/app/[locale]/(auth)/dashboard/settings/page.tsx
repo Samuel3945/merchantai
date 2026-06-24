@@ -26,7 +26,7 @@ const KEYS = [
   'modules.delivery',
   'modules.suppliers',
   'modules.facturas',
-  'fiado-enabled',
+  'credito-enabled',
   // AI preview gate (default OFF, flipped per-org by the operator in /platform).
   // Domicilios rides with it, so its module toggle is hidden until AI is on.
   'modules.ai',
@@ -79,7 +79,7 @@ export default async function DashboardSettingsPage(props: {
       />
       <SettingsClient
         initialPaymentMethods={paymentMethods}
-        fiadoEnabled={asBool(map['fiado-enabled'], true)}
+        creditoEnabled={asBool(map['credito-enabled'], true)}
         business={{
           'business_name': map.business_name,
           'business_phone': map.business_phone,

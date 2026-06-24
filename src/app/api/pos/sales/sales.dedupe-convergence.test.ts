@@ -99,7 +99,7 @@ const SCHEMA = `
   CREATE TYPE "cash_session_status" AS ENUM('open','closed');
   CREATE TYPE "cash_movement_type" AS ENUM(
     'sale','deposit','withdrawal','expense','salary','inventory_purchase',
-    'advance','adjustment','fiado_payment','reclassification'
+    'advance','adjustment','credito_payment','reclassification'
   );
   CREATE TYPE "audit_actor_type" AS ENUM('user','cashier','system','api');
 

@@ -1,6 +1,6 @@
-import type { FiadoDueState } from '@/libs/fiados-shared';
+import type { CreditoDueState } from '@/libs/creditos-shared';
 
-// Client-safe presentation helpers shared by the Fiados list and detail views:
+// Client-safe presentation helpers shared by the Creditos list and detail views:
 // COP formatting, dates in America/Bogota, relative time, and the semantic
 // colours for each due state (red overdue / amber due-soon / green on-track).
 
@@ -87,7 +87,7 @@ export type DueMeta = {
   bar: string;
 };
 
-export const DUE_STATE_META: Record<FiadoDueState, DueMeta> = {
+export const DUE_STATE_META: Record<CreditoDueState, DueMeta> = {
   overdue: {
     badge: 'destructive',
     tint: 'border-l-destructive',

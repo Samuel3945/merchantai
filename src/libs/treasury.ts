@@ -295,7 +295,7 @@ export async function createTreasuryAccount(
 }
 
 // Payment-method types that hold money in an account (vs the cash drawer, which
-// lives in cajas/caja_fuerte, or fiado, which is a debt). Each of these gets a
+// lives in cajas/caja_fuerte, or credito, which is a debt). Each of these gets a
 // linked `banco` treasury account so a transfer/digital payment has a real
 // destination — that is where the money lands when the transfer is confirmed.
 const MONEY_METHOD_TYPES = ['transfer', 'card', 'other'] as const;

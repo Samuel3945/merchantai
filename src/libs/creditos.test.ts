@@ -1,25 +1,25 @@
-import type { Executor } from '@/libs/fiados';
+import type { Executor } from '@/libs/creditos';
 import { PGlite } from '@electric-sql/pglite';
 import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
-  createFiado,
-  extendFiadoTermTx,
+  createCredito,
+  extendCreditoTermTx,
   isCashMethod,
   recordAbonoTx,
-} from '@/libs/fiados';
+} from '@/libs/creditos';
 import {
   appSettingsSchema,
   cashMovementsSchema,
   cashSessionsSchema,
-  fiadoMovementsSchema,
-  fiadosSchema,
+  creditoMovementsSchema,
+  creditosSchema,
 } from '@/models/Schema';
 
-// ── PGlite-backed integration tests for the fiados core ────────────────────
+// ── PGlite-backed integration tests for the creditos core ────────────────────
 //
-// These tests exercise createFiado, recordAbonoTx and extendFiadoTermTx
+// These tests exercise createCredito, recordAbonoTx and extendCreditoTermTx
 // against a real Postgres engine so we catch SQL shape problems, transaction
 // isolation gaps, and money-distribution bugs that unit tests on pure
 // functions can't.
@@ -32,10 +32,10 @@ let pg: PGlite;
 let db: Executor;
 
 const ENUMS = [
-  `CREATE TYPE "fiado_status" AS ENUM('pending', 'paid', 'written_off')`,
-  `CREATE TYPE "fiado_movement_type" AS ENUM('charge', 'payment', 'extension', 'writeoff', 'adjustment')`,
+  `CREATE TYPE "credito_status" AS ENUM('pending', 'paid', 'written_off')`,
+  `CREATE TYPE "credito_movement_type" AS ENUM('charge', 'payment', 'extension', 'writeoff', 'adjustment')`,
   `CREATE TYPE "cash_session_status" AS ENUM('open', 'closed')`,
-  `CREATE TYPE "cash_movement_type" AS ENUM('sale', 'deposit', 'expense', 'salary', 'inventory_purchase', 'withdrawal', 'adjustment', 'fiado_payment')`,
+  `CREATE TYPE "cash_movement_type" AS ENUM('sale', 'deposit', 'expense', 'salary', 'inventory_purchase', 'withdrawal', 'adjustment', 'credito_payment')`,
   `CREATE TYPE "transfer_reconciliation_status" AS ENUM('pending', 'confirmed', 'not_arrived', 'mismatch', 'resolved')`,
   `CREATE TYPE "transfer_resolution_type" AS ENUM('receivable', 'loss', 'cashier_liability')`,
 ];
@@ -90,14 +90,14 @@ const DDL = `
     created_at timestamp DEFAULT now() NOT NULL
   );
 
-  CREATE TABLE fiados (
+  CREATE TABLE creditos (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     organization_id text NOT NULL,
     customer_id uuid,
     sale_id uuid,
     original_amount numeric(12, 2) NOT NULL,
     due_date date NOT NULL,
-    status "fiado_status" DEFAULT 'pending' NOT NULL,
+    status "credito_status" DEFAULT 'pending' NOT NULL,
     notes text,
     created_by text,
     created_at timestamp DEFAULT now() NOT NULL,
@@ -121,7 +121,7 @@ const DDL = `
     resolution_type "transfer_resolution_type",
     resolved_by text,
     resolved_at timestamp,
-    resolution_fiado_id uuid REFERENCES fiados(id) ON DELETE SET NULL,
+    resolution_credito_id uuid REFERENCES creditos(id) ON DELETE SET NULL,
     claim_open boolean DEFAULT false NOT NULL,
     recovery_of_id uuid,
     remainder_reconciliation_id uuid,
@@ -131,11 +131,11 @@ const DDL = `
     created_at timestamp DEFAULT now() NOT NULL
   );
 
-  CREATE TABLE fiado_movements (
+  CREATE TABLE credito_movements (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
-    fiado_id uuid NOT NULL REFERENCES fiados(id) ON DELETE CASCADE,
+    credito_id uuid NOT NULL REFERENCES creditos(id) ON DELETE CASCADE,
     organization_id text NOT NULL,
-    type "fiado_movement_type" NOT NULL,
+    type "credito_movement_type" NOT NULL,
     amount numeric(12, 2) DEFAULT '0' NOT NULL,
     method text,
     cash_movement_id uuid REFERENCES cash_movements(id) ON DELETE SET NULL,
@@ -147,10 +147,10 @@ const DDL = `
     created_at timestamp DEFAULT now() NOT NULL
   );
 
-  CREATE INDEX fiados_org_status_idx ON fiados (organization_id, status);
-  CREATE INDEX fiados_org_due_date_idx ON fiados (organization_id, due_date);
-  CREATE UNIQUE INDEX fiados_sale_unique_idx ON fiados (sale_id) WHERE sale_id IS NOT NULL;
-  CREATE INDEX fiado_movements_fiado_created_idx ON fiado_movements (fiado_id, created_at);
+  CREATE INDEX creditos_org_status_idx ON creditos (organization_id, status);
+  CREATE INDEX creditos_org_due_date_idx ON creditos (organization_id, due_date);
+  CREATE UNIQUE INDEX creditos_sale_unique_idx ON creditos (sale_id) WHERE sale_id IS NOT NULL;
+  CREATE INDEX credito_movements_credito_created_idx ON credito_movements (credito_id, created_at);
 `;
 
 const ORG = 'org-test';
@@ -170,16 +170,16 @@ beforeAll(async () => {
 });
 
 // Cleanup between tests to prevent cross-test contamination.
-let fiadoCounter = 0;
+let creditoCounter = 0;
 
 beforeEach(async () => {
-  await pg.exec('DELETE FROM fiado_movements');
+  await pg.exec('DELETE FROM credito_movements');
   await pg.exec('DELETE FROM transfer_reconciliations');
-  await pg.exec('DELETE FROM fiados');
+  await pg.exec('DELETE FROM creditos');
   await pg.exec('DELETE FROM cash_movements');
   await pg.exec('DELETE FROM cash_sessions');
-  await pg.exec('DELETE FROM app_settings WHERE key = \'fiados-default-term-days\'');
-  fiadoCounter = 0;
+  await pg.exec('DELETE FROM app_settings WHERE key = \'creditos-default-term-days\'');
+  creditoCounter = 0;
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -197,9 +197,9 @@ async function openSession(): Promise<string> {
   return s!.id;
 }
 
-async function seedFiado(overrides: Record<string, unknown> = {}): Promise<string> {
-  fiadoCounter++;
-  const idx = fiadoCounter;
+async function seedCredito(overrides: Record<string, unknown> = {}): Promise<string> {
+  creditoCounter++;
+  const idx = creditoCounter;
   const defaults = {
     id: UUID(idx),
     organizationId: ORG,
@@ -210,7 +210,7 @@ async function seedFiado(overrides: Record<string, unknown> = {}): Promise<strin
     saleId: UUID(1000 + idx),
     ...overrides,
   };
-  await db.insert(fiadosSchema).values(defaults as any);
+  await db.insert(creditosSchema).values(defaults as any);
   return String(defaults.id); // May be overridden — return actual id.
 }
 // Correct base64url of "Juan Perez||300".
@@ -220,11 +220,11 @@ async function closeAllSessions(): Promise<void> {
   await pg.exec(`UPDATE cash_sessions SET status = 'closed', closed_at = now()`);
 }
 
-// ── createFiado ──────────────────────────────────────────────────────────
+// ── createCredito ──────────────────────────────────────────────────────────
 
-describe('createFiado', () => {
-  it('creates a fiado row and a charge movement', async () => {
-    const result = await createFiado(db, {
+describe('createCredito', () => {
+  it('creates a credito row and a charge movement', async () => {
+    const result = await createCredito(db, {
       organizationId: ORG,
       saleId: UUID(2001),
       originalAmount: '150.00',
@@ -235,23 +235,23 @@ describe('createFiado', () => {
 
     expect(result).not.toBeNull();
 
-    const fiadoId = result!.id;
+    const creditoId = result!.id;
 
-    const [fiado] = await db
+    const [credito] = await db
       .select()
-      .from(fiadosSchema)
-      .where(eq(fiadosSchema.id, fiadoId))
+      .from(creditosSchema)
+      .where(eq(creditosSchema.id, creditoId))
       .execute();
 
-    expect(fiado).toBeDefined();
-    expect(fiado!.originalAmount).toBe('150.00');
-    expect(fiado!.dueDate).toBe('2026-07-15');
-    expect(fiado!.status).toBe('pending');
+    expect(credito).toBeDefined();
+    expect(credito!.originalAmount).toBe('150.00');
+    expect(credito!.dueDate).toBe('2026-07-15');
+    expect(credito!.status).toBe('pending');
 
     const movements = await db
       .select()
-      .from(fiadoMovementsSchema)
-      .where(eq(fiadoMovementsSchema.fiadoId, fiadoId))
+      .from(creditoMovementsSchema)
+      .where(eq(creditoMovementsSchema.creditoId, creditoId))
       .execute();
 
     expect(movements).toHaveLength(1);
@@ -260,7 +260,7 @@ describe('createFiado', () => {
   });
 
   it('returns null for a zero amount', async () => {
-    const result = await createFiado(db, {
+    const result = await createCredito(db, {
       organizationId: ORG,
       saleId: UUID(2002),
       originalAmount: '0',
@@ -271,7 +271,7 @@ describe('createFiado', () => {
   });
 
   it('returns null for a negative amount', async () => {
-    const result = await createFiado(db, {
+    const result = await createCredito(db, {
       organizationId: ORG,
       saleId: UUID(2003),
       originalAmount: '-50.00',
@@ -282,7 +282,7 @@ describe('createFiado', () => {
   });
 
   it('is idempotent on saleId (onConflictDoNothing returns null)', async () => {
-    const first = await createFiado(db, {
+    const first = await createCredito(db, {
       organizationId: ORG,
       saleId: UUID(2004),
       originalAmount: '200.00',
@@ -293,8 +293,8 @@ describe('createFiado', () => {
     expect(first).not.toBeNull();
 
     // onConflictDoNothing suppresses the duplicate but .returning() gets no row,
-    // so createFiado returns null — the caller treats null as "already done."
-    const second = await createFiado(db, {
+    // so createCredito returns null — the caller treats null as "already done."
+    const second = await createCredito(db, {
       organizationId: ORG,
       saleId: UUID(2004),
       originalAmount: '999.00',
@@ -307,15 +307,15 @@ describe('createFiado', () => {
     // Still only one charge movement.
     const movements = await db
       .select()
-      .from(fiadoMovementsSchema)
-      .where(eq(fiadoMovementsSchema.fiadoId, first!.id))
+      .from(creditoMovementsSchema)
+      .where(eq(creditoMovementsSchema.creditoId, first!.id))
       .execute();
 
     expect(movements).toHaveLength(1);
   });
 
   it('uses explicit dueDate when provided', async () => {
-    const result = await createFiado(db, {
+    const result = await createCredito(db, {
       organizationId: ORG,
       saleId: UUID(2005),
       originalAmount: '50.00',
@@ -323,24 +323,24 @@ describe('createFiado', () => {
       createdBy: USER,
     });
 
-    const [fiado] = await db
+    const [credito] = await db
       .select()
-      .from(fiadosSchema)
-      .where(eq(fiadosSchema.id, result!.id))
+      .from(creditosSchema)
+      .where(eq(creditosSchema.id, result!.id))
       .execute();
 
-    expect(fiado!.dueDate).toBe('2026-12-25');
+    expect(credito!.dueDate).toBe('2026-12-25');
   });
 
   it('computes dueDate from the default term when not provided', async () => {
     await db.insert(appSettingsSchema).values({
       organizationId: ORG,
-      key: 'fiados-default-term-days',
+      key: 'creditos-default-term-days',
       value: '15',
     } as any);
 
     const createdAt = new Date('2026-06-01T12:00:00Z');
-    const result = await createFiado(db, {
+    const result = await createCredito(db, {
       organizationId: ORG,
       saleId: UUID(2006),
       originalAmount: '80.00',
@@ -348,13 +348,13 @@ describe('createFiado', () => {
       createdAt,
     });
 
-    const [fiado] = await db
+    const [credito] = await db
       .select()
-      .from(fiadosSchema)
-      .where(eq(fiadosSchema.id, result!.id))
+      .from(creditosSchema)
+      .where(eq(creditosSchema.id, result!.id))
       .execute();
 
-    expect(fiado!.dueDate).toBe('2026-06-16');
+    expect(credito!.dueDate).toBe('2026-06-16');
   });
 });
 
@@ -366,10 +366,10 @@ describe('recordAbonoTx', () => {
   });
 
   // base64url("Juan Perez||300") = SnVhbiBQZXJlenx8MzAw
-  // Uses the module-level constant defined after seedFiado.
+  // Uses the module-level constant defined after seedCredito.
 
-  it('partial abono reduces one fiado without settling it', async () => {
-    const fId = await seedFiado(/* uses defaults */);
+  it('partial abono reduces one credito without settling it', async () => {
+    const fId = await seedCredito(/* uses defaults */);
 
     const result = await recordAbonoTx(db, {
       organizationId: ORG,
@@ -381,21 +381,21 @@ describe('recordAbonoTx', () => {
 
     expect(result.applied).toBe(40);
     expect(result.remaining).toBe(0);
-    expect(result.paidFiadoIds).toEqual([]);
+    expect(result.paidCreditoIds).toEqual([]);
     expect(result.hitCaja).toBe(true);
     expect(result.cashMovementId).not.toBeNull();
 
-    const [fiado] = await db
+    const [credito] = await db
       .select()
-      .from(fiadosSchema)
-      .where(eq(fiadosSchema.id, fId))
+      .from(creditosSchema)
+      .where(eq(creditosSchema.id, fId))
       .execute();
 
-    expect(fiado!.status).toBe('pending');
+    expect(credito!.status).toBe('pending');
   });
 
-  it('exact abono settles the fiado', async () => {
-    const fId = await seedFiado();
+  it('exact abono settles the credito', async () => {
+    const fId = await seedCredito();
 
     const result = await recordAbonoTx(db, {
       organizationId: ORG,
@@ -407,19 +407,19 @@ describe('recordAbonoTx', () => {
 
     expect(result.applied).toBe(100);
     expect(result.remaining).toBe(0);
-    expect(result.paidFiadoIds).toEqual([fId]);
+    expect(result.paidCreditoIds).toEqual([fId]);
 
-    const [fiado] = await db
+    const [credito] = await db
       .select()
-      .from(fiadosSchema)
-      .where(eq(fiadosSchema.id, fId))
+      .from(creditosSchema)
+      .where(eq(creditosSchema.id, fId))
       .execute();
 
-    expect(fiado!.status).toBe('paid');
+    expect(credito!.status).toBe('paid');
   });
 
   it('overpayment leaves change as remaining', async () => {
-    const fId = await seedFiado();
+    const fId = await seedCredito();
 
     const result = await recordAbonoTx(db, {
       organizationId: ORG,
@@ -431,17 +431,17 @@ describe('recordAbonoTx', () => {
 
     expect(result.applied).toBe(100);
     expect(result.remaining).toBe(50);
-    expect(result.paidFiadoIds).toEqual([fId]);
+    expect(result.paidCreditoIds).toEqual([fId]);
   });
 
-  it('FIFO: distributes across multiple fiados oldest-first', async () => {
-    const oldId = await seedFiado({
+  it('FIFO: distributes across multiple creditos oldest-first', async () => {
+    const oldId = await seedCredito({
       id: UUID(10),
       saleId: UUID(2010),
       originalAmount: '100.00',
       dueDate: '2026-06-01',
     });
-    const newId = await seedFiado({
+    const newId = await seedCredito({
       id: UUID(11),
       saleId: UUID(2011),
       originalAmount: '200.00',
@@ -458,28 +458,28 @@ describe('recordAbonoTx', () => {
 
     expect(result.applied).toBe(250);
     expect(result.remaining).toBe(0);
-    expect(result.paidFiadoIds).toContain(oldId);
-    expect(result.paidFiadoIds).not.toContain(newId);
+    expect(result.paidCreditoIds).toContain(oldId);
+    expect(result.paidCreditoIds).not.toContain(newId);
 
-    const [oldFiado] = await db
+    const [oldCredito] = await db
       .select()
-      .from(fiadosSchema)
-      .where(eq(fiadosSchema.id, oldId))
+      .from(creditosSchema)
+      .where(eq(creditosSchema.id, oldId))
       .execute();
 
-    expect(oldFiado!.status).toBe('paid');
+    expect(oldCredito!.status).toBe('paid');
 
-    const [newFiado] = await db
+    const [newCredito] = await db
       .select()
-      .from(fiadosSchema)
-      .where(eq(fiadosSchema.id, newId))
+      .from(creditosSchema)
+      .where(eq(creditosSchema.id, newId))
       .execute();
 
-    expect(newFiado!.status).toBe('pending');
+    expect(newCredito!.status).toBe('pending');
   });
 
   it('digital method does NOT create a cash movement', async () => {
-    await seedFiado();
+    await seedCredito();
 
     const result = await recordAbonoTx(db, {
       organizationId: ORG,
@@ -496,7 +496,7 @@ describe('recordAbonoTx', () => {
 
   it('cash method without open session: auto-creates session, hitCaja=true', async () => {
     await closeAllSessions();
-    await seedFiado();
+    await seedCredito();
 
     const result = await recordAbonoTx(db, {
       organizationId: ORG,
@@ -523,14 +523,14 @@ describe('recordAbonoTx', () => {
 
     const movements = await db
       .select()
-      .from(fiadoMovementsSchema)
-      .where(eq(fiadoMovementsSchema.type, 'payment' as any))
+      .from(creditoMovementsSchema)
+      .where(eq(creditoMovementsSchema.type, 'payment' as any))
       .execute();
 
     expect(movements.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('throws when client has no pending fiados', async () => {
+  it('throws when client has no pending creditos', async () => {
     await expect(
       recordAbonoTx(db, {
         organizationId: ORG,
@@ -539,21 +539,21 @@ describe('recordAbonoTx', () => {
         method: 'efectivo',
         createdBy: USER,
       }),
-    ).rejects.toThrow('No se encontraron fiados pendientes');
+    ).rejects.toThrow('No se encontraron creditos pendientes');
   });
 
-  it('throws when method is "fiado"', async () => {
-    await seedFiado();
+  it('throws when method is "credito"', async () => {
+    await seedCredito();
 
     await expect(
       recordAbonoTx(db, {
         organizationId: ORG,
         clientKey: JUAN_KEY,
         amount: '50.00',
-        method: 'fiado',
+        method: 'credito',
         createdBy: USER,
       }),
-    ).rejects.toThrow('El abono no puede ser de tipo fiado');
+    ).rejects.toThrow('El abono no puede ser de tipo credito');
   });
 
   it('throws for zero amount', async () => {
@@ -581,7 +581,7 @@ describe('recordAbonoTx', () => {
   });
 
   it('Daviplata method is classified as digital (no cash movement)', async () => {
-    await seedFiado();
+    await seedCredito();
 
     const result = await recordAbonoTx(db, {
       organizationId: ORG,
@@ -597,7 +597,7 @@ describe('recordAbonoTx', () => {
   });
 
   it('records a note on the payment movement', async () => {
-    const fId = await seedFiado();
+    const fId = await seedCredito();
 
     await recordAbonoTx(db, {
       organizationId: ORG,
@@ -610,32 +610,32 @@ describe('recordAbonoTx', () => {
 
     const movements = await db
       .select()
-      .from(fiadoMovementsSchema)
-      .where(eq(fiadoMovementsSchema.fiadoId, fId))
+      .from(creditoMovementsSchema)
+      .where(eq(creditoMovementsSchema.creditoId, fId))
       .execute();
     const payments = movements.filter(m => m.type === 'payment');
 
     expect(payments[0]!.note).toBe('Abono parcial del viernes');
   });
 
-  it('settles a stale zero-balance fiado and continues to the next', async () => {
-    const fId = await seedFiado({
+  it('settles a stale zero-balance credito and continues to the next', async () => {
+    const fId = await seedCredito({
       id: UUID(20),
       saleId: UUID(2020),
       originalAmount: '100.00',
     });
     // Simulate prior full payment but status was never updated.
-    await db.insert(fiadoMovementsSchema).values({
-      fiadoId: fId,
+    await db.insert(creditoMovementsSchema).values({
+      creditoId: fId,
       organizationId: ORG,
       type: 'payment' as const,
       amount: '100.00',
       method: 'efectivo',
       createdBy: USER,
     } as any);
-    // Leave fiado.status = 'pending' (stale).
+    // Leave credito.status = 'pending' (stale).
 
-    await seedFiado({
+    await seedCredito({
       id: UUID(21),
       saleId: UUID(2021),
       originalAmount: '50.00',
@@ -651,8 +651,8 @@ describe('recordAbonoTx', () => {
     });
 
     // Both should be settled.
-    expect(result.paidFiadoIds).toContain(fId);
-    expect(result.paidFiadoIds.length).toBe(2);
+    expect(result.paidCreditoIds).toContain(fId);
+    expect(result.paidCreditoIds.length).toBe(2);
     expect(result.applied).toBe(50);
   });
 
@@ -666,19 +666,19 @@ describe('recordAbonoTx', () => {
   });
 });
 
-// ── extendFiadoTermTx ────────────────────────────────────────────────────
+// ── extendCreditoTermTx ────────────────────────────────────────────────────
 
-describe('extendFiadoTermTx', () => {
+describe('extendCreditoTermTx', () => {
   it('extends the due date and creates an extension movement', async () => {
-    const fId = await seedFiado({
+    const fId = await seedCredito({
       id: UUID(30),
       saleId: UUID(2030),
       dueDate: '2026-07-01',
     });
 
-    const result = await extendFiadoTermTx(db, {
+    const result = await extendCreditoTermTx(db, {
       organizationId: ORG,
-      fiadoId: fId,
+      creditoId: fId,
       newDueDate: '2026-08-15',
       reason: 'Cliente pidió más plazo',
       createdBy: USER,
@@ -687,18 +687,18 @@ describe('extendFiadoTermTx', () => {
     expect(result.dueDateBefore).toBe('2026-07-01');
     expect(result.dueDateAfter).toBe('2026-08-15');
 
-    const [fiado] = await db
+    const [credito] = await db
       .select()
-      .from(fiadosSchema)
-      .where(eq(fiadosSchema.id, fId))
+      .from(creditosSchema)
+      .where(eq(creditosSchema.id, fId))
       .execute();
 
-    expect(fiado!.dueDate).toBe('2026-08-15');
+    expect(credito!.dueDate).toBe('2026-08-15');
 
     const movements = await db
       .select()
-      .from(fiadoMovementsSchema)
-      .where(eq(fiadoMovementsSchema.fiadoId, fId))
+      .from(creditoMovementsSchema)
+      .where(eq(creditoMovementsSchema.creditoId, fId))
       .execute();
     const extensions = movements.filter(m => m.type === 'extension');
 
@@ -711,52 +711,52 @@ describe('extendFiadoTermTx', () => {
   });
 
   it('throws for invalid date format', async () => {
-    const fId = await seedFiado({ id: UUID(31), saleId: UUID(2031) });
+    const fId = await seedCredito({ id: UUID(31), saleId: UUID(2031) });
 
     await expect(
-      extendFiadoTermTx(db, {
+      extendCreditoTermTx(db, {
         organizationId: ORG,
-        fiadoId: fId,
+        creditoId: fId,
         newDueDate: 'not-a-date',
         createdBy: USER,
       }),
     ).rejects.toThrow('Fecha de vencimiento inválida');
   });
 
-  it('throws for a non-existent fiado', async () => {
+  it('throws for a non-existent credito', async () => {
     await expect(
-      extendFiadoTermTx(db, {
+      extendCreditoTermTx(db, {
         organizationId: ORG,
-        fiadoId: UUID(9999),
+        creditoId: UUID(9999),
         newDueDate: '2026-09-01',
         createdBy: USER,
       }),
-    ).rejects.toThrow('Fiado no encontrado o ya pagado');
+    ).rejects.toThrow('Credito no encontrado o ya pagado');
   });
 
-  it('throws for a paid fiado', async () => {
-    const fId = await seedFiado({
+  it('throws for a paid credito', async () => {
+    const fId = await seedCredito({
       id: UUID(32),
       saleId: UUID(2032),
       status: 'paid' as const,
     });
 
     await expect(
-      extendFiadoTermTx(db, {
+      extendCreditoTermTx(db, {
         organizationId: ORG,
-        fiadoId: fId,
+        creditoId: fId,
         newDueDate: '2026-09-01',
         createdBy: USER,
       }),
-    ).rejects.toThrow('Fiado no encontrado o ya pagado');
+    ).rejects.toThrow('Credito no encontrado o ya pagado');
   });
 
   it('extension with no reason works (nullable note)', async () => {
-    const fId = await seedFiado({ id: UUID(33), saleId: UUID(2033) });
+    const fId = await seedCredito({ id: UUID(33), saleId: UUID(2033) });
 
-    const result = await extendFiadoTermTx(db, {
+    const result = await extendCreditoTermTx(db, {
       organizationId: ORG,
-      fiadoId: fId,
+      creditoId: fId,
       newDueDate: '2026-10-01',
       createdBy: USER,
     });
@@ -775,20 +775,20 @@ describe('money precision', () => {
 
   // Uses module-level JUAN_KEY (correct base64url encoding).
 
-  it('preserves cent-exact amounts across multiple fiados', async () => {
-    await seedFiado({
+  it('preserves cent-exact amounts across multiple creditos', async () => {
+    await seedCredito({
       id: UUID(40),
       saleId: UUID(2040),
       originalAmount: '33.33',
       dueDate: '2026-06-01',
     });
-    await seedFiado({
+    await seedCredito({
       id: UUID(41),
       saleId: UUID(2041),
       originalAmount: '66.67',
       dueDate: '2026-06-15',
     });
-    await seedFiado({
+    await seedCredito({
       id: UUID(42),
       saleId: UUID(2042),
       originalAmount: '100.00',
@@ -809,8 +809,8 @@ describe('money precision', () => {
     for (const id of [UUID(40), UUID(41), UUID(42)]) {
       const [f] = await db
         .select()
-        .from(fiadosSchema)
-        .where(eq(fiadosSchema.id, id))
+        .from(creditosSchema)
+        .where(eq(creditosSchema.id, id))
         .execute();
 
       expect(f!.status).toBe('paid');
@@ -818,7 +818,7 @@ describe('money precision', () => {
   });
 
   it('handles many small partial abonos without float drift', async () => {
-    const fId = await seedFiado({
+    const fId = await seedCredito({
       id: UUID(50),
       saleId: UUID(2050),
       originalAmount: '100.00',
@@ -835,19 +835,19 @@ describe('money precision', () => {
       });
     }
 
-    const [fiado] = await db
+    const [credito] = await db
       .select()
-      .from(fiadosSchema)
-      .where(eq(fiadosSchema.id, fId))
+      .from(creditosSchema)
+      .where(eq(creditosSchema.id, fId))
       .execute();
 
-    expect(fiado!.status).toBe('paid');
+    expect(credito!.status).toBe('paid');
 
-    // Sum all payment movements for this fiado.
+    // Sum all payment movements for this credito.
     const payments = await db
       .select()
-      .from(fiadoMovementsSchema)
-      .where(eq(fiadoMovementsSchema.fiadoId, fId))
+      .from(creditoMovementsSchema)
+      .where(eq(creditoMovementsSchema.creditoId, fId))
       .execute();
     const total = payments
       .filter(m => m.type === 'payment')
@@ -860,9 +860,9 @@ describe('money precision', () => {
 // ── Caja (cash drawer) integration ───────────────────────────────────────
 
 describe('Caja integration', () => {
-  it('cash abono creates exactly one cash_movements row with type fiado_payment', async () => {
+  it('cash abono creates exactly one cash_movements row with type credito_payment', async () => {
     const sessionId = await openSession();
-    await seedFiado({ id: UUID(60), saleId: UUID(2060) });
+    await seedCredito({ id: UUID(60), saleId: UUID(2060) });
 
     const result = await recordAbonoTx(db, {
       organizationId: ORG,
@@ -882,15 +882,15 @@ describe('Caja integration', () => {
       .execute();
 
     expect(cm).toBeDefined();
-    expect(cm!.type).toBe('fiado_payment');
+    expect(cm!.type).toBe('credito_payment');
     expect(cm!.amount).toBe('100.00');
     expect(cm!.sessionId).toBe(sessionId);
     expect(cm!.organizationId).toBe(ORG);
   });
 
-  it('fiado_payment is counted as income (entradas) in cash breakdown', async () => {
+  it('credito_payment is counted as income (entradas) in cash breakdown', async () => {
     const sessionId = await openSession();
-    await seedFiado({ id: UUID(61), saleId: UUID(2061) });
+    await seedCredito({ id: UUID(61), saleId: UUID(2061) });
 
     await recordAbonoTx(db, {
       organizationId: ORG,
@@ -903,16 +903,16 @@ describe('Caja integration', () => {
     const result = await db.execute(
       `SELECT COALESCE(SUM(amount), 0)::float8 AS entradas
        FROM cash_movements
-       WHERE session_id = '${sessionId}' AND type IN ('deposit', 'adjustment', 'fiado_payment')`,
+       WHERE session_id = '${sessionId}' AND type IN ('deposit', 'adjustment', 'credito_payment')`,
     );
     const entradas = Number((result.rows?.[0] as any)?.entradas ?? 0);
 
     expect(entradas).toBe(75);
   });
 
-  it('fiado_payment is NOT type sale (no double-count in cashSales)', async () => {
+  it('credito_payment is NOT type sale (no double-count in cashSales)', async () => {
     const sessionId = await openSession();
-    await seedFiado({ id: UUID(62), saleId: UUID(2062) });
+    await seedCredito({ id: UUID(62), saleId: UUID(2062) });
 
     await recordAbonoTx(db, {
       organizationId: ORG,
@@ -934,7 +934,7 @@ describe('Caja integration', () => {
 
   it('multiple cash abonos create separate cash movements', async () => {
     const sessionId = await openSession();
-    await seedFiado({ id: UUID(63), saleId: UUID(2063), originalAmount: '200.00' });
+    await seedCredito({ id: UUID(63), saleId: UUID(2063), originalAmount: '200.00' });
 
     await recordAbonoTx(db, {
       organizationId: ORG,
@@ -956,16 +956,16 @@ describe('Caja integration', () => {
       .from(cashMovementsSchema)
       .where(eq(cashMovementsSchema.sessionId, sessionId))
       .execute();
-    const fiadoPayments = cashMovements.filter(cm => cm.type === 'fiado_payment');
+    const creditoPayments = cashMovements.filter(cm => cm.type === 'credito_payment');
 
-    expect(fiadoPayments).toHaveLength(2);
-    expect(fiadoPayments[0]!.amount).toBe('100.00');
-    expect(fiadoPayments[1]!.amount).toBe('100.00');
+    expect(creditoPayments).toHaveLength(2);
+    expect(creditoPayments[0]!.amount).toBe('100.00');
+    expect(creditoPayments[1]!.amount).toBe('100.00');
   });
 
   it('digital abono does NOT create a cash movement even with open session', async () => {
     await openSession();
-    await seedFiado({ id: UUID(64), saleId: UUID(2064) });
+    await seedCredito({ id: UUID(64), saleId: UUID(2064) });
 
     const result = await recordAbonoTx(db, {
       organizationId: ORG,
@@ -983,6 +983,6 @@ describe('Caja integration', () => {
       .from(cashMovementsSchema)
       .execute();
 
-    expect(allCash.filter(cm => cm.type === 'fiado_payment')).toHaveLength(0);
+    expect(allCash.filter(cm => cm.type === 'credito_payment')).toHaveLength(0);
   });
 });

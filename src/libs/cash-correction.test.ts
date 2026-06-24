@@ -16,7 +16,7 @@ let db: Executor;
 
 const ENUMS = [
   `CREATE TYPE "cash_session_status" AS ENUM('open', 'closed')`,
-  `CREATE TYPE "cash_movement_type" AS ENUM('sale', 'deposit', 'expense', 'salary', 'inventory_purchase', 'withdrawal', 'adjustment', 'advance', 'fiado_payment')`,
+  `CREATE TYPE "cash_movement_type" AS ENUM('sale', 'deposit', 'expense', 'salary', 'inventory_purchase', 'withdrawal', 'adjustment', 'advance', 'credito_payment')`,
 ];
 
 const DDL = `

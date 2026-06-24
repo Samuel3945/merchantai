@@ -79,7 +79,7 @@ export type PostSaleSideEffectArgs = {
   // applied" sentinel. INVARIANT: this routine is the only writer of a
   // `sale.created` audit row for a POS sale, so the sentinel uniquely means
   // "applyPostSaleSideEffects completed for this sale". It exists for every sale
-  // regardless of payment method (cash, fiado, transfer), so it gates the
+  // regardless of payment method (cash, credito, transfer), so it gates the
   // non-idempotent customer upsert even when there is no cash movement.
   audit: {
     actor: AuditActor;

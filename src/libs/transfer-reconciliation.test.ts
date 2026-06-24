@@ -45,7 +45,7 @@ const DDL = `
     resolution_type "transfer_resolution_type",
     resolved_by text,
     resolved_at timestamp,
-    resolution_fiado_id uuid,
+    resolution_credito_id uuid,
     claim_open boolean DEFAULT false NOT NULL,
     recovery_of_id uuid,
     remainder_reconciliation_id uuid,
@@ -317,20 +317,20 @@ describe('setReconciliationResolution', () => {
     expect(row?.resolvedAt).not.toBeNull();
   });
 
-  it('links the fiado when resolved as receivable', async () => {
+  it('links the credito when resolved as receivable', async () => {
     const id = await seed({ status: 'not_arrived' });
-    const fiadoId = UUID(900);
+    const creditoId = UUID(900);
     const row = await setReconciliationResolution(db, {
       id,
       organizationId: ORG,
       resolutionType: 'receivable',
       resolvedBy: USER,
       status: 'resolved',
-      resolutionFiadoId: fiadoId,
+      resolutionCreditoId: creditoId,
     });
 
     expect(row?.resolutionType).toBe('receivable');
-    expect(row?.resolutionFiadoId).toBe(fiadoId);
+    expect(row?.resolutionCreditoId).toBe(creditoId);
   });
 
   it('does not touch another org row (tenant isolation)', async () => {

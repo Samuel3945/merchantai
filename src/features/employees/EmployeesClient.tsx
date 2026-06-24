@@ -110,7 +110,7 @@ function permsToMap(
 /**
  * Toggles one module with the cashier-bundle cascade. Granting "Caja registradora
  * (POS)" pre-ticks the cashier core bundle ({@link POS_CORE_MODULES}: caja,
- * ventas, fiados, clientes) as a convenience — the owner can untick. Unticking any
+ * ventas, creditos, clientes) as a convenience — the owner can untick. Unticking any
  * core module drops the POS grant, because a cashier needs the full bundle to
  * operate the counter. Non-core modules toggle independently — POS is never
  * implied by them.
@@ -140,7 +140,7 @@ const MODULE_ICONS: Record<string, typeof MonitorIcon> = {
   pos: MonitorIcon,
   cash: WalletIcon,
   sales: ShoppingCartIcon,
-  fiados: HandCoinsIcon,
+  creditos: HandCoinsIcon,
   products: PackageIcon,
   inventory: BoxesIcon,
   customers: UsersIcon,
@@ -235,7 +235,7 @@ function GrantFields({
       <ToggleCard
         icon={MonitorIcon}
         label="Caja registradora (POS)"
-        hint="Combo de cajero: activa Caja, Ventas, Fiados y Clientes. Si desmarcás cualquiera de esos, el cajero se apaga."
+        hint="Combo de cajero: activa Caja, Ventas, Créditos y Clientes. Si desmarcás cualquiera de esos, el cajero se apaga."
         checked={!!modules.pos}
         onToggle={() => onToggleModule('pos')}
         highlighted

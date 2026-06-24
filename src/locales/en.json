@@ -1,7 +1,7 @@
 {
   "Index": {
     "meta_title": "MyMerchantAI — El punto de venta con Inteligencia Artificial para tu negocio",
-    "meta_description": "Vende más rápido, controla tu inventario en tiempo real, gestiona los fiados y pregúntale a tu negocio en lenguaje natural. MyMerchantAI es el POS inteligente hecho para los comercios de Latinoamérica."
+    "meta_description": "Vende más rápido, controla tu inventario en tiempo real, gestiona los creditos y pregúntale a tu negocio en lenguaje natural. MyMerchantAI es el POS inteligente hecho para los comercios de Latinoamérica."
   },
   "Navbar": {
     "sign_in": "Iniciar sesión",
@@ -16,7 +16,7 @@
   "Hero": {
     "badge": "Potenciado por IA · Hecho para Latinoamérica",
     "title": "El punto de venta <important>inteligente</important> que hace crecer tu negocio.",
-    "description": "Cobra en segundos, controla tu inventario en tiempo real, lleva los fiados sin enredos y pregúntale a tu negocio lo que quieras saber. Todo en un solo lugar, con el poder de la Inteligencia Artificial.",
+    "description": "Cobra en segundos, controla tu inventario en tiempo real, lleva los creditos sin enredos y pregúntale a tu negocio lo que quieras saber. Todo en un solo lugar, con el poder de la Inteligencia Artificial.",
     "primary_button": "Empieza gratis",
     "secondary_button": "Ver funciones"
   },
@@ -28,7 +28,7 @@
     "feature1_description": "Cobra en segundos desde cualquier dispositivo. Varios cajeros a la vez, pagos mixtos y cierre de caja con cuadre automático y alertas de fraude.",
     "feature2_title": "Inventario en tiempo real",
     "feature2_description": "El stock baja solo con cada venta. Recibe alertas de bajo inventario y de productos próximos a vencer para que nunca pierdas plata.",
-    "feature3_title": "Fiados sin enredos",
+    "feature3_title": "Creditos sin enredos",
     "feature3_description": "Lleva el control de quién te debe, cuánto y desde cuándo. Registra abonos y consulta el saldo de cada cliente al instante. Adiós al cuaderno.",
     "feature4_title": "Sales Manager AI",
     "feature4_description": "Pregúntale a tu negocio en español: «¿cuánto vendí esta semana?», «¿cuál es mi producto estrella?». La IA analiza tus datos y te responde con gráficos al instante.",
@@ -70,7 +70,7 @@
     "answer2": "Sí. Cada cajero entra con su propio acceso y tú ves en tiempo real quién vendió qué. El plan Gratis incluye un cajero y los planes pagos agregan más.",
     "question3": "¿Cómo funciona la Inteligencia Artificial?",
     "answer3": "Tu Sales Manager AI responde preguntas sobre tus ventas, inventario y clientes en lenguaje natural y te muestra gráficos. Además, un asistente de IA puede atender a tus clientes con la información de tu negocio. Cada plan incluye créditos de IA al mes.",
-    "question4": "¿Sirve para llevar los fiados de mis clientes?",
+    "question4": "¿Sirve para llevar los creditos de mis clientes?",
     "answer4": "Claro. Registra ventas a crédito y abonos, y consulta el saldo de cada cliente cuando quieras. Se acabó el cuaderno y las cuentas perdidas.",
     "question5": "¿Mi información está segura?",
     "answer5": "Sí. Cada negocio tiene su espacio aislado, con datos cifrados y respaldados en la nube. Solo tú y las personas que autorices pueden verlos.",
@@ -102,7 +102,7 @@
   },
   "DashboardLayout": {
     "meta_title": "Panel de MyMerchantAI",
-    "meta_description": "Gestiona ventas, inventario, fiados, clientes y reportes con IA desde el panel de MyMerchantAI."
+    "meta_description": "Gestiona ventas, inventario, creditos, clientes y reportes con IA desde el panel de MyMerchantAI."
   },
   "UserProfilePage": {
     "title_bar": "User Profile",

@@ -3,8 +3,8 @@ import {
   getClientPendingBalance,
   normalizeClientKey,
   recordAbono,
-  saleIdsForFiados,
-} from '@/libs/fiados';
+  saleIdsForCreditos,
+} from '@/libs/creditos';
 import { requirePosAuth } from '@/libs/pos-auth';
 
 export const runtime = 'nodejs';
@@ -17,7 +17,7 @@ type SettleBody = {
 
 // Cashier-app "marcar como pagado": records an abono for the client's full
 // remaining balance via the ledger (audited + Caja for efectivo), then every
-// covered fiado flips to paid. Replaces the old lossy status-flip.
+// covered credito flips to paid. Replaces the old lossy status-flip.
 export async function POST(req: Request): Promise<NextResponse> {
   const { ctx, errorResponse } = await requirePosAuth(req);
   if (errorResponse) {
@@ -52,7 +52,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       note: 'Marcar como pagado',
       createdBy: ctx.cashierId ?? ctx.cashierName ?? 'pos',
     });
-    const settledSaleIds = await saleIdsForFiados(ctx.organizationId, result.paidFiadoIds);
+    const settledSaleIds = await saleIdsForCreditos(ctx.organizationId, result.paidCreditoIds);
     return NextResponse.json({
       settledSaleIds,
       settled: settledSaleIds.length,
@@ -60,7 +60,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     });
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Error al saldar fiados' },
+      { error: err instanceof Error ? err.message : 'Error al saldar creditos' },
       { status: 400 },
     );
   }

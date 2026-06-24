@@ -2,8 +2,8 @@ import { auth } from '@clerk/nextjs/server';
 import { setRequestLocale } from 'next-intl/server';
 import { redirect } from 'next/navigation';
 import { getAppSetting } from '@/actions/app-settings';
+import { fetchCreditosOverview } from '@/actions/creditos';
 import { getLowStockItems, getMetrics, getStockByCategory } from '@/actions/dashboard';
-import { fetchFiadosOverview } from '@/actions/fiados';
 import { listWhatsAppChannels } from '@/actions/whatsapp-channels';
 import { DashboardClient } from '@/features/dashboard/DashboardClient';
 import { PlanPanel } from '@/features/dashboard/PlanPanel';
@@ -48,12 +48,12 @@ export default async function DashboardIndexPage(props: {
   const prevEnd = addDays(start, -1);
   const prevStart = addDays(prevEnd, -29);
 
-  // Range metrics drive the chart/KPIs/top-sellers; the fiado + low-stock lists
+  // Range metrics drive the chart/KPIs/top-sellers; the credito + low-stock lists
   // are current state, fetched once here (not in the client's range re-fetch).
-  const [metrics, fiado, lowStock, stockByCategory, whatsappChannels, aiSetting]
+  const [metrics, credito, lowStock, stockByCategory, whatsappChannels, aiSetting]
     = await Promise.all([
       getMetrics(start, end, prevStart, prevEnd),
-      fetchFiadosOverview(),
+      fetchCreditosOverview(),
       getLowStockItems(),
       getStockByCategory(),
       listWhatsAppChannels(),
@@ -69,7 +69,7 @@ export default async function DashboardIndexPage(props: {
     <>
       <DashboardClient
         initial={metrics}
-        fiado={fiado}
+        credito={credito}
         lowStock={lowStock}
         stockByCategory={stockByCategory}
         hasWhatsAppAgent={whatsappChannels.length > 0}

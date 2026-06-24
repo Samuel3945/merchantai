@@ -154,21 +154,21 @@ function RowMeta({ row }: { row: TransferReconciliation }) {
   );
 }
 
-// ── FIADO Customer Capture Modal ─────────────────────────────────────────────
+// ── CREDITO Customer Capture Modal ─────────────────────────────────────────────
 
-type FiadoModalState = {
+type CreditoModalState = {
   rowId: string;
   expectedAmount: string;
 };
 
-type FiadoModalProps = {
-  state: FiadoModalState | null;
+type CreditoModalProps = {
+  state: CreditoModalState | null;
   pending: boolean;
   onConfirm: (rowId: string, customerName: string, whatsapp: string, documentId: string) => void;
   onClose: () => void;
 };
 
-function FiadoModal({ state, pending, onConfirm, onClose }: FiadoModalProps) {
+function CreditoModal({ state, pending, onConfirm, onClose }: CreditoModalProps) {
   const [customerName, setCustomerName] = useState('');
   const [whatsapp, setWhatsapp] = useState('');
   const [documentId, setDocumentId] = useState('');
@@ -191,11 +191,11 @@ function FiadoModal({ state, pending, onConfirm, onClose }: FiadoModalProps) {
       <DialogContent
         className="max-w-[440px]"
         onOpenAutoFocus={() => nameRef.current?.focus()}
-        aria-describedby="fiado-dialog-description"
+        aria-describedby="credito-dialog-description"
       >
         <DialogHeader>
-          <DialogTitle>Cobrar como fiado</DialogTitle>
-          <DialogDescription id="fiado-dialog-description">
+          <DialogTitle>Cobrar como crédito</DialogTitle>
+          <DialogDescription id="credito-dialog-description">
             Registrá quién asume la deuda para que el agente pueda cobrarla
             después.
             {state && (
@@ -210,7 +210,7 @@ function FiadoModal({ state, pending, onConfirm, onClose }: FiadoModalProps) {
           {/* Customer name — required */}
           <div className="flex flex-col gap-1.5">
             <label
-              htmlFor="fiado-customer-name"
+              htmlFor="credito-customer-name"
               className="text-xs font-semibold"
             >
               Nombre completo
@@ -218,7 +218,7 @@ function FiadoModal({ state, pending, onConfirm, onClose }: FiadoModalProps) {
               <span className="text-destructive" aria-hidden="true">*</span>
             </label>
             <input
-              id="fiado-customer-name"
+              id="credito-customer-name"
               ref={nameRef}
               className={cashInputCls}
               placeholder="Ej: Ana García"
@@ -231,13 +231,13 @@ function FiadoModal({ state, pending, onConfirm, onClose }: FiadoModalProps) {
           {/* WhatsApp — recommended */}
           <div className="flex flex-col gap-1.5">
             <label
-              htmlFor="fiado-whatsapp"
+              htmlFor="credito-whatsapp"
               className="text-xs font-semibold"
             >
               WhatsApp
             </label>
             <input
-              id="fiado-whatsapp"
+              id="credito-whatsapp"
               className={cashInputCls}
               type="tel"
               inputMode="tel"
@@ -251,13 +251,13 @@ function FiadoModal({ state, pending, onConfirm, onClose }: FiadoModalProps) {
           {/* Document ID — recommended */}
           <div className="flex flex-col gap-1.5">
             <label
-              htmlFor="fiado-document"
+              htmlFor="credito-document"
               className="text-xs font-semibold"
             >
               Documento (CC / NIT)
             </label>
             <input
-              id="fiado-document"
+              id="credito-document"
               className={cashInputCls}
               placeholder="Ej: 1234567890"
               value={documentId}
@@ -268,7 +268,7 @@ function FiadoModal({ state, pending, onConfirm, onClose }: FiadoModalProps) {
           {!hasContact && customerName.trim() !== '' && (
             <p className="text-xs text-warn">
               Te recomendamos al menos un contacto (WhatsApp o documento) para
-              que el agente pueda cobrar el fiado.
+              que el agente pueda cobrar el crédito.
             </p>
           )}
         </div>
@@ -285,7 +285,7 @@ function FiadoModal({ state, pending, onConfirm, onClose }: FiadoModalProps) {
               }
             }}
           >
-            Registrar fiado
+            Registrar crédito
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -442,8 +442,8 @@ export function TransferReconciliationPanel(props: {
   const [partialId, setPartialId] = useState<string | null>(null);
   const [partialAmount, setPartialAmount] = useState('');
 
-  // FIADO capture modal state.
-  const [fiadoModal, setFiadoModal] = useState<{ rowId: string; expectedAmount: string } | null>(null);
+  // CREDITO capture modal state.
+  const [creditoModal, setCreditoModal] = useState<{ rowId: string; expectedAmount: string } | null>(null);
 
   // Recovery modal state (admin only).
   const [recoveryModal, setRecoveryModal] = useState<{ rowId: string; expectedAmount: string } | null>(null);
@@ -470,7 +470,7 @@ export function TransferReconciliationPanel(props: {
     });
   }
 
-  function handleFiadoConfirm(
+  function handleCreditoConfirm(
     rowId: string,
     customerName: string,
     whatsapp: string,
@@ -483,7 +483,7 @@ export function TransferReconciliationPanel(props: {
           whatsapp: whatsapp || null,
           documentId: documentId || null,
         }),
-      () => setFiadoModal(null),
+      () => setCreditoModal(null),
     );
   }
 
@@ -541,13 +541,13 @@ export function TransferReconciliationPanel(props: {
     <div className="space-y-5">
       {/* Modals */}
       {/* key per row so the modal remounts with fresh inputs every open —
-          prevents the previous customer's data leaking into the next fiado. */}
-      <FiadoModal
-        key={fiadoModal?.rowId ?? 'fiado-closed'}
-        state={fiadoModal}
+          prevents the previous customer's data leaking into the next credito. */}
+      <CreditoModal
+        key={creditoModal?.rowId ?? 'credito-closed'}
+        state={creditoModal}
         pending={pending}
-        onConfirm={handleFiadoConfirm}
-        onClose={() => setFiadoModal(null)}
+        onConfirm={handleCreditoConfirm}
+        onClose={() => setCreditoModal(null)}
       />
       <RecoveryModal
         key={recoveryModal?.rowId ?? 'recovery-closed'}
@@ -623,8 +623,8 @@ export function TransferReconciliationPanel(props: {
                         setPartialId(partialId === r.id ? null : r.id);
                         setPartialAmount('');
                       }}
-                      onFiado={() =>
-                        setFiadoModal({ rowId: r.id, expectedAmount: r.expectedAmount })}
+                      onCredito={() =>
+                        setCreditoModal({ rowId: r.id, expectedAmount: r.expectedAmount })}
                     />
 
                     {/* PÉRDIDA — admin-only. Loss is loss: no claim distinction.
@@ -1103,20 +1103,20 @@ export function TransferReconciliationPanel(props: {
 // ── SolutionDropdown ─────────────────────────────────────────────────────────
 // Groups the three recovery paths for a transfer under investigation under one
 // "Solución" action: it arrived in full, it arrived partially, or it becomes a
-// fiado someone will pay. All cashier-level. Mirrors LossDropdown's inline menu.
+// credito someone will pay. All cashier-level. Mirrors LossDropdown's inline menu.
 
 type SolutionDropdownProps = {
   disabled: boolean;
   onArrivedFull: () => void;
   onArrivedPartial: () => void;
-  onFiado: () => void;
+  onCredito: () => void;
 };
 
 function SolutionDropdown({
   disabled,
   onArrivedFull,
   onArrivedPartial,
-  onFiado,
+  onCredito,
 }: SolutionDropdownProps) {
   const [open, setOpen] = useState(false);
 
@@ -1176,9 +1176,9 @@ function SolutionDropdown({
               hover:bg-muted
               focus:bg-muted
             "
-            onClick={() => pick(onFiado)}
+            onClick={() => pick(onCredito)}
           >
-            Queda en fiado
+            Queda en crédito
           </button>
         </div>
       )}
