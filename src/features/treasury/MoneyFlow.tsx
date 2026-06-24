@@ -1,7 +1,7 @@
 'use client';
 
 import type { TreasuryAccount } from '@/libs/treasury';
-import { ArrowRightLeft, Coins, Landmark, Lock, Monitor, Plus } from 'lucide-react';
+import { ArrowRightLeft, Coins, Landmark, Lock, Monitor, Plus, Trash2 } from 'lucide-react';
 import { money } from '@/features/cash/cash-ui';
 import { groupByType } from './utils';
 
@@ -61,6 +61,7 @@ function PlaceNode({
   account,
   accent,
   onMove,
+  onDelete,
 }: {
   account: TreasuryAccount;
   accent: { icon: string; bg: string };
@@ -69,6 +70,11 @@ function PlaceNode({
    * whose cash is managed at the device (open/close), not moved from treasury.
    */
   onMove?: (key: string) => void;
+  /**
+   * When omitted, the place cannot be deleted here — e.g. POS cajas, which are
+   * retired at the device, not from treasury. Only caja_fuerte / banco pass it.
+   */
+  onDelete?: (account: TreasuryAccount) => void;
 }) {
   return (
     <div
@@ -107,6 +113,23 @@ function PlaceNode({
           "
         >
           <ArrowRightLeft className="size-[15px]" />
+        </button>
+      )}
+      {onDelete && (
+        <button
+          type="button"
+          onClick={() => onDelete(account)}
+          title="Eliminar"
+          className="
+            flex size-8 shrink-0 items-center justify-center rounded-[9px]
+            border border-border bg-card text-muted-foreground opacity-0
+            transition-[opacity,background-color,color]
+            group-hover:opacity-100
+            hover:border-destructive/40 hover:bg-destructive/10
+            hover:text-destructive
+          "
+        >
+          <Trash2 className="size-[15px]" />
         </button>
       )}
     </div>
@@ -148,6 +171,11 @@ type MoneyFlowProps = {
    */
   onMoveFromPlace: (key: string) => void;
   /**
+   * Called when the user clicks the delete button on a caja_fuerte / banco.
+   * Opens the DeleteAccountModal from the parent.
+   */
+  onDeletePlace: (account: TreasuryAccount) => void;
+  /**
    * Called when the user clicks "Agregar lugar" from within the diagram.
    * Opens the CreateSlideover from the parent.
    */
@@ -167,6 +195,7 @@ export function MoneyFlow({
   sinUbicar,
   pendingCount,
   onMoveFromPlace,
+  onDeletePlace,
   onAddPlace,
 }: MoneyFlowProps) {
   const tree = groupByType(accounts);
@@ -347,8 +376,9 @@ export function MoneyFlow({
               account={p}
               accent={{ icon: 'text-success', bg: 'bg-success/10' }}
               // POS cajas are read-only here: their cash moves only at the device
-              // (open/close), never from treasury.
+              // (open/close), never from treasury — and they can't be deleted here.
               onMove={p.type === 'caja' ? undefined : onMoveFromPlace}
+              onDelete={p.type === 'caja' ? undefined : onDeletePlace}
             />
           ))}
           {bancosPlaces.map(p => (
@@ -357,6 +387,7 @@ export function MoneyFlow({
               account={p}
               accent={{ icon: 'text-chart-5', bg: 'bg-chart-5/10' }}
               onMove={onMoveFromPlace}
+              onDelete={onDeletePlace}
             />
           ))}
 

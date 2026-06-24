@@ -15,7 +15,7 @@ import {
 } from '@/libs/supplier-invoice-payment';
 import {
   createTreasuryAccount,
-  deactivateTreasuryAccount,
+  deleteTreasuryAccountToPending,
   ensurePaymentMethodAccounts,
   getTreasuryPosition,
   listTreasuryAccounts as listTreasuryAccountsLib,
@@ -92,10 +92,16 @@ export async function createCajaFuerte(
   }
 }
 
-/** Creates a banco account linked to a payment_methods row. */
+/**
+ * Creates a banco account. A banco is first and foremost a storage container
+ * for money you already hold. Linking a payment method is OPTIONAL: when set,
+ * confirmed transfers paid with that method auto-deposit into this account
+ * (see resolveBancoForMethod); when omitted, it's a manual container you move
+ * money into yourself (consignaciones, transfers).
+ */
 export async function createBanco(
   name: string,
-  paymentMethodId: string,
+  paymentMethodId: string | null,
   openingBalance: number | string,
 ): Promise<ActionResult<TreasuryAccountRow>> {
   const { userId, orgId } = await requirePanelModule('cash');
@@ -103,12 +109,7 @@ export async function createBanco(
   if (!trimmed) {
     return { ok: false, error: 'El nombre de la cuenta bancaria es requerido' };
   }
-  if (!paymentMethodId) {
-    return {
-      ok: false,
-      error: 'La cuenta bancaria debe estar vinculada a un método de pago',
-    };
-  }
+  const linkedMethodId = paymentMethodId && paymentMethodId.length > 0 ? paymentMethodId : null;
   const actor = await getActorName(userId);
   try {
     const account = await createTreasuryAccount(db, {
@@ -116,7 +117,7 @@ export async function createBanco(
       type: 'banco',
       name: trimmed,
       openingBalance,
-      paymentMethodId,
+      paymentMethodId: linkedMethodId,
       createdBy: actor,
     });
     await logAction({
@@ -125,7 +126,7 @@ export async function createBanco(
       action: 'treasury.account.created',
       entityType: 'treasury_account',
       entityId: account.id,
-      after: { type: 'banco', name: trimmed, paymentMethodId, openingBalance },
+      after: { type: 'banco', name: trimmed, paymentMethodId: linkedMethodId, openingBalance },
     });
     revalidatePath(CASH_PATH);
     return { ok: true, data: account };
@@ -148,25 +149,55 @@ export async function listTreasuryAccounts(): Promise<TreasuryAccountRow[]> {
   return listTreasuryAccountsLib(db, orgId);
 }
 
-/** Soft-deletes a treasury account (active → false). Row is kept for history. */
-export async function deactivateAccount(
+/**
+ * Deletes a treasury container (caja_fuerte / banco). Owner-only. The account's
+ * remaining balance is moved to "Pendiente de ubicar" and the row is soft-deleted
+ * (active=false) so historical movements stay intact. Returns the amount moved so
+ * the UI can confirm it to the user.
+ */
+export async function deleteAccount(
   accountId: string,
-): Promise<ActionResult<null>> {
+): Promise<ActionResult<{ movedAmount: number }>> {
+  // Owner-only: deleting a container is an owner-level treasury operation, the
+  // same gate transferEntreCajas uses — re-assert org:admin regardless of grants.
+  const { orgRole } = await auth();
+  if (orgRole !== 'org:admin') {
+    return { ok: false, error: 'Solo el propietario puede eliminar cuentas de tesorería' };
+  }
   const { userId, orgId } = await requirePanelModule('cash');
   if (!accountId) {
     return { ok: false, error: 'accountId es requerido' };
   }
-  await deactivateTreasuryAccount(db, accountId, orgId);
-  await logAction({
-    organizationId: orgId,
-    actor: { type: 'user', id: userId },
-    action: 'treasury.account.deactivated',
-    entityType: 'treasury_account',
-    entityId: accountId,
-    after: { active: false },
-  });
-  revalidatePath(CASH_PATH);
-  return { ok: true, data: null };
+  // A composite display key (e.g. "banco:Nequi") is never a real account id.
+  if (accountId.includes(':')) {
+    return { ok: false, error: 'Identificador de cuenta inválido' };
+  }
+  const actor = await getActorName(userId);
+  try {
+    const result = await db.transaction(tx =>
+      deleteTreasuryAccountToPending(tx, {
+        accountId,
+        organizationId: orgId,
+        createdBy: actor,
+      }),
+    );
+    await logAction({
+      organizationId: orgId,
+      actor: { type: 'user', id: userId },
+      action: 'treasury.account.deleted',
+      entityType: 'treasury_account',
+      entityId: accountId,
+      after: { active: false, movedToPending: result.movedAmount },
+    });
+    revalidatePath(CASH_PATH);
+    revalidatePath(TESORERIA_PATH);
+    return { ok: true, data: { movedAmount: result.movedAmount } };
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Error al eliminar la cuenta',
+    };
+  }
 }
 
 // ── 2B: treasury_movements transfer actions ───────────────────────────────────

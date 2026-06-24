@@ -60,17 +60,15 @@ export function CreateSlideover({
       setError('Ingresá un nombre');
       return;
     }
-    if (type === 'banco' && !paymentMethodId) {
-      setError('Seleccioná el método de pago vinculado');
-      return;
-    }
     const bal = Number.parseFloat(openingBalance) || 0;
 
     startTransition(async () => {
       try {
         let res;
         if (type === 'banco') {
-          res = await createBanco(name.trim(), paymentMethodId, bal);
+          // Linking a payment method is optional — a banco is primarily a
+          // storage container; the link only auto-routes that method's transfers.
+          res = await createBanco(name.trim(), paymentMethodId || null, bal);
         } else {
           res = await createCajaFuerte(name.trim(), bal);
         }
@@ -203,30 +201,28 @@ export function CreateSlideover({
               />
             </div>
 
-            {/* Payment method picker for banco */}
-            {type === 'banco' && (
+            {/* Payment method picker for banco — OPTIONAL link */}
+            {type === 'banco' && transferMethods.length > 0 && (
               <div className="flex flex-col gap-1.5">
                 <span className="
                   text-xs font-semibold text-secondary-foreground
                 "
                 >
                   Método de pago vinculado
+                  {' '}
+                  <span className="font-normal text-muted-foreground">(opcional)</span>
                 </span>
-                {transferMethods.length > 0
-                  ? (
-                      <Select
-                        value={paymentMethodId}
-                        onValueChange={setPaymentMethodId}
-                        options={transferMethods.map(m => ({ value: m.id, label: m.name }))}
-                        placeholder="Seleccioná el método de transferencia"
-                      />
-                    )
-                  : (
-                      <p className="text-xs text-muted-foreground">
-                        No hay métodos de pago de tipo transferencia configurados.
-                        Agregá uno en Configuración → Métodos de pago.
-                      </p>
-                    )}
+                <Select
+                  value={paymentMethodId}
+                  onValueChange={setPaymentMethodId}
+                  options={transferMethods.map(m => ({ value: m.id, label: m.name }))}
+                  placeholder="Sin vincular"
+                />
+                <p className="text-[11.5px] text-muted-foreground">
+                  Solo si querés que los cobros por transferencia de ese método
+                  caigan acá automáticamente. Una cuenta para guardar plata no
+                  necesita método.
+                </p>
               </div>
             )}
 
@@ -263,7 +259,7 @@ export function CreateSlideover({
             </Button>
             <Button
               className="h-11 flex-1"
-              disabled={isPending || !name.trim() || (type === 'banco' && !paymentMethodId && transferMethods.length > 0)}
+              disabled={isPending || !name.trim()}
               onClick={submit}
             >
               Crear
