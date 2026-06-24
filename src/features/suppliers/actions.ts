@@ -1,7 +1,6 @@
 'use server';
 
 import type { SupplierCreateInput, SupplierUpdateInput } from './validation';
-import type { InvoiceContext } from '@/libs/supplier-invoice-payment';
 import { auth } from '@clerk/nextjs/server';
 import { and, asc, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
@@ -13,7 +12,6 @@ import {
   listOpenInvoices,
   listOpenInvoicesForSupplier,
   recordInvoicePayment,
-  resolveInvoiceInTx,
 } from '@/libs/supplier-invoice-payment';
 import { getSupplierKpisForOrg } from '@/libs/supplier-payables';
 import { recordSupplierPaymentOutflow } from '@/libs/treasury';
@@ -767,8 +765,12 @@ export async function recordPayablePaymentAction(input: {
 }
 
 // ── Invoice-grouped payables view ─────────────────────────────────────────────
-
-export type { OpenInvoiceGroup } from '@/libs/supplier-invoice-payment';
+// NOTE: this is a 'use server' module — it may ONLY export async functions.
+// Types (OpenInvoiceGroup, InvoiceContext) and the resolveInvoiceInTx helper are
+// imported by consumers straight from '@/libs/supplier-invoice-payment', NOT
+// re-exported here: a type/value re-export in a 'use server' file is emitted as a
+// runtime reference and crashes page-data collection (InvoiceContext is not
+// defined).
 
 /** Server-action wrapper for listOpenInvoices (requires org from Clerk). */
 export async function listOpenInvoicesAction() {
@@ -814,9 +816,3 @@ export async function recordInvoicePaymentAction(input: {
   revalidatePath('/[locale]/dashboard/suppliers/payables', 'page');
   return result;
 }
-
-// ── resolveInvoiceInTx re-export for recordMovement integration ───────────────
-// recordMovement (inventory.ts) calls this inside its own tx to stamp purchase_id.
-
-export { resolveInvoiceInTx };
-export type { InvoiceContext };
