@@ -11,6 +11,7 @@ import { db } from '@/libs/db-context';
 import { fifoBatchOrder } from '@/libs/fifo-cogs';
 import { requirePanelModule } from '@/libs/panel-session';
 import { insertPurchasePayable } from '@/libs/supplier-payables';
+import { recordSupplierPaymentOutflow } from '@/libs/treasury';
 import {
   expirationRiskCacheSchema,
   productsSchema,
@@ -62,6 +63,12 @@ export type RecordMovementInput = {
   expiresAt?: string | null;
   saleId?: string | null;
   notes?: string | null;
+  // ── Pay-at-entry (S2-T4, REQ-3.x) — optional, additive, no breaking change ──
+  // Only read when reason === 'purchase'. Existing callers without these fields
+  // default to 'unpaid' and no outflow is written.
+  paymentStatus?: 'unpaid' | 'full' | 'partial' | null;
+  paymentAmount?: string | null;
+  paymentAccountId?: string | null;
 };
 
 export type StockMovement = typeof stockMovementsSchema.$inferSelect;
@@ -217,7 +224,7 @@ export async function recordMovement(input: RecordMovementInput) {
         throw new Error('stock movement insert returned no id');
       }
       const movementId = movement.id as string;
-      await insertPurchasePayable(tx, {
+      const newPayable = await insertPurchasePayable(tx, {
         organizationId: orgId,
         supplierId: input.supplierId,
         stockMovementId: movementId,
@@ -226,6 +233,33 @@ export async function recordMovement(input: RecordMovementInput) {
         createdBy: userId,
         notes: null,
       });
+
+      // Pay-at-entry (REQ-3.x, S2-T4): if the user already paid or partially
+      // paid at entry time, debit the chosen container in the SAME tx.
+      // Balance/cap errors roll back lot + payable + payment all-or-nothing.
+      // 'unpaid'/missing → payable stays open, no outflow written (REQ-3.2).
+      const pStatus = input.paymentStatus ?? 'unpaid';
+      if (
+        (pStatus === 'full' || pStatus === 'partial')
+        && input.paymentAccountId
+      ) {
+        const totalAmount = input.qty * Number(unitCost);
+        const payAmt
+          = pStatus === 'full'
+            ? totalAmount
+            : Number(input.paymentAmount ?? '0');
+
+        // biome-ignore lint/suspicious/noExplicitAny: TenantDb tx is structurally compatible with Executor at runtime
+        await recordSupplierPaymentOutflow(tx as any, {
+          organizationId: orgId,
+          fromAccountId: input.paymentAccountId,
+          amount: payAmt,
+          supplierId: input.supplierId,
+          payableId: newPayable.id,
+          note: null,
+          createdBy: userId,
+        });
+      }
     }
 
     return { movement, product: updated, stockBefore: product.stock };
