@@ -1,7 +1,7 @@
 'use client';
 
-import type { OpenInvoiceGroup } from './actions';
 import type { PaymentContainer } from '@/actions/inventory';
+import type { OpenInvoiceGroup } from '@/libs/supplier-invoice-payment';
 import { useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
 import {
