@@ -1,13 +1,11 @@
 'use client';
 
-import type { PaymentMethodRow } from '@/actions/payment-methods';
 import { Landmark, Lock, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { Dialog as DialogPrimitive } from 'radix-ui';
 import { useState, useTransition } from 'react';
 import { createBanco, createCajaFuerte } from '@/actions/treasury';
 import { Button } from '@/components/ui/button';
-import { Select } from '@/components/ui/select';
 import { cashInputCls } from '@/features/cash/cash-ui';
 
 type AccountType = 'fuerte' | 'banco';
@@ -15,36 +13,30 @@ type AccountType = 'fuerte' | 'banco';
 type CreateSlideoverProps = {
   open: boolean;
   onClose: () => void;
-  /**
-   * Active payment methods of type 'transfer' — used to let the user pick
-   * a linked payment method when creating a bank account.
-   */
-  transferMethods: PaymentMethodRow[];
 };
 
 /**
  * Right-side slide-over panel to create a new treasury place.
- * Type toggle: Caja fuerte | Banco.
+ * Type toggle: Caja fuerte | Banco. Both are plain storage containers.
  * Caja fuerte → createCajaFuerte(name, openingBalance).
- * Banco → createBanco(name, paymentMethodId, openingBalance).
+ * Banco → createBanco(name, null, openingBalance). Banco accounts are NOT linked
+ * to a payment method here: creating a transfer payment method opens its own
+ * treasury account automatically (ensurePaymentMethodAccounts).
  */
 export function CreateSlideover({
   open,
   onClose,
-  transferMethods,
 }: CreateSlideoverProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [type, setType] = useState<AccountType>('fuerte');
   const [name, setName] = useState('');
-  const [paymentMethodId, setPaymentMethodId] = useState('');
   const [openingBalance, setOpeningBalance] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   function reset() {
     setType('fuerte');
     setName('');
-    setPaymentMethodId('');
     setOpeningBalance('');
     setError(null);
   }
@@ -66,9 +58,10 @@ export function CreateSlideover({
       try {
         let res;
         if (type === 'banco') {
-          // Linking a payment method is optional — a banco is primarily a
-          // storage container; the link only auto-routes that method's transfers.
-          res = await createBanco(name.trim(), paymentMethodId || null, bal);
+          // No payment-method link here: a banco created manually is a plain
+          // storage container. Method-linked accounts come from creating the
+          // transfer payment method (ensurePaymentMethodAccounts).
+          res = await createBanco(name.trim(), null, bal);
         } else {
           res = await createCajaFuerte(name.trim(), bal);
         }
@@ -163,7 +156,6 @@ export function CreateSlideover({
                     type="button"
                     onClick={() => {
                       setType(o.k);
-                      setPaymentMethodId('');
                       setError(null);
                     }}
                     className={`
@@ -200,31 +192,6 @@ export function CreateSlideover({
                 autoFocus
               />
             </div>
-
-            {/* Payment method picker for banco — OPTIONAL link */}
-            {type === 'banco' && transferMethods.length > 0 && (
-              <div className="flex flex-col gap-1.5">
-                <span className="
-                  text-xs font-semibold text-secondary-foreground
-                "
-                >
-                  Método de pago vinculado
-                  {' '}
-                  <span className="font-normal text-muted-foreground">(opcional)</span>
-                </span>
-                <Select
-                  value={paymentMethodId}
-                  onValueChange={setPaymentMethodId}
-                  options={transferMethods.map(m => ({ value: m.id, label: m.name }))}
-                  placeholder="Sin vincular"
-                />
-                <p className="text-[11.5px] text-muted-foreground">
-                  Solo si querés que los cobros por transferencia de ese método
-                  caigan acá automáticamente. Una cuenta para guardar plata no
-                  necesita método.
-                </p>
-              </div>
-            )}
 
             {/* Opening balance */}
             <div className="flex flex-col gap-1.5">
