@@ -1,11 +1,12 @@
 'use client';
 
-import type { OpenPayable } from './actions';
+import type { OpenInvoiceGroup, OpenPayable } from './actions';
 import type { PaymentContainer } from '@/actions/inventory';
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/utils/Helpers';
+import { InvoicePaymentModal } from './InvoicePaymentModal';
 import { PayablePaymentModal } from './PayablePaymentModal';
 
 const cop = new Intl.NumberFormat('es-CO', {
@@ -50,38 +51,48 @@ function StatusBadge({ status }: { status: 'open' | 'partial' }) {
 }
 
 /**
- * Client component for the "Compras por pagar" list view.
+ * Client component for the "Compras por pagar" grouped view.
  *
- * Renders open/partial payables; opens PayablePaymentModal on "Pagar".
- * On modal success, calls router.refresh() to re-fetch the list from the server.
+ * Renders invoice groups (grouped by purchase_id). Standalone payables
+ * (purchase_id = null) surface as single-line groups — back-compat.
  *
- * Satisfies: REQ-6.1–REQ-6.6, SC-5.1–SC-5.5, SC-6.4.
+ * Actions:
+ *   - "Pagar factura": opens InvoicePaymentModal (pays all open lines of the
+ *     invoice as one unit via recordInvoicePaymentAction).
+ *   - "Pagar" (per-line): opens PayablePaymentModal (existing granular path).
+ *
+ * Satisfies: REQ-6.1–REQ-6.6, SC-5.1–SC-5.5, SC-6.4, D3 (grouped view).
  */
 export function PayablesClient(props: {
-  initial: OpenPayable[];
+  /** Grouped invoice view (from listOpenInvoicesAction). */
+  invoices: OpenInvoiceGroup[];
+  /** Flat payable list (from listOpenPayablesAction) — for per-line "Pagar". */
+  payables: OpenPayable[];
   accounts: PaymentContainer[];
 }) {
   const router = useRouter();
-  const [payingId, setPayingId] = useState<string | null>(null);
+  const [payingInvoice, setPayingInvoice] = useState<OpenInvoiceGroup | null>(null);
+  const [payingPayableId, setPayingPayableId] = useState<string | null>(null);
   const [, startTransition] = useTransition();
 
-  const payable = props.initial.find(p => p.id === payingId) ?? null;
+  const payableForModal = props.payables.find(p => p.id === payingPayableId) ?? null;
 
   function handleSuccess() {
-    setPayingId(null);
+    setPayingInvoice(null);
+    setPayingPayableId(null);
     startTransition(() => {
       router.refresh();
     });
   }
 
-  if (props.initial.length === 0) {
+  if (props.invoices.length === 0) {
     return (
       <div className="
         flex flex-col items-center justify-center rounded-xl border
         border-dashed border-border bg-card px-6 py-16 text-center
       "
       >
-        <div className="text-5xl">✅</div>
+        <div className="text-5xl">&#x2705;</div>
         <div className="mt-4 text-lg font-semibold">
           Sin compras pendientes de pago
         </div>
@@ -99,60 +110,91 @@ export function PayablesClient(props: {
           <thead className="bg-muted/50 text-left text-xs uppercase">
             <tr>
               <th className="px-3 py-2">Proveedor</th>
-              <th className="px-3 py-2">Producto</th>
+              <th className="px-3 py-2">Factura</th>
+              <th className="px-3 py-2">Líneas</th>
               <th className="px-3 py-2">Total</th>
-              <th className="px-3 py-2">Pagado</th>
               <th className="px-3 py-2">Pendiente</th>
               <th className="px-3 py-2">Estado</th>
               <th className="px-3 py-2">Fecha</th>
-              <th className="px-3 py-2"></th>
+              <th className="px-3 py-2" />
             </tr>
           </thead>
           <tbody>
-            {props.initial.map(p => (
-              <tr
-                key={p.id}
-                className="
-                  border-t transition-colors
-                  hover:bg-muted/30
-                "
-              >
-                <td className="px-3 py-2 font-medium">
-                  {p.supplierName ?? <span className="text-muted-foreground">—</span>}
-                </td>
-                <td className="px-3 py-2">
-                  {p.productName ?? <span className="text-muted-foreground">—</span>}
-                </td>
-                <td className="px-3 py-2 tabular-nums">{money(p.totalAmount)}</td>
-                <td className="px-3 py-2 tabular-nums">{money(p.paidAmount)}</td>
-                <td className="px-3 py-2 font-semibold tabular-nums">
-                  {money(p.outstanding)}
-                </td>
-                <td className="px-3 py-2">
-                  <StatusBadge status={p.status} />
-                </td>
-                <td className="px-3 py-2">{formatDate(p.purchasedAt)}</td>
-                <td className="px-3 py-2 text-right">
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => setPayingId(p.id)}
-                  >
-                    Pagar
-                  </Button>
-                </td>
-              </tr>
-            ))}
+            {props.invoices.map((inv) => {
+              // Row key: purchaseId for invoiced groups; stable standalone payable id for standalone.
+              const rowKey = inv.purchaseId ?? `standalone-${inv.standalonePayableId}`;
+              const isInvoice = inv.purchaseId !== null;
+
+              // For standalone groups, target the exact payable id (not a fragile .find).
+              const standalonePayableId = inv.standalonePayableId ?? null;
+
+              return (
+                <tr
+                  key={rowKey}
+                  className="
+                    border-t transition-colors
+                    hover:bg-muted/30
+                  "
+                >
+                  <td className="px-3 py-2 font-medium">
+                    {inv.supplierName ?? <span className="text-muted-foreground">—</span>}
+                  </td>
+                  <td className="px-3 py-2 text-muted-foreground">
+                    {inv.invoiceNumber ?? (isInvoice ? '(sin número)' : '—')}
+                  </td>
+                  <td className="px-3 py-2 tabular-nums">{inv.lineCount}</td>
+                  <td className="px-3 py-2 tabular-nums">{money(inv.totalAmount)}</td>
+                  <td className="px-3 py-2 font-semibold tabular-nums">
+                    {money(inv.outstanding)}
+                  </td>
+                  <td className="px-3 py-2">
+                    <StatusBadge status={inv.status} />
+                  </td>
+                  <td className="px-3 py-2">{formatDate(inv.purchasedAt)}</td>
+                  <td className="px-3 py-2 text-right">
+                    {isInvoice
+                      ? (
+                          <Button
+                            size="sm"
+                            onClick={() => setPayingInvoice(inv)}
+                          >
+                            Pagar factura
+                          </Button>
+                        )
+                      : standalonePayableId
+                        ? (
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              onClick={() => setPayingPayableId(standalonePayableId)}
+                            >
+                              Pagar
+                            </Button>
+                          )
+                        : null}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
 
-      {payable && (
-        <PayablePaymentModal
-          payable={payable}
+      {payingInvoice && (
+        <InvoicePaymentModal
+          invoice={payingInvoice}
           accounts={props.accounts}
           onSuccess={handleSuccess}
-          onClose={() => setPayingId(null)}
+          onClose={() => setPayingInvoice(null)}
+        />
+      )}
+
+      {payableForModal && (
+        <PayablePaymentModal
+          payable={payableForModal}
+          accounts={props.accounts}
+          onSuccess={handleSuccess}
+          onClose={() => setPayingPayableId(null)}
         />
       )}
     </div>

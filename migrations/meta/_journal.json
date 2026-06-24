@@ -484,6 +484,13 @@
       "when": 1781900000006,
       "tag": "0068_supplier_return_credits",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1781900000007,
+      "tag": "0069_supplier_purchases",
+      "breakpoints": true
     }
   ]
 }

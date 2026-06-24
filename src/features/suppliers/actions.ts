@@ -1,6 +1,7 @@
 'use server';
 
 import type { SupplierCreateInput, SupplierUpdateInput } from './validation';
+import type { InvoiceContext } from '@/libs/supplier-invoice-payment';
 import { auth } from '@clerk/nextjs/server';
 import { and, asc, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
@@ -8,6 +9,12 @@ import { z } from 'zod';
 import { isUniqueViolation } from '@/libs/action-result';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
+import {
+  listOpenInvoices,
+  listOpenInvoicesForSupplier,
+  recordInvoicePayment,
+  resolveInvoiceInTx,
+} from '@/libs/supplier-invoice-payment';
 import { getSupplierKpisForOrg } from '@/libs/supplier-payables';
 import { recordSupplierPaymentOutflow } from '@/libs/treasury';
 import {
@@ -583,6 +590,8 @@ export type OpenPayable = {
   outstanding: string;
   status: 'open' | 'partial';
   purchasedAt: Date;
+  /** Invoice grouping (migration 0069). Null for standalone payables. */
+  purchaseId: string | null;
 };
 
 /**
@@ -606,6 +615,8 @@ export async function listOpenPayables(
       creditedAmount: supplierPayablesSchema.creditedAmount,
       status: supplierPayablesSchema.status,
       purchasedAt: supplierPayablesSchema.purchasedAt,
+      // Invoice grouping (migration 0069). Null for standalone payables.
+      purchaseId: supplierPayablesSchema.purchaseId,
       // supplier name: null when supplier has been deleted (orphan payable)
       supplierName: suppliersSchema.name,
       // product name: pulled from the linked stock_movement row
@@ -645,6 +656,8 @@ export async function listOpenPayables(
     ).toFixed(2),
     status: r.status as 'open' | 'partial',
     purchasedAt: r.purchasedAt,
+    // Invoice grouping (migration 0069).
+    purchaseId: r.purchaseId ?? null,
   }));
 }
 
@@ -752,3 +765,58 @@ export async function recordPayablePaymentAction(input: {
   revalidatePath('/[locale]/dashboard/suppliers/payables', 'page');
   return result;
 }
+
+// ── Invoice-grouped payables view ─────────────────────────────────────────────
+
+export type { OpenInvoiceGroup } from '@/libs/supplier-invoice-payment';
+
+/** Server-action wrapper for listOpenInvoices (requires org from Clerk). */
+export async function listOpenInvoicesAction() {
+  const { orgId } = await requireOrgId();
+  return listOpenInvoices(db, orgId);
+}
+
+/** Lists open invoices for a specific supplier (for EntryModal picker). */
+export async function listOpenInvoicesForSupplierAction(supplierId: string) {
+  const { orgId } = await requireOrgId();
+  return listOpenInvoicesForSupplier(db, orgId, supplierId);
+}
+
+const recordInvoicePaymentSchema = z.object({
+  purchaseId: z.string().uuid(),
+  fromAccountId: z.string().uuid(),
+  amount: z
+    .union([z.number(), z.string()])
+    .transform(v => (typeof v === 'string' ? Number(v) : v))
+    .refine(n => Number.isFinite(n) && n > 0, {
+      message: 'El monto debe ser un número mayor a cero',
+    }),
+  note: z.string().nullish(),
+});
+
+/** Pays a supplier invoice as a unit, allocating oldest-first across its lines. */
+export async function recordInvoicePaymentAction(input: {
+  purchaseId: string;
+  fromAccountId: string;
+  amount: number | string;
+  note?: string | null;
+}) {
+  const { userId, orgId } = await requireOrgId();
+  const data = recordInvoicePaymentSchema.parse(input);
+  const result = await recordInvoicePayment(db, {
+    organizationId: orgId,
+    purchaseId: data.purchaseId,
+    fromAccountId: data.fromAccountId,
+    amount: data.amount,
+    createdBy: userId,
+    note: data.note ?? null,
+  });
+  revalidatePath('/[locale]/dashboard/suppliers/payables', 'page');
+  return result;
+}
+
+// ── resolveInvoiceInTx re-export for recordMovement integration ───────────────
+// recordMovement (inventory.ts) calls this inside its own tx to stamp purchase_id.
+
+export { resolveInvoiceInTx };
+export type { InvoiceContext };

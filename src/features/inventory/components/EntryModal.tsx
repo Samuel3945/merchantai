@@ -1,6 +1,7 @@
 'use client';
 
 import type { InventoryProduct, MovementReason, PaymentContainer } from '@/actions/inventory';
+import type { InvoiceOption } from '@/libs/supplier-invoice-payment';
 import { useEffect, useState, useTransition } from 'react';
 import { listPaymentContainers, recordMovement } from '@/actions/inventory';
 import { DatePicker } from '@/components/DatePicker';
@@ -14,6 +15,7 @@ import {
 } from '@/components/ui/dialog';
 import { Select } from '@/components/ui/select';
 import { toast } from '@/components/ui/toast-store';
+import { listOpenInvoicesForSupplierAction } from '@/features/suppliers/actions';
 import {
   ENTRY_REASON_OPTIONS,
   entryFormSchema,
@@ -27,6 +29,9 @@ const inputCls
 const labelCls = 'text-sm font-medium';
 
 type PaymentStatus = 'unpaid' | 'full' | 'partial';
+
+// Invoice grouping mode. 'none' = standalone purchase (no invoice).
+type InvoiceMode = 'none' | 'new' | 'existing';
 
 export function EntryModal({
   product,
@@ -50,6 +55,12 @@ export function EntryModal({
   const [paymentAmount, setPaymentAmount] = useState('');
   const [containers, setContainers] = useState<PaymentContainer[]>([]);
   const [containerError, setContainerError] = useState<string | null>(null);
+
+  // Invoice grouping state (migration 0069) — optional, only when reason='purchase'.
+  const [invoiceMode, setInvoiceMode] = useState<InvoiceMode>('none');
+  const [invoiceNumber, setInvoiceNumber] = useState('');
+  const [existingInvoiceId, setExistingInvoiceId] = useState('');
+  const [openInvoices, setOpenInvoices] = useState<InvoiceOption[]>([]);
 
   const [pending, startTransition] = useTransition();
 
@@ -85,13 +96,46 @@ export function EntryModal({
     };
   }, [reason]);
 
-  // When the reason changes away from purchase, reset payment state.
+  // Load open invoices for the selected supplier when in purchase mode.
+  useEffect(() => {
+    if (reason !== 'purchase' || !supplierId) {
+      // eslint-disable-next-line react/set-state-in-effect -- early-return guard reset, not derived-state
+      setOpenInvoices([]);
+      return;
+    }
+    // Reset existing selection and mode whenever supplier changes.
+    // eslint-disable-next-line react/set-state-in-effect -- synchronous guard reset, not a derived-state anti-pattern
+    setInvoiceMode('none');
+    // eslint-disable-next-line react/set-state-in-effect -- synchronous guard reset, not a derived-state anti-pattern
+    setExistingInvoiceId('');
+    let active = true;
+    listOpenInvoicesForSupplierAction(supplierId)
+      .then((rows) => {
+        if (active) {
+          setOpenInvoices(rows);
+        }
+      })
+      .catch(() => {
+        // Non-critical: fails silently, user can still do standalone entry.
+        if (active) {
+          setOpenInvoices([]);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [reason, supplierId]);
+
+  // When the reason changes away from purchase, reset payment state and invoice.
   function handleReasonChange(v: MovementReason) {
     setReason(v);
     if (v !== 'purchase') {
       setPaymentStatus('unpaid');
       setPaymentAccountId('');
       setPaymentAmount('');
+      setInvoiceMode('none');
+      setInvoiceNumber('');
+      setExistingInvoiceId('');
     }
   }
 
@@ -124,6 +168,16 @@ export function EntryModal({
       toast.error(parsed.error.issues[0]?.message ?? 'Revisá los datos');
       return;
     }
+    // Build the optional invoiceContext from current invoice state.
+    const invoiceContext
+      = parsed.data.reason === 'purchase'
+        ? invoiceMode === 'new'
+          ? { mode: 'new' as const, invoiceNumber: invoiceNumber.trim() || null }
+          : invoiceMode === 'existing' && existingInvoiceId
+            ? { mode: 'existing' as const, purchaseId: existingInvoiceId }
+            : null
+        : null;
+
     startTransition(async () => {
       try {
         await recordMovement({
@@ -138,6 +192,7 @@ export function EntryModal({
           paymentStatus: parsed.data.paymentStatus,
           paymentAmount: parsed.data.paymentAmount,
           paymentAccountId: parsed.data.paymentAccountId,
+          invoiceContext,
         });
         toast.success(`Entrada registrada para "${product.name}"`);
         onSuccess();
@@ -241,6 +296,61 @@ export function EntryModal({
                 onChange={setExpiresAt}
                 triggerClassName="w-full"
               />
+            </div>
+          )}
+
+          {/* ── Factura (invoice grouping, migration 0069) ─────────────────── */}
+          {needsSupplier && supplierId && (
+            <div className="space-y-2 rounded-md border border-border p-3">
+              <label className={labelCls}>Factura (opcional)</label>
+              <Select
+                value={invoiceMode}
+                onValueChange={(v) => {
+                  setInvoiceMode(v as InvoiceMode);
+                  setInvoiceNumber('');
+                  setExistingInvoiceId('');
+                }}
+                options={[
+                  { value: 'none', label: 'Sin factura (compra suelta)' },
+                  { value: 'new', label: 'Nueva factura' },
+                  ...(openInvoices.length > 0
+                    ? [{ value: 'existing', label: 'Agregar a factura existente' }]
+                    : []),
+                ]}
+              />
+              {invoiceMode === 'new' && (
+                <div>
+                  <label className="text-xs text-muted-foreground">
+                    Número de factura (opcional)
+                  </label>
+                  <input
+                    type="text"
+                    value={invoiceNumber}
+                    onChange={e => setInvoiceNumber(e.target.value)}
+                    className={inputCls}
+                    placeholder="Ej. FAC-001"
+                  />
+                </div>
+              )}
+              {invoiceMode === 'existing' && openInvoices.length > 0 && (
+                <div>
+                  <label className="text-xs text-muted-foreground">
+                    Factura abierta
+                    {' '}
+                    <span className="text-destructive">*</span>
+                  </label>
+                  <Select
+                    value={existingInvoiceId}
+                    onValueChange={setExistingInvoiceId}
+                    options={openInvoices.map(inv => ({
+                      value: inv.id,
+                      label: inv.invoiceNumber
+                        ? `${inv.invoiceNumber} (${inv.lineCount} ${inv.lineCount === 1 ? 'producto' : 'productos'})`
+                        : `Factura sin número — ${inv.lineCount} ${inv.lineCount === 1 ? 'producto' : 'productos'}`,
+                    }))}
+                  />
+                </div>
+              )}
             </div>
           )}
 

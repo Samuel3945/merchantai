@@ -2,6 +2,7 @@
 
 import type { SQL } from 'drizzle-orm';
 import type { SmartStockSettings } from '@/actions/smart-stock';
+import type { InvoiceContext } from '@/libs/supplier-invoice-payment';
 import type { TreasuryAccountRow } from '@/libs/treasury';
 import { auth, clerkClient } from '@clerk/nextjs/server';
 import { and, desc, eq, gt, gte, inArray, isNotNull, lte, sql } from 'drizzle-orm';
@@ -11,6 +12,7 @@ import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/db-context';
 import { fifoBatchOrder } from '@/libs/fifo-cogs';
 import { requirePanelModule } from '@/libs/panel-session';
+import { resolveInvoiceInTx } from '@/libs/supplier-invoice-payment';
 import { insertPurchasePayable } from '@/libs/supplier-payables';
 import { applyReturnCredit } from '@/libs/supplier-returns';
 import {
@@ -74,6 +76,11 @@ export type RecordMovementInput = {
   paymentStatus?: 'unpaid' | 'full' | 'partial' | null;
   paymentAmount?: string | null;
   paymentAccountId?: string | null;
+  // ── Invoice grouping (migration 0069) — optional, additive ───────────────
+  // When set, creates/reuses a supplier_purchases header in the SAME tx and
+  // stamps purchase_id on the created payable. Default (undefined) = standalone,
+  // purchase_id null — fully back-compat for existing callers.
+  invoiceContext?: InvoiceContext | null;
 };
 
 export type StockMovement = typeof stockMovementsSchema.$inferSelect;
@@ -275,6 +282,21 @@ export async function recordMovement(input: RecordMovementInput) {
         throw new Error('stock movement insert returned no id');
       }
       const movementId = movement.id as string;
+
+      // Resolve invoice header if invoiceContext is provided (migration 0069).
+      // Default (no context) = standalone purchase, purchase_id = null.
+      let purchaseId: string | null = null;
+      if (input.invoiceContext) {
+        // biome-ignore lint/suspicious/noExplicitAny: TenantDb tx is structurally compatible with Executor
+        const resolved = await resolveInvoiceInTx(tx as any, {
+          organizationId: orgId,
+          supplierId: input.supplierId,
+          createdBy: userId,
+          context: input.invoiceContext,
+        });
+        purchaseId = resolved.purchaseId;
+      }
+
       const newPayable = await insertPurchasePayable(tx, {
         organizationId: orgId,
         supplierId: input.supplierId,
@@ -283,6 +305,7 @@ export async function recordMovement(input: RecordMovementInput) {
         unitCost,
         createdBy: userId,
         notes: null,
+        purchaseId,
       });
 
       // Pay-at-entry (REQ-3.x, S2-T4): if the user already paid or partially
