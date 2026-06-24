@@ -1024,10 +1024,14 @@ export async function getTodayCashKpis(): Promise<TodayCashKpis> {
 
   const result = await db.execute(sql`
     SELECT
-      COALESCE(SUM(amount) FILTER (WHERE type = 'expense'), 0)::float8 AS gastos_hoy,
+      -- OQ-2 fix (migration 0071): caja-funded supplier settles write type='expense'
+      -- with expense_id=NULL (no P&L anchor). Narrow to expense_id IS NOT NULL so
+      -- a settle row does NOT inflate P&L gasto KPIs. Legacy gastos always had an
+      -- expenses row so this predicate is backward-compatible with all pre-0071 rows.
+      COALESCE(SUM(amount) FILTER (WHERE type = 'expense' AND expense_id IS NOT NULL), 0)::float8 AS gastos_hoy,
       COALESCE(SUM(amount) FILTER (WHERE type = 'withdrawal'), 0)::float8 AS retiros_hoy,
       COALESCE(SUM(amount) FILTER (WHERE supplier_id IS NOT NULL), 0)::float8 AS pagos_proveedores,
-      COALESCE(SUM(amount) FILTER (WHERE type IN ('expense','salary','inventory_purchase')), 0)::float8 AS gastos_operativos
+      COALESCE(SUM(amount) FILTER (WHERE type IN ('expense','salary','inventory_purchase') AND expense_id IS NOT NULL), 0)::float8 AS gastos_operativos
     FROM cash_movements
     WHERE organization_id = ${orgId}
       AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date

@@ -361,6 +361,80 @@ export async function recordGasto(input: {
   }
 }
 
+// ── recordSupplierPaymentFromConsole ─────────────────────────────────────────
+// Treasury-funded supplier payment from the treasury console (owner/panel).
+// Settles the supplier's open/partial payables oldest-first from a chosen
+// cofre/banco account. No P&L entry — this is an ASSET debit (supplier debt
+// settlement), not a gasto. Use recordGasto for generic P&L expenses.
+//
+// Gated by requirePanelModule('cash'). Reuses recordSupplierPayment with
+// fundingSource:{kind:'treasury', accountId}.
+
+export async function recordSupplierPaymentFromConsole(input: {
+  supplierId: string;
+  fromAccountId: string;
+  amount: number | string;
+  note?: string | null;
+}): Promise<ActionResult<{ appliedTotal: number; excess: number; settledPayables: number }>> {
+  const { userId, orgId } = await requirePanelModule('cash');
+
+  if (!input.supplierId?.trim()) {
+    return { ok: false, error: 'Proveedor requerido' };
+  }
+  if (!input.fromAccountId?.trim()) {
+    return { ok: false, error: 'Contenedor de origen requerido' };
+  }
+  const amt = Number.parseFloat(toMoney(input.amount));
+  if (amt <= 0) {
+    return { ok: false, error: 'El monto debe ser mayor a 0' };
+  }
+
+  const actor = await getActorName(userId);
+
+  try {
+    const { recordSupplierPayment } = await import('@/libs/supplier-invoice-payment');
+    const result = await recordSupplierPayment(db, {
+      organizationId: orgId,
+      supplierId: input.supplierId,
+      fundingSource: { kind: 'treasury', accountId: input.fromAccountId },
+      amount: amt,
+      createdBy: actor,
+      note: input.note ?? null,
+    });
+
+    await logAction({
+      organizationId: orgId,
+      actor: { type: 'user', id: userId },
+      action: 'treasury.supplier.settled',
+      entityType: 'supplier_payment',
+      entityId: input.supplierId,
+      after: {
+        supplierId: input.supplierId,
+        fromAccountId: input.fromAccountId,
+        amount: amt,
+        appliedTotal: result.appliedTotal,
+        excess: result.excess,
+      },
+    });
+
+    revalidatePath(CASH_PATH);
+    revalidatePath(TESORERIA_PATH);
+    return {
+      ok: true,
+      data: {
+        appliedTotal: result.appliedTotal,
+        excess: result.excess,
+        settledPayables: result.breakdown.length,
+      },
+    };
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Error al registrar el pago a proveedor',
+    };
+  }
+}
+
 // ── Slice C: Financial Timeline ───────────────────────────────────────────────
 
 /**
