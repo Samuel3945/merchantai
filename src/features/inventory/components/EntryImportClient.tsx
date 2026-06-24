@@ -34,6 +34,7 @@ export function EntryImportClient({ onImported }: { onImported: () => void }) {
 
   const [reason, setReason] = useState<EntryReason>('purchase');
   const [supplierId, setSupplierId] = useState('');
+  const [invoiceNumber, setInvoiceNumber] = useState('');
   const [notes, setNotes] = useState('');
 
   const [drafts, setDrafts] = useState<EntryDraftRow[]>([]);
@@ -170,6 +171,7 @@ export function EntryImportClient({ onImported }: { onImported: () => void }) {
       const res = await bulkRecordEntries({
         reason,
         supplierId: reason === 'purchase' ? supplierId : null,
+        invoiceNumber: reason === 'purchase' ? invoiceNumber.trim() || null : null,
         notes: reason === 'manual' ? notes : null,
         rows: validRows.map(d => ({
           productId: d.productId!,
@@ -216,14 +218,25 @@ export function EntryImportClient({ onImported }: { onImported: () => void }) {
         </div>
         {reason === 'purchase'
           ? (
-              <div>
-                <label className={labelCls}>
-                  Proveedor
-                  {' '}
-                  <span className="text-destructive">*</span>
-                </label>
-                <SupplierSelect value={supplierId} onChange={setSupplierId} />
-              </div>
+              <>
+                <div>
+                  <label className={labelCls}>
+                    Proveedor
+                    {' '}
+                    <span className="text-destructive">*</span>
+                  </label>
+                  <SupplierSelect value={supplierId} onChange={setSupplierId} />
+                </div>
+                <div>
+                  <label className={labelCls}>N° de factura (opcional)</label>
+                  <input
+                    value={invoiceNumber}
+                    onChange={e => setInvoiceNumber(e.target.value)}
+                    className={cn(inputCls, 'h-9')}
+                    placeholder="Ej. FAC-2024-001"
+                  />
+                </div>
+              </>
             )
           : (
               <div>

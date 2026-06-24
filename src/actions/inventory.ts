@@ -26,6 +26,7 @@ import {
   salesSchema,
   stockMovementsSchema,
   supplierPayablesSchema,
+  supplierPurchasesSchema,
   suppliersSchema,
 } from '@/models/Schema';
 
@@ -872,6 +873,8 @@ export type BulkEntryRow = {
 export type BulkEntryInput = {
   reason: 'purchase' | 'manual';
   supplierId?: string | null;
+  /** Optional supplier invoice reference for purchase batches (migration 0069). */
+  invoiceNumber?: string | null;
   notes?: string | null;
   rows: BulkEntryRow[];
 };
@@ -884,10 +887,36 @@ export type BulkEntryResult = {
 // Reuses recordMovement per row so the FIFO ledger, audit log and the
 // products.stock = SUM(remaining_qty) invariant stay identical to a single
 // manual entry. Rows are independent: one bad row never blocks the rest.
+//
+// For reason='purchase': creates ONE supplier_purchases header before the loop,
+// then passes invoiceContext: { mode: 'existing', purchaseId } to EVERY row so
+// all resulting payables share the same purchase_id (migration 0069 grouping).
+// If header creation fails, the whole batch aborts — no rows are processed.
+// For reason='manual': no header, no payable. Back-compat unchanged.
 export async function bulkRecordEntries(
   input: BulkEntryInput,
 ): Promise<BulkEntryResult> {
-  await requirePanelModule('inventory');
+  const { userId, orgId } = await requirePanelModule('inventory');
+
+  // ── Create invoice header once before the row loop (purchase batches only) ──
+  let purchaseId: string | null = null;
+  if (input.reason === 'purchase' && input.supplierId) {
+    const tdb = await db();
+    const [header] = await tdb
+      .insert(supplierPurchasesSchema)
+      .values({
+        organizationId: orgId,
+        supplierId: input.supplierId,
+        invoiceNumber: input.invoiceNumber ?? null,
+        createdBy: userId,
+      })
+      .returning({ id: supplierPurchasesSchema.id });
+
+    if (!header) {
+      throw new Error('Failed to create supplier invoice header');
+    }
+    purchaseId = header.id;
+  }
 
   let created = 0;
   const failed: BulkEntryResult['failed'] = [];
@@ -904,6 +933,11 @@ export async function bulkRecordEntries(
         supplierId: input.reason === 'purchase' ? input.supplierId ?? null : null,
         expiresAt: row.expiresAt ?? null,
         notes: input.reason === 'manual' ? input.notes ?? null : null,
+        // Stamp every purchase row with the shared header so all payables group
+        // under one invoice in listOpenInvoices. Undefined for manual imports.
+        invoiceContext: purchaseId
+          ? { mode: 'existing' as const, purchaseId }
+          : undefined,
       });
       created += 1;
     } catch (err) {
