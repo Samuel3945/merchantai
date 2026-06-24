@@ -755,6 +755,55 @@ describe('regression — S3-T8: FIFO invariant and payment isolation', () => {
   });
 });
 
+// ── SC-6.2: Cross-org reject guard on recordPayablePayment ───────────────────
+// The payable belongs to ORG_B; calling with organizationId = ORG must throw
+// and write zero treasury_movements + zero supplier_payments rows.
+
+describe('recordPayablePayment — cross-org ownership guard', () => {
+  const PAYABLE_ORG_B = '00000000-0000-0000-cccc-000000000099';
+  const CONTAINER_ORG = '00000000-0000-0000-bbbb-000000000099';
+
+  it('rejects when payable belongs to a different org and writes no side effects', async () => {
+    // Seed an account for ORG (the caller's org).
+    await pg.query(
+      `INSERT INTO treasury_accounts
+         (id, organization_id, type, name, opening_balance, active, created_at, updated_at)
+       VALUES ($1, $2, 'caja_fuerte', 'test-acct', '5000.00', true, now(), now())`,
+      [CONTAINER_ORG, ORG],
+    );
+
+    // Seed a payable for ORG_B (a different org).
+    await seedPayable(PAYABLE_ORG_B, 500, 0, 'open', SUPPLIER_ID, ORG_B);
+
+    // Attempt to pay ORG_B's payable using ORG's credentials.
+    await expect(
+      recordPayablePayment(rawDb as never, {
+        organizationId: ORG,
+        payableId: PAYABLE_ORG_B,
+        fromAccountId: CONTAINER_ORG,
+        amount: 500,
+        createdBy: 'user-1',
+      }),
+    ).rejects.toThrow(/does not belong/i);
+
+    // No treasury_movements written.
+    const movCount = await pg.query<{ count: number }>(
+      'SELECT COUNT(*) as count FROM treasury_movements',
+      [],
+    );
+
+    expect(Number(movCount.rows[0]!.count)).toBe(0);
+
+    // No supplier_payments written.
+    const payCount = await pg.query<{ count: number }>(
+      'SELECT COUNT(*) as count FROM supplier_payments',
+      [],
+    );
+
+    expect(Number(payCount.rows[0]!.count)).toBe(0);
+  });
+});
+
 // ── TenantDb proxy regression (MANDATORY — same lesson as Slice 1 and 2) ──────
 // supplier_payables and treasury_movements must be in TENANT_TABLES.
 

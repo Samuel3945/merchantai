@@ -1,6 +1,6 @@
 'use client';
 
-import type { OpenPayable, RecordPayablePaymentResult } from './actions';
+import type { OpenPayable } from './actions';
 import type { PaymentContainer } from '@/actions/inventory';
 import { useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
@@ -84,7 +84,7 @@ export function PayablePaymentModal(props: {
           fromAccountId: accountId,
           amount,
           note: null,
-        }) as RecordPayablePaymentResult;
+        });
         onSuccess();
       } catch (err) {
         setError(

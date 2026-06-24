@@ -4,6 +4,7 @@ import type { SupplierCreateInput, SupplierUpdateInput } from './validation';
 import { auth } from '@clerk/nextjs/server';
 import { and, asc, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
+import { z } from 'zod';
 import { isUniqueViolation } from '@/libs/action-result';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
@@ -714,6 +715,18 @@ export async function recordPayablePayment(
   });
 }
 
+const recordPayablePaymentSchema = z.object({
+  payableId: z.string().uuid({ message: 'payableId debe ser un UUID válido' }),
+  fromAccountId: z.string().uuid({ message: 'fromAccountId debe ser un UUID válido' }),
+  amount: z
+    .union([z.number(), z.string()])
+    .transform(v => (typeof v === 'string' ? Number(v) : v))
+    .refine(n => Number.isFinite(n) && n > 0, {
+      message: 'El monto debe ser un número mayor a cero',
+    }),
+  note: z.string().nullish(),
+});
+
 /** Server-action wrapper for recordPayablePayment (requires org from Clerk). */
 export async function recordPayablePaymentAction(input: {
   payableId: string;
@@ -722,14 +735,15 @@ export async function recordPayablePaymentAction(input: {
   note?: string | null;
 }): Promise<RecordPayablePaymentResult> {
   const { userId, orgId } = await requireOrgId();
+  const data = recordPayablePaymentSchema.parse(input);
   const result = await recordPayablePayment(db, {
     organizationId: orgId,
-    payableId: input.payableId,
-    fromAccountId: input.fromAccountId,
-    amount: input.amount,
+    payableId: data.payableId,
+    fromAccountId: data.fromAccountId,
+    amount: data.amount,
     createdBy: userId,
-    note: input.note ?? null,
+    note: data.note ?? null,
   });
-  revalidatePath('/dashboard/suppliers/payables');
+  revalidatePath('/[locale]/dashboard/suppliers/payables', 'page');
   return result;
 }
