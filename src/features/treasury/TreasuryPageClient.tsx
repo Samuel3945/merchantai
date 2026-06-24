@@ -4,6 +4,7 @@ import type { PaymentMethodRow } from '@/actions/payment-methods';
 import type { PendingHandover, TreasuryAccount, TreasuryAccountRow } from '@/libs/treasury';
 import { useState } from 'react';
 import { CreateSlideover } from './CreateSlideover';
+import { DeleteAccountModal } from './DeleteAccountModal';
 import { MoneyFlow } from './MoneyFlow';
 import { PorUbicar } from './PorUbicar';
 import { TransferWizard } from './TransferWizard';
@@ -41,6 +42,7 @@ export function TreasuryPageClient({
   const [wizardOpen, setWizardOpen] = useState(false);
   const [wizardFromKey, setWizardFromKey] = useState<string | undefined>(undefined);
   const [slideoverOpen, setSlideoverOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<TreasuryAccount | null>(null);
 
   function openWizard(fromKey?: string) {
     setWizardFromKey(fromKey);
@@ -70,6 +72,7 @@ export function TreasuryPageClient({
         sinUbicar={sinUbicar}
         pendingCount={pendingCount}
         onMoveFromPlace={key => openWizard(key)}
+        onDeletePlace={account => setDeleteTarget(account)}
         onAddPlace={() => setSlideoverOpen(true)}
       />
 
@@ -93,6 +96,13 @@ export function TreasuryPageClient({
         open={slideoverOpen}
         onClose={() => setSlideoverOpen(false)}
         transferMethods={transferMethods}
+      />
+
+      {/* DeleteAccountModal — caja_fuerte / banco only */}
+      <DeleteAccountModal
+        account={deleteTarget}
+        open={deleteTarget !== null}
+        onClose={() => setDeleteTarget(null)}
       />
     </>
   );

@@ -411,6 +411,92 @@ export async function deactivateTreasuryAccount(
     );
 }
 
+export type DeleteAccountResult = {
+  /**
+   * The balance moved to Pendiente de ubicar at deletion time (0 when the
+   * account was empty). Lets the caller tell the user how much was relocated.
+   */
+  movedAmount: number;
+};
+
+/**
+ * Deletes a caja_fuerte or banco container: moves its ENTIRE remaining balance
+ * to the org's "Pendiente de ubicar" (transito) account, then deactivates it.
+ * Both steps run on the SAME executor, so the caller MUST wrap this in one
+ * transaction — that way the money is never stranded if a step fails.
+ *
+ * Guards:
+ *   - account must exist, belong to the org, and still be active
+ *   - only 'caja_fuerte' and 'banco' are deletable (never 'transito' or a POS 'caja')
+ *   - a negative balance is rejected (anomalous — needs manual correction first)
+ *
+ * The row itself is kept (active=false): historical treasury_movements that
+ * reference it stay intact.
+ */
+export async function deleteTreasuryAccountToPending(
+  executor: Executor,
+  args: { accountId: string; organizationId: string; createdBy: string },
+): Promise<DeleteAccountResult> {
+  const { accountId, organizationId, createdBy } = args;
+
+  const [account] = await executor
+    .select()
+    .from(treasuryAccountsSchema)
+    .where(
+      and(
+        eq(treasuryAccountsSchema.id, accountId),
+        eq(treasuryAccountsSchema.organizationId, organizationId),
+      ),
+    )
+    .limit(1);
+
+  if (!account || !account.active) {
+    throw new Error('cuenta no encontrada o ya eliminada');
+  }
+  if (account.type !== 'caja_fuerte' && account.type !== 'banco') {
+    throw new Error('solo se pueden eliminar cajas fuertes y cuentas bancarias');
+  }
+
+  // Current balance via the movements ledger: opening + credits − debits.
+  const [movRow] = await executor
+    .select({
+      credits: sql<string>`COALESCE(SUM(${treasuryMovementsSchema.amount}) FILTER (WHERE ${treasuryMovementsSchema.toAccountId} = ${accountId}), 0)::text`,
+      debits: sql<string>`COALESCE(SUM(${treasuryMovementsSchema.amount}) FILTER (WHERE ${treasuryMovementsSchema.fromAccountId} = ${accountId}), 0)::text`,
+    })
+    .from(treasuryMovementsSchema)
+    .where(eq(treasuryMovementsSchema.organizationId, organizationId));
+
+  const opening = Number.parseFloat(account.openingBalance ?? '0') || 0;
+  const credits = Number.parseFloat(movRow?.credits ?? '0') || 0;
+  const debits = Number.parseFloat(movRow?.debits ?? '0') || 0;
+  const balance = balanceForAccount(opening, credits, debits);
+
+  if (balance < 0) {
+    throw new Error(
+      `la cuenta tiene saldo negativo (${balance.toFixed(2)}) y no se puede eliminar`,
+    );
+  }
+
+  // Relocate any remaining balance to Pendiente de ubicar BEFORE deactivating,
+  // so the company total is preserved across the deletion.
+  if (balance > 0) {
+    const pending = await getOrCreatePendingAccount(executor, organizationId, createdBy);
+    await executor.insert(treasuryMovementsSchema).values({
+      organizationId,
+      fromAccountId: accountId,
+      toAccountId: pending.id,
+      amount: toMoney(balance),
+      type: 'transfer',
+      reason: `Cuenta eliminada: ${account.name}`,
+      createdBy,
+    });
+  }
+
+  await deactivateTreasuryAccount(executor, accountId, organizationId);
+
+  return { movedAmount: balance };
+}
+
 /**
  * Derives the opening balance for a container type from the Phase-1
  * getTreasuryPosition derivation. Used by the 0045 seed migration and tests

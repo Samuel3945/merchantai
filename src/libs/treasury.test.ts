@@ -13,6 +13,7 @@ import {
   countPendingHandovers,
   createTreasuryAccount,
   deactivateTreasuryAccount,
+  deleteTreasuryAccountToPending,
   depositConfirmedTransfer,
   ensurePaymentMethodAccounts,
   getHandoverStatusForSessions,
@@ -1940,6 +1941,102 @@ describe('getOrCreatePendingAccount', () => {
     );
 
     expect(Number(rows[0]!.cnt)).toBe(1);
+  });
+});
+
+describe('deleteTreasuryAccountToPending', () => {
+  async function isActive(accountId: string): Promise<boolean> {
+    const { rows } = await pg.query<{ active: boolean }>(
+      'SELECT active FROM treasury_accounts WHERE id = $1',
+      [accountId],
+    );
+    return rows[0]!.active;
+  }
+
+  it('moves the whole balance to Pendiente de ubicar and deactivates the account', async () => {
+    const vaultId = await makeAccount('caja_fuerte', 'Cajón viejo', 300);
+
+    const result = await deleteTreasuryAccountToPending(db, {
+      accountId: vaultId,
+      organizationId: ORG,
+      createdBy: 'owner',
+    });
+
+    expect(result.movedAmount).toBe(300);
+    expect(await isActive(vaultId)).toBe(false);
+
+    // The transito (Pendiente de ubicar) account now holds the relocated money.
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+
+    expect(await dbBalance(pending.id, 0)).toBe(300);
+
+    // The deleted account is drained to zero.
+    expect(await dbBalance(vaultId, 300)).toBe(0);
+
+    // The relocation movement carries a readable reason.
+    const { rows } = await pg.query<{ reason: string }>(
+      'SELECT reason FROM treasury_movements WHERE from_account_id = $1',
+      [vaultId],
+    );
+
+    expect(rows[0]!.reason).toBe('Cuenta eliminada: Cajón viejo');
+  });
+
+  it('deactivates an empty account without writing any movement', async () => {
+    const bankId = await makeAccount('banco', 'Banco vacío', 0);
+
+    const result = await deleteTreasuryAccountToPending(db, {
+      accountId: bankId,
+      organizationId: ORG,
+      createdBy: 'owner',
+    });
+
+    expect(result.movedAmount).toBe(0);
+    expect(await isActive(bankId)).toBe(false);
+
+    const { rows } = await pg.query<{ cnt: string }>(
+      'SELECT COUNT(*)::text AS cnt FROM treasury_movements WHERE organization_id = $1',
+      [ORG],
+    );
+
+    expect(Number(rows[0]!.cnt)).toBe(0);
+  });
+
+  it('refuses to delete the transito (Pendiente de ubicar) account itself', async () => {
+    const pending = await getOrCreatePendingAccount(db, ORG, 'owner');
+
+    await expect(
+      deleteTreasuryAccountToPending(db, {
+        accountId: pending.id,
+        organizationId: ORG,
+        createdBy: 'owner',
+      }),
+    ).rejects.toThrow(/solo se pueden eliminar/i);
+  });
+
+  it('refuses to delete a POS caja', async () => {
+    const cajaId = await makeAccount('caja', 'Caja POS', 100);
+
+    await expect(
+      deleteTreasuryAccountToPending(db, {
+        accountId: cajaId,
+        organizationId: ORG,
+        createdBy: 'owner',
+      }),
+    ).rejects.toThrow(/solo se pueden eliminar/i);
+  });
+
+  it('refuses to delete an already-deleted account', async () => {
+    const vaultId = await makeAccount('caja_fuerte', 'Ya eliminada', 0);
+    await deactivateTreasuryAccount(db, vaultId, ORG);
+
+    await expect(
+      deleteTreasuryAccountToPending(db, {
+        accountId: vaultId,
+        organizationId: ORG,
+        createdBy: 'owner',
+      }),
+    ).rejects.toThrow(/no encontrada o ya eliminada/i);
   });
 });
 
