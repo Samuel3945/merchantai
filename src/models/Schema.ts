@@ -2293,3 +2293,110 @@ export const deliveryEventsRelations = relations(
     }),
   }),
 );
+
+// ── Supplier accounts-payable (migration 0065) ────────────────────────────────
+//
+// One supplier_payables header per purchase entry (created inside the same tx as
+// stock_movements). One supplier_payments row per payment event — N payments can
+// reference the same payable (multi-payment N:M in v1 via direct nullable FK).
+// Payments debit a treasury container (salida), not expenses (ASSET, not P&L).
+// Mirror the fiados shape: denormalized paid_amount + status for fast list scans.
+
+export const supplierPayableStatusEnum = pgEnum('supplier_payable_status', [
+  'open',
+  'partial',
+  'paid',
+]);
+
+// Header: one per purchase entry lot. totalAmount is frozen at creation.
+export const supplierPayablesSchema = pgTable(
+  'supplier_payables',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: text('organization_id').notNull(),
+    // TEXT (no FK) — mirrors stock_movements.supplier_id convention (D1).
+    supplierId: text('supplier_id').notNull(),
+    // The entry lot. RESTRICT: lot must not be deleted while a payable exists.
+    stockMovementId: uuid('stock_movement_id').references(
+      () => stockMovementsSchema.id,
+      { onDelete: 'restrict' },
+    ),
+    // Frozen at qty × unitCost at purchase time. Never recomputed retroactively.
+    totalAmount: numeric('total_amount', { precision: 12, scale: 2 }).notNull(),
+    // Denormalized for fast SUM queries (D4). Updated atomically with each payment.
+    paidAmount: numeric('paid_amount', { precision: 12, scale: 2 })
+      .default('0')
+      .notNull(),
+    status: supplierPayableStatusEnum('status').default('open').notNull(),
+    purchasedAt: timestamp('purchased_at', { mode: 'date' })
+      .defaultNow()
+      .notNull(),
+    notes: text('notes'),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { mode: 'date' })
+      .defaultNow()
+      .$onUpdate(() => new Date())
+      .notNull(),
+  },
+  table => [
+    // Per-supplier history and totalPaid lookup (KPI).
+    index('supplier_payables_org_supplier_idx').on(
+      table.organizationId,
+      table.supplierId,
+    ),
+    // Open-list filter + pendingPayments KPI.
+    index('supplier_payables_org_status_idx').on(
+      table.organizationId,
+      table.status,
+    ),
+    // Date-range scan on the "Compras por pagar" list (purchased_at DESC).
+    index('supplier_payables_org_purchased_idx').on(
+      table.organizationId,
+      table.purchasedAt,
+    ),
+    // One payable per entry lot. Idempotent backfill-safe (mirrors fiados_sale_unique_idx).
+    uniqueIndex('supplier_payables_stock_movement_unique')
+      .on(table.stockMovementId)
+      .where(sql`${table.stockMovementId} IS NOT NULL`),
+  ],
+);
+
+// Ledger: one row per payment event. Many rows may reference the same payable.
+export const supplierPaymentsSchema = pgTable(
+  'supplier_payments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: text('organization_id').notNull(),
+    supplierId: text('supplier_id').notNull(),
+    // Nullable for future ad-hoc payments that don't link to a specific payable.
+    // SET NULL if a payable is ever purged — keeps the payment ledger intact.
+    payableId: uuid('payable_id').references(
+      () => supplierPayablesSchema.id,
+      { onDelete: 'set null' },
+    ),
+    // The salida treasury_movements row. RESTRICT: ledger row must not be orphaned.
+    treasuryMovementId: uuid('treasury_movement_id').references(
+      () => treasuryMovementsSchema.id,
+      { onDelete: 'restrict' },
+    ),
+    amount: numeric('amount', { precision: 12, scale: 2 }).notNull(),
+    note: text('note'),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+  },
+  table => [
+    // Per-supplier payment history.
+    index('supplier_payments_org_supplier_idx').on(
+      table.organizationId,
+      table.supplierId,
+    ),
+    // Payments for a given payable (settling multiple installments).
+    index('supplier_payments_payable_idx').on(table.payableId),
+    // paidThisMonth window: date_trunc('month', now()) scan (mirrors fiado movements idx).
+    index('supplier_payments_org_created_idx').on(
+      table.organizationId,
+      table.createdAt,
+    ),
+  ],
+);
