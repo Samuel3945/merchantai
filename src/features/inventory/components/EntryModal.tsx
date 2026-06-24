@@ -99,10 +99,14 @@ export function EntryModal({
   // Load open invoices for the selected supplier when in purchase mode.
   useEffect(() => {
     if (reason !== 'purchase' || !supplierId) {
+      // eslint-disable-next-line react/set-state-in-effect -- early-return guard reset, not derived-state
       setOpenInvoices([]);
       return;
     }
-    // Reset existing selection whenever supplier changes.
+    // Reset existing selection and mode whenever supplier changes.
+    // eslint-disable-next-line react/set-state-in-effect -- synchronous guard reset, not a derived-state anti-pattern
+    setInvoiceMode('none');
+    // eslint-disable-next-line react/set-state-in-effect -- synchronous guard reset, not a derived-state anti-pattern
     setExistingInvoiceId('');
     let active = true;
     listOpenInvoicesForSupplierAction(supplierId)

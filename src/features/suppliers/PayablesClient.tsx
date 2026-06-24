@@ -120,16 +120,13 @@ export function PayablesClient(props: {
             </tr>
           </thead>
           <tbody>
-            {props.invoices.map((inv, i) => {
-              // Row key: purchaseId for invoiced, payable id for standalone.
-              // For standalone (purchaseId=null) we use the payable from the flat list.
-              const rowKey = inv.purchaseId ?? `standalone-${i}`;
+            {props.invoices.map((inv) => {
+              // Row key: purchaseId for invoiced groups; stable standalone payable id for standalone.
+              const rowKey = inv.purchaseId ?? `standalone-${inv.standalonePayableId}`;
               const isInvoice = inv.purchaseId !== null;
 
-              // For standalone groups, find the matching payable for per-line pay.
-              const standalonePayable = !isInvoice
-                ? props.payables.find(p => p.supplierId === inv.supplierId && !p.purchaseId)
-                : null;
+              // For standalone groups, target the exact payable id (not a fragile .find).
+              const standalonePayableId = inv.standalonePayableId ?? null;
 
               return (
                 <tr
@@ -164,12 +161,12 @@ export function PayablesClient(props: {
                             Pagar factura
                           </Button>
                         )
-                      : standalonePayable
+                      : standalonePayableId
                         ? (
                             <Button
                               size="sm"
                               variant="secondary"
-                              onClick={() => setPayingPayableId(standalonePayable.id)}
+                              onClick={() => setPayingPayableId(standalonePayableId)}
                             >
                               Pagar
                             </Button>

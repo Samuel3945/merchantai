@@ -26,6 +26,7 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createTenantDb } from '@/libs/db-context';
 import {
   listOpenInvoices,
+  listOpenInvoicesForSupplier,
   recordInvoicePayment,
 } from '@/libs/supplier-invoice-payment';
 
@@ -262,11 +263,14 @@ const DDL = `
 
 const ORG = 'org-inv-1';
 const SUPPLIER_ID = '00000000-0000-0000-aaaa-100000000001';
+const SUPPLIER_ID_OTHER = '00000000-0000-0000-aaaa-100000000002';
 const CONTAINER_ID = '00000000-0000-0000-bbbb-100000000001';
 const PURCHASE_ID = '00000000-0000-0000-ffff-100000000001';
+const PURCHASE_ID_OTHER = '00000000-0000-0000-ffff-100000000002';
 const PAYABLE_A = '00000000-0000-0000-cccc-100000000001';
 const PAYABLE_B = '00000000-0000-0000-cccc-100000000002';
 const PAYABLE_STANDALONE = '00000000-0000-0000-cccc-100000000099';
+const PAYABLE_OTHER_SUPPLIER = '00000000-0000-0000-cccc-100000000098';
 
 // ── Setup ─────────────────────────────────────────────────────────────────────
 
@@ -685,5 +689,58 @@ describe('supplier_purchases TenantDb proxy regression', () => {
 
     expect(result).toHaveLength(1);
     expect(result[0]!.purchaseId).toBe(PURCHASE_ID);
+  });
+});
+
+// ── listOpenInvoicesForSupplier ───────────────────────────────────────────────
+// FIX-1 regression cover: the old ne(purchaseId, sql`NULL`) always returns []
+// because SQL NULL comparisons are always NULL (never true/false).
+// isNotNull(purchaseId) renders "purchase_id IS NOT NULL" which is correct.
+
+describe('listOpenInvoicesForSupplier', () => {
+  it('returns open invoices that belong to the supplier', async () => {
+    await seedInvoice(PURCHASE_ID, SUPPLIER_ID, 'FAC-100');
+    await seedPayable(PAYABLE_A, 500, 0, 'open', PURCHASE_ID, 0, SUPPLIER_ID);
+
+    const result = await listOpenInvoicesForSupplier(rawDb as never, ORG, SUPPLIER_ID);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]!.id).toBe(PURCHASE_ID);
+    expect(result[0]!.invoiceNumber).toBe('FAC-100');
+  });
+
+  it('excludes standalone payables (purchase_id = null)', async () => {
+    // Standalone payable — no invoice header.
+    await seedPayable(PAYABLE_STANDALONE, 200, 0, 'open', null, 0, SUPPLIER_ID);
+
+    const result = await listOpenInvoicesForSupplier(rawDb as never, ORG, SUPPLIER_ID);
+
+    // Must return nothing — standalone payables have no purchase_id.
+    expect(result).toHaveLength(0);
+  });
+
+  it('excludes invoices belonging to a different supplier', async () => {
+    // Invoice for SUPPLIER_ID — should be found.
+    await seedInvoice(PURCHASE_ID, SUPPLIER_ID, 'FAC-200');
+    await seedPayable(PAYABLE_A, 300, 0, 'open', PURCHASE_ID, 0, SUPPLIER_ID);
+
+    // Invoice for another supplier — must NOT appear in SUPPLIER_ID results.
+    await seedInvoice(PURCHASE_ID_OTHER, SUPPLIER_ID_OTHER, 'FAC-201');
+    await seedPayable(PAYABLE_OTHER_SUPPLIER, 400, 0, 'open', PURCHASE_ID_OTHER, 0, SUPPLIER_ID_OTHER);
+
+    const result = await listOpenInvoicesForSupplier(rawDb as never, ORG, SUPPLIER_ID);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]!.id).toBe(PURCHASE_ID);
+  });
+
+  it('excludes fully paid invoices', async () => {
+    await seedInvoice(PURCHASE_ID, SUPPLIER_ID, 'FAC-300');
+    // Payable is already paid.
+    await seedPayable(PAYABLE_A, 300, 300, 'paid', PURCHASE_ID, 0, SUPPLIER_ID);
+
+    const result = await listOpenInvoicesForSupplier(rawDb as never, ORG, SUPPLIER_ID);
+
+    expect(result).toHaveLength(0);
   });
 });

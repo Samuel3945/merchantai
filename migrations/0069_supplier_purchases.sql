@@ -14,11 +14,11 @@ CREATE TABLE "supplier_purchases" (
   "organization_id" text NOT NULL,
   "supplier_id" text NOT NULL,
   "invoice_number" text,
-  "purchased_at" timestamptz DEFAULT now() NOT NULL,
+  "purchased_at" timestamp DEFAULT now() NOT NULL,
   "notes" text,
   "created_by" text,
-  "created_at" timestamptz DEFAULT now() NOT NULL,
-  "updated_at" timestamptz DEFAULT now() NOT NULL
+  "created_at" timestamp DEFAULT now() NOT NULL,
+  "updated_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
 

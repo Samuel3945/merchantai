@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import { round2 } from '@/libs/creditos-math';
 import { recordSupplierPaymentOutflow } from '@/libs/treasury';
 import {
@@ -139,11 +139,6 @@ export async function recordInvoicePayment(
   const appliedTotal = round2(requestedAmt - remaining);
 
   // ── 3. Validate: amount must not exceed invoice outstanding ───────────────
-  if (round2(input.amount) > round2(appliedTotal + remaining) + 0.005) {
-    // Should never happen given the loop above, but defensive.
-    throw new Error('invoice outstanding exceeded');
-  }
-
   // If there is still unallocated amount after consuming all lines, the caller
   // tried to overpay. remaining > 0 means the requested amount > SUM(outstanding).
   if (remaining > 0.005) {
@@ -193,6 +188,12 @@ export async function recordInvoicePayment(
 export type OpenInvoiceGroup = {
   /** Null for standalone payables (no invoice header). */
   purchaseId: string | null;
+  /**
+   * For standalone groups (purchaseId = null): the exact payable id so the UI
+   * can open the payment modal for the correct row without a secondary `.find`.
+   * Null for invoice groups.
+   */
+  standalonePayableId: string | null;
   invoiceNumber: string | null;
   supplierId: string;
   supplierName: string | null;
@@ -262,6 +263,8 @@ export async function listOpenInvoices(
   // We use a Map where key = purchaseId or a unique per-payable sentinel for nulls.
   type GroupAcc = {
     purchaseId: string | null;
+    /** Populated only for standalone groups (purchaseId = null). */
+    standalonePayableId: string | null;
     invoiceNumber: string | null;
     supplierId: string;
     supplierName: string | null;
@@ -287,6 +290,8 @@ export async function listOpenInvoices(
     if (!groupMap.has(groupKey)) {
       groupMap.set(groupKey, {
         purchaseId: r.purchaseId ?? null,
+        // For standalone groups, record the exact payable id for direct UI targeting.
+        standalonePayableId: r.purchaseId == null ? r.id : null,
         invoiceNumber: r.invoiceNumber ?? null,
         supplierId: r.supplierId,
         supplierName: r.supplierName ?? null,
@@ -319,6 +324,7 @@ export async function listOpenInvoices(
 
     result.push({
       purchaseId: group.purchaseId,
+      standalonePayableId: group.standalonePayableId,
       invoiceNumber: group.invoiceNumber,
       supplierId: group.supplierId,
       supplierName: group.supplierName,
@@ -442,7 +448,7 @@ export async function listOpenInvoicesForSupplier(
         eq(supplierPayablesSchema.organizationId, organizationId),
         eq(supplierPayablesSchema.supplierId, supplierId),
         inArray(supplierPayablesSchema.status, ['open', 'partial']),
-        ne(supplierPayablesSchema.purchaseId, sql`NULL`),
+        isNotNull(supplierPayablesSchema.purchaseId),
       ),
     );
 
