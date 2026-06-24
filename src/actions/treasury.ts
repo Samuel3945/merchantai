@@ -412,7 +412,7 @@ export async function recordSupplierPaymentFromConsole(input: {
   fromAccountId: string;
   amount: number | string;
   note?: string | null;
-}): Promise<ActionResult<{ appliedTotal: number; excess: number; settledPayables: number }>> {
+}): Promise<ActionResult<{ appliedTotal: number; settledPayables: number }>> {
   const { userId, orgId } = await requirePanelModule('cash');
 
   if (!input.supplierId?.trim()) {
@@ -449,7 +449,6 @@ export async function recordSupplierPaymentFromConsole(input: {
         fromAccountId: input.fromAccountId,
         amount: amt,
         appliedTotal: result.appliedTotal,
-        excess: result.excess,
       },
     });
 
@@ -459,7 +458,6 @@ export async function recordSupplierPaymentFromConsole(input: {
       ok: true,
       data: {
         appliedTotal: result.appliedTotal,
-        excess: result.excess,
         settledPayables: result.breakdown.length,
       },
     };

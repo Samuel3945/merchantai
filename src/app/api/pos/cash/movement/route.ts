@@ -171,7 +171,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       // All other types keep the plain insert.
       let created: typeof cashMovementsSchema.$inferSelect | undefined;
       // Extra settle metadata returned in response (undefined for non-settle paths).
-      let settleOutcome: { outcome: 'settled'; appliedTotal: number; excess: number; settledPayables: number } | undefined;
+      let settleOutcome: { outcome: 'settled'; appliedTotal: number; settledPayables: number } | undefined;
 
       if (type === 'expense' && supplierId) {
         // Check whether this supplier has outstanding payables inside the tx.
@@ -184,6 +184,15 @@ export async function POST(req: Request): Promise<NextResponse> {
         if (outstanding.totalOutstanding > 0) {
           // SETTLE PATH — caja-funded, no P&L, no expenses row.
           const amtNum = Number.parseFloat(amount);
+
+          // Pre-check: reject overpay before entering the write path.
+          // Gives a clear Spanish message; the primitive also throws as a guard.
+          if (amtNum > outstanding.totalOutstanding + 0.005) {
+            throw new Error(
+              `El monto ($${amtNum.toFixed(2)}) supera la deuda del proveedor ($${outstanding.totalOutstanding.toFixed(2)}). Reducí el monto o registralo como gasto aparte.`,
+            );
+          }
+
           const settleResult = await recordSupplierPayment(tx, {
             organizationId: ctx.organizationId,
             supplierId,
@@ -208,7 +217,6 @@ export async function POST(req: Request): Promise<NextResponse> {
           settleOutcome = {
             outcome: 'settled',
             appliedTotal: settleResult.appliedTotal,
-            excess: settleResult.excess,
             settledPayables: settleResult.breakdown.length,
           };
 
@@ -222,7 +230,6 @@ export async function POST(req: Request): Promise<NextResponse> {
               supplierId,
               amount,
               appliedTotal: settleResult.appliedTotal,
-              excess: settleResult.excess,
               settledPayables: settleResult.breakdown.length,
             },
             metadata: { cashierName: ctx.cashierName, sessionId: open.id },

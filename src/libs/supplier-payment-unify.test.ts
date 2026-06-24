@@ -668,19 +668,26 @@ describe('recordSupplierPayment — caja funding', () => {
     ).rejects.toThrow(/greater than zero/i);
   });
 
-  it('returns excess without writing anything when no open payables', async () => {
+  it('throws when no open payables (amount > 0 outstanding)', async () => {
     await seedSession(SESSION_ID);
-    const result = await recordSupplierPayment(db as never, {
-      organizationId: ORG,
-      supplierId: SUPPLIER_ID,
-      fundingSource: { kind: 'caja', sessionId: SESSION_ID },
-      amount: 500,
-      createdBy: 'cajero',
-    });
 
-    expect(result.appliedTotal).toBe(0);
-    expect(result.excess).toBe(500);
-    expect(result.breakdown).toHaveLength(0);
+    await expect(
+      recordSupplierPayment(db as never, {
+        organizationId: ORG,
+        supplierId: SUPPLIER_ID,
+        fundingSource: { kind: 'caja', sessionId: SESSION_ID },
+        amount: 500,
+        createdBy: 'cajero',
+      }),
+    ).rejects.toThrow(/exceeds supplier outstanding/i);
+
+    // Zero rows written
+    const cmCount = await pg.query<{ count: string }>(
+      'SELECT COUNT(*) as count FROM cash_movements',
+      [],
+    );
+
+    expect(Number(cmCount.rows[0]!.count)).toBe(0);
   });
 
   it('allocates oldest-first across invoices — N cash_movements + N supplier_payments', async () => {
@@ -697,7 +704,6 @@ describe('recordSupplierPayment — caja funding', () => {
     });
 
     expect(result.appliedTotal).toBe(500);
-    expect(result.excess).toBe(0);
     expect(result.breakdown).toHaveLength(2);
     expect(result.breakdown[0]!.payableId).toBe(PAYABLE_A);
     expect(result.breakdown[0]!.chunk).toBe(300);
@@ -721,22 +727,38 @@ describe('recordSupplierPayment — caja funding', () => {
     expect(Number(spCount.rows[0]!.count)).toBe(2);
   });
 
-  it('caps at total outstanding — reports excess when amount > outstanding', async () => {
+  it('throws when amount > outstanding — writes ZERO rows', async () => {
     await seedSession(SESSION_ID);
     await seedPayable(PAYABLE_A, 300);
 
-    const result = await recordSupplierPayment(db as never, {
-      organizationId: ORG,
-      supplierId: SUPPLIER_ID,
-      fundingSource: { kind: 'caja', sessionId: SESSION_ID },
-      amount: 500, // > outstanding 300
-      createdBy: 'cajero',
-    });
+    await expect(
+      recordSupplierPayment(db as never, {
+        organizationId: ORG,
+        supplierId: SUPPLIER_ID,
+        fundingSource: { kind: 'caja', sessionId: SESSION_ID },
+        amount: 500, // > outstanding 300
+        createdBy: 'cajero',
+      }),
+    ).rejects.toThrow(/exceeds supplier outstanding/i);
 
-    expect(result.appliedTotal).toBe(300);
-    expect(result.excess).toBe(200); // not applied, reported to caller
-    expect(result.breakdown).toHaveLength(1);
-    expect(result.breakdown[0]!.chunk).toBe(300);
+    // Zero rows written — no partial debit
+    const cmCount = await pg.query<{ count: string }>(
+      'SELECT COUNT(*) as count FROM cash_movements',
+      [],
+    );
+    const spCount = await pg.query<{ count: string }>(
+      'SELECT COUNT(*) as count FROM supplier_payments',
+      [],
+    );
+    const payable = await pg.query<{ status: string; paid_amount: string }>(
+      'SELECT status, paid_amount FROM supplier_payables WHERE id = $1',
+      [PAYABLE_A],
+    );
+
+    expect(Number(cmCount.rows[0]!.count)).toBe(0);
+    expect(Number(spCount.rows[0]!.count)).toBe(0);
+    expect(payable.rows[0]!.status).toBe('open');
+    expect(Number(payable.rows[0]!.paid_amount)).toBe(0);
   });
 
   it('handles partial settle (amount < outstanding)', async () => {
@@ -752,7 +774,6 @@ describe('recordSupplierPayment — caja funding', () => {
     });
 
     expect(result.appliedTotal).toBe(200);
-    expect(result.excess).toBe(0);
 
     const p = await pg.query<{ status: string }>(
       'SELECT status FROM supplier_payables WHERE id = $1',

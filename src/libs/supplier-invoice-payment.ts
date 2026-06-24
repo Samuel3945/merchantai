@@ -697,8 +697,9 @@ export async function recordCajaPayableSettle(
 //   { kind: 'treasury', accountId } → recordSupplierPaymentOutflow per chunk.
 //   { kind: 'caja',     sessionId } → recordCajaPayableSettle per chunk.
 //
-// Returns: { appliedTotal, excess, breakdown }.
-// excess > 0 means the amount exceeded total outstanding; caller decides UX.
+// Returns: { appliedTotal, breakdown }.
+// Throws when the requested amount exceeds the supplier's total outstanding —
+// callers must ensure amount ≤ totalOutstanding before calling.
 // Does NOT fabricate credits. Does NOT overpay payables.
 
 export type SupplierPaymentFundingSource
@@ -724,7 +725,6 @@ export type SupplierPaymentBreakdown = {
 
 export type SupplierPaymentResult = {
   appliedTotal: number;
-  excess: number;
   breakdown: SupplierPaymentBreakdown[];
 };
 
@@ -761,11 +761,6 @@ export async function recordSupplierPayment(
       asc(supplierPayablesSchema.id),
     );
 
-  if (payables.length === 0) {
-    // No outstanding debt — caller should route to gasto instead.
-    return { appliedTotal: 0, excess: requestedAmt, breakdown: [] };
-  }
-
   // ── 2. Compute allocation oldest-first ────────────────────────────────────
   type Allocation = { payableId: string; supplierId: string; chunk: number };
   const allocations: Allocation[] = [];
@@ -787,10 +782,28 @@ export async function recordSupplierPayment(
     remaining = round2(remaining - chunk);
   }
 
-  const appliedTotal = round2(requestedAmt - remaining);
-  const excess = round2(remaining); // > 0 if amount > total outstanding
+  // ── 3. Guard: reject overpay ──────────────────────────────────────────────
+  // remaining > 0 means the requested amount exceeds the supplier's total
+  // outstanding. Compute total outstanding for the error message.
+  const totalOutstanding = round2(
+    payables.reduce((s: number, p: { totalAmount: string; paidAmount: string; creditedAmount: string | null }) => {
+      const total = round2(Number.parseFloat(p.totalAmount));
+      const paid = round2(Number.parseFloat(p.paidAmount));
+      const credited = round2(Number.parseFloat(p.creditedAmount ?? '0'));
+      return s + Math.max(0, round2(total - paid - credited));
+    }, 0),
+  );
 
-  // ── 3. Execute inside ONE outer transaction ───────────────────────────────
+  if (payables.length === 0 || remaining > 0.005) {
+    throw new Error(
+      `exceeds supplier outstanding: requested ${requestedAmt.toFixed(2)}, `
+      + `supplier outstanding ${totalOutstanding.toFixed(2)}`,
+    );
+  }
+
+  const appliedTotal = round2(requestedAmt - remaining);
+
+  // ── 4. Execute inside ONE outer transaction ───────────────────────────────
   const doWork = async (tx: Executor): Promise<SupplierPaymentResult> => {
     const breakdown: SupplierPaymentBreakdown[] = [];
 
@@ -830,7 +843,7 @@ export async function recordSupplierPayment(
       }
     }
 
-    return { appliedTotal, excess, breakdown };
+    return { appliedTotal, breakdown };
   };
 
   const isRealDb = typeof (executor as { transaction?: unknown }).transaction === 'function';
