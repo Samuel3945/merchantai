@@ -205,9 +205,7 @@ export function SuppliersClient(props: {
         <StatCard label="Proveedores activos" value={String(props.kpis.active)} />
         <StatCard
           label="Pagos pendientes"
-          value="Próximamente"
-          muted
-          hint="Disponible cuando se implemente Compras y Cuentas por Pagar."
+          value={money(props.kpis.pendingPayments)}
         />
         <StatCard
           label="Monto pagado este mes"

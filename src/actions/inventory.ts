@@ -10,6 +10,7 @@ import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/db-context';
 import { fifoBatchOrder } from '@/libs/fifo-cogs';
 import { requirePanelModule } from '@/libs/panel-session';
+import { insertPurchasePayable } from '@/libs/supplier-payables';
 import {
   expirationRiskCacheSchema,
   productsSchema,
@@ -206,6 +207,26 @@ export async function recordMovement(input: RecordMovementInput) {
       .set(stockUpdate)
       .where(eq(productsSchema.id, input.productId))
       .returning();
+
+    // For purchase entries, create one open supplier_payables row in the same tx.
+    // totalAmount = qty × unitCost, frozen at this moment (REQ-2.2, REQ-7.2).
+    // Non-purchase entries create NO payable (REQ-2.6).
+    // return_supplier does not mutate payables — deferred; see REQ-7.1.
+    if (input.reason === 'purchase' && movement && input.supplierId && unitCost) {
+      if (!movement?.id) {
+        throw new Error('stock movement insert returned no id');
+      }
+      const movementId = movement.id as string;
+      await insertPurchasePayable(tx, {
+        organizationId: orgId,
+        supplierId: input.supplierId,
+        stockMovementId: movementId,
+        qty: input.qty,
+        unitCost,
+        createdBy: userId,
+        notes: null,
+      });
+    }
 
     return { movement, product: updated, stockBefore: product.stock };
   });

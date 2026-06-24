@@ -2,14 +2,15 @@
 
 import type { SupplierCreateInput, SupplierUpdateInput } from './validation';
 import { auth } from '@clerk/nextjs/server';
-import { and, asc, eq, gte, ilike, inArray, isNotNull, or, sql } from 'drizzle-orm';
+import { and, asc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { isUniqueViolation } from '@/libs/action-result';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
+import { getSupplierKpisForOrg } from '@/libs/supplier-payables';
 import {
-  cashMovementsSchema,
   productsSchema,
+  supplierPaymentsSchema,
   supplierProductsSchema,
   suppliersSchema,
 } from '@/models/Schema';
@@ -148,11 +149,13 @@ export type SupplierOption = {
 export type SupplierKpis = {
   total: number;
   active: number;
+  // SUM(supplier_payments.amount) in the current calendar month, org-scoped.
+  // Reads supplier_payments only — NOT cash_movements (D6). POS cashier
+  // "Pago a proveedor" gastos stay in expenses/P&L where they belong.
   paidThisMonth: string;
-  // "Pagos pendientes" requires Cuentas por Pagar (a future Compras module).
-  // Until that obligation ledger exists there is nothing to derive it from, so
-  // it stays null and the UI reserves the slot instead of inventing a number.
-  pendingPayments: null;
+  // SUM(total_amount − paid_amount) for open+partial payables, org-scoped.
+  // Returns '0' (not null) when no payables exist (REQ-5.4).
+  pendingPayments: string;
 };
 
 const LIST_LIMIT = 200;
@@ -186,20 +189,18 @@ export async function listSuppliers(
       .where(and(...filters))
       .orderBy(asc(suppliersSchema.name))
       .limit(LIST_LIMIT),
+    // Switch from cash_movements to supplier_payments (D6): panel purchases
+    // never wrote cash_movements, so this is strictly more accurate. POS gasto
+    // amounts stay in expenses/P&L where they belong — no double-count.
     db
       .select({
-        supplierId: cashMovementsSchema.supplierId,
-        totalPaid: sql<string>`COALESCE(SUM(${cashMovementsSchema.amount}), 0)::text`,
-        lastPaymentAt: sql<Date | null>`MAX(${cashMovementsSchema.createdAt})`,
+        supplierId: supplierPaymentsSchema.supplierId,
+        totalPaid: sql<string>`COALESCE(SUM(${supplierPaymentsSchema.amount}), 0)::text`,
+        lastPaymentAt: sql<Date | null>`MAX(${supplierPaymentsSchema.createdAt})`,
       })
-      .from(cashMovementsSchema)
-      .where(
-        and(
-          eq(cashMovementsSchema.organizationId, orgId),
-          isNotNull(cashMovementsSchema.supplierId),
-        ),
-      )
-      .groupBy(cashMovementsSchema.supplierId),
+      .from(supplierPaymentsSchema)
+      .where(eq(supplierPaymentsSchema.organizationId, orgId))
+      .groupBy(supplierPaymentsSchema.supplierId),
   ]);
 
   const paidMap = new Map<
@@ -207,12 +208,12 @@ export async function listSuppliers(
     { totalPaid: string; lastPaymentAt: Date | null }
   >();
   for (const p of payments) {
-    if (p.supplierId) {
-      paidMap.set(p.supplierId, {
-        totalPaid: p.totalPaid,
-        lastPaymentAt: p.lastPaymentAt,
-      });
-    }
+    // supplierId is text NOT NULL in supplier_payments; the map key is the
+    // suppliers.id uuid-as-text, matching how the entry flow stores it.
+    paidMap.set(p.supplierId, {
+      totalPaid: p.totalPaid,
+      lastPaymentAt: p.lastPaymentAt,
+    });
   }
 
   const productMap = await loadProductRefsBySupplier(
@@ -272,24 +273,14 @@ export async function getSupplierKpis(): Promise<SupplierKpis> {
     .from(suppliersSchema)
     .where(eq(suppliersSchema.organizationId, orgId));
 
-  const [paid] = await db
-    .select({
-      total: sql<string>`COALESCE(SUM(${cashMovementsSchema.amount}), 0)::text`,
-    })
-    .from(cashMovementsSchema)
-    .where(
-      and(
-        eq(cashMovementsSchema.organizationId, orgId),
-        isNotNull(cashMovementsSchema.supplierId),
-        gte(cashMovementsSchema.createdAt, sql`date_trunc('month', now())`),
-      ),
-    );
+  // Delegate to the tested lib function so production and tests share one path.
+  const kpis = await getSupplierKpisForOrg(db, orgId);
 
   return {
     total: counts?.total ?? 0,
     active: counts?.active ?? 0,
-    paidThisMonth: paid?.total ?? '0',
-    pendingPayments: null,
+    paidThisMonth: kpis.paidThisMonth,
+    pendingPayments: kpis.pendingPayments,
   };
 }
 
