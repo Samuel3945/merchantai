@@ -242,7 +242,10 @@ export function TransferWizard({
         }
       }}
     >
-      <DialogContent className="max-w-[460px] overflow-hidden p-0">
+      <DialogContent
+        className="max-w-[460px] overflow-hidden p-0"
+        showCloseButton={false}
+      >
         {/* Header */}
         <div className="border-b border-border px-[22px] py-5">
           <div className="flex items-center justify-between">
