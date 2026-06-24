@@ -590,6 +590,8 @@ export type OpenPayable = {
   outstanding: string;
   status: 'open' | 'partial';
   purchasedAt: Date;
+  /** Invoice grouping (migration 0069). Null for standalone payables. */
+  purchaseId: string | null;
 };
 
 /**
@@ -613,6 +615,8 @@ export async function listOpenPayables(
       creditedAmount: supplierPayablesSchema.creditedAmount,
       status: supplierPayablesSchema.status,
       purchasedAt: supplierPayablesSchema.purchasedAt,
+      // Invoice grouping (migration 0069). Null for standalone payables.
+      purchaseId: supplierPayablesSchema.purchaseId,
       // supplier name: null when supplier has been deleted (orphan payable)
       supplierName: suppliersSchema.name,
       // product name: pulled from the linked stock_movement row
@@ -652,6 +656,8 @@ export async function listOpenPayables(
     ).toFixed(2),
     status: r.status as 'open' | 'partial',
     purchasedAt: r.purchasedAt,
+    // Invoice grouping (migration 0069).
+    purchaseId: r.purchaseId ?? null,
   }));
 }
 

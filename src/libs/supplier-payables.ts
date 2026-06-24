@@ -28,6 +28,8 @@ export type InsertPurchasePayableInput = {
   unitCost: string | number;
   createdBy: string;
   notes?: string | null;
+  /** Optional invoice header (migration 0069). NULL = standalone purchase. */
+  purchaseId?: string | null;
 };
 
 export type SupplierPayableRow
@@ -49,6 +51,8 @@ export async function insertPurchasePayable(
       paidAmount: '0',
       status: 'open',
       purchasedAt: new Date(),
+      // Invoice grouping (migration 0069): stamp purchase_id when provided.
+      purchaseId: input.purchaseId ?? null,
       notes: input.notes ?? null,
       createdBy: input.createdBy,
     })
