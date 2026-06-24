@@ -542,10 +542,17 @@ export function orderAccountIdsForLock(ids: string[]): string[] {
 /**
  * Acquire a SELECT … FOR UPDATE on the specified treasury_accounts rows.
  *
- * Modeled on getRemainingForHandover (line 1454): uses raw sql`` to emit a
- * single statement with ORDER BY id … FOR UPDATE, which makes Postgres acquire
- * row locks in ascending-id order deterministically — matching the
- * ordered-locking rule (D2).
+ * Implementation: Drizzle ORM query with `.orderBy(id).for('update')` chained
+ * together — type-safe and compatible with the TenantDb proxy (both 'orderBy'
+ * and 'for' are in SELECT_CHAIN in db-context.ts). This is DISTINCT from
+ * getRemainingForHandover which uses a raw sql`` template for its WHERE clause;
+ * here the WHERE uses the typed Drizzle helpers (eq / inArray) and only the
+ * lock and ordering are chained DSL methods.
+ *
+ * The single statement locks all requested rows in ascending-id order in one
+ * round-trip, satisfying the ordered-locking invariant (D2). Multi-row deadlock
+ * safety requires acquiring ALL needed account ids in ONE call (so they are
+ * locked in ascending id order); never lock accounts across separate calls in a tx.
  *
  * Must be called INSIDE a transaction. The lock is held until the outer tx
  * commits or rolls back. Passing an empty ids array is a no-op (returns early).
@@ -562,14 +569,10 @@ export async function lockAccountsForUpdate(
     return;
   }
   const ordered = orderAccountIdsForLock(ids);
-  // Single statement: ORDER BY id ensures Postgres acquires row locks in
-  // ascending-id order. ANY($ids) matches the drizzle inArray idiom but via
-  // raw sql to keep ORDER BY … FOR UPDATE in one statement (avoids proxy edge
-  // cases — same approach as getRemainingForHandover).
-  // Use the typed schema object (not a raw SQL alias) so that the call is
-  // compatible with the TenantDb proxy (which intercepts `.from(schemaTable)`
-  // and validates the table name). ORDER BY + FOR UPDATE are safe through the
-  // proxy because 'orderBy' and 'for' are both in SELECT_CHAIN (db-context.ts:108).
+  // Drizzle ORM: typed schema object (not a raw alias) keeps the call compatible
+  // with the TenantDb proxy (which intercepts .from(schemaTable) and validates
+  // the table name). ORDER BY + FOR UPDATE are chained via .orderBy() and .for()
+  // — both are in SELECT_CHAIN (db-context.ts:108) so they pass through cleanly.
   // When executor is a TenantDb the org filter is automatically applied; the
   // explicit eq(organizationId) below is redundant but harmless — it is the
   // source-of-truth guard when executor is a raw Drizzle db or tx.
@@ -615,6 +618,11 @@ export async function recordContainerTransfer(
   const amt = Number.parseFloat(toMoney(input.amount));
 
   // Load both accounts in one query to avoid two round-trips.
+  // NOTE: this read happens BEFORE lockAccountsForUpdate below. That is an
+  // accepted limitation: `active` and `openingBalance` are static/seed data
+  // (account deactivation is a rare admin op, openingBalance never changes
+  // after seeding) and are NOT part of the balance-overdraw race this change
+  // targets. The critical balance scan runs AFTER the lock is acquired.
   const accounts = await executor
     .select()
     .from(treasuryAccountsSchema)
@@ -721,6 +729,11 @@ export async function recordBankConsignacion(
   const amt = Number.parseFloat(toMoney(input.amount));
 
   // Load both accounts.
+  // NOTE: this read happens BEFORE lockAccountsForUpdate below. That is an
+  // accepted limitation: `active` and `openingBalance` are static/seed data
+  // (account deactivation is a rare admin op, openingBalance never changes
+  // after seeding) and are NOT part of the balance-overdraw race this change
+  // targets. The critical balance scan runs AFTER the lock is acquired.
   const accounts = await executor
     .select()
     .from(treasuryAccountsSchema)
@@ -934,8 +947,15 @@ export async function recordGastoOutflow(
     return expense.id;
   };
 
-  // When executor is the real `db`, wrap in a transaction for atomicity.
-  // When executor is already a tx (passed from a parent transaction), use it directly.
+  // When executor is the top-level `db` singleton, open a dedicated transaction.
+  // When executor is already a transaction object (e.g. a Drizzle tx passed from
+  // a parent transaction, or a TenantDb tx proxy), call doInserts directly — the
+  // `.transaction` property is still present on a Drizzle tx (it exposes the
+  // underlying tx), so this check is NOT a reliable "is-standalone" test.
+  // In practice, standalone callers pass the `db` singleton (has `.transaction`
+  // as a function on the module), while callers inside a parent tx pass the tx
+  // object directly and this branch is not reached. If a tx is passed directly,
+  // doInserts nests a SAVEPOINT (harmless; rollback still propagates to the parent).
   const isRealDb = typeof (executor as { transaction?: unknown }).transaction === 'function';
   if (isRealDb) {
     return (executor as typeof import('@/libs/DB').db).transaction(tx => doInserts(tx as unknown as Executor));

@@ -11,6 +11,7 @@ import { requirePanelModule } from '@/libs/panel-session';
 import {
   getHandoverStatusForSessions,
   getOrCreatePendingAccount,
+  lockAccountsForUpdate,
   recordBankConsignacion,
   recordContainerTransfer,
   recordGastoOutflow,
@@ -354,20 +355,15 @@ export async function reclassifyAutoSweep(
 
       const amtNum = Number.parseFloat(String(amount));
 
+      // Acquire both account locks in ascending-id order up front so the global
+      // ordered-lock invariant (D2) holds literally for this tx, regardless of any
+      // future caller that might lock transito before a cofre.
+      // recordContainerTransfer will re-lock each source row inside its own call —
+      // those are no-ops because Postgres re-entrant row locks are idempotent.
+      await lockAccountsForUpdate(tx, orgId, [oldCofreId, transitoId]);
+
       // Step 1: reverse the original placement (cofre A → transito).
       // No handoverMovementId — this is a compensating ledger entry, not a placement.
-      //
-      // DEADLOCK ANALYSIS (container-lock hardening, design #441):
-      // recordContainerTransfer now locks only the SOURCE row via lockAccountsForUpdate.
-      // Lock acquisition order for this tx: [oldCofreId] (step 1) → [transitoId] (step 2).
-      // Two concurrent reclassification txs:
-      //   Case A (same cofre): both try to lock oldCofreId in step 1 → serialize; no cycle.
-      //   Case B (different cofres): Tx1 holds cofreA, Tx2 holds cofreC; both then wait for
-      //     transito (their step-2 lock). One succeeds, the other serializes after commit.
-      //     No cycle because each tx holds a DIFFERENT step-1 lock — neither is waiting for
-      //     a resource the other holds.
-      // Conclusion: source-only + ascending-id ordering (lockAccountsForUpdate) is sufficient
-      // here. No extra parent-level multi-lock acquisition needed.
       await recordContainerTransfer(tx, {
         organizationId: orgId,
         fromAccountId: oldCofreId,
