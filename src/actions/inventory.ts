@@ -254,7 +254,7 @@ export async function recordMovement(input: RecordMovementInput) {
     // No treasury movement is written — this is a liability credit only.
     // Back-compat: no supplierId → pure inventory exit, no payable change.
     let returnCreditResult: { appliedTotal: number; unapplied: number } | null = null;
-    if (input.reason === 'return_supplier' && input.supplierId && movement && unitCost) {
+    if (input.reason === 'return_supplier' && input.supplierId && movement && Number(unitCost) > 0) {
       const returnValue = input.qty * Number(unitCost);
       // biome-ignore lint/suspicious/noExplicitAny: Drizzle tx is structurally compatible with Executor
       returnCreditResult = await applyReturnCredit(tx as any, {

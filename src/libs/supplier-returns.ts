@@ -1,4 +1,5 @@
 import { and, asc, eq, inArray } from 'drizzle-orm';
+import { round2 } from '@/libs/creditos-math';
 import {
   supplierPayableCreditsSchema,
   supplierPayablesSchema,
@@ -59,11 +60,13 @@ export async function applyReturnCredit(
 ): Promise<ApplyReturnCreditResult> {
   const { organizationId, supplierId, returnStockMovementId, amount, createdBy, note } = input;
 
+  // FIX 1b: zero/negative amount is a graceful NO-OP — caller (recordMovement) already
+  // skips applyReturnCredit when unitCost is 0, but defensive guard here avoids throw.
   if (amount <= 0) {
-    throw new Error(
-      `applyReturnCredit: amount must be > 0 (got ${amount})`,
-    );
+    return { appliedTotal: 0, unapplied: 0, creditIds: [] };
   }
+
+  const roundedAmount = round2(amount);
 
   // 1. Lock open+partial payables for this supplier in purchased_at ASC order
   //    (FIFO: oldest debt gets credited first). FOR UPDATE serializes concurrent
@@ -85,10 +88,10 @@ export async function applyReturnCredit(
         inArray(supplierPayablesSchema.status, ['open', 'partial']),
       ),
     )
-    .orderBy(asc(supplierPayablesSchema.purchasedAt))
+    .orderBy(asc(supplierPayablesSchema.purchasedAt), asc(supplierPayablesSchema.id))
     .for('update');
 
-  let remaining = amount;
+  let remaining = roundedAmount;
   let appliedTotal = 0;
   const creditIds: string[] = [];
 
@@ -107,7 +110,12 @@ export async function applyReturnCredit(
       continue;
     }
 
-    const take = Math.min(remaining, outstanding);
+    const take = round2(Math.min(remaining, outstanding));
+
+    // Skip degenerate sub-cent chunk (avoids a '0.00' credit row).
+    if (take < 0.005) {
+      continue;
+    }
 
     // 3. Write the credit chunk row.
     const [creditRow] = await executor
@@ -117,7 +125,7 @@ export async function applyReturnCredit(
         supplierId,
         payableId: payable.id,
         returnStockMovementId,
-        amount: take.toFixed(2),
+        amount: round2(take).toFixed(2),
         note: note ?? null,
         createdBy,
       })
@@ -130,9 +138,11 @@ export async function applyReturnCredit(
     creditIds.push(creditRow.id);
 
     // 4. Update credited_amount and recompute status.
-    const newCredited = credited + take;
-    const newStatus: 'open' | 'partial' | 'paid'
-      = paid + newCredited >= total - 0.005 ? 'paid' : (newCredited > 0 ? 'partial' : 'open');
+    const newCredited = round2(credited + take);
+    // FIX 4: take > 0 always here (guarded above), so newCredited > 0 always.
+    // The ':open' branch is dead — simplify to 'partial'.
+    const newStatus: 'partial' | 'paid'
+      = paid + newCredited >= total - 0.005 ? 'paid' : 'partial';
 
     await executor
       .update(supplierPayablesSchema)
@@ -143,13 +153,13 @@ export async function applyReturnCredit(
       })
       .where(eq(supplierPayablesSchema.id, payable.id));
 
-    appliedTotal += take;
-    remaining -= take;
+    appliedTotal = round2(appliedTotal + take);
+    remaining = round2(remaining - take);
   }
 
   return {
-    appliedTotal,
-    unapplied: remaining,
+    appliedTotal: round2(appliedTotal),
+    unapplied: round2(remaining),
     creditIds,
   };
 }

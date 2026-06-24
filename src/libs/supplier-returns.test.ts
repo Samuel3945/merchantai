@@ -460,6 +460,44 @@ describe('applyReturnCredit — SR-8: TenantDb proxy — supplier_payable_credit
   });
 });
 
+// ── SR-10: zero amount → graceful NO-OP (FIX 1b) ─────────────────────────────
+
+describe('applyReturnCredit — SR-10: zero amount is a NO-OP, no credit row, no throw', () => {
+  it('returns appliedTotal=0, unapplied=0, creditIds=[] without writing any row', async () => {
+    await seedProduct();
+    await seedMovement();
+    await seedPayable(PAYABLE_ID_1, 100, 0, 0, 'open');
+
+    const result = await applyReturnCredit(db as never, {
+      organizationId: ORG,
+      supplierId: SUPPLIER_ID,
+      returnStockMovementId: MOVEMENT_ID,
+      amount: 0,
+      createdBy: 'user-1',
+    });
+
+    expect(result.appliedTotal).toBe(0);
+    expect(result.unapplied).toBe(0);
+    expect(result.creditIds).toHaveLength(0);
+
+    const creditCount = await pg.query<{ count: string }>(
+      `SELECT COUNT(*) as count FROM supplier_payable_credits`,
+      [],
+    );
+
+    expect(Number(creditCount.rows[0]!.count)).toBe(0);
+
+    // payable must be untouched (status still 'open')
+    const payable = await pg.query<{ status: string; credited_amount: string }>(
+      `SELECT status, credited_amount FROM supplier_payables WHERE id = $1`,
+      [PAYABLE_ID_1],
+    );
+
+    expect(payable.rows[0]!.status).toBe('open');
+    expect(Number(payable.rows[0]!.credited_amount)).toBe(0);
+  });
+});
+
 // ── SR-9: already partially credited payable gets more credit ─────────────────
 
 describe('applyReturnCredit — SR-9: accumulates credited_amount on already-credited payable', () => {
