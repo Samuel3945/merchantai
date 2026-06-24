@@ -49,6 +49,7 @@ const TENANT_TABLES: ReadonlySet<string> = new Set([
   'cash_security_threshold_cache',
   'supplier_payables',
   'supplier_payments',
+  'supplier_payable_credits',
   // Treasury containers and ledger (accessed via helpers; proxy adds org filter).
   'treasury_accounts',
   'treasury_movements',
