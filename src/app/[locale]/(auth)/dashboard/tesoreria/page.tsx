@@ -1,5 +1,4 @@
 import { setRequestLocale } from 'next-intl/server';
-import { listPaymentMethods } from '@/actions/payment-methods';
 import { getTimeline, getTreasury, listGastosAction, listTreasuryAccounts } from '@/actions/treasury';
 import {
   getHandoverStatusForSessionsAction,
@@ -24,10 +23,13 @@ export default async function TesoreriaPage(props: {
     .slice(0, 10);
   const monthEnd = new Date().toISOString().slice(0, 10);
 
-  const [treasury, treasuryAccountRows, allMethods, timelineEntries, initialGastos] = await Promise.all([
+  // Run the payment-method → treasury backfill FIRST (it lives inside
+  // listTreasuryAccounts via ensurePaymentMethodAccounts) so a transfer method's
+  // auto-created account is visible in the position on THIS render, not only
+  // after a refresh.
+  const treasuryAccountRows = await listTreasuryAccounts().catch(() => []);
+  const [treasury, timelineEntries, initialGastos] = await Promise.all([
     getTreasury().catch(() => []),
-    listTreasuryAccounts().catch(() => []),
-    listPaymentMethods({ activeOnly: true }).catch(() => []),
     getTimeline(50).catch(() => []),
     listGastosAction({ start: monthStart, end: monthEnd }).catch(() => ({ rows: [], total: 0 })),
   ]);
@@ -61,9 +63,6 @@ export default async function TesoreriaPage(props: {
   const bankRows = treasuryAccountRows.filter(r => r.type === 'banco');
   const cajaFuerteRows = treasuryAccountRows.filter(r => r.type === 'caja_fuerte');
 
-  // Payment methods of type 'transfer' for the CreateSlideover banco picker
-  const transferMethods = allMethods.filter(m => m.type === 'transfer');
-
   return (
     <div className="flex flex-col gap-[22px]">
       {/* 1. Hero: title + big total + 3 buckets */}
@@ -81,7 +80,6 @@ export default async function TesoreriaPage(props: {
         pendingHandovers={pendingHandovers}
         bankAccounts={bankRows}
         cajaFuerteAccounts={cajaFuerteRows}
-        transferMethods={transferMethods}
         total={totalEmpresa}
         sinUbicar={sinUbicar}
         pendingCount={pendingCount}

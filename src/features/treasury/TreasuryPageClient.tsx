@@ -1,6 +1,5 @@
 'use client';
 
-import type { PaymentMethodRow } from '@/actions/payment-methods';
 import type { PendingHandover, TreasuryAccount, TreasuryAccountRow } from '@/libs/treasury';
 import { useState } from 'react';
 import { CreateSlideover } from './CreateSlideover';
@@ -16,7 +15,6 @@ type TreasuryPageClientProps = {
   pendingHandovers: PendingHandover[];
   bankAccounts: TreasuryAccountRow[];
   cajaFuerteAccounts: TreasuryAccountRow[];
-  transferMethods: PaymentMethodRow[];
   total: number;
   sinUbicar: number;
   pendingCount: number;
@@ -34,7 +32,6 @@ export function TreasuryPageClient({
   pendingHandovers,
   bankAccounts,
   cajaFuerteAccounts,
-  transferMethods,
   total,
   sinUbicar,
   pendingCount,
@@ -95,7 +92,6 @@ export function TreasuryPageClient({
       <CreateSlideover
         open={slideoverOpen}
         onClose={() => setSlideoverOpen(false)}
-        transferMethods={transferMethods}
       />
 
       {/* DeleteAccountModal — caja_fuerte / banco only */}
