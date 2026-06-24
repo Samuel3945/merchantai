@@ -163,11 +163,11 @@ export const entryFormSchema = z
           path: ['paymentAmount'],
           message: 'El monto parcial debe ser mayor a 0',
         });
-      } else if (amt > total) {
+      } else if (amt >= total) {
         ctx.addIssue({
           code: 'custom',
           path: ['paymentAmount'],
-          message: 'El monto parcial no puede superar el total de la compra',
+          message: 'El monto parcial debe ser menor al total (usá "Sí, pagué el total" para pago completo)',
         });
       }
     }

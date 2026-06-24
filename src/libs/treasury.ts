@@ -1720,6 +1720,12 @@ export async function recordSupplierPaymentOutflow(
     }
 
     // 2. Org-wide balance scan — VERBATIM from recordInflowSourceDebit (D5).
+    // NOTE (design D5 / accepted limitation): this aggregate is NOT row-locked.
+    // FOR UPDATE is placed on the payable row only. Concurrent debits from the
+    // same container within overlapping transactions are not serialized — the
+    // balance may appear sufficient to two callers simultaneously. This mirrors
+    // recordInflowSourceDebit and recordGastoOutflow; container-level locking
+    // is deferred as a future hardening change.
     const [movRow] = await tx
       .select({
         credits: sql<string>`COALESCE(SUM(${treasuryMovementsSchema.amount}) FILTER (WHERE ${treasuryMovementsSchema.toAccountId} = ${input.fromAccountId}), 0)::text`,
@@ -1838,8 +1844,15 @@ export async function recordSupplierPaymentOutflow(
     };
   };
 
-  // When executor is the real `db`, wrap in a transaction for atomicity.
-  // When executor is already a tx (from a parent transaction), use it directly.
+  // When executor is the top-level `db` singleton, open a dedicated transaction.
+  // When executor is already a transaction object (e.g. a Drizzle tx passed from
+  // a parent transaction, or a TenantDb tx proxy), call doWork directly — the
+  // `.transaction` property is still present on a TenantDb tx (it exposes the
+  // underlying Drizzle tx), so this check is NOT a reliable "is-standalone" test.
+  // In practice, standalone callers pass the `db` singleton (has `.transaction`
+  // as a function on the module), while callers inside a parent tx pass the tx
+  // object directly and this branch is not reached. If a TenantDb tx is passed,
+  // doWork nests a savepoint (harmless; rollback still propagates to the parent).
   const isRealDb = typeof (executor as { transaction?: unknown }).transaction === 'function';
   if (isRealDb) {
     return (executor as typeof import('@/libs/DB').db).transaction(

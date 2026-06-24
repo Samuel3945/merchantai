@@ -138,6 +138,34 @@ export async function recordMovement(input: RecordMovementInput) {
     }
   }
 
+  // Defense in depth: server-side payment field validation for purchase entries.
+  // The Zod refinement in entryFormSchema runs only on the client; enforce the
+  // same rules here so the money path cannot be reached with invalid fields
+  // regardless of the caller. Callers that omit payment fields default to
+  // 'unpaid' and bypass this guard (no breaking change for existing callers).
+  if (input.reason === 'purchase') {
+    const pStatus = input.paymentStatus ?? 'unpaid';
+    if (pStatus === 'full' || pStatus === 'partial') {
+      if (!input.paymentAccountId) {
+        throw new Error(
+          'Seleccioná el contenedor de donde sale el dinero',
+        );
+      }
+    }
+    if (pStatus === 'partial') {
+      const amt = Number(input.paymentAmount);
+      const total = input.qty * Number(input.unitCost ?? '0');
+      if (!input.paymentAmount || !Number.isFinite(amt) || amt <= 0) {
+        throw new Error('El monto parcial debe ser mayor a 0');
+      }
+      if (amt >= total) {
+        throw new Error(
+          'El monto parcial debe ser menor al total de la compra (usá "Sí, pagué el total" para pago completo)',
+        );
+      }
+    }
+  }
+
   const result = await tdb.transaction(async (tx) => {
     // Manual exits draw down the FIFO ledger (oldest batches first) and capture
     // the weighted cost of the units removed, mirroring how sales consume stock,
@@ -841,9 +869,7 @@ export type PaymentContainer = {
 };
 
 export async function listPaymentContainers(): Promise<PaymentContainer[]> {
-  await requirePanelModule('inventory');
-  const tdb = await db();
-  const orgId = tdb.orgId;
+  const { orgId } = await requirePanelModule('inventory');
   const rawDb = db.unsafeNoOrgFilter(
     'listPaymentContainers: treasury_accounts queried directly with explicit org filter',
   );

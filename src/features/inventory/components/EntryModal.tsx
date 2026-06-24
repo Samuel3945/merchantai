@@ -49,6 +49,7 @@ export function EntryModal({
   const [paymentAccountId, setPaymentAccountId] = useState('');
   const [paymentAmount, setPaymentAmount] = useState('');
   const [containers, setContainers] = useState<PaymentContainer[]>([]);
+  const [containerError, setContainerError] = useState<string | null>(null);
 
   const [pending, startTransition] = useTransition();
 
@@ -68,11 +69,16 @@ export function EntryModal({
     listPaymentContainers()
       .then((rows) => {
         if (active) {
+          setContainerError(null);
           setContainers(rows);
         }
       })
       .catch(() => {
-        // non-fatal: ContainerSelector stays empty; user can proceed without paying
+        if (active) {
+          setContainerError(
+            'No se pudieron cargar los contenedores. Recargá la página.',
+          );
+        }
       });
     return () => {
       active = false;
@@ -99,7 +105,7 @@ export function EntryModal({
       && (!needsExpiry || expiresAt.trim().length > 0)
       && (!needsNotes || notes.trim().length > 0)
       && (!needsContainer || paymentAccountId.trim().length > 0)
-      && (!needsPartialAmount || (Number(paymentAmount) > 0 && Number(paymentAmount) <= totalCost));
+      && (!needsPartialAmount || (Number(paymentAmount) > 0 && Number(paymentAmount) < totalCost));
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -265,6 +271,9 @@ export function EntryModal({
                     value={paymentAccountId}
                     onChange={setPaymentAccountId}
                   />
+                  {containerError && (
+                    <p className="mt-1 text-sm text-destructive">{containerError}</p>
+                  )}
                 </div>
               )}
               {needsPartialAmount && (

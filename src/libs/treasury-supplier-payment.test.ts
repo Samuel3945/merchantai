@@ -434,8 +434,14 @@ describe('recordSupplierPaymentOutflow — SC-3.7: atomic rollback on insert fai
   });
 });
 
-describe('recordSupplierPaymentOutflow — SC-3.8: balance guard', () => {
-  it('rejects payment when container balance is insufficient', async () => {
+// SC-3.8: single-transaction insufficient-balance rejection only.
+// NOTE: the container balance is an unlocked aggregate (FOR UPDATE is on the
+// payable row only, per design D5). Concurrent debits from the same container
+// are NOT serialized — this is a deliberate, accepted limitation shared with
+// recordInflowSourceDebit and recordGastoOutflow. This test covers only the
+// single-transaction path, not concurrent-debit safety.
+describe('recordSupplierPaymentOutflow — SC-3.8: single-tx insufficient-balance rejection', () => {
+  it('rejects payment in single tx when container balance is insufficient', async () => {
     // Container has 300, try to pay 500
     await seedAccount(CONTAINER_ID, 300);
     await seedPayable(PAYABLE_ID, 1000);
