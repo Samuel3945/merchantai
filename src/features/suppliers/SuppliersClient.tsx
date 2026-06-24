@@ -6,6 +6,7 @@ import type {
   SupplierListItem,
   SupplierWithProducts,
 } from './actions';
+import Link from 'next/link';
 import { useEffect, useRef, useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
 import {
@@ -203,10 +204,13 @@ export function SuppliersClient(props: {
       >
         <StatCard label="Total proveedores" value={String(props.kpis.total)} />
         <StatCard label="Proveedores activos" value={String(props.kpis.active)} />
-        <StatCard
-          label="Pagos pendientes"
-          value={money(props.kpis.pendingPayments)}
-        />
+        <Link href="/dashboard/suppliers/payables" className="group">
+          <StatCard
+            label="Pagos pendientes"
+            value={money(props.kpis.pendingPayments)}
+            hint="Ver compras por pagar"
+          />
+        </Link>
         <StatCard
           label="Monto pagado este mes"
           value={money(props.kpis.paidThisMonth)}
@@ -258,6 +262,9 @@ export function SuppliersClient(props: {
                 <Button onClick={openCreate}>Nuevo proveedor</Button>
                 <Button variant="secondary" onClick={() => setImportOpen(true)}>
                   Importar
+                </Button>
+                <Button variant="secondary" asChild>
+                  <Link href="/dashboard/suppliers/payables">Compras por pagar</Link>
                 </Button>
                 <div className="ml-auto text-sm text-muted-foreground">
                   {rows.length}

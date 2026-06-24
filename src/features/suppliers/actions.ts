@@ -2,14 +2,18 @@
 
 import type { SupplierCreateInput, SupplierUpdateInput } from './validation';
 import { auth } from '@clerk/nextjs/server';
-import { and, asc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
+import { z } from 'zod';
 import { isUniqueViolation } from '@/libs/action-result';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
 import { getSupplierKpisForOrg } from '@/libs/supplier-payables';
+import { recordSupplierPaymentOutflow } from '@/libs/treasury';
 import {
   productsSchema,
+  stockMovementsSchema,
+  supplierPayablesSchema,
   supplierPaymentsSchema,
   supplierProductsSchema,
   suppliersSchema,
@@ -561,4 +565,185 @@ export async function listSuppliersForProduct(
       ),
     )
     .orderBy(asc(suppliersSchema.name));
+}
+
+// ── "Compras por pagar" — Slice 3 ─────────────────────────────────────────────
+
+// Executor type: real db singleton or a drizzle tx (same pattern as treasury.ts).
+type Executor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/** One row in the "Compras por pagar" list. */
+export type OpenPayable = {
+  id: string;
+  supplierId: string;
+  supplierName: string | null;
+  productName: string | null;
+  totalAmount: string;
+  paidAmount: string;
+  outstanding: string;
+  status: 'open' | 'partial';
+  purchasedAt: Date;
+};
+
+/**
+ * Lists all open or partial payables for the org, ordered newest-first.
+ * Accepts an executor so it can be called from PGLite tests (lib-level)
+ * or from server actions (using the real db singleton).
+ *
+ * Satisfies: REQ-6.1, REQ-6.2, REQ-6.5, REQ-6.6, SC-5.1–SC-5.5.
+ */
+export async function listOpenPayables(
+  executor: Executor,
+  organizationId: string,
+): Promise<OpenPayable[]> {
+  const rows = await executor
+    .select({
+      id: supplierPayablesSchema.id,
+      supplierId: supplierPayablesSchema.supplierId,
+      totalAmount: supplierPayablesSchema.totalAmount,
+      paidAmount: supplierPayablesSchema.paidAmount,
+      status: supplierPayablesSchema.status,
+      purchasedAt: supplierPayablesSchema.purchasedAt,
+      // supplier name: null when supplier has been deleted (orphan payable)
+      supplierName: suppliersSchema.name,
+      // product name: pulled from the linked stock_movement row
+      productName: stockMovementsSchema.productName,
+    })
+    .from(supplierPayablesSchema)
+    .leftJoin(
+      suppliersSchema,
+      // supplierId is text (D1 — no FK, mirrors stock_movements.supplier_id).
+      // Cast uuid to text for the join so PG's strict type system is satisfied.
+      sql`${suppliersSchema.id}::text = ${supplierPayablesSchema.supplierId}`,
+    )
+    .leftJoin(
+      stockMovementsSchema,
+      eq(stockMovementsSchema.id, supplierPayablesSchema.stockMovementId),
+    )
+    .where(
+      and(
+        eq(supplierPayablesSchema.organizationId, organizationId),
+        inArray(supplierPayablesSchema.status, ['open', 'partial']),
+      ),
+    )
+    .orderBy(desc(supplierPayablesSchema.purchasedAt));
+
+  return rows.map(r => ({
+    id: r.id,
+    supplierId: r.supplierId,
+    supplierName: r.supplierName ?? null,
+    productName: r.productName ?? null,
+    totalAmount: r.totalAmount,
+    paidAmount: r.paidAmount,
+    outstanding: (
+      Number.parseFloat(r.totalAmount) - Number.parseFloat(r.paidAmount)
+    ).toFixed(2),
+    status: r.status as 'open' | 'partial',
+    purchasedAt: r.purchasedAt,
+  }));
+}
+
+/** Server-action wrapper for listOpenPayables (requires org from Clerk). */
+export async function listOpenPayablesAction(): Promise<OpenPayable[]> {
+  const { orgId } = await requireOrgId();
+  return listOpenPayables(db, orgId);
+}
+
+export type RecordPayablePaymentInput = {
+  organizationId: string;
+  payableId: string;
+  fromAccountId: string;
+  amount: number | string;
+  createdBy: string;
+  note?: string | null;
+};
+
+export type RecordPayablePaymentResult = {
+  paymentId: string;
+  treasuryMovementId: string;
+  payableStatus: 'open' | 'partial' | 'paid';
+};
+
+/**
+ * Records a payment against an open/partial payable from the "Compras por pagar" view.
+ *
+ * Delegates to recordSupplierPaymentOutflow (Slice 2 helper, REQ-4.11) after
+ * validating that the payable belongs to the org and is not already paid.
+ * When executor is the real db singleton, recordSupplierPaymentOutflow opens
+ * its own tx. When executor is a tx object (e.g. TenantDb), it nests directly.
+ *
+ * Satisfies: REQ-4.11, REQ-6.3, REQ-6.4, SC-5.3, SC-5.4, SC-6.1, SC-6.3.
+ */
+export async function recordPayablePayment(
+  executor: Executor,
+  input: RecordPayablePaymentInput,
+): Promise<RecordPayablePaymentResult> {
+  // Validate the payable belongs to this org and is not already paid.
+  // The helper (recordSupplierPaymentOutflow) also validates this inside the tx;
+  // this pre-check gives a clearer error surface before delegating.
+  const [payable] = await executor
+    .select({
+      id: supplierPayablesSchema.id,
+      organizationId: supplierPayablesSchema.organizationId,
+      supplierId: supplierPayablesSchema.supplierId,
+      status: supplierPayablesSchema.status,
+    })
+    .from(supplierPayablesSchema)
+    .where(eq(supplierPayablesSchema.id, input.payableId))
+    .limit(1);
+
+  if (!payable) {
+    throw new Error(`payable not found: ${input.payableId}`);
+  }
+
+  if (payable.organizationId !== input.organizationId) {
+    throw new Error('payable does not belong to this organization');
+  }
+
+  if (payable.status === 'paid') {
+    throw new Error('payable already paid — no additional payments accepted');
+  }
+
+  return recordSupplierPaymentOutflow(executor, {
+    organizationId: input.organizationId,
+    fromAccountId: input.fromAccountId,
+    amount: input.amount,
+    supplierId: payable.supplierId,
+    payableId: input.payableId,
+    note: input.note ?? null,
+    createdBy: input.createdBy,
+  });
+}
+
+const recordPayablePaymentSchema = z.object({
+  payableId: z.string().uuid({ message: 'payableId debe ser un UUID válido' }),
+  fromAccountId: z.string().uuid({ message: 'fromAccountId debe ser un UUID válido' }),
+  amount: z
+    .union([z.number(), z.string()])
+    .transform(v => (typeof v === 'string' ? Number(v) : v))
+    .refine(n => Number.isFinite(n) && n > 0, {
+      message: 'El monto debe ser un número mayor a cero',
+    }),
+  note: z.string().nullish(),
+});
+
+/** Server-action wrapper for recordPayablePayment (requires org from Clerk). */
+export async function recordPayablePaymentAction(input: {
+  payableId: string;
+  fromAccountId: string;
+  amount: number | string;
+  note?: string | null;
+}): Promise<RecordPayablePaymentResult> {
+  const { userId, orgId } = await requireOrgId();
+  const data = recordPayablePaymentSchema.parse(input);
+  const result = await recordPayablePayment(db, {
+    organizationId: orgId,
+    payableId: data.payableId,
+    fromAccountId: data.fromAccountId,
+    amount: data.amount,
+    createdBy: userId,
+    note: data.note ?? null,
+  });
+  revalidatePath('/[locale]/dashboard/suppliers/payables', 'page');
+  return result;
 }
