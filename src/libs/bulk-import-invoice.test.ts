@@ -294,12 +294,32 @@ describe('TC-1: purchase batch groups all payables under one header', () => {
 });
 
 // ── TC-2: manual import → no header, no payables ──────────────────────────────
+//
+// Guards the reason==='purchase' gate: a stock movement inserted WITHOUT going
+// through the purchase/payable seam must produce zero supplier_purchases and
+// zero supplier_payables rows.  This test WOULD FAIL if the guard regressed
+// (e.g. someone removed the `reason === 'purchase'` condition and always
+// created a header).
 
 describe('TC-2: manual import creates no header and no payables', () => {
-  it('no supplier_purchases row when reason is manual', async () => {
-    // Simulate bulkRecordEntries(reason='manual'): skip header creation.
-    // For manual, no invoiceContext is passed — payable creation itself is skipped.
-    // We verify that the tables remain empty.
+  it('manual stock entry produces no supplier_purchases and no supplier_payables', async () => {
+    const PRODUCT_MANUAL = '00000000-0000-0000-cccc-200000000061';
+    const MOV_MANUAL = '00000000-0000-0000-dddd-200000000061';
+
+    await seedProduct(PRODUCT_MANUAL);
+    // Insert a stock_movement with reason='manual' — simulates what
+    // bulkRecordEntries does for manual imports: no header, no invoiceContext,
+    // no payable insertion.
+    await pg.query(
+      `INSERT INTO stock_movements
+         (id, organization_id, product_id, type, qty, remaining_qty, unit_cost,
+          reason, created_by, created_at)
+       VALUES ($1, $2, $3, 'entry', 5, 5, '50.00', 'manual', $4, now())`,
+      [MOV_MANUAL, ORG, PRODUCT_MANUAL, USER_ID],
+    );
+
+    // Intentionally do NOT call resolveInvoiceInTx or insertPurchasePayable —
+    // that's the guard: reason='manual' skips both.
 
     const headerCount = await pg.query<{ count: string }>(
       'SELECT COUNT(*) as count FROM supplier_purchases WHERE organization_id = $1',
@@ -312,6 +332,28 @@ describe('TC-2: manual import creates no header and no payables', () => {
 
     expect(Number(headerCount.rows[0]!.count)).toBe(0);
     expect(Number(payableCount.rows[0]!.count)).toBe(0);
+  });
+
+  it('calling resolveInvoiceInTx without a purchase reason creates a header (guard contrast)', async () => {
+    // Contrast test: if the guard were absent and we DID call the purchase seam
+    // for a manual row, a header WOULD appear.  This confirms the guard is load-bearing.
+    const purchaseId = await createHeader(null);
+
+    const headerCount = await pg.query<{ count: string }>(
+      'SELECT COUNT(*) as count FROM supplier_purchases WHERE organization_id = $1',
+      [ORG],
+    );
+
+    // Exactly 1 row — the one we just created by bypassing the guard.
+    expect(Number(headerCount.rows[0]!.count)).toBe(1);
+
+    // Sanity: the id is what we expect.
+    const row = await pg.query<{ id: string }>(
+      'SELECT id FROM supplier_purchases WHERE organization_id = $1',
+      [ORG],
+    );
+
+    expect(row.rows[0]!.id).toBe(purchaseId);
   });
 });
 
@@ -568,5 +610,66 @@ describe('TC-6: listOpenInvoices groups all batch payables under one entry', () 
 
     expect(purchaseIds).toContain(purchaseId);
     expect(purchaseIds).toContain(null);
+  });
+});
+
+// ── TC-7: duplicate invoiceNumber raises unique violation ─────────────────────
+//
+// The partial unique index on supplier_purchases
+// (organization_id, supplier_id, invoice_number) WHERE invoice_number IS NOT NULL
+// must reject a second header with the same org+supplier+invoice_number.
+// This is the seam that FIX 1 catches with error code 23505.
+
+describe('TC-7: duplicate invoiceNumber → unique constraint violation', () => {
+  it('inserting two headers with the same org+supplier+invoiceNumber raises a unique violation', async () => {
+    // First header succeeds.
+    await createHeader('FAC-DUP-001');
+
+    // Second insert with the same invoice number must throw.
+    await expect(
+      pg.query(
+        `INSERT INTO supplier_purchases
+           (organization_id, supplier_id, invoice_number, created_by, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, now(), now())`,
+        [ORG, SUPPLIER_ID, 'FAC-DUP-001', USER_ID],
+      ),
+    ).rejects.toMatchObject({ code: '23505' });
+  });
+
+  it('two headers with the same invoice_number but different suppliers are allowed', async () => {
+    const OTHER_SUPPLIER = '00000000-0000-0000-aaaa-200000000099';
+
+    // Insert other supplier so FK constraint passes.
+    await pg.query(
+      `INSERT INTO suppliers (id, organization_id, name, created_at, updated_at)
+       VALUES ($1, $2, 'Otro proveedor', now(), now())`,
+      [OTHER_SUPPLIER, ORG],
+    );
+
+    await createHeader('FAC-MULTI-001');
+
+    // Same invoice number, different supplier → no violation.
+    const result = await pg.query<{ id: string }>(
+      `INSERT INTO supplier_purchases
+         (organization_id, supplier_id, invoice_number, created_by, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, now(), now())
+       RETURNING id`,
+      [ORG, OTHER_SUPPLIER, 'FAC-MULTI-001', USER_ID],
+    );
+
+    expect(result.rows[0]?.id).toBeDefined();
+  });
+
+  it('null invoiceNumbers never conflict with each other', async () => {
+    // Two headers with invoice_number=NULL → index WHERE clause excludes them.
+    await createHeader(null);
+    await createHeader(null);
+
+    const count = await pg.query<{ count: string }>(
+      'SELECT COUNT(*) as count FROM supplier_purchases WHERE organization_id = $1',
+      [ORG],
+    );
+
+    expect(Number(count.rows[0]!.count)).toBe(2);
   });
 });

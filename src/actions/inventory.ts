@@ -902,20 +902,29 @@ export async function bulkRecordEntries(
   let purchaseId: string | null = null;
   if (input.reason === 'purchase' && input.supplierId) {
     const tdb = await db();
-    const [header] = await tdb
-      .insert(supplierPurchasesSchema)
-      .values({
-        organizationId: orgId,
-        supplierId: input.supplierId,
-        invoiceNumber: input.invoiceNumber ?? null,
-        createdBy: userId,
-      })
-      .returning({ id: supplierPurchasesSchema.id });
+    try {
+      const [header] = await tdb
+        .insert(supplierPurchasesSchema)
+        .values({
+          organizationId: orgId,
+          supplierId: input.supplierId,
+          invoiceNumber: input.invoiceNumber ?? null,
+          createdBy: userId,
+        })
+        .returning({ id: supplierPurchasesSchema.id });
 
-    if (!header) {
-      throw new Error('Failed to create supplier invoice header');
+      if (!header) {
+        throw new Error('Failed to create supplier invoice header');
+      }
+      purchaseId = header.id;
+    } catch (err) {
+      // PG unique-violation code 23505: duplicate invoice number for this supplier.
+      const code = (err as { code?: string }).code;
+      if (code === '23505') {
+        throw new Error('Ya existe una factura con ese número para este proveedor');
+      }
+      throw err;
     }
-    purchaseId = header.id;
   }
 
   let created = 0;
@@ -947,6 +956,21 @@ export async function bulkRecordEntries(
         error: err instanceof Error ? err.message : 'Error inesperado',
       });
     }
+  }
+
+  // ── FIX 2: Delete empty orphan header when every row failed ──────────────────
+  // If a header was created but no row succeeded, remove it to avoid accumulating
+  // empty supplier_purchases records.
+  if (purchaseId !== null && created === 0) {
+    const tdb = await db();
+    await tdb
+      .delete(supplierPurchasesSchema)
+      .where(
+        and(
+          eq(supplierPurchasesSchema.id, purchaseId),
+          eq(supplierPurchasesSchema.organizationId, orgId),
+        ),
+      );
   }
 
   return { created, failed };
