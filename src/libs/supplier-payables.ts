@@ -91,7 +91,7 @@ export async function getSupplierKpisForOrg(
         eq(supplierPaymentsSchema.organizationId, organizationId),
         gte(
           supplierPaymentsSchema.createdAt,
-          sql`date_trunc('month', now())`,
+          sql`date_trunc('month', now() AT TIME ZONE 'America/Bogota')`,
         ),
       ),
     );

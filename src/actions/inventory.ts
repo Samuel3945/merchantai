@@ -213,8 +213,9 @@ export async function recordMovement(input: RecordMovementInput) {
     // Non-purchase entries create NO payable (REQ-2.6).
     // return_supplier does not mutate payables — deferred; see REQ-7.1.
     if (input.reason === 'purchase' && movement && input.supplierId && unitCost) {
-      // movement.id is a uuid string; TS infers `unknown` here due to TenantDb's
-      // TenantInsertValues generic resolution — safe to cast.
+      if (!movement?.id) {
+        throw new Error('stock movement insert returned no id');
+      }
       const movementId = movement.id as string;
       await insertPurchasePayable(tx, {
         organizationId: orgId,

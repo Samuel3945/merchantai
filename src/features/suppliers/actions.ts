@@ -2,14 +2,14 @@
 
 import type { SupplierCreateInput, SupplierUpdateInput } from './validation';
 import { auth } from '@clerk/nextjs/server';
-import { and, asc, eq, gte, ilike, inArray, ne, or, sql } from 'drizzle-orm';
+import { and, asc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { isUniqueViolation } from '@/libs/action-result';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
+import { getSupplierKpisForOrg } from '@/libs/supplier-payables';
 import {
   productsSchema,
-  supplierPayablesSchema,
   supplierPaymentsSchema,
   supplierProductsSchema,
   suppliersSchema,
@@ -273,39 +273,14 @@ export async function getSupplierKpis(): Promise<SupplierKpis> {
     .from(suppliersSchema)
     .where(eq(suppliersSchema.organizationId, orgId));
 
-  // paidThisMonth: SUM(supplier_payments.amount) for the current calendar month.
-  // Reads supplier_payments only — NOT cash_movements (REQ-5.1, D6).
-  const [paid] = await db
-    .select({
-      total: sql<string>`COALESCE(SUM(${supplierPaymentsSchema.amount}), 0)::text`,
-    })
-    .from(supplierPaymentsSchema)
-    .where(
-      and(
-        eq(supplierPaymentsSchema.organizationId, orgId),
-        gte(supplierPaymentsSchema.createdAt, sql`date_trunc('month', now())`),
-      ),
-    );
-
-  // pendingPayments: SUM(total_amount − paid_amount) for open+partial payables.
-  // Excludes status='paid' rows. Returns '0' (not null) when empty (REQ-5.2, REQ-5.4).
-  const [pending] = await db
-    .select({
-      total: sql<string>`COALESCE(SUM(${supplierPayablesSchema.totalAmount} - ${supplierPayablesSchema.paidAmount}), 0)::text`,
-    })
-    .from(supplierPayablesSchema)
-    .where(
-      and(
-        eq(supplierPayablesSchema.organizationId, orgId),
-        ne(supplierPayablesSchema.status, 'paid'),
-      ),
-    );
+  // Delegate to the tested lib function so production and tests share one path.
+  const kpis = await getSupplierKpisForOrg(db, orgId);
 
   return {
     total: counts?.total ?? 0,
     active: counts?.active ?? 0,
-    paidThisMonth: paid?.total ?? '0',
-    pendingPayments: pending?.total ?? '0',
+    paidThisMonth: kpis.paidThisMonth,
+    pendingPayments: kpis.pendingPayments,
   };
 }
 
