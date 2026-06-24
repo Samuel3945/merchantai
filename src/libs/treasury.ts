@@ -158,6 +158,9 @@ export async function getTreasuryPosition(
     .where(
       and(
         eq(treasuryAccountsSchema.organizationId, organizationId),
+        // Deleted accounts are soft-deleted (active=false); never show them as
+        // a place in the treasury position.
+        eq(treasuryAccountsSchema.active, true),
         sql`${treasuryAccountsSchema.type} IN ('caja_fuerte', 'banco', 'transito')`,
       ),
     )

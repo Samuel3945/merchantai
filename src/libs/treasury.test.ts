@@ -351,6 +351,20 @@ describe('getTreasuryPosition', () => {
     expect(balances['banco:Nequi']).toBe(50);
   });
 
+  it('excludes soft-deleted (active=false) accounts from the position', async () => {
+    await pg.query(
+      `INSERT INTO treasury_accounts (id, organization_id, type, name, opening_balance, active, created_at, updated_at)
+       VALUES (gen_random_uuid(), $1, 'caja_fuerte', 'Vault activa', '100.00', true, now(), now()),
+              (gen_random_uuid(), $1, 'banco', 'Banco eliminado', '0.00', false, now(), now())`,
+      [ORG],
+    );
+
+    const accounts = await getTreasuryPosition(db, ORG);
+
+    expect(accounts.some(a => a.name === 'Vault activa')).toBe(true);
+    expect(accounts.some(a => a.name === 'Banco eliminado')).toBe(false);
+  });
+
   it('falls back to the last close count when a caja has no open session', async () => {
     await pg.query(
       `INSERT INTO pos_tokens (id, organization_id, device_name) VALUES ($1, $2, 'Caja 1')`,
