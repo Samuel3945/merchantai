@@ -1,7 +1,7 @@
 import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
+import { getDefaultTermDays } from '@/libs/creditos';
 import { db } from '@/libs/DB';
-import { getDefaultTermDays } from '@/libs/fiados';
 import { parseWholesaleTiers } from '@/libs/wholesale';
 import {
   cashSessionsSchema,
@@ -256,15 +256,15 @@ export async function GET(req: Request): Promise<NextResponse> {
   const [
     businessName,
     businessPhone,
-    fiadoEnabledRaw,
-    fiadoTermDays,
+    creditoEnabledRaw,
+    creditoTermDays,
     paymentMethods,
     cashiers,
     products,
   ] = await Promise.all([
     getSetting(orgId, 'business_name'),
     getSetting(orgId, 'business_phone'),
-    getSetting(orgId, 'fiado-enabled'),
+    getSetting(orgId, 'credito-enabled'),
     getDefaultTermDays(db, orgId),
     listActivePaymentMethods(orgId),
     listCashiers(orgId),
@@ -281,7 +281,7 @@ export async function GET(req: Request): Promise<NextResponse> {
       .orderBy(asc(productsSchema.name)),
   ]);
 
-  const fiadoEnabled = fiadoEnabledRaw === 'true';
+  const creditoEnabled = creditoEnabledRaw === 'true';
 
   // Wire contract: the POS reads snake_case fields (unit_type, is_wholesale,
   // wholesale_tiers with min_qty). Map explicitly instead of dumping raw drizzle
@@ -309,10 +309,10 @@ export async function GET(req: Request): Promise<NextResponse> {
     publish_at: p.publishAt,
   }));
 
-  // El método "Fiado" (type credit) se controla por el toggle fiado-enabled, no
+  // El método "Credito" (type credit) se controla por el toggle credito-enabled, no
   // por su columna active. Si el toggle está apagado, no debe llegar al cajero
   // como opción de pago aunque la fila siga active = true.
-  const visiblePaymentMethods = fiadoEnabled
+  const visiblePaymentMethods = creditoEnabled
     ? paymentMethods
     : paymentMethods.filter(
         pm => (pm as { type?: string }).type !== 'credit',
@@ -325,13 +325,13 @@ export async function GET(req: Request): Promise<NextResponse> {
       id: orgId,
       name: businessName || 'Mi Tienda',
       phone: businessPhone || '',
-      fiadoEnabled,
-      // Org default payment term: new fiados fall due this many days after
+      creditoEnabled,
+      // Org default payment term: new creditos fall due this many days after
       // the sale unless an explicit due date is provided.
-      fiadoTermDays,
+      creditoTermDays,
     },
     features: {
-      fiadoEnabled,
+      creditoEnabled,
       sellByWeight: true,
       sellDigital: true,
       wholesale: true,

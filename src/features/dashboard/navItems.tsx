@@ -49,7 +49,7 @@ export const navGroups: NavGroup[] = [
       { href: '/dashboard/sales', label: 'Ventas', icon: Receipt },
       { href: '/dashboard/pos-cajeros', label: 'Cajas POS', icon: ShoppingCart },
       { href: '/dashboard/delivery', label: 'Domicilios', icon: Bike },
-      { href: '/dashboard/fiados', label: 'Fiados', icon: HandCoins },
+      { href: '/dashboard/creditos', label: 'Creditos', icon: HandCoins },
     ],
   },
   {
@@ -91,7 +91,7 @@ export const navGroups: NavGroup[] = [
 ];
 
 export type NavModuleFlags = {
-  fiado: boolean;
+  credito: boolean;
   employees: boolean;
   delivery: boolean;
   facturas: boolean;
@@ -105,7 +105,7 @@ export type NavModuleFlags = {
 // Maps a nav href to the module flag that controls its visibility. Items not
 // listed here are always visible (core modules).
 const GATED_HREF: Record<string, keyof NavModuleFlags> = {
-  '/dashboard/fiados': 'fiado',
+  '/dashboard/creditos': 'credito',
   '/dashboard/employees': 'employees',
   '/dashboard/delivery': 'delivery',
   '/dashboard/facturas': 'facturas',
@@ -123,7 +123,7 @@ const MEMBER_ONLY_HREFS = new Set<string>([
 ]);
 
 // Returns the nav groups with hidden items removed. Two filters apply:
-//   1. Module toggles (NavModuleFlags) — business-level on/off (Fiados/Empleados).
+//   1. Module toggles (NavModuleFlags) — business-level on/off (Creditos/Empleados).
 //   2. Per-user panel permissions — when `panelModules` is provided (a non-owner
 //      member), deny-by-default: keep only public items and the modules they
 //      hold, hiding owner-only items. `panelModules == null` means the owner,

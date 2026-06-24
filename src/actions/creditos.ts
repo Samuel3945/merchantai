@@ -5,26 +5,26 @@ import { revalidatePath } from 'next/cache';
 import { getAppSetting, setAppSetting } from '@/actions/app-settings';
 import {
   DEFAULT_TERM_DAYS,
-  extendFiadoTerm,
+  extendCreditoTerm,
   getClientDetail,
-  getFiadosHistory,
-  getFiadosOverview,
+  getCreditosHistory,
+  getCreditosOverview,
   recordAbono,
   TERM_SETTING_KEY,
-} from '@/libs/fiados';
+} from '@/libs/creditos';
 import { requirePanelModule } from '@/libs/panel-session';
 
-// Thin auth + revalidate wrappers over the fiados core (libs/fiados.ts). All the
+// Thin auth + revalidate wrappers over the creditos core (libs/creditos.ts). All the
 // money + ledger logic lives in the core so it can run inside sale transactions
 // and be reasoned about without Clerk.
 
 export type {
   ClientDebt,
   ClientDetail,
-  FiadosMetrics,
-  FiadosOverview,
-  FiadoTimelineEntry,
-} from '@/libs/fiados';
+  CreditosMetrics,
+  CreditosOverview,
+  CreditoTimelineEntry,
+} from '@/libs/creditos';
 
 async function requireOrg() {
   const { userId, orgId } = await auth();
@@ -34,19 +34,19 @@ async function requireOrg() {
   if (!orgId) {
     throw new Error('No active organization');
   }
-  // Backend enforcement: the owner passes; a member needs the Fiados module.
-  await requirePanelModule('fiados');
+  // Backend enforcement: the owner passes; a member needs the Creditos module.
+  await requirePanelModule('creditos');
   return { userId, orgId };
 }
 
-export async function fetchFiadosOverview() {
+export async function fetchCreditosOverview() {
   const { orgId } = await requireOrg();
-  return getFiadosOverview(orgId);
+  return getCreditosOverview(orgId);
 }
 
-export async function fetchFiadosHistory() {
+export async function fetchCreditosHistory() {
   const { orgId } = await requireOrg();
-  return getFiadosHistory(orgId);
+  return getCreditosHistory(orgId);
 }
 
 export async function fetchClientDetail(clientKey: string) {
@@ -61,7 +61,7 @@ export type AbonarInput = {
   note?: string | null;
 };
 
-export async function abonarFiado(input: AbonarInput) {
+export async function abonarCredito(input: AbonarInput) {
   const { userId, orgId } = await requireOrg();
   const result = await recordAbono({
     organizationId: orgId,
@@ -71,45 +71,45 @@ export async function abonarFiado(input: AbonarInput) {
     note: input.note ?? null,
     createdBy: userId,
   });
-  revalidatePath('/dashboard/fiados');
+  revalidatePath('/dashboard/creditos');
   revalidatePath('/dashboard/cash');
   return result;
 }
 
 export type ExtenderPlazoInput = {
-  fiadoId: string;
+  creditoId: string;
   newDueDate: string;
   reason?: string | null;
 };
 
 export async function extenderPlazo(input: ExtenderPlazoInput) {
   const { userId, orgId } = await requireOrg();
-  const result = await extendFiadoTerm({
+  const result = await extendCreditoTerm({
     organizationId: orgId,
-    fiadoId: input.fiadoId,
+    creditoId: input.creditoId,
     newDueDate: input.newDueDate,
     reason: input.reason ?? null,
     createdBy: userId,
   });
-  revalidatePath('/dashboard/fiados');
+  revalidatePath('/dashboard/creditos');
   return result;
 }
 
 // ── Default term setting (Configuración) ─────────────────────────────────────
 
-export async function getFiadoTermDays(): Promise<number> {
+export async function getCreditoTermDays(): Promise<number> {
   const { value } = await getAppSetting(TERM_SETTING_KEY);
   const n = Number.parseInt(value, 10);
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_TERM_DAYS;
 }
 
-export async function setFiadoTermDays(days: number): Promise<number> {
+export async function setCreditoTermDays(days: number): Promise<number> {
   const n = Math.trunc(days);
   if (!Number.isFinite(n) || n < 1 || n > 365) {
     throw new Error('El plazo debe estar entre 1 y 365 días');
   }
   await setAppSetting(TERM_SETTING_KEY, String(n));
   revalidatePath('/dashboard/settings');
-  revalidatePath('/dashboard/fiados');
+  revalidatePath('/dashboard/creditos');
   return n;
 }

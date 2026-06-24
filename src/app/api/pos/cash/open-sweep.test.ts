@@ -119,7 +119,7 @@ const SCHEMA = `
     )
   );
 
-  CREATE TYPE "cash_movement_type" AS ENUM('sale','deposit','expense','salary','inventory_purchase','withdrawal','adjustment','advance','fiado_payment','reclassification');
+  CREATE TYPE "cash_movement_type" AS ENUM('sale','deposit','expense','salary','inventory_purchase','withdrawal','adjustment','advance','credito_payment','reclassification');
 
   CREATE TABLE cash_movements (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,

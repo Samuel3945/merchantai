@@ -84,12 +84,12 @@ export async function setAppSetting(
         },
       });
 
-    // Keep the Fiado payment method's `active` flag in sync with the
-    // fiado-enabled toggle. The two were decoupled, so payment_methods kept
-    // the credit row active=true after fiado was turned off and the POS still
+    // Keep the Credito payment method's `active` flag in sync with the
+    // credito-enabled toggle. The two were decoupled, so payment_methods kept
+    // the credit row active=true after credito was turned off and the POS still
     // received it as a payment option. Syncing here in the same transaction
     // makes this toggle the single source of truth. See issue #8.
-    if (key === 'fiado-enabled') {
+    if (key === 'credito-enabled') {
       const enabled = value === 'true';
       await tx.execute(
         sql`UPDATE payment_methods SET active = ${enabled}

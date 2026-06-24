@@ -30,13 +30,13 @@ import {
   DEFAULT_SATURATION_CONFIG,
 } from '@/libs/caja-saturation';
 import { recordCashMovement } from '@/libs/cash-helpers';
+import { createCredito } from '@/libs/creditos';
+import { creditoAmountFor } from '@/libs/creditos-math';
 import { db } from '@/libs/DB';
 import {
   maybeAutoEmitInvoice,
   maybeEmitCreditNote,
 } from '@/libs/einvoice/emit';
-import { createFiado } from '@/libs/fiados';
-import { fiadoAmountFor } from '@/libs/fiados-math';
 import { consumeFifoExits } from '@/libs/fifo-cogs';
 import { getOrgTimezone } from '@/libs/org-timezone';
 import { getCurrentPanelUser } from '@/libs/panel-session';
@@ -46,8 +46,8 @@ import { applySaleReturn } from '@/libs/sale-returns';
 import { recordSaleTransferReconciliations } from '@/libs/transfer-reconciliation';
 import { wholesaleUnitPrice } from '@/libs/wholesale';
 import {
-  fiadoMovementsSchema,
-  fiadosSchema,
+  creditoMovementsSchema,
+  creditosSchema,
   orgAddressesSchema,
   posReturnItemsSchema,
   posReturnsSchema,
@@ -74,8 +74,8 @@ export type CreateSaleInput = {
   paymentType: string;
   notes?: string | null;
   payments?: SalePaymentInput[];
-  // For fiado sales: optional manual due date ('YYYY-MM-DD'). When omitted, the
-  // org default term applies (fiados.default_term_days, 30 by default).
+  // For credito sales: optional manual due date ('YYYY-MM-DD'). When omitted, the
+  // org default term applies (creditos.default_term_days, 30 by default).
   dueDate?: string | null;
 };
 
@@ -294,19 +294,19 @@ export async function createSale(input: CreateSaleInput) {
       .values(paymentRows)
       .returning();
 
-    // Fiado: book the credit account for the portion NOT covered by an upfront
-    // non-fiado payment. A 100%-fiado sale owes the full total; a split sale
-    // (e.g. part efectivo now, rest fiado) owes only the remainder. The efectivo
+    // Credito: book the credit account for the portion NOT covered by an upfront
+    // non-credito payment. A 100%-credito sale owes the full total; a split sale
+    // (e.g. part efectivo now, rest credito) owes only the remainder. The efectivo
     // part still hits the drawer via recordCashMovement below.
-    const fiadoAmount = fiadoAmountFor(total, paymentRows);
-    const isFiado
-      = /fiado/i.test(input.paymentType)
-        || paymentRows.some(p => /fiado/i.test(p.method));
-    if (isFiado && fiadoAmount > 0) {
-      await createFiado(tx, {
+    const creditoAmount = creditoAmountFor(total, paymentRows);
+    const isCredito
+      = /credito/i.test(input.paymentType)
+        || paymentRows.some(p => /credito/i.test(p.method));
+    if (isCredito && creditoAmount > 0) {
+      await createCredito(tx, {
         organizationId: orgId,
         saleId: sale.id,
-        originalAmount: fiadoAmount,
+        originalAmount: creditoAmount,
         dueDate: input.dueDate ?? null,
         createdBy: userId,
         notes: input.notes ?? null,
@@ -1335,14 +1335,14 @@ export type SaleTimelineEvent = {
     | 'transfer_confirmed'
     | 'transfer_partial'
     | 'transfer_not_arrived'
-    | 'transfer_to_fiado'
+    | 'transfer_to_credito'
     | 'transfer_loss'
     | 'cashier_explained'
-    | 'fiado_opened'
-    | 'fiado_abono'
-    | 'fiado_extended'
-    | 'fiado_writeoff'
-    | 'fiado_paid'
+    | 'credito_opened'
+    | 'credito_abono'
+    | 'credito_extended'
+    | 'credito_writeoff'
+    | 'credito_paid'
     | 'return';
   /** ISO timestamp; the UI sorts and formats it. */
   at: string;
@@ -1355,8 +1355,8 @@ export type SaleTimelineEvent = {
 
 // The full lifecycle of ONE sale, projected read-only over the ledgers that
 // already record it: the sale and its payments, the transfer-reconciliation
-// trail (confirmed / partial / not arrived / loss / converted to fiado), the
-// fiado debt and its abonos, and any returns. No new table — every beat is
+// trail (confirmed / partial / not arrived / loss / converted to credito), the
+// credito debt and its abonos, and any returns. No new table — every beat is
 // reconstructed from existing rows and returned oldest-first.
 export async function getSaleTimeline(
   saleId: string,
@@ -1397,7 +1397,7 @@ export async function getSaleTimeline(
     return [];
   }
 
-  const [payments, returns, fiados] = await Promise.all([
+  const [payments, returns, creditos] = await Promise.all([
     db
       .select({
         id: salePaymentsSchema.id,
@@ -1419,18 +1419,18 @@ export async function getSaleTimeline(
       .where(eq(posReturnsSchema.saleId, saleId)),
     db
       .select({
-        id: fiadosSchema.id,
-        originalAmount: fiadosSchema.originalAmount,
-        status: fiadosSchema.status,
-        dueDate: fiadosSchema.dueDate,
-        createdAt: fiadosSchema.createdAt,
+        id: creditosSchema.id,
+        originalAmount: creditosSchema.originalAmount,
+        status: creditosSchema.status,
+        dueDate: creditosSchema.dueDate,
+        createdAt: creditosSchema.createdAt,
       })
-      .from(fiadosSchema)
-      .where(eq(fiadosSchema.saleId, saleId)),
+      .from(creditosSchema)
+      .where(eq(creditosSchema.saleId, saleId)),
   ]);
 
   const paymentIds = payments.map(p => p.id);
-  const fiadoIds = fiados.map(f => f.id);
+  const creditoIds = creditos.map(f => f.id);
 
   const transfers = paymentIds.length > 0
     ? await db
@@ -1443,7 +1443,7 @@ export async function getSaleTimeline(
           reconciledAt: transferReconciliationsSchema.reconciledAt,
           resolvedAt: transferReconciliationsSchema.resolvedAt,
           resolutionType: transferReconciliationsSchema.resolutionType,
-          resolutionFiadoId: transferReconciliationsSchema.resolutionFiadoId,
+          resolutionCreditoId: transferReconciliationsSchema.resolutionCreditoId,
           cashierExplainedAt: transferReconciliationsSchema.cashierExplainedAt,
           cashierExplanation: transferReconciliationsSchema.cashierExplanation,
           createdAt: transferReconciliationsSchema.createdAt,
@@ -1454,28 +1454,28 @@ export async function getSaleTimeline(
         )
     : [];
 
-  const movements = fiadoIds.length > 0
+  const movements = creditoIds.length > 0
     ? await db
         .select({
-          id: fiadoMovementsSchema.id,
-          fiadoId: fiadoMovementsSchema.fiadoId,
-          type: fiadoMovementsSchema.type,
-          amount: fiadoMovementsSchema.amount,
-          method: fiadoMovementsSchema.method,
-          dueDateBefore: fiadoMovementsSchema.dueDateBefore,
-          dueDateAfter: fiadoMovementsSchema.dueDateAfter,
-          createdAt: fiadoMovementsSchema.createdAt,
+          id: creditoMovementsSchema.id,
+          creditoId: creditoMovementsSchema.creditoId,
+          type: creditoMovementsSchema.type,
+          amount: creditoMovementsSchema.amount,
+          method: creditoMovementsSchema.method,
+          dueDateBefore: creditoMovementsSchema.dueDateBefore,
+          dueDateAfter: creditoMovementsSchema.dueDateAfter,
+          createdAt: creditoMovementsSchema.createdAt,
         })
-        .from(fiadoMovementsSchema)
-        .where(inArray(fiadoMovementsSchema.fiadoId, fiadoIds))
+        .from(creditoMovementsSchema)
+        .where(inArray(creditoMovementsSchema.creditoId, creditoIds))
     : [];
 
-  // Fiados that exist because a transfer was resolved as a receivable — their
-  // "opened" beat is already told by the transfer_to_fiado event, so we don't
-  // repeat it as a standalone "Pasó a fiado".
-  const fiadoFromTransfer = new Set(
+  // Creditos that exist because a transfer was resolved as a receivable — their
+  // "opened" beat is already told by the transfer_to_credito event, so we don't
+  // repeat it as a standalone "Pasó a credito".
+  const creditoFromTransfer = new Set(
     transfers
-      .map(t => t.resolutionFiadoId)
+      .map(t => t.resolutionCreditoId)
       .filter((id): id is string => id != null),
   );
 
@@ -1562,10 +1562,10 @@ export async function getSaleTimeline(
 
     if (t.resolvedAt && t.resolutionType === 'receivable') {
       events.push({
-        id: `tr-fiado-${t.id}`,
-        kind: 'transfer_to_fiado',
+        id: `tr-credito-${t.id}`,
+        kind: 'transfer_to_credito',
         at: t.resolvedAt.toISOString(),
-        title: 'Transferencia convertida en fiado',
+        title: 'Transferencia convertida en crédito',
         detail: 'El cliente queda debiendo el monto',
         amount: t.expectedAmount,
         tone: 'warning',
@@ -1583,13 +1583,13 @@ export async function getSaleTimeline(
     }
   }
 
-  for (const f of fiados) {
-    if (!fiadoFromTransfer.has(f.id)) {
+  for (const f of creditos) {
+    if (!creditoFromTransfer.has(f.id)) {
       events.push({
-        id: `fiado-${f.id}`,
-        kind: 'fiado_opened',
+        id: `credito-${f.id}`,
+        kind: 'credito_opened',
         at: f.createdAt.toISOString(),
-        title: 'Pasó a fiado (crédito)',
+        title: 'Pasó a crédito',
         detail: `Vence el ${f.dueDate}`,
         amount: f.originalAmount,
         tone: 'warning',
@@ -1597,14 +1597,14 @@ export async function getSaleTimeline(
     }
   }
 
-  // The latest payment movement per fiado, so the "pagado totalmente" beat lands
+  // The latest payment movement per credito, so the "pagado totalmente" beat lands
   // at the moment the balance actually reached zero.
-  const lastPaymentByFiado = new Map<string, Date>();
+  const lastPaymentByCredito = new Map<string, Date>();
   for (const m of movements) {
     if (m.type === 'payment') {
-      const prev = lastPaymentByFiado.get(m.fiadoId);
+      const prev = lastPaymentByCredito.get(m.creditoId);
       if (!prev || m.createdAt > prev) {
-        lastPaymentByFiado.set(m.fiadoId, m.createdAt);
+        lastPaymentByCredito.set(m.creditoId, m.createdAt);
       }
     }
   }
@@ -1613,9 +1613,9 @@ export async function getSaleTimeline(
     if (m.type === 'payment') {
       events.push({
         id: `fm-pay-${m.id}`,
-        kind: 'fiado_abono',
+        kind: 'credito_abono',
         at: m.createdAt.toISOString(),
-        title: `Abono al fiado — ${m.method ?? 'efectivo'}`,
+        title: `Abono al crédito — ${m.method ?? 'efectivo'}`,
         detail: null,
         amount: m.amount,
         tone: 'success',
@@ -1623,9 +1623,9 @@ export async function getSaleTimeline(
     } else if (m.type === 'extension') {
       events.push({
         id: `fm-ext-${m.id}`,
-        kind: 'fiado_extended',
+        kind: 'credito_extended',
         at: m.createdAt.toISOString(),
-        title: 'Plazo del fiado extendido',
+        title: 'Plazo del crédito extendido',
         detail:
           m.dueDateBefore && m.dueDateAfter
             ? `${m.dueDateBefore} → ${m.dueDateAfter}`
@@ -1636,9 +1636,9 @@ export async function getSaleTimeline(
     } else if (m.type === 'writeoff') {
       events.push({
         id: `fm-wo-${m.id}`,
-        kind: 'fiado_writeoff',
+        kind: 'credito_writeoff',
         at: m.createdAt.toISOString(),
-        title: 'Fiado dado de baja',
+        title: 'Crédito dado de baja',
         detail: null,
         amount: m.amount,
         tone: 'danger',
@@ -1646,14 +1646,14 @@ export async function getSaleTimeline(
     }
   }
 
-  for (const f of fiados) {
+  for (const f of creditos) {
     if (f.status === 'paid') {
-      const at = lastPaymentByFiado.get(f.id) ?? f.createdAt;
+      const at = lastPaymentByCredito.get(f.id) ?? f.createdAt;
       events.push({
-        id: `fiado-paid-${f.id}`,
-        kind: 'fiado_paid',
+        id: `credito-paid-${f.id}`,
+        kind: 'credito_paid',
         at: at.toISOString(),
-        title: 'Fiado pagado totalmente',
+        title: 'Crédito pagado totalmente',
         detail: 'El cliente quedó al día',
         amount: null,
         tone: 'eco',

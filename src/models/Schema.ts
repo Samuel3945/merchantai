@@ -378,12 +378,12 @@ export const cashMovementTypeEnum = pgEnum('cash_movement_type', [
   // receivable against future salary, not a P&L expense. Behaves like withdrawal
   // for the cash math (a salida) and is excluded from operating expenses.
   'advance',
-  // Cobro de fiado: a customer pays down a credit account IN CASH. It is drawer
+  // Cobro de credito: a customer pays down a credit account IN CASH. It is drawer
   // income for the arqueo, but it is NOT new revenue (the sale already booked
-  // revenue when the fiado was created) — so Finanzas excludes it. Only the
+  // revenue when the credito was created) — so Finanzas excludes it. Only the
   // efectivo portion lands here; digital abonos (nequi/daviplata/transfer) are
-  // recorded on the fiado ledger but never touch the physical drawer.
-  'fiado_payment',
+  // recorded on the credito ledger but never touch the physical drawer.
+  'credito_payment',
   // Payment reclassification: a sale's method split was mis-entered (e.g. a
   // mixed payment booked as all-cash). Moving an amount in/out of cash shifts the
   // expected drawer balance, so this posts a SIGNED compensating row (negative
@@ -654,7 +654,7 @@ export const transferReconciliationStatusEnum = pgEnum(
 );
 
 export const transferResolutionTypeEnum = pgEnum('transfer_resolution_type', [
-  // The customer still owes it — converted into a fiado (credit) debt.
+  // The customer still owes it — converted into a credito (credit) debt.
   'receivable',
   // Written off; Finanzas offsets the revenue that never materialized. It does
   // NOT post a cash_movement — the money never entered the drawer, so removing
@@ -1188,25 +1188,25 @@ export const customersSchema = pgTable(
   ],
 );
 
-// ── Fiados (store-credit accounts) ─────────────────────────────────────────
-// A fiado is a first-class receivable: the customer took goods now and pays
+// ── Creditos (store-credit accounts) ─────────────────────────────────────────
+// A credito is a first-class receivable: the customer took goods now and pays
 // later. It replaces the old "derived from sales.notes" hack — see
-// actions/fiados.ts. The account holds the headline figures (original amount,
-// due date, status); fiado_movements is the append-only ledger that records
+// actions/creditos.ts. The account holds the headline figures (original amount,
+// due date, status); credito_movements is the append-only ledger that records
 // every charge, payment, plazo extension and adjustment chronologically. That
 // ledger IS the timeline shown in the detail view and the full audit trail.
 //
-// Balance = original_amount − SUM(payment movements). A fiado is `paid` when the
+// Balance = original_amount − SUM(payment movements). A credito is `paid` when the
 // balance reaches zero and `written_off` when forgiven. Rows are never deleted,
 // so the Historial tab always has the complete record.
-export const fiadoStatusEnum = pgEnum('fiado_status', [
+export const creditoStatusEnum = pgEnum('credito_status', [
   'pending',
   'paid',
   'written_off',
 ]);
 
-export const fiadoMovementTypeEnum = pgEnum('fiado_movement_type', [
-  // Origin of the debt — one per fiado, amount = original_amount.
+export const creditoMovementTypeEnum = pgEnum('credito_movement_type', [
+  // Origin of the debt — one per credito, amount = original_amount.
   'charge',
   // Customer pays down the balance (efectivo/nequi/daviplata/transferencia/otro).
   'payment',
@@ -1218,8 +1218,8 @@ export const fiadoMovementTypeEnum = pgEnum('fiado_movement_type', [
   'adjustment',
 ]);
 
-export const fiadosSchema = pgTable(
-  'fiados',
+export const creditosSchema = pgTable(
+  'creditos',
   {
     id: uuid('id').primaryKey().defaultRandom(),
     organizationId: text('organization_id').notNull(),
@@ -1228,8 +1228,8 @@ export const fiadosSchema = pgTable(
     customerId: uuid('customer_id').references(() => customersSchema.id, {
       onDelete: 'set null',
     }),
-    // Origin sale. SET NULL keeps the fiado alive even if the sale is purged;
-    // the unique index below makes the backfill idempotent (one fiado per sale).
+    // Origin sale. SET NULL keeps the credito alive even if the sale is purged;
+    // the unique index below makes the backfill idempotent (one credito per sale).
     saleId: uuid('sale_id').references(() => salesSchema.id, {
       onDelete: 'set null',
     }),
@@ -1240,7 +1240,7 @@ export const fiadosSchema = pgTable(
     // The real payment deadline — the field the old model never stored. Used by
     // Vencido / Próximo a vencer / "Vence mañana" and the Caja-free risk states.
     dueDate: date('due_date').notNull(),
-    status: fiadoStatusEnum('status').default('pending').notNull(),
+    status: creditoStatusEnum('status').default('pending').notNull(),
     // Display continuity during migration: holds the parsed "name | Tel: phone"
     // until customer_id is fully populated.
     notes: text('notes'),
@@ -1253,20 +1253,20 @@ export const fiadosSchema = pgTable(
   },
   table => [
     // Pendientes/Historial tabs and the dashboard counts filter org + status.
-    index('fiados_org_status_idx').on(table.organizationId, table.status),
+    index('creditos_org_status_idx').on(table.organizationId, table.status),
     // Vencidos / Próximos a vencer scan org + due_date.
-    index('fiados_org_due_date_idx').on(table.organizationId, table.dueDate),
-    index('fiados_customer_idx').on(table.customerId),
-    // One fiado per origin sale. Lets the backfill be re-run safely to catch
-    // fiados created between Phase 0 and the Phase 1 write path going live.
-    uniqueIndex('fiados_sale_unique_idx')
+    index('creditos_org_due_date_idx').on(table.organizationId, table.dueDate),
+    index('creditos_customer_idx').on(table.customerId),
+    // One credito per origin sale. Lets the backfill be re-run safely to catch
+    // creditos created between Phase 0 and the Phase 1 write path going live.
+    uniqueIndex('creditos_sale_unique_idx')
       .on(table.saleId)
       .where(sql`${table.saleId} IS NOT NULL`),
   ],
 );
 
 // Derived ledger for NON-cash incoming money (transferencia / nequi / daviplata,
-// from both sales and fiado abonos). It is the digital twin of cash_movements:
+// from both sales and credito abonos). It is the digital twin of cash_movements:
 // cash lands in the drawer and is reconciled by the cashier (arqueo); transfers
 // land in an account and are reconciled by whoever holds it (canConfirmTransfers),
 // decoupled from the cash close. One row = one incoming transfer that must be
@@ -1278,9 +1278,9 @@ export const transferReconciliationsSchema = pgTable(
     id: uuid('id').primaryKey().defaultRandom(),
     organizationId: text('organization_id').notNull(),
     // Sale source: the sale_payments row this transfer came from. UNIQUE so the
-    // backfill and the offline POS sync can never double-insert. NULL for fiado
+    // backfill and the offline POS sync can never double-insert. NULL for credito
     // abonos — those link the other way, via
-    // fiado_movements.transfer_reconciliation_id (mirror of cash_movement_id).
+    // credito_movements.transfer_reconciliation_id (mirror of cash_movement_id).
     salePaymentId: uuid('sale_payment_id').references(
       () => salePaymentsSchema.id,
       { onDelete: 'cascade' },
@@ -1316,11 +1316,11 @@ export const transferReconciliationsSchema = pgTable(
     resolutionType: transferResolutionTypeEnum('resolution_type'),
     resolvedBy: text('resolved_by'),
     resolvedAt: timestamp('resolved_at', { mode: 'date' }),
-    // Set when resolved as 'receivable': the fiado (debt) booked for the customer.
+    // Set when resolved as 'receivable': the credito (debt) booked for the customer.
     // Only legal when the sale has a known customer and the case was an honest
     // error — never for an anonymous sale or a fake comprobante.
-    resolutionFiadoId: uuid('resolution_fiado_id').references(
-      () => fiadosSchema.id,
+    resolutionCreditoId: uuid('resolution_credito_id').references(
+      () => creditosSchema.id,
       { onDelete: 'set null' },
     ),
     // PÉRDIDA+RECLAMO: true when a loss row has an active legal/insurance claim.
@@ -1374,22 +1374,22 @@ export const transferReconciliationsRelations = relations(
       fields: [transferReconciliationsSchema.cashSessionId],
       references: [cashSessionsSchema.id],
     }),
-    resolutionFiado: one(fiadosSchema, {
-      fields: [transferReconciliationsSchema.resolutionFiadoId],
-      references: [fiadosSchema.id],
+    resolutionCredito: one(creditosSchema, {
+      fields: [transferReconciliationsSchema.resolutionCreditoId],
+      references: [creditosSchema.id],
     }),
   }),
 );
 
-export const fiadoMovementsSchema = pgTable(
-  'fiado_movements',
+export const creditoMovementsSchema = pgTable(
+  'credito_movements',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    fiadoId: uuid('fiado_id')
+    creditoId: uuid('credito_id')
       .notNull()
-      .references(() => fiadosSchema.id, { onDelete: 'cascade' }),
+      .references(() => creditosSchema.id, { onDelete: 'cascade' }),
     organizationId: text('organization_id').notNull(),
-    type: fiadoMovementTypeEnum('type').notNull(),
+    type: creditoMovementTypeEnum('type').notNull(),
     // Always positive; `type` decides the direction. Zero for pure extensions.
     amount: numeric('amount', { precision: 12, scale: 2 })
       .default('0')
@@ -1406,7 +1406,7 @@ export const fiadoMovementsSchema = pgTable(
     ),
     // Digital twin of cashMovementId: links a digital abono (nequi / daviplata /
     // transferencia) to the single reconciliation row it created, so the owner
-    // confirms one incoming transfer even when it paid down several fiados.
+    // confirms one incoming transfer even when it paid down several creditos.
     // Null for cash abonos (those use cashMovementId) and for charge/extension.
     transferReconciliationId: uuid('transfer_reconciliation_id').references(
       () => transferReconciliationsSchema.id,
@@ -1420,14 +1420,14 @@ export const fiadoMovementsSchema = pgTable(
     createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
   },
   table => [
-    // The timeline: every movement of a fiado, oldest first.
-    index('fiado_movements_fiado_created_idx').on(
-      table.fiadoId,
+    // The timeline: every movement of a credito, oldest first.
+    index('credito_movements_credito_created_idx').on(
+      table.creditoId,
       table.createdAt,
     ),
     // "Recuperado este mes" and the digital-vs-cash report split scan
     // org + type + time window.
-    index('fiado_movements_org_type_created_idx').on(
+    index('credito_movements_org_type_created_idx').on(
       table.organizationId,
       table.type,
       table.createdAt,
@@ -1435,31 +1435,31 @@ export const fiadoMovementsSchema = pgTable(
   ],
 );
 
-export const fiadosRelations = relations(fiadosSchema, ({ one, many }) => ({
+export const creditosRelations = relations(creditosSchema, ({ one, many }) => ({
   customer: one(customersSchema, {
-    fields: [fiadosSchema.customerId],
+    fields: [creditosSchema.customerId],
     references: [customersSchema.id],
   }),
   sale: one(salesSchema, {
-    fields: [fiadosSchema.saleId],
+    fields: [creditosSchema.saleId],
     references: [salesSchema.id],
   }),
-  movements: many(fiadoMovementsSchema),
+  movements: many(creditoMovementsSchema),
 }));
 
-export const fiadoMovementsRelations = relations(
-  fiadoMovementsSchema,
+export const creditoMovementsRelations = relations(
+  creditoMovementsSchema,
   ({ one }) => ({
-    fiado: one(fiadosSchema, {
-      fields: [fiadoMovementsSchema.fiadoId],
-      references: [fiadosSchema.id],
+    credito: one(creditosSchema, {
+      fields: [creditoMovementsSchema.creditoId],
+      references: [creditosSchema.id],
     }),
     cashMovement: one(cashMovementsSchema, {
-      fields: [fiadoMovementsSchema.cashMovementId],
+      fields: [creditoMovementsSchema.cashMovementId],
       references: [cashMovementsSchema.id],
     }),
     transferReconciliation: one(transferReconciliationsSchema, {
-      fields: [fiadoMovementsSchema.transferReconciliationId],
+      fields: [creditoMovementsSchema.transferReconciliationId],
       references: [transferReconciliationsSchema.id],
     }),
   }),
@@ -1733,7 +1733,7 @@ export const paymentMethodTypeEnum = pgEnum('payment_method_type', [
 ]);
 
 // Per-organization catalog of payment methods used at checkout. Seeded with
-// the Colombian defaults (Efectivo, Nequi, Daviplata, Llave, Tarjeta, Fiado)
+// the Colombian defaults (Efectivo, Nequi, Daviplata, Llave, Tarjeta, Credito)
 // when the org first asks for them. Soft-deleted via active=false so audit
 // trails on past sales (paymentType/method) still resolve.
 export const paymentMethodsSchema = pgTable(
@@ -1807,14 +1807,14 @@ export const treasuryAccountsSchema = pgTable(
 );
 
 // ── Notifications ─────────────────────────────────────────────────────────
-// Per-org notification feed (low stock, expiring batches, overdue fiados,
+// Per-org notification feed (low stock, expiring batches, overdue creditos,
 // cash-close discrepancies, generic sale alerts). Severity drives UI
 // emphasis (e.g. red pulse on the bell for 'high').
 export const notificationKindEnum = pgEnum('notification_kind', [
   'cash_difference',
   'low_stock',
   'expiring_soon',
-  'fiado_overdue',
+  'credito_overdue',
   'sale_alert',
   // Operator broadcast from the platform console (announcements, maintenance,
   // incidents). Rendered with a generic icon and no deep link.
@@ -1974,7 +1974,7 @@ export const einvoiceEmissionsSchema = pgTable(
 // create it; the courier moves it through the status state machine and the
 // customer is notified on each transition. `delivery_events` is the append-only
 // ledger of everything that happened to the order (status changes, notes,
-// outbound notifications) — it mirrors the fiado_movements pattern and IS the
+// outbound notifications) — it mirrors the credito_movements pattern and IS the
 // "Historial" the courier view renders.
 //
 // State machine: pending → assigned → in_transit → delivered
@@ -2300,7 +2300,7 @@ export const deliveryEventsRelations = relations(
 // stock_movements). One supplier_payments row per payment event — N payments can
 // reference the same payable (multi-payment N:M in v1 via direct nullable FK).
 // Payments debit a treasury container (salida), not expenses (ASSET, not P&L).
-// Mirror the fiados shape: denormalized paid_amount + status for fast list scans.
+// Mirror the creditos shape: denormalized paid_amount + status for fast list scans.
 
 export const supplierPayableStatusEnum = pgEnum('supplier_payable_status', [
   'open',
@@ -2355,7 +2355,7 @@ export const supplierPayablesSchema = pgTable(
       table.organizationId,
       table.purchasedAt,
     ),
-    // One payable per entry lot. Idempotent backfill-safe (mirrors fiados_sale_unique_idx).
+    // One payable per entry lot. Idempotent backfill-safe (mirrors creditos_sale_unique_idx).
     uniqueIndex('supplier_payables_stock_movement_unique')
       .on(table.stockMovementId)
       .where(sql`${table.stockMovementId} IS NOT NULL`),
@@ -2393,7 +2393,7 @@ export const supplierPaymentsSchema = pgTable(
     ),
     // Payments for a given payable (settling multiple installments).
     index('supplier_payments_payable_idx').on(table.payableId),
-    // paidThisMonth window: date_trunc('month', now()) scan (mirrors fiado movements idx).
+    // paidThisMonth window: date_trunc('month', now()) scan (mirrors credito movements idx).
     index('supplier_payments_org_created_idx').on(
       table.organizationId,
       table.createdAt,

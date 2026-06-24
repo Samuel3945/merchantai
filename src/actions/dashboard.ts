@@ -49,11 +49,11 @@ export type DashboardMetrics = {
   // Best sellers over the selected range — feeds the "Más vendidos" panel.
   topProducts: TopProductRow[];
   // New credit extended per day — feeds the "Por cobrar" chart series.
-  fiadoByDay: FiadoByDayRow[];
+  creditoByDay: CreditoByDayRow[];
 };
 
-// New fiado credit summed by the day it was created.
-export type FiadoByDayRow = { day: string; amount: number };
+// New credito credit summed by the day it was created.
+export type CreditoByDayRow = { day: string; amount: number };
 
 // Products at or below their minimum stock — the "Stock crítico" reorder list.
 // Current state (not range-dependent), so the page fetches it once.
@@ -211,7 +211,7 @@ async function salesByDay(
 // total but flips status to 'returned'. Filtering gross to 'completed' only while
 // still subtracting its refund made net go negative (e.g. a $100 sale fully
 // returned the same day read as -$100 instead of $0). 'settled' is included for
-// forward-safety in case the fiado-settled lifecycle ever flips status.
+// forward-safety in case the credito-settled lifecycle ever flips status.
 async function netRevenue(
   orgId: string,
   start: string,
@@ -271,12 +271,12 @@ function validateDate(value: string, field: string): string {
   return value;
 }
 
-// New fiado credit summed by the day it was created, over the range.
-async function fiadoByDay(
+// New credito credit summed by the day it was created, over the range.
+async function creditoByDay(
   orgId: string,
   start: string,
   end: string,
-): Promise<FiadoByDayRow[]> {
+): Promise<CreditoByDayRow[]> {
   const result = await db.execute(sql`
     SELECT
       to_char(
@@ -284,7 +284,7 @@ async function fiadoByDay(
         'YYYY-MM-DD'
       ) AS day,
       COALESCE(SUM(original_amount), 0)::float8 AS amount
-    FROM fiados
+    FROM creditos
     WHERE organization_id = ${orgId}
       AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
           BETWEEN ${start}::date AND ${end}::date
@@ -321,7 +321,7 @@ export async function getMetrics(
     prevNet,
     cashFlow,
     topProducts,
-    fiadoDaily,
+    creditoDaily,
   ] = await Promise.all([
     periodStats(orgId, s, e),
     inventoryStats(orgId),
@@ -331,7 +331,7 @@ export async function getMetrics(
     hasCompare && cs && ce ? netRevenue(orgId, cs, ce) : Promise.resolve(null),
     cashFlowStats(orgId, s, e),
     getTopProducts(s, e),
-    fiadoByDay(orgId, s, e),
+    creditoByDay(orgId, s, e),
   ]);
 
   return {
@@ -345,7 +345,7 @@ export async function getMetrics(
     inventory,
     salesByDay: byDay,
     topProducts: topProducts.slice(0, 5),
-    fiadoByDay: fiadoDaily,
+    creditoByDay: creditoDaily,
   };
 }
 

@@ -2,8 +2,8 @@ import { NextResponse } from 'next/server';
 import {
   normalizeClientKey,
   recordAbono,
-  saleIdsForFiados,
-} from '@/libs/fiados';
+  saleIdsForCreditos,
+} from '@/libs/creditos';
 import { requirePosAuth } from '@/libs/pos-auth';
 
 export const runtime = 'nodejs';
@@ -18,7 +18,7 @@ type AbonarBody = {
 
 // Cashier-app abono. Delegates to the shared ledger core so an abono made at the
 // register is identical to one made on the dashboard, and a cash abono lands in
-// Caja as a "Cobro de fiado". Keeps the legacy { applied, remaining,
+// Caja as a "Cobro de credito". Keeps the legacy { applied, remaining,
 // settledSaleIds } response shape (plus hitCaja).
 export async function POST(req: Request): Promise<NextResponse> {
   const { ctx, errorResponse } = await requirePosAuth(req);
@@ -46,7 +46,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       note: body.notes ?? null,
       createdBy: ctx.cashierId ?? ctx.cashierName ?? 'pos',
     });
-    const settledSaleIds = await saleIdsForFiados(ctx.organizationId, result.paidFiadoIds);
+    const settledSaleIds = await saleIdsForCreditos(ctx.organizationId, result.paidCreditoIds);
     return NextResponse.json({
       applied: result.applied,
       remaining: result.remaining,

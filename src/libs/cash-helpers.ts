@@ -6,7 +6,7 @@ import { formatSaleNumber } from '@/libs/sale-number';
 import {
   cashMovementsSchema,
   cashSessionsSchema,
-  fiadoMovementsSchema,
+  creditoMovementsSchema,
   salePaymentsSchema,
   salesSchema,
   treasuryMovementsSchema,
@@ -175,10 +175,10 @@ export const INCOME_MOVEMENT_TYPES: CashMovementType[] = [
   'sale',
   'deposit',
   'adjustment',
-  // Cobro de fiado en efectivo: real cash into the drawer, so it raises the
+  // Cobro de credito en efectivo: real cash into the drawer, so it raises the
   // expected amount for the arqueo. It is NOT revenue (Finanzas excludes it —
-  // revenue was booked when the fiado sale happened), only drawer cash.
-  'fiado_payment',
+  // revenue was booked when the credito sale happened), only drawer cash.
+  'credito_payment',
 ];
 
 // Cash leaving the drawer. This DOES include `withdrawal`: a security withdrawal
@@ -444,7 +444,7 @@ export async function computeCashBreakdown(
   const [row] = await executor
     .select({
       cashSales: sql<string>`COALESCE(SUM(${cashMovementsSchema.amount}) FILTER (WHERE ${cashMovementsSchema.type} = 'sale'), 0)::text`,
-      entradas: sql<string>`COALESCE(SUM(${cashMovementsSchema.amount}) FILTER (WHERE ${cashMovementsSchema.type} IN ('deposit','adjustment','fiado_payment')), 0)::text`,
+      entradas: sql<string>`COALESCE(SUM(${cashMovementsSchema.amount}) FILTER (WHERE ${cashMovementsSchema.type} IN ('deposit','adjustment','credito_payment')), 0)::text`,
       salidas: sql<string>`COALESCE(SUM(${cashMovementsSchema.amount}) FILTER (WHERE ${cashMovementsSchema.type} IN ('expense','salary','inventory_purchase','withdrawal','advance')), 0)::text`,
       // Signed: a reclassification can move expected cash either way.
       reclassifications: sql<string>`COALESCE(SUM(${cashMovementsSchema.amount}) FILTER (WHERE ${cashMovementsSchema.type} = 'reclassification'), 0)::text`,
@@ -524,7 +524,7 @@ export async function recordCashMovement(
   }
 
   // Resolve the cash portion BEFORE touching any session, so a non-cash sale
-  // (fiado/transfer) never auto-creates a phantom session. One lookup feeds both
+  // (credito/transfer) never auto-creates a phantom session. One lookup feeds both
   // the cash-detection fallback (paymentType) and the human-readable movement
   // label (saleNumber) — the per-org sale number keeps the Caja ledger
   // consistent with the Sales view (#1001) instead of a raw UUID prefix.
@@ -639,7 +639,7 @@ export async function recordCashMovement(
 // ── Collections by payment method ────────────────────────────────────────────
 // Caja shows the physical drawer (efectivo) — but the owner also wants to see
 // how much came in by each digital method this session. Digital collections
-// never enter the drawer, so they live in sale_payments + the fiado ledger, not
+// never enter the drawer, so they live in sale_payments + the credito ledger, not
 // cash_movements. This aggregates BOTH over the session window and buckets them.
 
 export type CollectionsByMethod = {
@@ -690,8 +690,8 @@ export async function computeCollectionsByMethod(
   const start = session.openedAt;
   const end = session.closedAt ?? new Date();
 
-  const [saleRows, fiadoRows] = await Promise.all([
-    // Sale collections (excluding the fiado-credit portion, which is not money in).
+  const [saleRows, creditoRows] = await Promise.all([
+    // Sale collections (excluding the credito-credit portion, which is not money in).
     executor
       .select({
         method: salePaymentsSchema.method,
@@ -704,30 +704,30 @@ export async function computeCollectionsByMethod(
           eq(salesSchema.organizationId, session.organizationId),
           gte(salePaymentsSchema.createdAt, start),
           lte(salePaymentsSchema.createdAt, end),
-          sql`${salePaymentsSchema.method} NOT ILIKE '%fiado%'`,
+          sql`${salePaymentsSchema.method} NOT ILIKE '%credito%'`,
         ),
       )
       .groupBy(salePaymentsSchema.method),
-    // Fiado abonos collected this session.
+    // Credito abonos collected this session.
     executor
       .select({
-        method: fiadoMovementsSchema.method,
-        sum: sql<string>`COALESCE(SUM(${fiadoMovementsSchema.amount}), 0)::text`,
+        method: creditoMovementsSchema.method,
+        sum: sql<string>`COALESCE(SUM(${creditoMovementsSchema.amount}), 0)::text`,
       })
-      .from(fiadoMovementsSchema)
+      .from(creditoMovementsSchema)
       .where(
         and(
-          eq(fiadoMovementsSchema.organizationId, session.organizationId),
-          eq(fiadoMovementsSchema.type, 'payment'),
-          gte(fiadoMovementsSchema.createdAt, start),
-          lte(fiadoMovementsSchema.createdAt, end),
+          eq(creditoMovementsSchema.organizationId, session.organizationId),
+          eq(creditoMovementsSchema.type, 'payment'),
+          gte(creditoMovementsSchema.createdAt, start),
+          lte(creditoMovementsSchema.createdAt, end),
         ),
       )
-      .groupBy(fiadoMovementsSchema.method),
+      .groupBy(creditoMovementsSchema.method),
   ]);
 
   const result: CollectionsByMethod = { ...EMPTY_COLLECTIONS };
-  for (const row of [...saleRows, ...fiadoRows]) {
+  for (const row of [...saleRows, ...creditoRows]) {
     const amount = Number.parseFloat(row.sum) || 0;
     if (amount === 0) {
       continue;

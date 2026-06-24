@@ -5,7 +5,7 @@ import type {
   LowStockRow,
   StockCategoryRow,
 } from '@/actions/dashboard';
-import type { FiadosOverview } from '@/libs/fiados';
+import type { CreditosOverview } from '@/libs/creditos';
 import type { RangePreset } from '@/utils/DateRange';
 import { useOrganization } from '@clerk/nextjs';
 import { Bot, MessageCircle } from 'lucide-react';
@@ -114,7 +114,7 @@ type BotMessage = { text: string; time: string };
 // with the store instead of a generic mock.
 function buildAssistantMessages(
   data: DashboardMetrics,
-  fiado: FiadosOverview,
+  credito: CreditosOverview,
   lowStock: LowStockRow[],
 ): BotMessage[] {
   const msgs: BotMessage[] = [{ text: 'Buenos días 👋', time: '7:02' }];
@@ -128,7 +128,7 @@ function buildAssistantMessages(
     });
   }
 
-  const debtor = fiado.clients[0];
+  const debtor = credito.clients[0];
   if (debtor && debtor.balance > 0) {
     msgs.push({
       text: `${debtor.name} te debe ${formatMoney(
@@ -420,20 +420,20 @@ const METRIC_CONFIG: Record<ChartMetric, {
 }> = {
   ventas: { color: '#0F766E', label: 'Ventas por día', money: true },
   ganancia: { color: '#10B981', label: 'Ganancia por día', money: true },
-  cobrar: { color: '#B45309', label: 'Fiado por día', money: true },
+  cobrar: { color: '#B45309', label: 'Credito por día', money: true },
   stock: { color: '#DC2626', label: 'Stock crítico por categoría', money: false },
 };
 
 export function DashboardClient({
   initial,
-  fiado,
+  credito,
   lowStock,
   stockByCategory,
   hasWhatsAppAgent,
   aiEnabled,
 }: {
   initial: DashboardMetrics;
-  fiado: FiadosOverview;
+  credito: CreditosOverview;
   lowStock: LowStockRow[];
   stockByCategory: StockCategoryRow[];
   hasWhatsAppAgent: boolean;
@@ -489,38 +489,38 @@ export function DashboardClient({
   }
 
   const prev = data.previousPeriod;
-  const fiadoTotal = fiado.clients.reduce((sum, c) => sum + c.balance, 0);
+  const creditoTotal = credito.clients.reduce((sum, c) => sum + c.balance, 0);
   const botMessages = useMemo(
-    () => buildAssistantMessages(data, fiado, lowStock),
-    [data, fiado, lowStock],
+    () => buildAssistantMessages(data, credito, lowStock),
+    [data, credito, lowStock],
   );
 
   // The chart reflects the selected KPI: each metric maps to its own {x,y}
-  // series — sales/profit/fiado by day, or low stock by category.
+  // series — sales/profit/credito by day, or low stock by category.
   const chart = METRIC_CONFIG[metric];
   const chartSeries = useMemo(() => {
     switch (metric) {
       case 'ganancia':
         return data.salesByDay.map(r => ({ x: formatDayLabel(r.day), y: r.profit }));
       case 'cobrar':
-        return data.fiadoByDay.map(r => ({ x: formatDayLabel(r.day), y: r.amount }));
+        return data.creditoByDay.map(r => ({ x: formatDayLabel(r.day), y: r.amount }));
       case 'stock':
         return stockByCategory.map(r => ({ x: r.category, y: r.count }));
       default:
         return data.salesByDay.map(r => ({ x: formatDayLabel(r.day), y: r.total }));
     }
-  }, [metric, data.salesByDay, data.fiadoByDay, stockByCategory]);
+  }, [metric, data.salesByDay, data.creditoByDay, stockByCategory]);
   const chartValue = chart.money
     ? formatMoney(
         metric === 'ganancia'
           ? data.period.profit
           : metric === 'cobrar'
-            ? fiadoTotal
+            ? creditoTotal
             : data.period.total,
       )
     : String(lowStock.length);
   const chartSub = metric === 'cobrar'
-    ? `${fiado.clients.length} ${fiado.clients.length === 1 ? 'cliente' : 'clientes'}`
+    ? `${credito.clients.length} ${credito.clients.length === 1 ? 'cliente' : 'clientes'}`
     : metric === 'stock'
       ? `${lowStock.length} ${lowStock.length === 1 ? 'producto' : 'productos'}`
       : `${data.period.count} ${data.period.count === 1 ? 'venta' : 'ventas'}`;
@@ -595,12 +595,12 @@ export function DashboardClient({
         />
         <KpiCard
           title="Por cobrar"
-          value={formatMoney(fiadoTotal)}
+          value={formatMoney(creditoTotal)}
           selected={metric === 'cobrar'}
           onSelect={() => setMetric('cobrar')}
           color={METRIC_CONFIG.cobrar.color}
-          hint={`${fiado.clients.length} ${
-            fiado.clients.length === 1 ? 'cliente con fiado' : 'clientes con fiado'
+          hint={`${credito.clients.length} ${
+            credito.clients.length === 1 ? 'cliente con credito' : 'clientes con credito'
           }`}
         />
         <KpiCard
@@ -784,7 +784,7 @@ export function DashboardClient({
         </div>
       </div>
 
-      {/* Bottom row — outstanding fiado and the reorder list */}
+      {/* Bottom row — outstanding credito and the reorder list */}
       <div className="
         grid gap-6
         lg:grid-cols-2
@@ -797,29 +797,29 @@ export function DashboardClient({
               uppercase
             "
             >
-              Fiado pendiente
+              Credito pendiente
             </div>
             <Link
-              href="/dashboard/fiados"
+              href="/dashboard/creditos"
               className="
                 text-xs text-muted-foreground
                 hover:text-primary hover:underline
               "
             >
-              Muro de fiados →
+              Muro de creditos →
             </Link>
           </div>
           <div className="mt-1 font-display text-2xl font-medium tabular-nums">
-            {formatMoney(fiado.clients.reduce((sum, c) => sum + c.balance, 0))}
+            {formatMoney(credito.clients.reduce((sum, c) => sum + c.balance, 0))}
           </div>
           <div className="text-xs text-muted-foreground">
-            {fiado.clients.length}
+            {credito.clients.length}
             {' '}
-            {fiado.clients.length === 1 ? 'persona con fiado' : 'personas con fiado'}
+            {credito.clients.length === 1 ? 'persona con credito' : 'personas con credito'}
           </div>
-          {fiado.clients.length > 0 && (
+          {credito.clients.length > 0 && (
             <ul className="mt-3 divide-y">
-              {fiado.clients.slice(0, 4).map(c => (
+              {credito.clients.slice(0, 4).map(c => (
                 <li
                   key={c.clientKey}
                   className="flex items-center justify-between gap-3 py-2.5"

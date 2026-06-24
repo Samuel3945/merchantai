@@ -4,9 +4,9 @@ import { and, desc, eq, gte, ilike, lt, lte, or, sql } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { resolvePosActor } from '@/libs/audit-log';
 import { findOpenSession, toMoney } from '@/libs/cash-helpers';
+import { createCredito } from '@/libs/creditos';
+import { creditoAmountFor } from '@/libs/creditos-math';
 import { db } from '@/libs/DB';
-import { createFiado } from '@/libs/fiados';
-import { fiadoAmountFor } from '@/libs/fiados-math';
 import { consumeFifoExits } from '@/libs/fifo-cogs';
 import { requirePosAuth } from '@/libs/pos-auth';
 import { salePaymentsAggJson } from '@/libs/pos-sales-payments-agg';
@@ -39,7 +39,7 @@ type CreateSaleBody = {
   paymentType?: string;
   notes?: string | null;
   payments?: SalePaymentInput[];
-  // Optional manual due date ('YYYY-MM-DD') for fiado sales; org default term
+  // Optional manual due date ('YYYY-MM-DD') for credito sales; org default term
   // applies when omitted.
   dueDate?: string | null;
   // Optional real sale time (ISO) for offline-capable clients. Omitted by the
@@ -181,14 +181,14 @@ export async function POST(req: Request): Promise<NextResponse> {
   }
 
   // Regla portada de Tiendademo (pos.service.webSale): una venta NUEVA que mueve
-  // efectivo exige una caja abierta. Los pagos 100% fiado no afectan la caja,
+  // efectivo exige una caja abierta. Los pagos 100% credito no afectan la caja,
   // así que se permiten sin sesión abierta.
   const paymentMethods
     = body.payments && body.payments.length > 0
       ? body.payments.map(p => p.method ?? '')
       : [paymentType];
   const requiresOpenCash = !paymentMethods.every(m =>
-    m.toLowerCase().includes('fiado'),
+    m.toLowerCase().includes('credito'),
   );
   if (requiresOpenCash) {
     const openSession = await findOpenSession(db, ctx.organizationId, ctx.tokenId);
@@ -391,17 +391,17 @@ export async function POST(req: Request): Promise<NextResponse> {
         .values(paymentRows)
         .returning();
 
-      // Fiado: book the credit account for the portion not paid upfront with a
-      // non-fiado method. Same rule as the dashboard createSale action.
-      const fiadoAmount = fiadoAmountFor(total, paymentRows);
-      const isFiado
-        = /fiado/i.test(paymentType)
-          || paymentRows.some(p => /fiado/i.test(p.method));
-      if (isFiado && fiadoAmount > 0) {
-        await createFiado(tx, {
+      // Credito: book the credit account for the portion not paid upfront with a
+      // non-credito method. Same rule as the dashboard createSale action.
+      const creditoAmount = creditoAmountFor(total, paymentRows);
+      const isCredito
+        = /credito/i.test(paymentType)
+          || paymentRows.some(p => /credito/i.test(p.method));
+      if (isCredito && creditoAmount > 0) {
+        await createCredito(tx, {
           organizationId: ctx.organizationId,
           saleId: sale.id,
-          originalAmount: fiadoAmount,
+          originalAmount: creditoAmount,
           dueDate: body.dueDate ?? null,
           createdBy: ctx.cashierId ?? ctx.cashierName ?? null,
           notes: body.notes ?? null,

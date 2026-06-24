@@ -53,7 +53,7 @@ const SCHEMA = `
   CREATE TYPE "cash_session_status" AS ENUM('open', 'closed');
   CREATE TYPE "treasury_account_type" AS ENUM('caja','caja_fuerte','banco','transito');
   CREATE TYPE "treasury_movement_type" AS ENUM('transfer','consignacion','entrada','salida','gasto','adjustment','handover');
-  CREATE TYPE "cash_movement_type" AS ENUM('sale','deposit','expense','salary','inventory_purchase','withdrawal','adjustment','advance','fiado_payment','reclassification');
+  CREATE TYPE "cash_movement_type" AS ENUM('sale','deposit','expense','salary','inventory_purchase','withdrawal','adjustment','advance','credito_payment','reclassification');
 
   CREATE TABLE treasury_accounts (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,

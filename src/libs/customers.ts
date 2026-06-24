@@ -1,11 +1,11 @@
-import type { Executor as FiadoExecutor } from '@/libs/fiados';
+import type { Executor as CreditoExecutor } from '@/libs/creditos';
 import { and, eq, or } from 'drizzle-orm';
 import { customersSchema } from '@/models/Schema';
 
-// Re-use the shared Executor type (db | tx) defined in fiados.ts which already
+// Re-use the shared Executor type (db | tx) defined in creditos.ts which already
 // covers the full Drizzle db/tx union. Importing it keeps customers.ts free of
 // a runtime DB import (it never calls db directly — callers always pass the tx).
-type Executor = FiadoExecutor;
+type Executor = CreditoExecutor;
 
 export type FindOrCreateCustomerArgs = {
   orgId: string;

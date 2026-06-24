@@ -68,11 +68,11 @@ export async function POST(req: Request): Promise<NextResponse> {
 
   const orgId = posToken.organizationId;
 
-  const [businessName, businessAddress, fiadoEnabledRaw, paymentMethods, products, cashierRow, branchRows]
+  const [businessName, businessAddress, creditoEnabledRaw, paymentMethods, products, cashierRow, branchRows]
     = await Promise.all([
       getSetting(orgId, 'business_name'),
       getSetting(orgId, 'business_address'),
-      getSetting(orgId, 'fiado-enabled'),
+      getSetting(orgId, 'credito-enabled'),
       listActivePaymentMethods(orgId),
       db
         .select()
@@ -105,7 +105,7 @@ export async function POST(req: Request): Promise<NextResponse> {
         : Promise.resolve([]),
     ]);
 
-  const fiadoEnabled = fiadoEnabledRaw === 'true';
+  const creditoEnabled = creditoEnabledRaw === 'true';
 
   // Caja branch address if assigned, else the legacy global business_address.
   const branch = branchRows[0];
@@ -113,10 +113,10 @@ export async function POST(req: Request): Promise<NextResponse> {
     ? [branch.address, branch.city].filter(Boolean).join(', ')
     : businessAddress || '';
 
-  // El método "Fiado" (type credit) se controla por el toggle fiado-enabled, no
+  // El método "Credito" (type credit) se controla por el toggle credito-enabled, no
   // por su columna active. Si el toggle está apagado, no debe llegar al cajero
   // como opción de pago aunque la fila siga active = true.
-  const visiblePaymentMethods = fiadoEnabled
+  const visiblePaymentMethods = creditoEnabled
     ? paymentMethods
     : paymentMethods.filter(
         pm => (pm as { type?: string }).type !== 'credit',
@@ -128,7 +128,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       id: posToken.storeId,
       name: businessName || 'Mi Tienda',
       address: storeAddress,
-      fiadoEnabled,
+      creditoEnabled,
     },
     cashier: cashierRow ? { id: cashierRow.id, name: cashierRow.name } : null,
     paymentMethods: visiblePaymentMethods,

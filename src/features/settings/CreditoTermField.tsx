@@ -1,13 +1,13 @@
 'use client';
 
 import { useEffect, useState, useTransition } from 'react';
-import { getFiadoTermDays, setFiadoTermDays } from '@/actions/fiados';
+import { getCreditoTermDays, setCreditoTermDays } from '@/actions/creditos';
 import { Button } from '@/components/ui/button';
 
-// Per-organization default payment term for new fiados. The value is stored in
-// app_settings (fiados-default-term-days) and read by the sale paths; the due
-// date can still be overridden on each individual fiado sale.
-export function FiadoTermField() {
+// Per-organization default payment term for new creditos. The value is stored in
+// app_settings (creditos-default-term-days) and read by the sale paths; the due
+// date can still be overridden on each individual credito sale.
+export function CreditoTermField() {
   const [days, setDays] = useState('');
   const [saved, setSaved] = useState<number | null>(null);
   const [pending, startTransition] = useTransition();
@@ -15,7 +15,7 @@ export function FiadoTermField() {
 
   useEffect(() => {
     let active = true;
-    getFiadoTermDays()
+    getCreditoTermDays()
       .then((n) => {
         if (active) {
           setDays(String(n));
@@ -37,7 +37,7 @@ export function FiadoTermField() {
     setError(null);
     startTransition(async () => {
       try {
-        const v = await setFiadoTermDays(n);
+        const v = await setCreditoTermDays(n);
         setSaved(v);
         setDays(String(v));
       } catch (e) {
@@ -52,7 +52,7 @@ export function FiadoTermField() {
     <div className="rounded-md border border-border bg-muted/30 p-4">
       <div className="text-sm font-medium">Plazo de pago por defecto</div>
       <div className="mt-1 text-xs text-muted-foreground">
-        Días para que venza un fiado nuevo. Podés cambiar la fecha en cada venta.
+        Días para que venza un crédito nuevo. Podés cambiar la fecha en cada venta.
       </div>
       <div className="mt-3 flex items-center gap-2">
         <input

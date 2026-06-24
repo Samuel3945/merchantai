@@ -412,9 +412,9 @@ export async function getInventoryValuation(): Promise<InventoryRow[]> {
   });
 }
 
-// ── 7. Fiados pendientes ───────────────────────────────────────────────────
+// ── 7. Creditos pendientes ───────────────────────────────────────────────────
 
-export type FiadoReportRow = {
+export type CreditoReportRow = {
   clientName: string;
   saleCount: number;
   totalOwed: number;
@@ -422,11 +422,11 @@ export type FiadoReportRow = {
   risk: string;
 };
 
-export async function getFiadoReport(): Promise<FiadoReportRow[]> {
+export async function getCreditoReport(): Promise<CreditoReportRow[]> {
   const { orgId } = await requireOrg();
 
   const result = await db.execute(sql`
-    WITH fiado_sales AS (
+    WITH credito_sales AS (
       SELECT
         s.id,
         s.total::numeric AS total,
@@ -434,17 +434,17 @@ export async function getFiadoReport(): Promise<FiadoReportRow[]> {
         s.created_at,
         COALESCE(
           (SELECT SUM(sp.amount) FROM sale_payments sp
-           WHERE sp.sale_id = s.id AND sp.method NOT ILIKE '%fiado%'),
+           WHERE sp.sale_id = s.id AND sp.method NOT ILIKE '%credito%'),
           0
         )::numeric AS paid
       FROM sales s
       WHERE s.organization_id = ${orgId}
         AND s.status = 'completed'
         AND (
-          s.payment_type ILIKE '%fiado%'
+          s.payment_type ILIKE '%credito%'
           OR EXISTS (
             SELECT 1 FROM sale_payments sp2
-            WHERE sp2.sale_id = s.id AND sp2.method ILIKE '%fiado%'
+            WHERE sp2.sale_id = s.id AND sp2.method ILIKE '%credito%'
           )
         )
     )
@@ -461,7 +461,7 @@ export async function getFiadoReport(): Promise<FiadoReportRow[]> {
         WHEN MAX(EXTRACT(day FROM NOW() - created_at)) >= 3 THEN 'medio'
         ELSE 'bajo'
       END AS risk
-    FROM fiado_sales
+    FROM credito_sales
     WHERE total - paid > 0
     GROUP BY client_name
     ORDER BY total_owed DESC
@@ -550,7 +550,7 @@ export type ReportsOverview = {
   topProduct: { name: string; revenue: number; qty: number };
   cash: { sessions: number; totalDifference: number; alerts: number };
   inventory: { value: number; outOfStock: number; lowStock: number; products: number };
-  fiados: { totalOwed: number; clients: number; highRisk: number };
+  creditos: { totalOwed: number; clients: number; highRisk: number };
   losses: { totalLoss: number; items: number };
   cashFlow: { net: number; expenses: number };
   returns: { rate: number; totalRefunded: number };
@@ -658,7 +658,7 @@ export async function getReportsOverview(
     top,
     cash,
     inventory,
-    fiados,
+    creditos,
     losses,
     cashFlow,
     returns,
@@ -673,7 +673,7 @@ export async function getReportsOverview(
     getTopProducts(s, e),
     getCashAnalysis(s, e),
     getInventoryValuation(),
-    getFiadoReport(),
+    getCreditoReport(),
     getLossReport(s, e),
     getCashFlow(s, e),
     getReturnsAnalysis(s, e),
@@ -738,10 +738,10 @@ export async function getReportsOverview(
       lowStock: inventory.reduce((acc, r) => acc + r.lowStock, 0),
       products: inventory.reduce((acc, r) => acc + r.productCount, 0),
     },
-    fiados: {
-      totalOwed: fiados.reduce((acc, r) => acc + r.totalOwed, 0),
-      clients: fiados.length,
-      highRisk: fiados.filter(r => r.risk === 'alto').length,
+    creditos: {
+      totalOwed: creditos.reduce((acc, r) => acc + r.totalOwed, 0),
+      clients: creditos.length,
+      highRisk: creditos.filter(r => r.risk === 'alto').length,
     },
     losses: {
       totalLoss: losses.reduce((acc, r) => acc + r.totalLoss, 0),

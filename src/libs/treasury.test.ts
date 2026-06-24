@@ -39,7 +39,7 @@ let db: Executor;
 
 const ENUMS = [
   `CREATE TYPE "cash_session_status" AS ENUM('open', 'closed')`,
-  `CREATE TYPE "cash_movement_type" AS ENUM('sale', 'deposit', 'expense', 'salary', 'inventory_purchase', 'withdrawal', 'adjustment', 'advance', 'fiado_payment', 'reclassification')`,
+  `CREATE TYPE "cash_movement_type" AS ENUM('sale', 'deposit', 'expense', 'salary', 'inventory_purchase', 'withdrawal', 'adjustment', 'advance', 'credito_payment', 'reclassification')`,
   `CREATE TYPE "transfer_reconciliation_status" AS ENUM('pending', 'confirmed', 'not_arrived', 'mismatch')`,
   `CREATE TYPE "transfer_resolution_type" AS ENUM('receivable', 'loss', 'cashier_liability')`,
   // 2A enum additions + Phase 3 handover values
@@ -124,7 +124,7 @@ const DDL = `
     resolution_type "transfer_resolution_type",
     resolved_by text,
     resolved_at timestamp,
-    resolution_fiado_id uuid,
+    resolution_credito_id uuid,
     cashier_explanation text,
     cashier_explained_by text,
     cashier_explained_at timestamp,
@@ -1571,7 +1571,7 @@ describe('adjustConfirmedTransferDeposit', () => {
 describe('ensurePaymentMethodAccounts', () => {
   const PM_NEQUI = '00000000-0000-0000-0000-0000000000c1';
   const PM_EFECTIVO = '00000000-0000-0000-0000-0000000000c2';
-  const PM_FIADO = '00000000-0000-0000-0000-0000000000c3';
+  const PM_CREDITO = '00000000-0000-0000-0000-0000000000c3';
 
   async function insertMethod(id: string, name: string, type: string) {
     await pg.query(
@@ -1600,9 +1600,9 @@ describe('ensurePaymentMethodAccounts', () => {
     expect(rows.rows[0]!.payment_method_id).toBe(PM_NEQUI);
   });
 
-  it('skips cash and fiado methods', async () => {
+  it('skips cash and credito methods', async () => {
     await insertMethod(PM_EFECTIVO, 'Efectivo', 'cash');
-    await insertMethod(PM_FIADO, 'Fiado', 'credit');
+    await insertMethod(PM_CREDITO, 'Credito', 'credit');
     await ensurePaymentMethodAccounts(db, ORG, 'tester');
 
     const rows = await pg.query(

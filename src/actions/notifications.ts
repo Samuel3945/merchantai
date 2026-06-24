@@ -18,7 +18,7 @@ export type NotificationKind
   = | 'cash_difference'
     | 'low_stock'
     | 'expiring_soon'
-    | 'fiado_overdue'
+    | 'credito_overdue'
     | 'sale_alert'
     | 'platform_announcement';
 
@@ -144,7 +144,7 @@ export async function markAllAsRead(): Promise<{ updated: number }> {
 // notification of the same kind+target so the bell isn't spammed every minute.
 
 const CASH_DIFFERENCE_THRESHOLD = 10_000;
-const FIADO_OVERDUE_DAYS = 7;
+const CREDITO_OVERDUE_DAYS = 7;
 const DEDUP_WINDOW_HOURS = 24;
 
 async function existsRecentUnread(
@@ -295,11 +295,11 @@ export async function generateExpiringSoonNotifications(
   return created;
 }
 
-export async function generateFiadoOverdueNotifications(
+export async function generateCreditoOverdueNotifications(
   organizationId: string,
 ): Promise<number> {
-  // Fiado is stored as sales with payment_type='credit'. A "client" is
-  // identified by the notes-encoded name|phone fields used by the fiados
+  // Credito is stored as sales with payment_type='credit'. A "client" is
+  // identified by the notes-encoded name|phone fields used by the creditos
   // feature. We aggregate per sale (clientKey not stable without joining
   // customers); the dedup window keeps duplicates out of the bell.
   const result = await db.execute<{
@@ -322,7 +322,7 @@ export async function generateFiadoOverdueNotifications(
     WHERE s.organization_id = ${organizationId}
       AND s.payment_type = 'credit'
       AND s.status = 'completed'
-      AND s.created_at <= now() - (${FIADO_OVERDUE_DAYS}::text || ' days')::interval
+      AND s.created_at <= now() - (${CREDITO_OVERDUE_DAYS}::text || ' days')::interval
     GROUP BY s.id
     HAVING s.total > COALESCE(SUM(p.amount), 0)
   `);
@@ -336,7 +336,7 @@ export async function generateFiadoOverdueNotifications(
     notes: string | null;
   }>) {
     const targetKey = `sale:${row.sale_id}`;
-    if (await existsRecentUnread(organizationId, 'fiado_overdue', targetKey)) {
+    if (await existsRecentUnread(organizationId, 'credito_overdue', targetKey)) {
       continue;
     }
     const pending = Number(row.total) - Number(row.paid);
@@ -344,9 +344,9 @@ export async function generateFiadoOverdueNotifications(
     const client = nameMatch?.[1]?.trim() || 'Cliente';
     await createNotification({
       organizationId,
-      kind: 'fiado_overdue',
+      kind: 'credito_overdue',
       severity: row.days_old >= 14 ? 'high' : 'mid',
-      title: 'Fiado vencido',
+      title: 'Crédito vencido',
       message: `${client} lleva ${row.days_old} días sin pagar $${pending.toLocaleString('es-CO')}.`,
       payload: {
         targetKey,
@@ -374,7 +374,7 @@ export async function runNotificationScan(): Promise<{
   for (const { organizationId } of orgRows) {
     total += await generateLowStockNotifications(organizationId);
     total += await generateExpiringSoonNotifications(organizationId);
-    total += await generateFiadoOverdueNotifications(organizationId);
+    total += await generateCreditoOverdueNotifications(organizationId);
   }
   return { orgs: orgRows.length, created: total };
 }

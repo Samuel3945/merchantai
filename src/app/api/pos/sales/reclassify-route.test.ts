@@ -43,7 +43,7 @@ const PAYMENT_ID = 'dddddddd-dddd-dddd-dddd-dddddddddddd';
 
 const SCHEMA = `
   CREATE TYPE "cash_session_status" AS ENUM('open', 'closed');
-  CREATE TYPE "cash_movement_type" AS ENUM('sale','deposit','expense','salary','inventory_purchase','withdrawal','adjustment','advance','fiado_payment','reclassification');
+  CREATE TYPE "cash_movement_type" AS ENUM('sale','deposit','expense','salary','inventory_purchase','withdrawal','adjustment','advance','credito_payment','reclassification');
   CREATE TYPE "transfer_reconciliation_status" AS ENUM('pending','confirmed','not_arrived','mismatch','resolved');
   CREATE TYPE "transfer_resolution_type" AS ENUM('receivable','loss','cashier_liability');
 
@@ -123,7 +123,7 @@ const SCHEMA = `
     resolution_type "transfer_resolution_type",
     resolved_by text,
     resolved_at timestamp,
-    resolution_fiado_id uuid,
+    resolution_credito_id uuid,
     claim_open boolean DEFAULT false NOT NULL,
     recovery_of_id uuid,
     remainder_reconciliation_id uuid,

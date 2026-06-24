@@ -19,7 +19,7 @@ These all `import { db } from '@/libs/DB'` and must be ported to `import { db } 
 - [ ] `src/actions/cash.ts`
 - [ ] `src/actions/dashboard.ts`
 - [ ] `src/actions/employees.ts`
-- [ ] `src/actions/fiados.ts`
+- [ ] `src/actions/creditos.ts`
 - [ ] `src/actions/notifications.ts`
 - [ ] `src/actions/payment-methods.ts`
 - [ ] `src/actions/plans.ts`
@@ -43,9 +43,9 @@ Migration recipe per file:
 - [ ] `src/app/api/pos/cash/open/route.ts`
 - [ ] `src/app/api/pos/connect/route.ts`
 - [ ] `src/app/api/pos/customers/[id]/route.ts`
-- [ ] `src/app/api/pos/fiados/abonar/route.ts`
-- [ ] `src/app/api/pos/fiados/route.ts`
-- [ ] `src/app/api/pos/fiados/settle/route.ts`
+- [ ] `src/app/api/pos/creditos/abonar/route.ts`
+- [ ] `src/app/api/pos/creditos/route.ts`
+- [ ] `src/app/api/pos/creditos/settle/route.ts`
 - [ ] `src/app/api/pos/login/route.ts`
 - [ ] `src/app/api/pos/me/route.ts`
 - [ ] `src/app/api/pos/sales/[saleId]/return/route.ts`

@@ -1,49 +1,49 @@
-import type { FiadoDueState } from '@/libs/fiados-shared';
+import type { CreditoDueState } from '@/libs/creditos-shared';
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { findOpenSession } from '@/libs/cash-helpers';
-import { db } from '@/libs/DB';
 import {
   clientKeyOf,
   normalizeClientKey,
   parseClient,
   planAbono,
   round2,
-} from '@/libs/fiados-math';
+} from '@/libs/creditos-math';
 import {
   addDaysISO,
   deriveDueState,
-} from '@/libs/fiados-shared';
+} from '@/libs/creditos-shared';
+import { db } from '@/libs/DB';
 import {
-  createFiadoTransferReconciliation,
+  createCreditoTransferReconciliation,
   methodNeedsReconciliation,
 } from '@/libs/transfer-reconciliation';
 import {
   appSettingsSchema,
   cashMovementsSchema,
   cashSessionsSchema,
-  fiadoMovementsSchema,
-  fiadosSchema,
+  creditoMovementsSchema,
+  creditosSchema,
 } from '@/models/Schema';
 
 export {
   addDaysISO,
+  CREDITO_PAYMENT_METHODS,
+  type CreditoDueState,
   daysUntilDue,
   deriveDueState,
   DUE_SOON_DAYS,
-  FIADO_PAYMENT_METHODS,
-  type FiadoDueState,
-} from '@/libs/fiados-shared';
+} from '@/libs/creditos-shared';
 // Re-exported so the POS endpoints and the dashboard share one identity logic.
 export { clientKeyOf, normalizeClientKey, parseClient };
 
-// Core fiados (store-credit / accounts-receivable) service. Single source of
+// Core creditos (store-credit / accounts-receivable) service. Single source of
 // truth for the money + ledger logic, kept out of the 'use server' action layer
 // so it can run INSIDE a sale transaction (executor-aware) and be unit-reasoned
-// without Clerk. The actions in actions/fiados.ts are thin auth+revalidate wrappers.
+// without Clerk. The actions in actions/creditos.ts are thin auth+revalidate wrappers.
 //
-// Model (see models/Schema.ts): one `fiados` row per credit sale; an append-only
-// `fiado_movements` ledger (charge/payment/extension/writeoff/adjustment) that is
-// the timeline, the Caja link and the audit trail. The UI groups fiados BY CLIENT
+// Model (see models/Schema.ts): one `creditos` row per credit sale; an append-only
+// `credito_movements` ledger (charge/payment/extension/writeoff/adjustment) that is
+// the timeline, the Caja link and the audit trail. The UI groups creditos BY CLIENT
 // because that is how a tendero thinks ("¿quién me debe?").
 
 // Exported for integration tests (pglite executor).
@@ -52,7 +52,7 @@ export type Executor = typeof db | Parameters<Parameters<typeof db.transaction>[
 // ── Constants ────────────────────────────────────────────────────────────────
 
 export const DEFAULT_TERM_DAYS = 30;
-export const TERM_SETTING_KEY = 'fiados-default-term-days';
+export const TERM_SETTING_KEY = 'creditos-default-term-days';
 
 // Methods that physically enter the cash drawer. Only these create a Caja
 // movement; digital abonos are collected but never touch the arqueo.
@@ -90,9 +90,9 @@ export async function getDefaultTermDays(
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_TERM_DAYS;
 }
 
-// ── Write: create a fiado from a sale ────────────────────────────────────────
+// ── Write: create a credito from a sale ────────────────────────────────────────
 
-export type CreateFiadoArgs = {
+export type CreateCreditoArgs = {
   organizationId: string;
   saleId: string;
   originalAmount: number | string;
@@ -102,16 +102,16 @@ export type CreateFiadoArgs = {
   createdBy?: string | null;
   // The "Cliente: NAME | Tel: PHONE" display string (usually the sale notes).
   notes?: string | null;
-  // Align the charge movement (and the fiado) with the original sale time, for
+  // Align the charge movement (and the credito) with the original sale time, for
   // the offline POS sync path that replays older sales.
   createdAt?: Date;
 };
 
-// Inserts the fiado account + its opening `charge` movement. Runs inside the
+// Inserts the credito account + its opening `charge` movement. Runs inside the
 // sale transaction (pass the tx as executor). Returns null for a zero amount.
-export async function createFiado(
+export async function createCredito(
   executor: Executor,
-  args: CreateFiadoArgs,
+  args: CreateCreditoArgs,
 ): Promise<{ id: string } | null> {
   const amount = toMoney(args.originalAmount);
   if (Number.parseFloat(amount) <= 0) {
@@ -124,8 +124,8 @@ export async function createFiado(
     dueDate = addDaysISO(args.createdAt ?? new Date(), term);
   }
 
-  const [fiado] = await executor
-    .insert(fiadosSchema)
+  const [credito] = await executor
+    .insert(creditosSchema)
     .values({
       organizationId: args.organizationId,
       customerId: args.customerId ?? null,
@@ -140,16 +140,16 @@ export async function createFiado(
         : {}),
     })
     // Idempotent against the partial unique on sale_id: a re-played sale never
-    // spawns a second fiado.
+    // spawns a second credito.
     .onConflictDoNothing()
-    .returning({ id: fiadosSchema.id });
+    .returning({ id: creditosSchema.id });
 
-  if (!fiado) {
+  if (!credito) {
     return null;
   }
 
-  await executor.insert(fiadoMovementsSchema).values({
-    fiadoId: fiado.id,
+  await executor.insert(creditoMovementsSchema).values({
+    creditoId: credito.id,
     organizationId: args.organizationId,
     type: 'charge',
     amount,
@@ -158,14 +158,14 @@ export async function createFiado(
     ...(args.createdAt ? { createdAt: args.createdAt } : {}),
   });
 
-  return fiado;
+  return credito;
 }
 
 // ── Write: register an abono (payment) for a client ──────────────────────────
 
 export type RecordAbonoArgs = {
   organizationId: string;
-  // Groups the client's fiados (see clientKeyOf).
+  // Groups the client's creditos (see clientKeyOf).
   clientKey: string;
   amount: number | string;
   method: string;
@@ -177,14 +177,14 @@ export type RecordAbonoArgs = {
 export type RecordAbonoResult = {
   applied: number;
   remaining: number;
-  paidFiadoIds: string[];
+  paidCreditoIds: string[];
   cashMovementId: string | null;
   // True when the cash hit the drawer; false for digital, or cash with no open
   // Caja session (the abono is still recorded, the drawer just can't reflect it).
   hitCaja: boolean;
 };
 
-// Applies an abono FIFO across the client's pending fiados (oldest due first).
+// Applies an abono FIFO across the client's pending creditos (oldest due first).
 // A single Caja movement is created for the cash portion and linked to every
 // payment movement it covers; digital methods are recorded with no drawer impact.
 export async function recordAbono(
@@ -207,71 +207,71 @@ export async function recordAbonoTx(
   if (!method) {
     throw new Error('Método de pago requerido');
   }
-  if (/fiado/i.test(method)) {
-    throw new Error('El abono no puede ser de tipo fiado');
+  if (/credito/i.test(method)) {
+    throw new Error('El abono no puede ser de tipo credito');
   }
 
-  // Scan the org's pending fiados (no lock) to find the client's IDs,
+  // Scan the org's pending creditos (no lock) to find the client's IDs,
   // oldest-due-first. Then lock only those rows — avoids serializing
   // unrelated clients' abonos in the same org.
   const candidates = await executor
     .select({
-      id: fiadosSchema.id,
-      customerId: fiadosSchema.customerId,
-      notes: fiadosSchema.notes,
-      originalAmount: fiadosSchema.originalAmount,
+      id: creditosSchema.id,
+      customerId: creditosSchema.customerId,
+      notes: creditosSchema.notes,
+      originalAmount: creditosSchema.originalAmount,
     })
-    .from(fiadosSchema)
+    .from(creditosSchema)
     .where(
       and(
-        eq(fiadosSchema.organizationId, args.organizationId),
-        eq(fiadosSchema.status, 'pending'),
+        eq(creditosSchema.organizationId, args.organizationId),
+        eq(creditosSchema.status, 'pending'),
       ),
     )
-    .orderBy(asc(fiadosSchema.dueDate), asc(fiadosSchema.createdAt));
+    .orderBy(asc(creditosSchema.dueDate), asc(creditosSchema.createdAt));
 
   const clientIds = candidates
     .filter(f => clientKeyOf(f) === args.clientKey)
     .map(f => f.id);
   if (clientIds.length === 0) {
-    throw new Error('No se encontraron fiados pendientes para este cliente');
+    throw new Error('No se encontraron creditos pendientes para este cliente');
   }
 
   // Lock only the client's rows — not the whole org.
   const client = await executor
     .select({
-      id: fiadosSchema.id,
-      customerId: fiadosSchema.customerId,
-      notes: fiadosSchema.notes,
-      originalAmount: fiadosSchema.originalAmount,
+      id: creditosSchema.id,
+      customerId: creditosSchema.customerId,
+      notes: creditosSchema.notes,
+      originalAmount: creditosSchema.originalAmount,
     })
-    .from(fiadosSchema)
-    .where(inArray(fiadosSchema.id, clientIds))
-    .orderBy(asc(fiadosSchema.dueDate), asc(fiadosSchema.createdAt))
+    .from(creditosSchema)
+    .where(inArray(creditosSchema.id, clientIds))
+    .orderBy(asc(creditosSchema.dueDate), asc(creditosSchema.createdAt))
     .for('update');
 
   const ids = client.map(f => f.id);
   const paidRows = await executor
     .select({
-      fiadoId: fiadoMovementsSchema.fiadoId,
-      paid: sql<string>`COALESCE(SUM(${fiadoMovementsSchema.amount}), 0)::text`,
+      creditoId: creditoMovementsSchema.creditoId,
+      paid: sql<string>`COALESCE(SUM(${creditoMovementsSchema.amount}), 0)::text`,
     })
-    .from(fiadoMovementsSchema)
+    .from(creditoMovementsSchema)
     .where(
       and(
-        inArray(fiadoMovementsSchema.fiadoId, ids),
-        eq(fiadoMovementsSchema.type, 'payment'),
+        inArray(creditoMovementsSchema.creditoId, ids),
+        eq(creditoMovementsSchema.type, 'payment'),
       ),
     )
-    .groupBy(fiadoMovementsSchema.fiadoId);
+    .groupBy(creditoMovementsSchema.creditoId);
   const paidById = new Map(
-    paidRows.map(r => [r.fiadoId, Number.parseFloat(r.paid) || 0]),
+    paidRows.map(r => [r.creditoId, Number.parseFloat(r.paid) || 0]),
   );
 
   const displayName = parseClient(client[0]?.notes ?? null).name || 'cliente';
 
   // Plan the FIFO distribution before writing anything. The math is pure and
-  // unit-tested in fiados-math; here we only feed it balances and apply it.
+  // unit-tested in creditos-math; here we only feed it balances and apply it.
   const { entries: plan, appliedTotal, remaining } = planAbono(
     client.map(f => ({
       id: f.id,
@@ -296,7 +296,7 @@ export async function recordAbonoTx(
           openedBy: args.createdBy,
           openingAmount: '0',
           status: 'open',
-          notes: 'Auto-abierta por cobro de fiado (no había caja abierta)',
+          notes: 'Auto-abierta por cobro de credito (no había caja abierta)',
         })
         .returning();
       session = autoSession;
@@ -307,9 +307,9 @@ export async function recordAbonoTx(
         .values({
           sessionId: session.id,
           organizationId: args.organizationId,
-          type: 'fiado_payment',
+          type: 'credito_payment',
           amount: toMoney(appliedTotal),
-          reason: `Cobro de fiado ${displayName}`.trim(),
+          reason: `Cobro de credito ${displayName}`.trim(),
           createdBy: args.createdBy,
         })
         .returning({ id: cashMovementsSchema.id });
@@ -319,7 +319,7 @@ export async function recordAbonoTx(
 
   // Digital abono (nequi/daviplata/transferencia): never touches the drawer, so
   // it gets ONE reconciliation row for the whole transfer (linked to every
-  // fiado_movement it covers), mirroring how the cash portion gets one
+  // credito_movement it covers), mirroring how the cash portion gets one
   // cash_movement. The owner confirms it against the account later.
   let transferReconciliationId: string | null = null;
   if (
@@ -328,7 +328,7 @@ export async function recordAbonoTx(
     && methodNeedsReconciliation(method)
   ) {
     const session = await findOpenSession(executor, args.organizationId);
-    transferReconciliationId = await createFiadoTransferReconciliation(
+    transferReconciliationId = await createCreditoTransferReconciliation(
       executor,
       {
         organizationId: args.organizationId,
@@ -339,11 +339,11 @@ export async function recordAbonoTx(
     );
   }
 
-  const paidFiadoIds: string[] = [];
+  const paidCreditoIds: string[] = [];
   for (const p of plan) {
     if (p.apply > 0) {
-      await executor.insert(fiadoMovementsSchema).values({
-        fiadoId: p.fiadoId,
+      await executor.insert(creditoMovementsSchema).values({
+        creditoId: p.creditoId,
         organizationId: args.organizationId,
         type: 'payment',
         amount: toMoney(p.apply),
@@ -356,17 +356,17 @@ export async function recordAbonoTx(
     }
     if (p.settle) {
       await executor
-        .update(fiadosSchema)
+        .update(creditosSchema)
         .set({ status: 'paid' })
-        .where(eq(fiadosSchema.id, p.fiadoId));
-      paidFiadoIds.push(p.fiadoId);
+        .where(eq(creditosSchema.id, p.creditoId));
+      paidCreditoIds.push(p.creditoId);
     }
   }
 
   return {
     applied: appliedTotal,
     remaining: round2(remaining),
-    paidFiadoIds,
+    paidCreditoIds,
     cashMovementId,
     hitCaja: cashMovementId != null,
   };
@@ -376,20 +376,20 @@ export async function recordAbonoTx(
 
 export type ExtendTermArgs = {
   organizationId: string;
-  fiadoId: string;
+  creditoId: string;
   newDueDate: string; // 'YYYY-MM-DD'
   reason?: string | null;
   createdBy: string;
 };
 
-export async function extendFiadoTerm(
+export async function extendCreditoTerm(
   args: ExtendTermArgs,
 ): Promise<{ dueDateBefore: string; dueDateAfter: string }> {
-  return db.transaction(tx => extendFiadoTermTx(tx, args));
+  return db.transaction(tx => extendCreditoTermTx(tx, args));
 }
 
 // Transaction body, exported for integration tests.
-export async function extendFiadoTermTx(
+export async function extendCreditoTermTx(
   executor: Executor,
   args: ExtendTermArgs,
 ): Promise<{ dueDateBefore: string; dueDateAfter: string }> {
@@ -397,31 +397,31 @@ export async function extendFiadoTermTx(
     throw new Error('Fecha de vencimiento inválida');
   }
 
-  const [fiado] = await executor
-    .select({ id: fiadosSchema.id, dueDate: fiadosSchema.dueDate })
-    .from(fiadosSchema)
+  const [credito] = await executor
+    .select({ id: creditosSchema.id, dueDate: creditosSchema.dueDate })
+    .from(creditosSchema)
     .where(
       and(
-        eq(fiadosSchema.id, args.fiadoId),
-        eq(fiadosSchema.organizationId, args.organizationId),
-        eq(fiadosSchema.status, 'pending'),
+        eq(creditosSchema.id, args.creditoId),
+        eq(creditosSchema.organizationId, args.organizationId),
+        eq(creditosSchema.status, 'pending'),
       ),
     )
     .for('update')
     .limit(1);
 
-  if (!fiado) {
-    throw new Error('Fiado no encontrado o ya pagado');
+  if (!credito) {
+    throw new Error('Credito no encontrado o ya pagado');
   }
 
-  const dueDateBefore = fiado.dueDate;
+  const dueDateBefore = credito.dueDate;
   await executor
-    .update(fiadosSchema)
+    .update(creditosSchema)
     .set({ dueDate: args.newDueDate })
-    .where(eq(fiadosSchema.id, fiado.id));
+    .where(eq(creditosSchema.id, credito.id));
 
-  await executor.insert(fiadoMovementsSchema).values({
-    fiadoId: fiado.id,
+  await executor.insert(creditoMovementsSchema).values({
+    creditoId: credito.id,
     organizationId: args.organizationId,
     type: 'extension',
     amount: '0',
@@ -436,7 +436,7 @@ export async function extendFiadoTermTx(
 
 // ── Read: enriched rows + client grouping ────────────────────────────────────
 
-type EnrichedFiado = {
+type EnrichedCredito = {
   id: string;
   customerId: string | null;
   saleId: string | null;
@@ -450,27 +450,27 @@ type EnrichedFiado = {
   lastMovementAt: Date | null;
 };
 
-async function fetchEnrichedFiados(
+async function fetchEnrichedCreditos(
   organizationId: string,
   status?: 'pending' | 'paid',
-): Promise<EnrichedFiado[]> {
-  const conds = [eq(fiadosSchema.organizationId, organizationId)];
+): Promise<EnrichedCredito[]> {
+  const conds = [eq(creditosSchema.organizationId, organizationId)];
   if (status) {
-    conds.push(eq(fiadosSchema.status, status));
+    conds.push(eq(creditosSchema.status, status));
   }
 
   const rows = await db
     .select({
-      id: fiadosSchema.id,
-      customerId: fiadosSchema.customerId,
-      saleId: fiadosSchema.saleId,
-      notes: fiadosSchema.notes,
-      originalAmount: fiadosSchema.originalAmount,
-      dueDate: fiadosSchema.dueDate,
-      status: fiadosSchema.status,
-      createdAt: fiadosSchema.createdAt,
+      id: creditosSchema.id,
+      customerId: creditosSchema.customerId,
+      saleId: creditosSchema.saleId,
+      notes: creditosSchema.notes,
+      originalAmount: creditosSchema.originalAmount,
+      dueDate: creditosSchema.dueDate,
+      status: creditosSchema.status,
+      createdAt: creditosSchema.createdAt,
     })
-    .from(fiadosSchema)
+    .from(creditosSchema)
     .where(and(...conds));
 
   if (rows.length === 0) {
@@ -480,14 +480,14 @@ async function fetchEnrichedFiados(
   const ids = rows.map(r => r.id);
   const agg = await db
     .select({
-      fiadoId: fiadoMovementsSchema.fiadoId,
-      paid: sql<string>`COALESCE(SUM(${fiadoMovementsSchema.amount}) FILTER (WHERE ${fiadoMovementsSchema.type} = 'payment'), 0)::text`,
-      last: sql<Date>`MAX(${fiadoMovementsSchema.createdAt})`,
+      creditoId: creditoMovementsSchema.creditoId,
+      paid: sql<string>`COALESCE(SUM(${creditoMovementsSchema.amount}) FILTER (WHERE ${creditoMovementsSchema.type} = 'payment'), 0)::text`,
+      last: sql<Date>`MAX(${creditoMovementsSchema.createdAt})`,
     })
-    .from(fiadoMovementsSchema)
-    .where(inArray(fiadoMovementsSchema.fiadoId, ids))
-    .groupBy(fiadoMovementsSchema.fiadoId);
-  const aggById = new Map(agg.map(a => [a.fiadoId, a]));
+    .from(creditoMovementsSchema)
+    .where(inArray(creditoMovementsSchema.creditoId, ids))
+    .groupBy(creditoMovementsSchema.creditoId);
+  const aggById = new Map(agg.map(a => [a.creditoId, a]));
 
   return rows.map((r) => {
     const a = aggById.get(r.id);
@@ -513,19 +513,19 @@ export type ClientDebt = {
   balance: number;
   pct: number; // 0..100 paid
   dueDate: string; // earliest pending due date drives the headline state
-  dueState: FiadoDueState;
+  dueState: CreditoDueState;
   dueDays: number;
   lastMovementAt: string | null;
-  fiadoCount: number;
-  fiadoIds: string[];
+  creditoCount: number;
+  creditoIds: string[];
 };
 
 function groupByClient(
-  fiados: EnrichedFiado[],
+  creditos: EnrichedCredito[],
   today: Date = new Date(),
 ): ClientDebt[] {
-  const groups = new Map<string, EnrichedFiado[]>();
-  for (const f of fiados) {
+  const groups = new Map<string, EnrichedCredito[]>();
+  for (const f of creditos) {
     const key = clientKeyOf(f);
     const list = groups.get(key);
     if (list) {
@@ -567,15 +567,15 @@ function groupByClient(
       dueState: state,
       dueDays: days,
       lastMovementAt: lastMovementAt ? lastMovementAt.toISOString() : null,
-      fiadoCount: list.length,
-      fiadoIds: list.map(f => f.id),
+      creditoCount: list.length,
+      creditoIds: list.map(f => f.id),
     });
   }
 
   return result;
 }
 
-export type FiadosMetrics = {
+export type CreditosMetrics = {
   pendingTotal: number;
   clientsWithDebt: number;
   overdue: number;
@@ -583,30 +583,30 @@ export type FiadosMetrics = {
   recoveredThisMonth: number;
 };
 
-export type FiadosOverview = {
-  metrics: FiadosMetrics;
+export type CreditosOverview = {
+  metrics: CreditosMetrics;
   clients: ClientDebt[];
 };
 
 // Pendientes tab + dashboard metrics. Clients sorted most-urgent first.
-export async function getFiadosOverview(
+export async function getCreditosOverview(
   organizationId: string,
-): Promise<FiadosOverview> {
+): Promise<CreditosOverview> {
   const today = new Date();
-  const pending = await fetchEnrichedFiados(organizationId, 'pending');
+  const pending = await fetchEnrichedCreditos(organizationId, 'pending');
   const clients = groupByClient(pending, today).sort(
     (a, b) => a.dueDays - b.dueDays,
   );
 
   const [recovered] = await db
     .select({
-      sum: sql<string>`COALESCE(SUM(${fiadoMovementsSchema.amount}) FILTER (WHERE ${fiadoMovementsSchema.type} = 'payment'), 0)::text`,
+      sum: sql<string>`COALESCE(SUM(${creditoMovementsSchema.amount}) FILTER (WHERE ${creditoMovementsSchema.type} = 'payment'), 0)::text`,
     })
-    .from(fiadoMovementsSchema)
+    .from(creditoMovementsSchema)
     .where(
       and(
-        eq(fiadoMovementsSchema.organizationId, organizationId),
-        sql`${fiadoMovementsSchema.createdAt} >= date_trunc('month', now() AT TIME ZONE 'America/Bogota')`,
+        eq(creditoMovementsSchema.organizationId, organizationId),
+        sql`${creditoMovementsSchema.createdAt} >= date_trunc('month', now() AT TIME ZONE 'America/Bogota')`,
       ),
     );
 
@@ -622,11 +622,11 @@ export async function getFiadosOverview(
   };
 }
 
-// Historial tab: clients whose fiados are fully paid. Persisted forever.
-export async function getFiadosHistory(
+// Historial tab: clients whose creditos are fully paid. Persisted forever.
+export async function getCreditosHistory(
   organizationId: string,
 ): Promise<ClientDebt[]> {
-  const paid = await fetchEnrichedFiados(organizationId, 'paid');
+  const paid = await fetchEnrichedCreditos(organizationId, 'paid');
   return groupByClient(paid).sort((a, b) => {
     const at = a.lastMovementAt ? Date.parse(a.lastMovementAt) : 0;
     const bt = b.lastMovementAt ? Date.parse(b.lastMovementAt) : 0;
@@ -634,25 +634,25 @@ export async function getFiadosHistory(
   });
 }
 
-// Same settled-fiado data as getFiadosHistory, mapped to the snake_case wire
-// shape the cashier device (pos-merchatai FiadosCajero history tab) reads. The
+// Same settled-credito data as getCreditosHistory, mapped to the snake_case wire
+// shape the cashier device (pos-merchatai CreditosCajero history tab) reads. The
 // history is org-wide on purpose: a debt settled at ANY register/sede of the org
 // shows here, not only the ones the current cashier closed.
-export type PosFiadoHistoryItem = {
+export type PosCreditoHistoryItem = {
   id: string; // clientKey — unique per client, used as the list key
   client_name: string;
   client_phone: string | null;
   total: number; // full amount of the debt that was settled
-  created_at: string; // when the oldest fiado in the group was generated
+  created_at: string; // when the oldest credito in the group was generated
   settled_at: string; // when the last payment landed
 };
 
-export async function getFiadosHistoryForPos(
+export async function getCreditosHistoryForPos(
   organizationId: string,
-): Promise<PosFiadoHistoryItem[]> {
-  const paid = await fetchEnrichedFiados(organizationId, 'paid');
+): Promise<PosCreditoHistoryItem[]> {
+  const paid = await fetchEnrichedCreditos(organizationId, 'paid');
 
-  const groups = new Map<string, EnrichedFiado[]>();
+  const groups = new Map<string, EnrichedCredito[]>();
   for (const f of paid) {
     const key = clientKeyOf(f);
     const list = groups.get(key);
@@ -663,7 +663,7 @@ export async function getFiadosHistoryForPos(
     }
   }
 
-  const items: PosFiadoHistoryItem[] = [];
+  const items: PosCreditoHistoryItem[] = [];
   for (const [clientKey, list] of groups) {
     const { name, phone } = parseClient(list[0]?.notes ?? null);
     const total = round2(list.reduce((a, f) => a + f.originalAmount, 0));
@@ -689,11 +689,11 @@ export async function getFiadosHistoryForPos(
 }
 
 // ── POS (cashier app) compatibility ──────────────────────────────────────────
-// The cashier endpoints (/api/pos/fiados*) read from the SAME ledger as the
+// The cashier endpoints (/api/pos/creditos*) read from the SAME ledger as the
 // dashboard so an abono on either surface stays consistent. These map the
 // ledger onto the legacy JSON shape the cashier UI already expects.
 
-export type PosFiadoSale = {
+export type PosCreditoSale = {
   id: string;
   total: number;
   paid: number;
@@ -702,11 +702,11 @@ export type PosFiadoSale = {
   daysOld: number;
 };
 
-// Wire shape consumed by the cashier device (pos-merchatai FiadosCajero). Kept
+// Wire shape consumed by the cashier device (pos-merchatai CreditosCajero). Kept
 // in snake_case on purpose — the device reads these exact keys. `id` IS the
-// clientKey: the device passes it straight back to /pos/fiados/abonar and
-// /pos/fiados/settle as `clientKey`.
-export type PosFiadoClient = {
+// clientKey: the device passes it straight back to /pos/creditos/abonar and
+// /pos/creditos/settle as `clientKey`.
+export type PosCreditoClient = {
   id: string;
   client_name: string;
   client_phone: string | null;
@@ -716,10 +716,10 @@ export type PosFiadoClient = {
   status: 'pending' | 'partial' | 'settled';
   last_activity: string;
   notes: string | null;
-  sales: PosFiadoSale[];
+  sales: PosCreditoSale[];
 };
 
-export type PosFiadosResult = {
+export type PosCreditosResult = {
   stats: {
     total_owed: number;
     urgent: number;
@@ -727,10 +727,10 @@ export type PosFiadosResult = {
     ok: number;
     total_clients: number;
   };
-  clients: PosFiadoClient[];
+  clients: PosCreditoClient[];
 };
 
-function riskFromDueState(state: FiadoDueState): 'high' | 'mid' | 'low' {
+function riskFromDueState(state: CreditoDueState): 'high' | 'mid' | 'low' {
   if (state === 'overdue') {
     return 'high';
   }
@@ -740,13 +740,13 @@ function riskFromDueState(state: FiadoDueState): 'high' | 'mid' | 'low' {
   return 'low';
 }
 
-export async function getFiadosForPos(
+export async function getCreditosForPos(
   organizationId: string,
-): Promise<PosFiadosResult> {
-  const pending = await fetchEnrichedFiados(organizationId, 'pending');
+): Promise<PosCreditosResult> {
+  const pending = await fetchEnrichedCreditos(organizationId, 'pending');
   const today = new Date();
 
-  const groups = new Map<string, EnrichedFiado[]>();
+  const groups = new Map<string, EnrichedCredito[]>();
   for (const f of pending) {
     const key = clientKeyOf(f);
     const list = groups.get(key);
@@ -760,7 +760,7 @@ export async function getFiadosForPos(
   const ageDays = (d: Date) =>
     Math.max(0, Math.floor((today.getTime() - d.getTime()) / 86_400_000));
 
-  const clients: PosFiadoClient[] = [];
+  const clients: PosCreditoClient[] = [];
   for (const [clientKey, list] of groups) {
     const { name, phone } = parseClient(list[0]?.notes ?? null);
     const dueDate = list.map(f => f.dueDate).sort()[0] ?? '';
@@ -800,9 +800,9 @@ export async function getFiadosForPos(
   };
 }
 
-// Maps paid fiado ids back to their origin sale ids, for the legacy
+// Maps paid credito ids back to their origin sale ids, for the legacy
 // `settledSaleIds` field in the cashier abono response.
-export async function saleIdsForFiados(
+export async function saleIdsForCreditos(
   organizationId: string,
   ids: string[],
 ): Promise<string[]> {
@@ -810,12 +810,12 @@ export async function saleIdsForFiados(
     return [];
   }
   const rows = await db
-    .select({ saleId: fiadosSchema.saleId })
-    .from(fiadosSchema)
+    .select({ saleId: creditosSchema.saleId })
+    .from(creditosSchema)
     .where(
       and(
-        eq(fiadosSchema.organizationId, organizationId),
-        inArray(fiadosSchema.id, ids),
+        eq(creditosSchema.organizationId, organizationId),
+        inArray(creditosSchema.id, ids),
       ),
     );
   return rows.map(r => r.saleId).filter((x): x is string => x != null);
@@ -826,7 +826,7 @@ export async function getClientPendingBalance(
   organizationId: string,
   clientKey: string,
 ): Promise<number> {
-  const pending = await fetchEnrichedFiados(organizationId, 'pending');
+  const pending = await fetchEnrichedCreditos(organizationId, 'pending');
   return round2(
     pending
       .filter(f => clientKeyOf(f) === clientKey)
@@ -836,9 +836,9 @@ export async function getClientPendingBalance(
 
 // ── Read: single client detail + timeline ────────────────────────────────────
 
-export type FiadoTimelineEntry = {
+export type CreditoTimelineEntry = {
   id: string;
-  fiadoId: string;
+  creditoId: string;
   type: 'charge' | 'payment' | 'extension' | 'writeoff' | 'adjustment';
   amount: number;
   method: string | null;
@@ -852,7 +852,7 @@ export type FiadoTimelineEntry = {
 
 export type ClientDetail = {
   client: ClientDebt;
-  fiados: {
+  creditos: {
     id: string;
     saleId: string | null;
     original: number;
@@ -860,18 +860,18 @@ export type ClientDetail = {
     balance: number;
     dueDate: string;
     status: 'pending' | 'paid' | 'written_off';
-    dueState: FiadoDueState;
+    dueState: CreditoDueState;
     dueDays: number;
     createdAt: string;
   }[];
-  timeline: FiadoTimelineEntry[];
+  timeline: CreditoTimelineEntry[];
 };
 
 export async function getClientDetail(
   organizationId: string,
   clientKey: string,
 ): Promise<ClientDetail | null> {
-  const all = await fetchEnrichedFiados(organizationId);
+  const all = await fetchEnrichedCreditos(organizationId);
   const mine = all.filter(f => clientKeyOf(f) === clientKey);
   if (mine.length === 0) {
     return null;
@@ -883,7 +883,7 @@ export async function getClientDetail(
     return null;
   }
 
-  const fiados = mine
+  const creditos = mine
     .map((f) => {
       const { state, days } = deriveDueState(
         f.dueDate,
@@ -908,25 +908,25 @@ export async function getClientDetail(
   const ids = mine.map(f => f.id);
   const movements = await db
     .select({
-      id: fiadoMovementsSchema.id,
-      fiadoId: fiadoMovementsSchema.fiadoId,
-      type: fiadoMovementsSchema.type,
-      amount: fiadoMovementsSchema.amount,
-      method: fiadoMovementsSchema.method,
-      cashMovementId: fiadoMovementsSchema.cashMovementId,
-      dueDateBefore: fiadoMovementsSchema.dueDateBefore,
-      dueDateAfter: fiadoMovementsSchema.dueDateAfter,
-      note: fiadoMovementsSchema.note,
-      createdBy: fiadoMovementsSchema.createdBy,
-      createdAt: fiadoMovementsSchema.createdAt,
+      id: creditoMovementsSchema.id,
+      creditoId: creditoMovementsSchema.creditoId,
+      type: creditoMovementsSchema.type,
+      amount: creditoMovementsSchema.amount,
+      method: creditoMovementsSchema.method,
+      cashMovementId: creditoMovementsSchema.cashMovementId,
+      dueDateBefore: creditoMovementsSchema.dueDateBefore,
+      dueDateAfter: creditoMovementsSchema.dueDateAfter,
+      note: creditoMovementsSchema.note,
+      createdBy: creditoMovementsSchema.createdBy,
+      createdAt: creditoMovementsSchema.createdAt,
     })
-    .from(fiadoMovementsSchema)
-    .where(inArray(fiadoMovementsSchema.fiadoId, ids))
-    .orderBy(asc(fiadoMovementsSchema.createdAt));
+    .from(creditoMovementsSchema)
+    .where(inArray(creditoMovementsSchema.creditoId, ids))
+    .orderBy(asc(creditoMovementsSchema.createdAt));
 
-  const timeline: FiadoTimelineEntry[] = movements.map(m => ({
+  const timeline: CreditoTimelineEntry[] = movements.map(m => ({
     id: m.id,
-    fiadoId: m.fiadoId,
+    creditoId: m.creditoId,
     type: m.type,
     amount: Number.parseFloat(m.amount) || 0,
     method: m.method,
@@ -938,5 +938,5 @@ export async function getClientDetail(
     createdAt: m.createdAt.toISOString(),
   }));
 
-  return { client, fiados, timeline };
+  return { client, creditos, timeline };
 }

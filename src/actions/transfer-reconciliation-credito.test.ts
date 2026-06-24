@@ -1,16 +1,16 @@
 /**
- * PR3 — FIADO customer capture tests (action layer)
+ * PR3 — CREDITO customer capture tests (action layer)
  *
  * Strict TDD: RED tests written before the implementation.
  * These tests verify that resolveTransfer('receivable') now:
  *   1. Requires customer capture input (name + contact)
  *   2. Calls findOrCreateCustomer to get/create a real customers row
- *   3. Creates the fiado with customer_id NOT null
+ *   3. Creates the credito with customer_id NOT null
  *   4. Does NOT rely on parseClient(sale.notes)
  *
  * Scenarios covered:
- *   S-05: FIADO creates real customer + links (new customer, contact provided)
- *   S-05b: FIADO dedup — same whatsapp reuses existing customer
+ *   S-05: CREDITO creates real customer + links (new customer, contact provided)
+ *   S-05b: CREDITO dedup — same whatsapp reuses existing customer
  */
 
 import { PGlite } from '@electric-sql/pglite';
@@ -29,7 +29,7 @@ import {
 const h = vi.hoisted(() => ({
   db: null as unknown as ReturnType<typeof drizzle>,
   orgRole: 'org:admin' as string,
-  orgId: 'org-fiado-test',
+  orgId: 'org-credito-test',
   userId: 'user_test',
 }));
 
@@ -69,10 +69,10 @@ vi.mock('next/cache', () => ({
 const SETUP_SQL = `
   CREATE TYPE "transfer_reconciliation_status" AS ENUM('pending', 'confirmed', 'not_arrived', 'mismatch', 'resolved');
   CREATE TYPE "transfer_resolution_type" AS ENUM('receivable', 'loss', 'cashier_liability');
-  CREATE TYPE "fiado_status" AS ENUM('pending', 'paid', 'written_off');
-  CREATE TYPE "fiado_movement_type" AS ENUM('charge', 'payment', 'extension', 'writeoff', 'adjustment');
+  CREATE TYPE "credito_status" AS ENUM('pending', 'paid', 'written_off');
+  CREATE TYPE "credito_movement_type" AS ENUM('charge', 'payment', 'extension', 'writeoff', 'adjustment');
   CREATE TYPE "cash_session_status" AS ENUM('open', 'closed');
-  CREATE TYPE "cash_movement_type" AS ENUM('sale', 'deposit', 'expense', 'salary', 'inventory_purchase', 'withdrawal', 'adjustment', 'fiado_payment');
+  CREATE TYPE "cash_movement_type" AS ENUM('sale', 'deposit', 'expense', 'salary', 'inventory_purchase', 'withdrawal', 'adjustment', 'credito_payment');
 
   CREATE TABLE customers (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
@@ -167,27 +167,27 @@ const SETUP_SQL = `
     created_at timestamp DEFAULT now() NOT NULL
   );
 
-  CREATE TABLE fiados (
+  CREATE TABLE creditos (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     organization_id text NOT NULL,
     customer_id uuid REFERENCES customers(id) ON DELETE SET NULL,
     sale_id uuid,
     original_amount numeric(12, 2) NOT NULL,
     due_date date NOT NULL,
-    status "fiado_status" DEFAULT 'pending' NOT NULL,
+    status "credito_status" DEFAULT 'pending' NOT NULL,
     notes text,
     created_by text,
     created_at timestamp DEFAULT now() NOT NULL,
     updated_at timestamp DEFAULT now() NOT NULL
   );
 
-  CREATE UNIQUE INDEX fiados_sale_unique_idx ON fiados (sale_id) WHERE sale_id IS NOT NULL;
+  CREATE UNIQUE INDEX creditos_sale_unique_idx ON creditos (sale_id) WHERE sale_id IS NOT NULL;
 
-  CREATE TABLE fiado_movements (
+  CREATE TABLE credito_movements (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
-    fiado_id uuid NOT NULL REFERENCES fiados(id) ON DELETE CASCADE,
+    credito_id uuid NOT NULL REFERENCES creditos(id) ON DELETE CASCADE,
     organization_id text NOT NULL,
-    type "fiado_movement_type" NOT NULL,
+    type "credito_movement_type" NOT NULL,
     amount numeric(12, 2) DEFAULT '0' NOT NULL,
     method text,
     cash_movement_id uuid,
@@ -216,7 +216,7 @@ const SETUP_SQL = `
     resolution_type "transfer_resolution_type",
     resolved_by text,
     resolved_at timestamp,
-    resolution_fiado_id uuid REFERENCES fiados(id) ON DELETE SET NULL,
+    resolution_credito_id uuid REFERENCES creditos(id) ON DELETE SET NULL,
     claim_open boolean DEFAULT false NOT NULL,
     recovery_of_id uuid,
     remainder_reconciliation_id uuid,
@@ -231,7 +231,7 @@ const SETUP_SQL = `
     WHERE sale_payment_id IS NOT NULL;
 `;
 
-const ORG = 'org-fiado-test';
+const ORG = 'org-credito-test';
 const UUID = (i: number): string =>
   `00000000-0000-0000-0000-${String(i).padStart(12, '0')}`;
 
@@ -282,8 +282,8 @@ beforeAll(async () => {
 beforeEach(async () => {
   // Clean between tests — order matters for FK constraints
   await pg.exec('DELETE FROM transfer_reconciliations');
-  await pg.exec('DELETE FROM fiado_movements');
-  await pg.exec('DELETE FROM fiados');
+  await pg.exec('DELETE FROM credito_movements');
+  await pg.exec('DELETE FROM creditos');
   await pg.exec('DELETE FROM sale_payments');
   await pg.exec('DELETE FROM sales');
   await pg.exec('DELETE FROM customers');
@@ -291,9 +291,9 @@ beforeEach(async () => {
   h.orgRole = 'org:admin';
 });
 
-// ── S-05: FIADO creates a real customer row ───────────────────────────────────
+// ── S-05: CREDITO creates a real customer row ───────────────────────────────────
 
-describe('S-05: FIADO resolution — customer capture and link', () => {
+describe('S-05: CREDITO resolution — customer capture and link', () => {
   it('creates a customers row when resolving as receivable with captured contact', async () => {
     const { resolveTransfer } = await import('./transfer-reconciliation');
     const { reconId } = await seedReconWithSale();
@@ -315,7 +315,7 @@ describe('S-05: FIADO resolution — customer capture and link', () => {
     expect(customers.rows[0]?.name).toBe('Ana García');
   });
 
-  it('creates the fiado with customer_id NOT null', async () => {
+  it('creates the credito with customer_id NOT null', async () => {
     const { resolveTransfer } = await import('./transfer-reconciliation');
     const { reconId } = await seedReconWithSale();
 
@@ -326,14 +326,14 @@ describe('S-05: FIADO resolution — customer capture and link', () => {
 
     expect(result.ok).toBe(true);
 
-    // The fiado must have customer_id set
-    const fiados = await pg.query<{ customer_id: string | null }>(
-      `SELECT customer_id FROM fiados WHERE organization_id = $1`,
+    // The credito must have customer_id set
+    const creditos = await pg.query<{ customer_id: string | null }>(
+      `SELECT customer_id FROM creditos WHERE organization_id = $1`,
       [ORG],
     );
 
-    expect(fiados.rows).toHaveLength(1);
-    expect(fiados.rows[0]?.customer_id).not.toBeNull();
+    expect(creditos.rows).toHaveLength(1);
+    expect(creditos.rows[0]?.customer_id).not.toBeNull();
 
     // And customer_id must match the created customer
     const customers = await pg.query<{ id: string }>(
@@ -341,7 +341,7 @@ describe('S-05: FIADO resolution — customer capture and link', () => {
       [ORG],
     );
 
-    expect(fiados.rows[0]?.customer_id).toBe(customers.rows[0]?.id);
+    expect(creditos.rows[0]?.customer_id).toBe(customers.rows[0]?.id);
   });
 
   it('sets the reconciliation status to resolved with resolutionType receivable', async () => {
@@ -364,12 +364,12 @@ describe('S-05: FIADO resolution — customer capture and link', () => {
     expect(rows.rows[0]?.resolution_type).toBe('receivable');
   });
 
-  it('falls back to a legacy fiado with null customer_id when no customerName is given', async () => {
+  it('falls back to a legacy credito with null customer_id when no customerName is given', async () => {
     const { resolveTransfer } = await import('./transfer-reconciliation');
     const { reconId } = await seedReconWithSale();
 
     // Backward compatibility: the current panel button calls without customer
-    // data. It must still resolve (no throw) and create a legacy fiado whose
+    // data. It must still resolve (no throw) and create a legacy credito whose
     // customer_id is null until the View B capture UI is wired.
     const result = await resolveTransfer(reconId, 'receivable', {
       customerName: '',
@@ -377,19 +377,19 @@ describe('S-05: FIADO resolution — customer capture and link', () => {
 
     expect(result.ok).toBe(true);
 
-    const fiados = await pg.query<{ customer_id: string | null }>(
-      `SELECT customer_id FROM fiados WHERE organization_id = $1`,
+    const creditos = await pg.query<{ customer_id: string | null }>(
+      `SELECT customer_id FROM creditos WHERE organization_id = $1`,
       [ORG],
     );
 
-    expect(fiados.rows).toHaveLength(1);
-    expect(fiados.rows[0]?.customer_id).toBeNull();
+    expect(creditos.rows).toHaveLength(1);
+    expect(creditos.rows[0]?.customer_id).toBeNull();
   });
 });
 
-// ── S-05b: FIADO dedup — same whatsapp reuses existing customer ───────────────
+// ── S-05b: CREDITO dedup — same whatsapp reuses existing customer ───────────────
 
-describe('S-05b: FIADO dedup — second FIADO with same whatsapp reuses customer', () => {
+describe('S-05b: CREDITO dedup — second CREDITO with same whatsapp reuses customer', () => {
   it('reuses an existing customer when the same whatsapp is provided', async () => {
     // Pre-create a customer
     const existingCustomerResult = await pg.query<{ id: string }>(
@@ -421,13 +421,13 @@ describe('S-05b: FIADO dedup — second FIADO with same whatsapp reuses customer
     expect(customers.rows).toHaveLength(1);
     expect(customers.rows[0]?.id).toBe(existingCustomerId);
 
-    // The fiado must link to the existing customer
-    const fiados = await pg.query<{ customer_id: string }>(
-      `SELECT customer_id FROM fiados WHERE organization_id = $1`,
+    // The credito must link to the existing customer
+    const creditos = await pg.query<{ customer_id: string }>(
+      `SELECT customer_id FROM creditos WHERE organization_id = $1`,
       [ORG],
     );
 
-    expect(fiados.rows[0]?.customer_id).toBe(existingCustomerId);
+    expect(creditos.rows[0]?.customer_id).toBe(existingCustomerId);
   });
 
   it('creates a separate customer when whatsapp is different', async () => {

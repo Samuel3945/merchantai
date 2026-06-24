@@ -1,15 +1,15 @@
-// Client-safe presentation + pure logic for the Fiados module. NO server-only
+// Client-safe presentation + pure logic for the Creditos module. NO server-only
 // imports (no db, no clerk, no node:*) so client components can import it without
 // pulling the data layer into the bundle. Mirrors the cash-ui / cash-helpers
-// split. The server core (libs/fiados.ts) re-uses these same pure helpers, so
+// split. The server core (libs/creditos.ts) re-uses these same pure helpers, so
 // the due-date rules are defined exactly once.
 
-export type FiadoDueState = 'overdue' | 'due_soon' | 'on_track' | 'paid';
+export type CreditoDueState = 'overdue' | 'due_soon' | 'on_track' | 'paid';
 
 // "Próximo a vencer": due today or within this many days.
 export const DUE_SOON_DAYS = 3;
 
-export const FIADO_PAYMENT_METHODS = [
+export const CREDITO_PAYMENT_METHODS = [
   { value: 'efectivo', label: 'Efectivo' },
   { value: 'nequi', label: 'Nequi' },
   { value: 'daviplata', label: 'Daviplata' },
@@ -38,7 +38,7 @@ export function deriveDueState(
   dueDate: string,
   isPaid: boolean,
   today: Date = new Date(),
-): { state: FiadoDueState; days: number } {
+): { state: CreditoDueState; days: number } {
   if (isPaid) {
     return { state: 'paid', days: 0 };
   }
@@ -60,7 +60,7 @@ export function addDaysISO(base: Date, days: number): string {
 
 // Plain-language label for a due state, from the tendero's point of view.
 // e.g. "Atrasado 8 días", "Vence mañana", "Vence en 12 días", "Pagado".
-export function dueStateLabel(state: FiadoDueState, days: number): string {
+export function dueStateLabel(state: CreditoDueState, days: number): string {
   switch (state) {
     case 'paid':
       return 'Pagado';

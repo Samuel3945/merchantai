@@ -366,31 +366,31 @@ export async function getInventoryHealth(): Promise<InventoryHealth> {
   };
 }
 
-// ── Fiados aging ──────────────────────────────────────────────────────────
+// ── Creditos aging ──────────────────────────────────────────────────────────
 
-export type FiadoAgingBucket = { bucket: string; count: number; amount: number };
+export type CreditoAgingBucket = { bucket: string; count: number; amount: number };
 
-export async function getFiadosAging(): Promise<FiadoAgingBucket[]> {
+export async function getCreditosAging(): Promise<CreditoAgingBucket[]> {
   const { orgId } = await requireOrg();
 
   const result = await db.execute(sql`
-    WITH fiado_debt AS (
+    WITH credito_debt AS (
       SELECT
         s.id,
         s.total::numeric AS total,
         COALESCE((
           SELECT SUM(sp.amount) FROM sale_payments sp
-          WHERE sp.sale_id = s.id AND sp.method NOT ILIKE '%fiado%'
+          WHERE sp.sale_id = s.id AND sp.method NOT ILIKE '%credito%'
         ), 0)::numeric AS paid,
         EXTRACT(day FROM NOW() - s.created_at)::int AS age_days
       FROM sales s
       WHERE s.organization_id = ${orgId}
         AND s.status = 'completed'
         AND (
-          s.payment_type ILIKE '%fiado%'
+          s.payment_type ILIKE '%credito%'
           OR EXISTS (
             SELECT 1 FROM sale_payments sp2
-            WHERE sp2.sale_id = s.id AND sp2.method ILIKE '%fiado%'
+            WHERE sp2.sale_id = s.id AND sp2.method ILIKE '%credito%'
           )
         )
     ),
@@ -403,7 +403,7 @@ export async function getFiadosAging(): Promise<FiadoAgingBucket[]> {
           ELSE '15+ días'
         END AS bucket,
         (total - paid)::float8 AS owed
-      FROM fiado_debt
+      FROM credito_debt
       WHERE total - paid > 0
     )
     SELECT bucket, COUNT(*)::int AS count, COALESCE(SUM(owed), 0)::float8 AS amount

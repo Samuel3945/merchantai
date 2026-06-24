@@ -74,8 +74,8 @@ vi.mock('@/libs/customers', () => ({
   findOrCreateCustomer: vi.fn(async () => ({ id: 'cust-123' })),
 }));
 
-vi.mock('@/libs/fiados', () => ({
-  createFiado: vi.fn(async () => ({ id: 'fiado-123' })),
+vi.mock('@/libs/creditos', () => ({
+  createCredito: vi.fn(async () => ({ id: 'credito-123' })),
 }));
 
 vi.mock('@/libs/payment-reclassification', () => ({
@@ -117,7 +117,7 @@ const SETUP_SQL = `
     resolution_type "transfer_resolution_type",
     resolved_by text,
     resolved_at timestamp,
-    resolution_fiado_id uuid,
+    resolution_credito_id uuid,
     claim_open boolean DEFAULT false NOT NULL,
     recovery_of_id uuid,
     remainder_reconciliation_id uuid,

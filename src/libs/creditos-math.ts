@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 
-// Pure, dependency-free money + identity logic for fiados. No db, no clerk — so
-// it can be unit-tested directly and reused by the server core (libs/fiados.ts).
+// Pure, dependency-free money + identity logic for creditos. No db, no clerk — so
+// it can be unit-tested directly and reused by the server core (libs/creditos.ts).
 // This is where the money-critical rules live (FIFO distribution, the credited
 // amount, client grouping), isolated so they can be tested exhaustively.
 
@@ -28,7 +28,7 @@ export function parseClient(notes: string | null): { name: string; phone: string
 
 // Stable grouping key for "this debt belongs to this client". Prefers the real
 // customer FK; falls back to the notes-parsed name+phone for legacy/unlinked
-// fiados so historical data still groups correctly during the migration.
+// creditos so historical data still groups correctly during the migration.
 export function clientKeyOf(row: {
   customerId: string | null;
   notes: string | null;
@@ -50,36 +50,36 @@ export function normalizeClientKey(key: string): string {
   return `n:${key}`;
 }
 
-export type AbonoPlanEntry = { fiadoId: string; apply: number; settle: boolean };
+export type AbonoPlanEntry = { creditoId: string; apply: number; settle: boolean };
 export type AbonoPlan = {
   entries: AbonoPlanEntry[];
   appliedTotal: number;
   remaining: number;
 };
 
-// FIFO distribution of an abono across a client's fiados, which MUST already be
-// ordered oldest-due-first. Each fiado is paid down to zero before the next is
-// touched; an over-payment leaves a positive `remaining`. A fiado already at
+// FIFO distribution of an abono across a client's creditos, which MUST already be
+// ordered oldest-due-first. Each credito is paid down to zero before the next is
+// touched; an over-payment leaves a positive `remaining`. A credito already at
 // zero balance is settled (apply 0) so a stale "pending" row can self-heal.
 // Pure and side-effect free: the caller does the DB writes from `entries`.
 export function planAbono(
-  fiados: { id: string; balance: number }[],
+  creditos: { id: string; balance: number }[],
   amount: number,
 ): AbonoPlan {
   let remaining = round2(amount);
   const entries: AbonoPlanEntry[] = [];
-  for (const f of fiados) {
+  for (const f of creditos) {
     if (remaining <= 0) {
       break;
     }
     const balance = round2(f.balance);
     if (balance <= 0) {
-      entries.push({ fiadoId: f.id, apply: 0, settle: true });
+      entries.push({ creditoId: f.id, apply: 0, settle: true });
       continue;
     }
     const apply = round2(Math.min(remaining, balance));
     remaining = round2(remaining - apply);
-    entries.push({ fiadoId: f.id, apply, settle: apply >= balance });
+    entries.push({ creditoId: f.id, apply, settle: apply >= balance });
   }
   return {
     entries,
@@ -88,15 +88,15 @@ export function planAbono(
   };
 }
 
-// The credit a fiado sale books: the total minus any upfront payment made with a
-// non-fiado method. A 100%-fiado sale owes the full total; a split sale (part
-// efectivo now, rest fiado) owes only the remainder.
-export function fiadoAmountFor(
+// The credit a credito sale books: the total minus any upfront payment made with a
+// non-credito method. A 100%-credito sale owes the full total; a split sale (part
+// efectivo now, rest credito) owes only the remainder.
+export function creditoAmountFor(
   total: number,
   payments: { method: string; amount: number | string }[],
 ): number {
-  const nonFiadoPaid = payments
-    .filter(p => !/fiado/i.test(p.method))
+  const nonCreditoPaid = payments
+    .filter(p => !/credito/i.test(p.method))
     .reduce((acc, p) => acc + (Number.parseFloat(String(p.amount)) || 0), 0);
-  return round2(total - nonFiadoPaid);
+  return round2(total - nonCreditoPaid);
 }

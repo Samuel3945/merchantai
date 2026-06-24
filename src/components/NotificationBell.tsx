@@ -19,7 +19,7 @@ type NotificationKind
   = | 'cash_difference'
     | 'low_stock'
     | 'expiring_soon'
-    | 'fiado_overdue'
+    | 'credito_overdue'
     | 'sale_alert'
     | 'platform_announcement';
 
@@ -29,7 +29,7 @@ const KIND_HREF: Record<NotificationKind, string> = {
   cash_difference: '/dashboard/reports/analisis-caja',
   low_stock: '/dashboard/products',
   expiring_soon: '/dashboard/inventory',
-  fiado_overdue: '/dashboard/fiados',
+  credito_overdue: '/dashboard/creditos',
   sale_alert: '/dashboard/sales',
   platform_announcement: '/dashboard',
 };
@@ -52,7 +52,7 @@ const KIND_ICON: Record<NotificationKind, React.ComponentType<{ className?: stri
   cash_difference: Wallet,
   low_stock: PackageX,
   expiring_soon: Clock,
-  fiado_overdue: AlertTriangle,
+  credito_overdue: AlertTriangle,
   sale_alert: ClipboardList,
   platform_announcement: Megaphone,
 };

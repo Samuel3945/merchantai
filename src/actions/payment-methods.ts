@@ -17,11 +17,11 @@ const DEFAULT_SEED: ReadonlyArray<{
   sortOrder: number;
 }> = [
   // Solo se siembran los métodos gestionados por el sistema: Efectivo (siempre
-  // activo) y Fiado (controlado por el toggle fiado-enabled). Las cuentas de
+  // activo) y Credito (controlado por el toggle credito-enabled). Las cuentas de
   // transferencia y tarjetas las agrega el negocio explícitamente con «Nuevo
   // método» — no se crean métodos que el usuario no configuró.
   { name: 'Efectivo', type: 'cash', sortOrder: 0 },
-  { name: 'Fiado', type: 'credit', sortOrder: 1 },
+  { name: 'Crédito', type: 'credit', sortOrder: 1 },
 ];
 
 async function requireOrg() {
@@ -240,7 +240,7 @@ export async function updatePaymentMethod(
 // Borrado REAL. Es seguro porque sale_payments.method es texto (no FK a
 // payment_methods): el historial de ventas conserva el nombre del método. Los
 // métodos del sistema (cash/credit) no se pueden borrar — se gestionan con
-// «Efectivo siempre activo» y el toggle de Fiado.
+// «Efectivo siempre activo» y el toggle de Credito.
 export async function deletePaymentMethod(id: string): Promise<{ ok: true }> {
   const { orgId } = await requireAdminOrg();
 

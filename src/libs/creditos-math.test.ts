@@ -1,71 +1,71 @@
 import { describe, expect, it } from 'vitest';
 import {
   clientKeyOf,
-  fiadoAmountFor,
+  creditoAmountFor,
   normalizeClientKey,
   parseClient,
   planAbono,
   round2,
-} from '@/libs/fiados-math';
+} from '@/libs/creditos-math';
 
-// Money-critical pure logic for fiados. These are the rules that decide how much
+// Money-critical pure logic for creditos. These are the rules that decide how much
 // a customer owes and how an abono is distributed — exercised exhaustively here
 // so a regression can never silently move money.
 
 describe('planAbono (FIFO distribution)', () => {
-  it('partial abono reduces one fiado without settling it', () => {
+  it('partial abono reduces one credito without settling it', () => {
     const r = planAbono([{ id: 'a', balance: 100 }], 60);
 
-    expect(r.entries).toEqual([{ fiadoId: 'a', apply: 60, settle: false }]);
+    expect(r.entries).toEqual([{ creditoId: 'a', apply: 60, settle: false }]);
     expect(r.appliedTotal).toBe(60);
     expect(r.remaining).toBe(0);
   });
 
-  it('exact abono settles the fiado', () => {
+  it('exact abono settles the credito', () => {
     const r = planAbono([{ id: 'a', balance: 100 }], 100);
 
-    expect(r.entries).toEqual([{ fiadoId: 'a', apply: 100, settle: true }]);
+    expect(r.entries).toEqual([{ creditoId: 'a', apply: 100, settle: true }]);
     expect(r.appliedTotal).toBe(100);
     expect(r.remaining).toBe(0);
   });
 
-  it('overpaying one fiado leaves change as remaining', () => {
+  it('overpaying one credito leaves change as remaining', () => {
     const r = planAbono([{ id: 'a', balance: 100 }], 150);
 
-    expect(r.entries).toEqual([{ fiadoId: 'a', apply: 100, settle: true }]);
+    expect(r.entries).toEqual([{ creditoId: 'a', apply: 100, settle: true }]);
     expect(r.appliedTotal).toBe(100);
     expect(r.remaining).toBe(50);
   });
 
-  it('distributes oldest-first across multiple fiados', () => {
+  it('distributes oldest-first across multiple creditos', () => {
     const r = planAbono([{ id: 'a', balance: 100 }, { id: 'b', balance: 200 }], 250);
 
     expect(r.entries).toEqual([
-      { fiadoId: 'a', apply: 100, settle: true },
-      { fiadoId: 'b', apply: 150, settle: false },
+      { creditoId: 'a', apply: 100, settle: true },
+      { creditoId: 'b', apply: 150, settle: false },
     ]);
     expect(r.appliedTotal).toBe(250);
     expect(r.remaining).toBe(0);
   });
 
-  it('stops once the amount is exhausted (does not touch later fiados)', () => {
+  it('stops once the amount is exhausted (does not touch later creditos)', () => {
     const r = planAbono([{ id: 'a', balance: 100 }, { id: 'b', balance: 200 }], 100);
 
-    expect(r.entries).toEqual([{ fiadoId: 'a', apply: 100, settle: true }]);
+    expect(r.entries).toEqual([{ creditoId: 'a', apply: 100, settle: true }]);
     expect(r.remaining).toBe(0);
   });
 
-  it('settles an already-zero-balance fiado and moves on', () => {
+  it('settles an already-zero-balance credito and moves on', () => {
     const r = planAbono([{ id: 'a', balance: 0 }, { id: 'b', balance: 50 }], 30);
 
     expect(r.entries).toEqual([
-      { fiadoId: 'a', apply: 0, settle: true },
-      { fiadoId: 'b', apply: 30, settle: false },
+      { creditoId: 'a', apply: 0, settle: true },
+      { creditoId: 'b', apply: 30, settle: false },
     ]);
     expect(r.appliedTotal).toBe(30);
   });
 
-  it('no fiados -> nothing applied, all remains', () => {
+  it('no creditos -> nothing applied, all remains', () => {
     const r = planAbono([], 50);
 
     expect(r.entries).toEqual([]);
@@ -78,34 +78,34 @@ describe('planAbono (FIFO distribution)', () => {
 
     expect(r.appliedTotal).toBe(100);
     expect(r.remaining).toBe(0);
-    expect(r.entries[0]).toEqual({ fiadoId: 'a', apply: 33.33, settle: true });
-    expect(r.entries[1]).toEqual({ fiadoId: 'b', apply: 66.67, settle: true });
+    expect(r.entries[0]).toEqual({ creditoId: 'a', apply: 33.33, settle: true });
+    expect(r.entries[1]).toEqual({ creditoId: 'b', apply: 66.67, settle: true });
   });
 });
 
-describe('fiadoAmountFor (credited amount of a sale)', () => {
-  it('a 100%-fiado sale owes the full total', () => {
-    expect(fiadoAmountFor(300, [{ method: 'fiado', amount: '300.00' }])).toBe(300);
+describe('creditoAmountFor (credited amount of a sale)', () => {
+  it('a 100%-credito sale owes the full total', () => {
+    expect(creditoAmountFor(300, [{ method: 'credito', amount: '300.00' }])).toBe(300);
   });
 
   it('a split sale owes only the part not paid upfront', () => {
     expect(
-      fiadoAmountFor(300, [
+      creditoAmountFor(300, [
         { method: 'efectivo', amount: '100' },
-        { method: 'fiado', amount: '200' },
+        { method: 'credito', amount: '200' },
       ]),
     ).toBe(200);
   });
 
   it('a fully-paid sale owes nothing', () => {
-    expect(fiadoAmountFor(300, [{ method: 'efectivo', amount: '300' }])).toBe(0);
+    expect(creditoAmountFor(300, [{ method: 'efectivo', amount: '300' }])).toBe(0);
   });
 
   it('digital upfront payment counts as paid', () => {
     expect(
-      fiadoAmountFor(300, [
+      creditoAmountFor(300, [
         { method: 'Nequi', amount: '50' },
-        { method: 'fiado', amount: '250' },
+        { method: 'credito', amount: '250' },
       ]),
     ).toBe(250);
   });

@@ -129,7 +129,7 @@ export function OnboardingStepper() {
   });
 
   // Step 2 — collections.
-  const [fiadoEnabled, setFiadoEnabled] = useState(true);
+  const [creditoEnabled, setCreditoEnabled] = useState(true);
   const [transfers, setTransfers] = useState<TransferAccount[]>([]);
   const [showAddTransfer, setShowAddTransfer] = useState(false);
   const [draftName, setDraftName] = useState('');
@@ -258,7 +258,7 @@ export function OnboardingStepper() {
     if (step === 2) {
       startTransition(async () => {
         try {
-          await setAppSetting('fiado-enabled', fiadoEnabled ? 'true' : 'false');
+          await setAppSetting('credito-enabled', creditoEnabled ? 'true' : 'false');
           setStep(3);
         } catch (err) {
           setError(err instanceof Error ? err.message : 'Error inesperado');
@@ -460,7 +460,7 @@ export function OnboardingStepper() {
       {step === 2 && (
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            El efectivo siempre está disponible. Activa el fiado y agrega tus
+            El efectivo siempre está disponible. Activa el crédito y agrega tus
             cuentas de transferencia para que el bot las comparta con el cliente.
           </p>
 
@@ -483,10 +483,10 @@ export function OnboardingStepper() {
           </div>
 
           <FeatureToggle
-            label="Fiado / Crédito"
+            label="Crédito"
             description="Permite registrar ventas a crédito con saldo pendiente."
-            checked={fiadoEnabled}
-            onChange={setFiadoEnabled}
+            checked={creditoEnabled}
+            onChange={setCreditoEnabled}
           />
 
           <div className="border-t pt-4">
