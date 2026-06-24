@@ -32,8 +32,15 @@ function DialogOverlay({
 function DialogContent({
   className,
   children,
+  showCloseButton = true,
   ...props
-}: React.ComponentProps<typeof DialogPrimitive.Content>) {
+}: React.ComponentProps<typeof DialogPrimitive.Content> & {
+  /**
+   * Render the built-in top-right close button. Set false when the dialog
+   * provides its own close control to avoid duplicate X buttons.
+   */
+  showCloseButton?: boolean;
+}) {
   return (
     <DialogPortal>
       <DialogOverlay />
@@ -50,17 +57,19 @@ function DialogContent({
         {...props}
       >
         {children}
-        <DialogPrimitive.Close
-          className="
-            absolute top-4 right-4 rounded-sm text-muted-foreground opacity-70
-            transition-opacity outline-none
-            hover:opacity-100
-            focus-visible:ring-2 focus-visible:ring-ring/50
-          "
-          aria-label="Cerrar"
-        >
-          <XIcon className="size-4" />
-        </DialogPrimitive.Close>
+        {showCloseButton && (
+          <DialogPrimitive.Close
+            className="
+              absolute top-4 right-4 rounded-sm text-muted-foreground opacity-70
+              transition-opacity outline-none
+              hover:opacity-100
+              focus-visible:ring-2 focus-visible:ring-ring/50
+            "
+            aria-label="Cerrar"
+          >
+            <XIcon className="size-4" />
+          </DialogPrimitive.Close>
+        )}
       </DialogPrimitive.Content>
     </DialogPortal>
   );
