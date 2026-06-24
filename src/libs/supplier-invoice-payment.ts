@@ -2,7 +2,9 @@ import { and, asc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import { round2 } from '@/libs/creditos-math';
 import { recordSupplierPaymentOutflow } from '@/libs/treasury';
 import {
+  cashMovementsSchema,
   supplierPayablesSchema,
+  supplierPaymentsSchema,
   supplierPurchasesSchema,
   suppliersSchema,
 } from '@/models/Schema';
@@ -489,4 +491,341 @@ export async function listOpenInvoicesForSupplier(
     purchasedAt: p.purchasedAt,
     lineCount: countMap.get(p.id) ?? 0,
   }));
+}
+
+// ── getSupplierOutstanding ────────────────────────────────────────────────────
+// Returns the total amount owed to a supplier across ALL open/partial payables.
+// Used by: POS route (settle-vs-gasto decision), read endpoint, recordSupplierPayment.
+// Read-only; no lock acquired.
+
+export type SupplierOutstandingResult = {
+  totalOutstanding: number;
+  invoiceCount: number;
+  invoices: Array<{
+    payableId: string;
+    purchasedAt: Date;
+    outstanding: number;
+    status: 'open' | 'partial';
+  }>;
+};
+
+export async function getSupplierOutstanding(
+  executor: Executor,
+  organizationId: string,
+  supplierId: string,
+): Promise<SupplierOutstandingResult> {
+  const rows = await executor
+    .select({
+      id: supplierPayablesSchema.id,
+      totalAmount: supplierPayablesSchema.totalAmount,
+      paidAmount: supplierPayablesSchema.paidAmount,
+      creditedAmount: supplierPayablesSchema.creditedAmount,
+      status: supplierPayablesSchema.status,
+      purchasedAt: supplierPayablesSchema.purchasedAt,
+    })
+    .from(supplierPayablesSchema)
+    .where(
+      and(
+        eq(supplierPayablesSchema.organizationId, organizationId),
+        eq(supplierPayablesSchema.supplierId, supplierId),
+        inArray(supplierPayablesSchema.status, ['open', 'partial']),
+      ),
+    )
+    .orderBy(
+      asc(supplierPayablesSchema.purchasedAt),
+      asc(supplierPayablesSchema.id),
+    );
+
+  const invoices: SupplierOutstandingResult['invoices'] = rows.map((r: {
+    id: string;
+    totalAmount: string;
+    paidAmount: string;
+    creditedAmount: string | null;
+    status: 'open' | 'partial';
+    purchasedAt: Date;
+  }) => {
+    const total = round2(Number.parseFloat(r.totalAmount));
+    const paid = round2(Number.parseFloat(r.paidAmount));
+    const credited = round2(Number.parseFloat(r.creditedAmount ?? '0'));
+    return {
+      payableId: r.id,
+      purchasedAt: r.purchasedAt,
+      outstanding: round2(total - paid - credited),
+      status: r.status,
+    };
+  });
+
+  const totalOutstanding = round2(invoices.reduce((s, i) => s + i.outstanding, 0));
+
+  return { totalOutstanding, invoiceCount: invoices.length, invoices };
+}
+
+// ── recordCajaPayableSettle ───────────────────────────────────────────────────
+// Inline caja-funded settle for ONE payable chunk.
+// Called from recordSupplierPayment when fundingSource.kind === 'caja'.
+//
+// Writes (inside caller's tx):
+//   1. cash_movements (type='expense', expense_id=NULL, supplier_id set) — the
+//      physical cash exits the drawer exactly like any other expense; the arqueo
+//      filter (type IN ('expense',...)) counts it identically to a gasto.
+//   2. supplier_payments (cash_movement_id=<#1.id>, treasury_movement_id=NULL).
+//   3. UPDATE supplier_payables (paid_amount += chunk, status recomputed).
+//
+// Does NOT write: expenses (no P&L), treasury_movements (no container debit).
+// Lock: SELECT ... FOR UPDATE on the payable row ONLY (oldest-first by caller).
+// OQ-2 fix: expense_id=NULL lets getTodayCashKpis narrow gastos_hoy to
+//           type='expense' AND expense_id IS NOT NULL without counting this row.
+
+type CajaPayableSettleInput = {
+  organizationId: string;
+  sessionId: string;
+  payableId: string;
+  supplierId: string;
+  amount: number; // already round2'd by caller
+  note?: string | null;
+  createdBy: string;
+};
+
+type CajaPayableSettleResult = {
+  cashMovementId: string;
+  payableStatus: 'open' | 'partial' | 'paid';
+};
+
+export async function recordCajaPayableSettle(
+  tx: Executor,
+  input: CajaPayableSettleInput,
+): Promise<CajaPayableSettleResult> {
+  // 1. Lock the payable row FOR UPDATE (oldest-first guaranteed by caller).
+  const [payable] = await tx
+    .select({
+      id: supplierPayablesSchema.id,
+      organizationId: supplierPayablesSchema.organizationId,
+      totalAmount: supplierPayablesSchema.totalAmount,
+      paidAmount: supplierPayablesSchema.paidAmount,
+      creditedAmount: supplierPayablesSchema.creditedAmount,
+      status: supplierPayablesSchema.status,
+    })
+    .from(supplierPayablesSchema)
+    .where(eq(supplierPayablesSchema.id, input.payableId))
+    .for('update')
+    .limit(1);
+
+  if (!payable) {
+    throw new Error(`payable not found: ${input.payableId}`);
+  }
+  if (payable.organizationId !== input.organizationId) {
+    throw new Error('payable does not belong to this organization');
+  }
+  if (payable.status === 'paid') {
+    throw new Error('payable already paid — no additional payments accepted');
+  }
+
+  const totalAmt = round2(Number.parseFloat(payable.totalAmount));
+  const alreadyPaid = round2(Number.parseFloat(payable.paidAmount));
+  const credited = round2(Number.parseFloat(payable.creditedAmount ?? '0'));
+  const outstanding = round2(totalAmt - alreadyPaid - credited);
+
+  if (input.amount > outstanding + 0.005) {
+    throw new Error(
+      `chunk (${input.amount.toFixed(2)}) exceeds payable outstanding (${outstanding.toFixed(2)})`,
+    );
+  }
+
+  // 2. Insert ONE cash_movements row — type='expense', expense_id=NULL (no P&L anchor).
+  //    cash leaves the physical drawer; arqueo salidas filter keys on type only.
+  const [movRow] = await tx
+    .insert(cashMovementsSchema)
+    .values({
+      sessionId: input.sessionId,
+      organizationId: input.organizationId,
+      type: 'expense',
+      amount: input.amount.toFixed(2),
+      reason: input.note ?? 'Pago a proveedor',
+      supplierId: input.supplierId,
+      expenseId: null, // NOT a P&L gasto — intentionally no anchor
+      createdBy: input.createdBy,
+    })
+    .returning({ id: cashMovementsSchema.id });
+
+  if (!movRow) {
+    throw new Error('recordCajaPayableSettle: cash_movements insert returned no row');
+  }
+
+  // 3. Insert supplier_payments — cash_movement_id set, treasury_movement_id NULL.
+  await tx
+    .insert(supplierPaymentsSchema)
+    .values({
+      organizationId: input.organizationId,
+      supplierId: input.supplierId,
+      payableId: input.payableId,
+      cashMovementId: movRow.id,
+      treasuryMovementId: null,
+      amount: input.amount.toFixed(2),
+      note: input.note ?? null,
+      createdBy: input.createdBy,
+    });
+
+  // 4. Update payable: paid_amount += chunk, recompute status.
+  const newPaid = round2(alreadyPaid + input.amount);
+  const newStatus: 'open' | 'partial' | 'paid'
+    = newPaid + credited >= totalAmt - 0.005 ? 'paid' : newPaid > 0 ? 'partial' : 'open';
+
+  await tx
+    .update(supplierPayablesSchema)
+    .set({
+      paidAmount: newPaid.toFixed(2),
+      status: newStatus,
+    })
+    .where(eq(supplierPayablesSchema.id, input.payableId));
+
+  return { cashMovementId: movRow.id, payableStatus: newStatus };
+}
+
+// ── recordSupplierPayment ─────────────────────────────────────────────────────
+// Unified supplier-payment primitive — allocates across ALL open/partial payables
+// for a supplier (oldest-first) from ONE funding source.
+//
+// fundingSource:
+//   { kind: 'treasury', accountId } → recordSupplierPaymentOutflow per chunk.
+//   { kind: 'caja',     sessionId } → recordCajaPayableSettle per chunk.
+//
+// Returns: { appliedTotal, excess, breakdown }.
+// excess > 0 means the amount exceeded total outstanding; caller decides UX.
+// Does NOT fabricate credits. Does NOT overpay payables.
+
+export type SupplierPaymentFundingSource
+  = | { kind: 'treasury'; accountId: string }
+    | { kind: 'caja'; sessionId: string };
+
+export type SupplierPaymentInput = {
+  organizationId: string;
+  supplierId: string;
+  fundingSource: SupplierPaymentFundingSource;
+  amount: number;
+  createdBy: string;
+  note?: string | null;
+};
+
+export type SupplierPaymentBreakdown = {
+  payableId: string;
+  chunk: number;
+  payableStatus: 'open' | 'partial' | 'paid';
+};
+
+export type SupplierPaymentResult = {
+  appliedTotal: number;
+  excess: number;
+  breakdown: SupplierPaymentBreakdown[];
+};
+
+export async function recordSupplierPayment(
+  executor: Executor,
+  input: SupplierPaymentInput,
+): Promise<SupplierPaymentResult> {
+  const requestedAmt = round2(input.amount);
+
+  if (requestedAmt <= 0) {
+    throw new Error('amount must be greater than zero');
+  }
+
+  // ── 1. Unlocked read of all open/partial payables for the supplier ──────────
+  //    Oldest-first across ALL invoices for this supplier.
+  const payables = await executor
+    .select({
+      id: supplierPayablesSchema.id,
+      supplierId: supplierPayablesSchema.supplierId,
+      totalAmount: supplierPayablesSchema.totalAmount,
+      paidAmount: supplierPayablesSchema.paidAmount,
+      creditedAmount: supplierPayablesSchema.creditedAmount,
+    })
+    .from(supplierPayablesSchema)
+    .where(
+      and(
+        eq(supplierPayablesSchema.organizationId, input.organizationId),
+        eq(supplierPayablesSchema.supplierId, input.supplierId),
+        inArray(supplierPayablesSchema.status, ['open', 'partial']),
+      ),
+    )
+    .orderBy(
+      asc(supplierPayablesSchema.purchasedAt),
+      asc(supplierPayablesSchema.id),
+    );
+
+  if (payables.length === 0) {
+    // No outstanding debt — caller should route to gasto instead.
+    return { appliedTotal: 0, excess: requestedAmt, breakdown: [] };
+  }
+
+  // ── 2. Compute allocation oldest-first ────────────────────────────────────
+  type Allocation = { payableId: string; supplierId: string; chunk: number };
+  const allocations: Allocation[] = [];
+  let remaining = requestedAmt;
+
+  for (const p of payables) {
+    if (remaining <= 0) {
+      break;
+    }
+    const total = round2(Number.parseFloat(p.totalAmount));
+    const paid = round2(Number.parseFloat(p.paidAmount));
+    const credited = round2(Number.parseFloat(p.creditedAmount ?? '0'));
+    const outstanding = round2(total - paid - credited);
+    if (outstanding <= 0) {
+      continue;
+    }
+    const chunk = round2(Math.min(remaining, outstanding));
+    allocations.push({ payableId: p.id, supplierId: p.supplierId, chunk });
+    remaining = round2(remaining - chunk);
+  }
+
+  const appliedTotal = round2(requestedAmt - remaining);
+  const excess = round2(remaining); // > 0 if amount > total outstanding
+
+  // ── 3. Execute inside ONE outer transaction ───────────────────────────────
+  const doWork = async (tx: Executor): Promise<SupplierPaymentResult> => {
+    const breakdown: SupplierPaymentBreakdown[] = [];
+
+    for (const alloc of allocations) {
+      if (input.fundingSource.kind === 'treasury') {
+        const chunkResult = await recordSupplierPaymentOutflow(tx, {
+          organizationId: input.organizationId,
+          fromAccountId: input.fundingSource.accountId,
+          amount: alloc.chunk,
+          supplierId: alloc.supplierId,
+          payableId: alloc.payableId,
+          note: input.note ?? null,
+          createdBy: input.createdBy,
+        });
+        breakdown.push({
+          payableId: alloc.payableId,
+          chunk: alloc.chunk,
+          payableStatus: chunkResult.payableStatus,
+        });
+      } else {
+        // kind === 'caja'
+        const chunkResult = await recordCajaPayableSettle(tx, {
+          organizationId: input.organizationId,
+          sessionId: input.fundingSource.sessionId,
+          payableId: alloc.payableId,
+          supplierId: alloc.supplierId,
+          amount: alloc.chunk,
+          note: input.note ?? null,
+          createdBy: input.createdBy,
+        });
+        breakdown.push({
+          payableId: alloc.payableId,
+          chunk: alloc.chunk,
+          payableStatus: chunkResult.payableStatus,
+        });
+      }
+    }
+
+    return { appliedTotal, excess, breakdown };
+  };
+
+  const isRealDb = typeof (executor as { transaction?: unknown }).transaction === 'function';
+  if (isRealDb) {
+    return (executor as { transaction: <T>(cb: (tx: Executor) => Promise<T>) => Promise<T> })
+      .transaction(tx => doWork(tx));
+  }
+  return doWork(executor);
 }
