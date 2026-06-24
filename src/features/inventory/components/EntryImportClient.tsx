@@ -34,11 +34,13 @@ export function EntryImportClient({ onImported }: { onImported: () => void }) {
 
   const [reason, setReason] = useState<EntryReason>('purchase');
   const [supplierId, setSupplierId] = useState('');
+  const [invoiceNumber, setInvoiceNumber] = useState('');
   const [notes, setNotes] = useState('');
 
   const [drafts, setDrafts] = useState<EntryDraftRow[]>([]);
   const [fileName, setFileName] = useState('');
   const [result, setResult] = useState<BulkEntryResult | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
   useEffect(() => {
@@ -166,18 +168,26 @@ export function EntryImportClient({ onImported }: { onImported: () => void }) {
     if (validRows.length === 0 || !batchReady) {
       return;
     }
+    setImportError(null);
     startTransition(async () => {
-      const res = await bulkRecordEntries({
-        reason,
-        supplierId: reason === 'purchase' ? supplierId : null,
-        notes: reason === 'manual' ? notes : null,
-        rows: validRows.map(d => ({
-          productId: d.productId!,
-          qty: Number(d.qty),
-          unitCost: d.unitCost.trim(),
-          expiresAt: d.expiresAt.trim() || null,
-        })),
-      });
+      let res: Awaited<ReturnType<typeof bulkRecordEntries>>;
+      try {
+        res = await bulkRecordEntries({
+          reason,
+          supplierId: reason === 'purchase' ? supplierId : null,
+          invoiceNumber: reason === 'purchase' ? invoiceNumber.trim() || null : null,
+          notes: reason === 'manual' ? notes : null,
+          rows: validRows.map(d => ({
+            productId: d.productId!,
+            qty: Number(d.qty),
+            unitCost: d.unitCost.trim(),
+            expiresAt: d.expiresAt.trim() || null,
+          })),
+        });
+      } catch (err) {
+        setImportError(err instanceof Error ? err.message : 'Error al importar');
+        return;
+      }
       setResult(res);
       // Keep rows that still need attention: invalid ones plus any the server
       // rejected, matched by position among the rows we sent.
@@ -188,6 +198,8 @@ export function EntryImportClient({ onImported }: { onImported: () => void }) {
       );
       setDrafts([...invalid, ...stillFailing]);
       if (res.created > 0) {
+        // Reset invoice number so next batch doesn't accidentally reuse it.
+        setInvoiceNumber('');
         onImported();
       }
     });
@@ -216,14 +228,25 @@ export function EntryImportClient({ onImported }: { onImported: () => void }) {
         </div>
         {reason === 'purchase'
           ? (
-              <div>
-                <label className={labelCls}>
-                  Proveedor
-                  {' '}
-                  <span className="text-destructive">*</span>
-                </label>
-                <SupplierSelect value={supplierId} onChange={setSupplierId} />
-              </div>
+              <>
+                <div>
+                  <label className={labelCls}>
+                    Proveedor
+                    {' '}
+                    <span className="text-destructive">*</span>
+                  </label>
+                  <SupplierSelect value={supplierId} onChange={setSupplierId} />
+                </div>
+                <div>
+                  <label className={labelCls}>N° de factura (opcional)</label>
+                  <input
+                    value={invoiceNumber}
+                    onChange={e => setInvoiceNumber(e.target.value)}
+                    className={cn(inputCls, 'h-9')}
+                    placeholder="Ej. FAC-2024-001"
+                  />
+                </div>
+              </>
             )
           : (
               <div>
@@ -283,6 +306,15 @@ export function EntryImportClient({ onImported }: { onImported: () => void }) {
         "
         >
           Cargando productos…
+        </div>
+      )}
+
+      {importError && (
+        <div className="
+          rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3
+        "
+        >
+          <p className="text-sm font-medium text-destructive">{importError}</p>
         </div>
       )}
 
