@@ -96,9 +96,10 @@ export async function getSupplierKpisForOrg(
       ),
     );
 
+  // outstanding = total − paid − credited (migration 0068: credited_amount added).
   const [pendingRow] = await executor
     .select({
-      total: sql<string>`COALESCE(SUM(${supplierPayablesSchema.totalAmount} - ${supplierPayablesSchema.paidAmount}), 0)::text`,
+      total: sql<string>`COALESCE(SUM(${supplierPayablesSchema.totalAmount} - ${supplierPayablesSchema.paidAmount} - ${supplierPayablesSchema.creditedAmount}), 0)::text`,
     })
     .from(supplierPayablesSchema)
     .where(

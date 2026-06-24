@@ -1873,6 +1873,8 @@ export async function recordSupplierPaymentOutflow(
           organizationId: supplierPayablesSchema.organizationId,
           totalAmount: supplierPayablesSchema.totalAmount,
           paidAmount: supplierPayablesSchema.paidAmount,
+          // creditedAmount: return credits reduce outstanding (migration 0068).
+          creditedAmount: supplierPayablesSchema.creditedAmount,
           status: supplierPayablesSchema.status,
         })
         .from(supplierPayablesSchema)
@@ -1894,7 +1896,9 @@ export async function recordSupplierPaymentOutflow(
 
       const totalAmt = Number.parseFloat(payable.totalAmount);
       const alreadyPaid = Number.parseFloat(payable.paidAmount);
-      const outstanding = totalAmt - alreadyPaid;
+      // outstanding = total − paid − credited (migration 0068 adds credited_amount).
+      const alreadyCredited = Number.parseFloat(payable.creditedAmount ?? '0');
+      const outstanding = totalAmt - alreadyPaid - alreadyCredited;
 
       if (amt > outstanding + 0.005) {
         throw new Error(
@@ -1903,7 +1907,8 @@ export async function recordSupplierPaymentOutflow(
       }
 
       newPaidAmount = alreadyPaid + amt;
-      payableStatus = newPaidAmount >= totalAmt - 0.005 ? 'paid' : 'partial';
+      // Status: paid when paid+credited >= total (both reduce the debt).
+      payableStatus = newPaidAmount + alreadyCredited >= totalAmt - 0.005 ? 'paid' : 'partial';
     }
 
     // 5. INSERT treasury_movements salida — NO expenseId, NO category P&L.

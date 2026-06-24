@@ -477,6 +477,13 @@
       "when": 1781900000005,
       "tag": "0067_rename_fiado_to_credito",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1781900000006,
+      "tag": "0068_supplier_return_credits",
+      "breakpoints": true
     }
   ]
 }

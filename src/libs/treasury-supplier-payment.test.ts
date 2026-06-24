@@ -147,7 +147,7 @@ const DDL = `
     CONSTRAINT treasury_mov_transfer_recon_unique UNIQUE (transfer_reconciliation_id)
   );
 
-  -- Supplier payables: one header per purchase entry (migration 0065)
+  -- Supplier payables: one header per purchase entry (migration 0065 + 0068)
   CREATE TABLE supplier_payables (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     organization_id text NOT NULL,
@@ -155,6 +155,7 @@ const DDL = `
     stock_movement_id uuid,
     total_amount numeric(12,2) NOT NULL,
     paid_amount numeric(12,2) DEFAULT '0' NOT NULL,
+    credited_amount numeric(12,2) DEFAULT '0' NOT NULL,
     status "supplier_payable_status" DEFAULT 'open' NOT NULL,
     purchased_at timestamp DEFAULT now() NOT NULL,
     notes text,
@@ -235,12 +236,13 @@ async function seedPayable(
   totalAmount: number,
   paidAmount = 0,
   status: 'open' | 'partial' | 'paid' = 'open',
+  creditedAmount = 0,
 ): Promise<void> {
   await pg.query(
     `INSERT INTO supplier_payables
-       (id, organization_id, supplier_id, total_amount, paid_amount, status, purchased_at, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, now(), now(), now())`,
-    [id, ORG, SUPPLIER_ID, totalAmount.toFixed(2), paidAmount.toFixed(2), status],
+       (id, organization_id, supplier_id, total_amount, paid_amount, credited_amount, status, purchased_at, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, now(), now(), now())`,
+    [id, ORG, SUPPLIER_ID, totalAmount.toFixed(2), paidAmount.toFixed(2), creditedAmount.toFixed(2), status],
   );
 }
 
@@ -658,6 +660,66 @@ describe('recordSupplierPaymentOutflow — TenantDb proxy regression', () => {
         [ORG, SUPPLIER_ID, PAYABLE_ID_2],
       ),
     ).rejects.toThrow();
+  });
+});
+
+// ── SC-3.9: payment cap respects credited_amount ──────────────────────────────
+//
+// When a payable already has credited_amount > 0 the outstanding balance is
+// total − paid − credited.  This test proves:
+//   (a) overpay beyond the credited-adjusted outstanding is rejected
+//   (b) exact payment of the credited-adjusted outstanding succeeds and
+//       transitions the payable to 'paid'
+
+describe('recordSupplierPaymentOutflow — SC-3.9: cap includes credited_amount', () => {
+  const PAYABLE_SC39 = '00000000-0000-0000-cccc-000000000039';
+
+  it('rejects overpay when credited reduces outstanding (total=100, paid=0, credited=60 → outstanding=40)', async () => {
+    // outstanding = 100 − 0 − 60 = 40; trying to pay 41 must be rejected.
+    await seedAccount(CONTAINER_ID, 2000);
+    await seedPayable(PAYABLE_SC39, 100, 0, 'partial', 60);
+
+    await expect(
+      recordSupplierPaymentOutflow(db as never, {
+        organizationId: ORG,
+        fromAccountId: CONTAINER_ID,
+        amount: 41,
+        supplierId: SUPPLIER_ID,
+        payableId: PAYABLE_SC39,
+        createdBy: 'user-sc39',
+      }),
+    ).rejects.toThrow();
+
+    const movCount = await pg.query<{ count: number }>(
+      'SELECT COUNT(*) as count FROM treasury_movements',
+      [],
+    );
+
+    expect(Number(movCount.rows[0]!.count)).toBe(0);
+  });
+
+  it('exact payment of credited-adjusted outstanding (40) succeeds and marks payable paid', async () => {
+    await seedAccount(CONTAINER_ID, 2000);
+    await seedPayable(PAYABLE_SC39, 100, 0, 'partial', 60);
+
+    const result = await recordSupplierPaymentOutflow(db as never, {
+      organizationId: ORG,
+      fromAccountId: CONTAINER_ID,
+      amount: 40,
+      supplierId: SUPPLIER_ID,
+      payableId: PAYABLE_SC39,
+      createdBy: 'user-sc39',
+    });
+
+    expect(result.payableStatus).toBe('paid');
+
+    const payable = await pg.query<{ status: string; paid_amount: string }>(
+      'SELECT status, paid_amount FROM supplier_payables WHERE id = $1',
+      [PAYABLE_SC39],
+    );
+
+    expect(payable.rows[0]!.status).toBe('paid');
+    expect(payable.rows[0]!.paid_amount).toBe('40.00');
   });
 });
 

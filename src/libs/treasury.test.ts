@@ -217,6 +217,7 @@ const DDL = `
     stock_movement_id uuid,
     total_amount numeric(12,2) NOT NULL,
     paid_amount numeric(12,2) DEFAULT '0' NOT NULL,
+    credited_amount numeric(12,2) DEFAULT '0' NOT NULL,
     status "supplier_payable_status" DEFAULT 'open' NOT NULL,
     purchased_at timestamp DEFAULT now() NOT NULL,
     notes text,
@@ -3148,6 +3149,21 @@ describe('getSupplierKpisForOrg', () => {
     const kpis = await getSupplierKpisForOrg(db as unknown as Executor, ORG);
 
     expect(kpis.paidThisMonth).toBe('0');
+  });
+
+  // SC-4.7 — pendingPayments subtracts credited_amount from outstanding
+  it('SC-4.7: pendingPayments subtracts credited_amount (outstanding = total − paid − credited)', async () => {
+    // payable: total=200, paid=0, credited=100 → outstanding=100 (not 200)
+    await pg.query(
+      `INSERT INTO supplier_payables
+         (id, organization_id, supplier_id, total_amount, paid_amount, credited_amount, status, purchased_at, created_at, updated_at)
+       VALUES (gen_random_uuid(), $1, 'sup-cr', '200.00', '0.00', '100.00', 'partial', now(), now(), now())`,
+      [ORG],
+    );
+
+    const kpis = await getSupplierKpisForOrg(db as unknown as Executor, ORG);
+
+    expect(kpis.pendingPayments).toBe('100.00');
   });
 });
 

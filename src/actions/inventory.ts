@@ -12,6 +12,7 @@ import { db } from '@/libs/db-context';
 import { fifoBatchOrder } from '@/libs/fifo-cogs';
 import { requirePanelModule } from '@/libs/panel-session';
 import { insertPurchasePayable } from '@/libs/supplier-payables';
+import { applyReturnCredit } from '@/libs/supplier-returns';
 import {
   listTreasuryAccounts as listTreasuryAccountsLib,
   recordSupplierPaymentOutflow,
@@ -247,10 +248,28 @@ export async function recordMovement(input: RecordMovementInput) {
       .where(eq(productsSchema.id, input.productId))
       .returning();
 
+    // For return_supplier exits with a supplierId, apply return credits FIFO across
+    // the supplier's open/partial payables in the SAME tx as the exit movement.
+    // Value = returned qty × FIFO weighted cost captured in unitCost (already computed).
+    // No treasury movement is written — this is a liability credit only.
+    // Back-compat: no supplierId → pure inventory exit, no payable change.
+    let returnCreditResult: { appliedTotal: number; unapplied: number } | null = null;
+    if (input.reason === 'return_supplier' && input.supplierId && movement && Number(unitCost) > 0) {
+      const returnValue = input.qty * Number(unitCost);
+      // biome-ignore lint/suspicious/noExplicitAny: Drizzle tx is structurally compatible with Executor
+      returnCreditResult = await applyReturnCredit(tx as any, {
+        organizationId: orgId,
+        supplierId: input.supplierId,
+        returnStockMovementId: movement.id as string,
+        amount: returnValue,
+        createdBy: userId,
+        note: notes ?? null,
+      });
+    }
+
     // For purchase entries, create one open supplier_payables row in the same tx.
     // totalAmount = qty × unitCost, frozen at this moment (REQ-2.2, REQ-7.2).
     // Non-purchase entries create NO payable (REQ-2.6).
-    // return_supplier does not mutate payables — deferred; see REQ-7.1.
     if (input.reason === 'purchase' && movement && input.supplierId && unitCost) {
       if (!movement?.id) {
         throw new Error('stock movement insert returned no id');
@@ -294,7 +313,7 @@ export async function recordMovement(input: RecordMovementInput) {
       }
     }
 
-    return { movement, product: updated, stockBefore: product.stock };
+    return { movement, product: updated, stockBefore: product.stock, returnCreditResult };
   });
 
   // Audit trail: who moved what, and how stock changed. logAction swallows its
@@ -319,6 +338,7 @@ export async function recordMovement(input: RecordMovementInput) {
   });
 
   revalidatePath('/dashboard/inventory');
+  revalidatePath('/dashboard/suppliers');
   return result;
 }
 

@@ -19,6 +19,7 @@ import {
   exitFormSchema,
   reasonRequiresNotes,
 } from '../validation';
+import { SupplierSelect } from './SupplierSelect';
 
 const inputCls
   = 'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50';
@@ -27,6 +28,12 @@ const labelCls = 'text-sm font-medium';
 function isExpired(lot: ProductLot): boolean {
   return !!lot.expiresAt && new Date(lot.expiresAt) <= new Date();
 }
+
+const currencyFmt = new Intl.NumberFormat('es-CO', {
+  style: 'currency',
+  currency: 'COP',
+  maximumFractionDigits: 0,
+});
 
 export function ExitModal({
   product,
@@ -40,11 +47,13 @@ export function ExitModal({
   const [qty, setQty] = useState('');
   const [reason, setReason] = useState<MovementReason>('damaged');
   const [notes, setNotes] = useState('');
+  const [supplierId, setSupplierId] = useState('');
   const [lots, setLots] = useState<ProductLot[]>([]);
   const [pending, startTransition] = useTransition();
 
   const needsNotes = reasonRequiresNotes(reason);
   const showLots = reason === 'expired' && product.isPerishable;
+  const showSupplierSelect = reason === 'return_supplier';
   const canConfirm
     = Number(qty) > 0 && (!needsNotes || notes.trim().length > 0);
 
@@ -67,6 +76,14 @@ export function ExitModal({
     };
   }, [showLots, product.id, lots.length]);
 
+  function handleReasonChange(v: string) {
+    setReason(v as MovementReason);
+    // Clear supplier selection when switching away from return_supplier.
+    if (v !== 'return_supplier') {
+      setSupplierId('');
+    }
+  }
+
   function fillFromExpiredLots() {
     const expired = lots.filter(isExpired);
     const source = expired.length > 0 ? expired : lots.slice(0, 1);
@@ -78,20 +95,32 @@ export function ExitModal({
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const parsed = exitFormSchema.safeParse({ qty, reason, notes });
+    const parsed = exitFormSchema.safeParse({ qty, reason, notes, supplierId });
     if (!parsed.success) {
       toast.error(parsed.error.issues[0]?.message ?? 'Revisá los datos');
       return;
     }
     startTransition(async () => {
       try {
-        await recordMovement({
+        const result = await recordMovement({
           productId: product.id,
           type: 'exit',
           qty: parsed.data.qty,
           reason: parsed.data.reason,
           notes: parsed.data.notes,
+          supplierId: parsed.data.supplierId,
         });
+
+        // Surface unapplied excess when the return value exceeds supplier debt.
+        const credit = result?.returnCreditResult;
+        if (credit && credit.unapplied > 0.005) {
+          const formatted = currencyFmt.format(credit.unapplied);
+          toast({
+            description: `Crédito no aplicado: ${formatted} — el proveedor ya estaba al día. Coordiná el reintegro manualmente.`,
+            variant: 'default',
+          });
+        }
+
         toast.success(`Salida registrada para "${product.name}"`);
         onSuccess();
         onClose();
@@ -122,13 +151,27 @@ export function ExitModal({
             <label className={labelCls}>Motivo</label>
             <Select
               value={reason}
-              onValueChange={v => setReason(v as MovementReason)}
+              onValueChange={handleReasonChange}
               options={EXIT_REASON_OPTIONS.map(o => ({
                 value: o.value,
                 label: o.label,
               }))}
             />
           </div>
+
+          {showSupplierSelect && (
+            <div>
+              <label className={labelCls}>
+                Proveedor al que se devuelve
+                {' '}
+                <span className="text-xs text-muted-foreground">(opcional — reduce su deuda)</span>
+              </label>
+              <SupplierSelect
+                value={supplierId}
+                onChange={setSupplierId}
+              />
+            </div>
+          )}
 
           {showLots && (
             <div className="

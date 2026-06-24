@@ -2327,6 +2327,11 @@ export const supplierPayablesSchema = pgTable(
     paidAmount: numeric('paid_amount', { precision: 12, scale: 2 })
       .default('0')
       .notNull(),
+    // Denormalized sum of all credit chunks applied against this payable.
+    // Updated atomically with each supplier_payable_credits insert.
+    creditedAmount: numeric('credited_amount', { precision: 12, scale: 2 })
+      .default('0')
+      .notNull(),
     status: supplierPayableStatusEnum('status').default('open').notNull(),
     purchasedAt: timestamp('purchased_at', { mode: 'date' })
       .defaultNow()
@@ -2395,6 +2400,59 @@ export const supplierPaymentsSchema = pgTable(
     index('supplier_payments_payable_idx').on(table.payableId),
     // paidThisMonth window: date_trunc('month', now()) scan (mirrors credito movements idx).
     index('supplier_payments_org_created_idx').on(
+      table.organizationId,
+      table.createdAt,
+    ),
+  ],
+);
+
+// Credit ledger: one row per credit chunk applied to a payable during a return.
+// A single return_supplier exit may split its value across N payables (FIFO),
+// writing one supplier_payable_credits row per payable chunk. Total of all
+// chunk amounts = applyReturnCredit result.appliedTotal.
+//
+// Design decisions:
+//   - payable_id is nullable (SET NULL): a purged payable orphans the credit
+//     row but the return stock_movement row stays (RESTRICT on that FK).
+//   - total_amount on supplier_payables is NEVER mutated (REQ immutability).
+//   - paidThisMonth KPI reads supplier_payments only (credits ≠ cash).
+export const supplierPayableCreditsSchema = pgTable(
+  'supplier_payable_credits',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: text('organization_id').notNull(),
+    // TEXT (no FK) — mirrors supplier_payables.supplier_id convention (D1).
+    supplierId: text('supplier_id').notNull(),
+    // The payable this credit chunk reduced. SET NULL if payable is purged.
+    payableId: uuid('payable_id').references(
+      () => supplierPayablesSchema.id,
+      { onDelete: 'set null' },
+    ),
+    // The return exit stock_movements row that originated this credit.
+    // RESTRICT: the return movement must not be deleted while credits exist.
+    returnStockMovementId: uuid('return_stock_movement_id')
+      .notNull()
+      .references(() => stockMovementsSchema.id, { onDelete: 'restrict' }),
+    // Amount applied to THIS payable chunk (sum ≤ return value).
+    amount: numeric('amount', { precision: 12, scale: 2 }).notNull(),
+    note: text('note'),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+  },
+  table => [
+    // Per-supplier credit history and outstanding recalculation.
+    index('supplier_payable_credits_org_supplier_idx').on(
+      table.organizationId,
+      table.supplierId,
+    ),
+    // Payable-level credit lookup (recompute credited_amount if needed).
+    index('supplier_payable_credits_payable_idx').on(table.payableId),
+    // Return movement → all credit chunks for that return.
+    index('supplier_payable_credits_return_movement_idx').on(
+      table.returnStockMovementId,
+    ),
+    // Date-range scans across credits.
+    index('supplier_payable_credits_org_created_idx').on(
       table.organizationId,
       table.createdAt,
     ),
