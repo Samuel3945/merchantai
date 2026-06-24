@@ -11,6 +11,86 @@ import {
 // biome-ignore lint/suspicious/noExplicitAny: bridges Drizzle db/tx/TenantDb structural mismatch
 type Executor = any;
 
+// ── writeLotReturnCredit ──────────────────────────────────────────────────────
+//
+// Lot-specific credit write: targets ONE payable (the lot's own payable), NOT the
+// FIFO walk across all open payables. Called inside returnLot's transaction when
+// creditPortion > 0.
+//
+// Reuses the exact same inner math/epsilon logic from applyReturnCredit's inner
+// loop, without the outer FIFO walk. Does NOT modify applyReturnCredit.
+//
+// Lock order: caller (returnLot) must already hold the supplier_payables FOR UPDATE
+// lock before calling this function.
+
+export type WriteLotReturnCreditInput = {
+  organizationId: string;
+  supplierId: string;
+  payableId: string;
+  exitMovementId: string;
+  creditPortion: number;
+  createdBy: string;
+  note?: string | null;
+};
+
+export async function writeLotReturnCredit(
+  executor: Executor,
+  input: WriteLotReturnCreditInput,
+): Promise<void> {
+  const { organizationId, supplierId, payableId, exitMovementId, creditPortion, createdBy, note } = input;
+
+  const take = round2(creditPortion);
+
+  // Skip degenerate sub-cent chunk (mirrors applyReturnCredit inner guard).
+  if (take < 0.005) {
+    return;
+  }
+
+  // Fetch current credited_amount to compute new total (caller holds FOR UPDATE lock).
+  const [payable] = await executor
+    .select({
+      creditedAmount: supplierPayablesSchema.creditedAmount,
+      totalAmount: supplierPayablesSchema.totalAmount,
+      paidAmount: supplierPayablesSchema.paidAmount,
+    })
+    .from(supplierPayablesSchema)
+    .where(eq(supplierPayablesSchema.id, payableId));
+
+  if (!payable) {
+    throw new Error(`supplier_payables row not found: ${payableId}`);
+  }
+
+  const credited = Number.parseFloat(payable.creditedAmount ?? '0');
+  const total = Number.parseFloat(payable.totalAmount);
+  const paid = Number.parseFloat(payable.paidAmount);
+
+  // Write the credit chunk row.
+  await executor
+    .insert(supplierPayableCreditsSchema)
+    .values({
+      organizationId,
+      supplierId,
+      payableId,
+      returnStockMovementId: exitMovementId,
+      amount: take.toFixed(2),
+      note: note ?? null,
+      createdBy,
+    });
+
+  // Bump credited_amount and recompute status (same math as applyReturnCredit).
+  const newCredited = round2(credited + take);
+  const newStatus: 'partial' | 'paid' = paid + newCredited >= total - 0.005 ? 'paid' : 'partial';
+
+  await executor
+    .update(supplierPayablesSchema)
+    .set({
+      creditedAmount: newCredited.toFixed(2),
+      status: newStatus,
+      updatedAt: new Date(),
+    })
+    .where(eq(supplierPayablesSchema.id, payableId));
+}
+
 // ── applyReturnCredit ─────────────────────────────────────────────────────────
 //
 // Applies a supplier return credit FIFO-oldest-first across the supplier's open

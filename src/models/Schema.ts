@@ -646,6 +646,7 @@ export const treasuryMovementTypeEnum = pgEnum('treasury_movement_type', [
   'gasto',
   'adjustment',
   'handover',
+  'refund',
 ]);
 
 export const transferReconciliationStatusEnum = pgEnum(
@@ -2509,6 +2510,59 @@ export const supplierPayableCreditsSchema = pgTable(
     ),
     // Date-range scans across credits.
     index('supplier_payable_credits_org_created_idx').on(
+      table.organizationId,
+      table.createdAt,
+    ),
+  ],
+);
+
+// Cash-back ledger: one row per supplier refund event.
+// Created when a returned lot's value exceeds the supplier's outstanding balance —
+// the excess comes back as real cash (inflow into a container).
+//
+// Mirrors supplier_payments shape:
+//   - treasury_movement_id NOT NULL RESTRICT: every refund must reference a real
+//     treasury_movements row (type='refund', from=null, to=container).
+//   - payable_id nullable (SET NULL): payable may be purged; refund stays on record.
+//   - stock_movement_id: the EXIT stock_movements row for this return. RESTRICT.
+//   - Does NOT write supplier_payments → paidThisMonth KPI is unaffected.
+export const supplierRefundsSchema = pgTable(
+  'supplier_refunds',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: text('organization_id').notNull(),
+    // TEXT (no FK) — mirrors supplier_payables.supplier_id convention (D1).
+    supplierId: text('supplier_id').notNull(),
+    // The payable this refund is linked to. SET NULL if payable is purged.
+    payableId: uuid('payable_id').references(
+      () => supplierPayablesSchema.id,
+      { onDelete: 'set null' },
+    ),
+    // The EXIT stock_movements row (the return lot exit, same tx). RESTRICT.
+    stockMovementId: uuid('stock_movement_id')
+      .notNull()
+      .references(() => stockMovementsSchema.id, { onDelete: 'restrict' }),
+    // The treasury_movements row (type='refund', from=null, to=container). RESTRICT.
+    treasuryMovementId: uuid('treasury_movement_id')
+      .notNull()
+      .references(() => treasuryMovementsSchema.id, { onDelete: 'restrict' }),
+    amount: numeric('amount', { precision: 12, scale: 2 }).notNull(),
+    note: text('note'),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+  },
+  table => [
+    // Per-supplier refund history.
+    index('supplier_refunds_org_supplier_idx').on(
+      table.organizationId,
+      table.supplierId,
+    ),
+    // Payable-level refund lookup.
+    index('supplier_refunds_payable_idx').on(table.payableId),
+    // Return movement → refund row.
+    index('supplier_refunds_stock_movement_idx').on(table.stockMovementId),
+    // Date-range scans.
+    index('supplier_refunds_org_created_idx').on(
       table.organizationId,
       table.createdAt,
     ),

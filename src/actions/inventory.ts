@@ -25,6 +25,7 @@ import {
   saleItemsSchema,
   salesSchema,
   stockMovementsSchema,
+  supplierPayablesSchema,
   suppliersSchema,
 } from '@/models/Schema';
 
@@ -430,6 +431,9 @@ export type ProductLot = {
   reason: string | null;
   supplierId: string | null;
   supplierName: string | null;
+  // Linked payable info — null when no payable exists for this lot (e.g. initial stock load).
+  payableId: string | null;
+  outstanding: string | null;
 };
 
 export async function getProductLots(productId: string): Promise<ProductLot[]> {
@@ -446,8 +450,21 @@ export async function getProductLots(productId: string): Promise<ProductLot[]> {
       createdAt: stockMovementsSchema.createdAt,
       reason: stockMovementsSchema.reason,
       supplierId: stockMovementsSchema.supplierId,
+      // Payable info via unique index on stock_movement_id (O(1) lookup).
+      payableId: supplierPayablesSchema.id,
+      // outstanding = totalAmount − paidAmount − creditedAmount, floored at 0.
+      outstanding: sql<string>`GREATEST(
+        0,
+        CAST(${supplierPayablesSchema.totalAmount} AS numeric)
+          - CAST(${supplierPayablesSchema.paidAmount} AS numeric)
+          - CAST(COALESCE(${supplierPayablesSchema.creditedAmount}, '0') AS numeric)
+      )::text`,
     })
     .from(stockMovementsSchema)
+    .leftJoin(
+      supplierPayablesSchema,
+      eq(supplierPayablesSchema.stockMovementId, stockMovementsSchema.id),
+    )
     .where(
       and(
         eq(stockMovementsSchema.productId, productId),
@@ -483,6 +500,8 @@ export async function getProductLots(productId: string): Promise<ProductLot[]> {
     reason: l.reason,
     supplierId: l.supplierId,
     supplierName: l.supplierId ? supplierNames.get(l.supplierId) ?? null : null,
+    payableId: l.payableId ?? null,
+    outstanding: l.payableId != null ? (l.outstanding ?? null) : null,
   }));
 }
 
@@ -923,5 +942,33 @@ export async function listPaymentContainers(): Promise<PaymentContainer[]> {
       id: a.id,
       name: a.name,
       type: a.type as 'caja' | 'caja_fuerte' | 'banco',
+    }));
+}
+
+// ── listRefundContainers ──────────────────────────────────────────────────────
+// Returns ONLY caja_fuerte and banco containers for supplier refund destinations.
+// Excludes live POS cajas (type='caja') to prevent arqueo leaks: injecting cash
+// into a live caja bypasses the blind cash-session closing count.
+// Design: POS-caja refunds are deferred; refunds must land in a non-session
+// container (caja_fuerte or banco) only.
+
+export type RefundContainer = {
+  id: string;
+  name: string;
+  type: 'caja_fuerte' | 'banco';
+};
+
+export async function listRefundContainers(): Promise<RefundContainer[]> {
+  const { orgId } = await requirePanelModule('inventory');
+  const rawDb = db.unsafeNoOrgFilter(
+    'listRefundContainers: treasury_accounts queried directly with explicit org filter',
+  );
+  const accounts: TreasuryAccountRow[] = await listTreasuryAccountsLib(rawDb, orgId);
+  return accounts
+    .filter(a => a.type === 'caja_fuerte' || a.type === 'banco')
+    .map(a => ({
+      id: a.id,
+      name: a.name,
+      type: a.type as 'caja_fuerte' | 'banco',
     }));
 }
