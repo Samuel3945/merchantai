@@ -2296,6 +2296,54 @@ export const deliveryEventsRelations = relations(
 
 // ── Supplier accounts-payable (migration 0065) ────────────────────────────────
 //
+// ── supplier_purchases (migration 0069) ──────────────────────────────────────
+// Optional invoice header: groups N purchase-entry payables under a single
+// "factura" (physical invoice). Standalone payables (no invoice) keep
+// purchase_id = null — fully back-compatible.
+//
+// Design decisions:
+//   - supplier_id is TEXT (no FK) — mirrors stock_movements.supplier_id (D1).
+//   - invoice_number is nullable; unique only within (org, supplier, non-null).
+//   - Outstanding/paid on the invoice is computed at read (SUM over lines); no
+//     stored header denorm in v1 (small N per invoice, cheap to recompute).
+
+export const supplierPurchasesSchema = pgTable(
+  'supplier_purchases',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: text('organization_id').notNull(),
+    // TEXT (no FK) — mirrors stock_movements.supplier_id convention (D1).
+    supplierId: text('supplier_id').notNull(),
+    // Physical invoice number from the supplier (optional, nullable).
+    invoiceNumber: text('invoice_number'),
+    purchasedAt: timestamp('purchased_at', { mode: 'date' }).defaultNow().notNull(),
+    notes: text('notes'),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { mode: 'date' })
+      .defaultNow()
+      .$onUpdate(() => new Date())
+      .notNull(),
+  },
+  table => [
+    // Per-supplier invoice history.
+    index('supplier_purchases_org_supplier_idx').on(
+      table.organizationId,
+      table.supplierId,
+    ),
+    // Date-range scan for "Compras por pagar" grouped view.
+    index('supplier_purchases_org_purchased_idx').on(
+      table.organizationId,
+      table.purchasedAt,
+    ),
+    // Prevent duplicate invoice_number per supplier within an org.
+    // Partial: only enforced when invoice_number IS NOT NULL.
+    uniqueIndex('supplier_purchases_org_supplier_invoice_unique')
+      .on(table.organizationId, table.supplierId, table.invoiceNumber)
+      .where(sql`${table.invoiceNumber} IS NOT NULL`),
+  ],
+);
+
 // One supplier_payables header per purchase entry (created inside the same tx as
 // stock_movements). One supplier_payments row per payment event — N payments can
 // reference the same payable (multi-payment N:M in v1 via direct nullable FK).
@@ -2336,6 +2384,12 @@ export const supplierPayablesSchema = pgTable(
     purchasedAt: timestamp('purchased_at', { mode: 'date' })
       .defaultNow()
       .notNull(),
+    // Optional invoice grouping (migration 0069). NULL = standalone purchase.
+    // SET NULL if the invoice header is ever deleted (keeps payable intact).
+    purchaseId: uuid('purchase_id').references(
+      () => supplierPurchasesSchema.id,
+      { onDelete: 'set null' },
+    ),
     notes: text('notes'),
     createdBy: text('created_by'),
     createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
@@ -2364,6 +2418,8 @@ export const supplierPayablesSchema = pgTable(
     uniqueIndex('supplier_payables_stock_movement_unique')
       .on(table.stockMovementId)
       .where(sql`${table.stockMovementId} IS NOT NULL`),
+    // Invoice grouping index (migration 0069).
+    index('supplier_payables_purchase_id_idx').on(table.purchaseId),
   ],
 );
 

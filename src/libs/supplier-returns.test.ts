@@ -61,6 +61,19 @@ const DDL = `
     created_at timestamp DEFAULT now() NOT NULL
   );
 
+  -- Invoice header (migration 0069).
+  CREATE TABLE supplier_purchases (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+    organization_id text NOT NULL,
+    supplier_id text NOT NULL,
+    invoice_number text,
+    purchased_at timestamp DEFAULT now() NOT NULL,
+    notes text,
+    created_by text,
+    created_at timestamp DEFAULT now() NOT NULL,
+    updated_at timestamp DEFAULT now() NOT NULL
+  );
+
   CREATE TABLE supplier_payables (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     organization_id text NOT NULL,
@@ -71,6 +84,7 @@ const DDL = `
     credited_amount numeric(12,2) DEFAULT '0' NOT NULL,
     status "supplier_payable_status" DEFAULT 'open' NOT NULL,
     purchased_at timestamp DEFAULT now() NOT NULL,
+    purchase_id uuid REFERENCES supplier_purchases(id) ON DELETE SET NULL,
     notes text,
     created_by text,
     created_at timestamp DEFAULT now() NOT NULL,

@@ -192,7 +192,20 @@ const DDL = `
     created_at timestamp DEFAULT now() NOT NULL
   );
 
-  -- Supplier payables: one header per purchase entry (migration 0065 + 0068)
+  -- Invoice header (migration 0069).
+  CREATE TABLE supplier_purchases (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+    organization_id text NOT NULL,
+    supplier_id text NOT NULL,
+    invoice_number text,
+    purchased_at timestamp DEFAULT now() NOT NULL,
+    notes text,
+    created_by text,
+    created_at timestamp DEFAULT now() NOT NULL,
+    updated_at timestamp DEFAULT now() NOT NULL
+  );
+
+  -- Supplier payables: one header per purchase entry (migration 0065 + 0068 + 0069)
   CREATE TABLE supplier_payables (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     organization_id text NOT NULL,
@@ -203,6 +216,7 @@ const DDL = `
     credited_amount numeric(12,2) DEFAULT '0' NOT NULL,
     status "supplier_payable_status" DEFAULT 'open' NOT NULL,
     purchased_at timestamp DEFAULT now() NOT NULL,
+    purchase_id uuid REFERENCES supplier_purchases(id) ON DELETE SET NULL,
     notes text,
     created_by text,
     created_at timestamp DEFAULT now() NOT NULL,
@@ -317,11 +331,13 @@ async function seedPayable(
   supplierId: string = SUPPLIER_ID,
   orgId: string = ORG,
   stockMovementId: string | null = null,
+  purchaseId: string | null = null,
 ): Promise<void> {
   await pg.query(
     `INSERT INTO supplier_payables
-       (id, organization_id, supplier_id, stock_movement_id, total_amount, paid_amount, status, purchased_at, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, now(), now(), now())`,
+       (id, organization_id, supplier_id, stock_movement_id, total_amount, paid_amount,
+        status, purchased_at, purchase_id, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, now(), $8, now(), now())`,
     [
       id,
       orgId,
@@ -330,6 +346,7 @@ async function seedPayable(
       totalAmount.toFixed(2),
       paidAmount.toFixed(2),
       status,
+      purchaseId,
     ],
   );
 }
