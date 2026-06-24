@@ -193,30 +193,16 @@ export async function POST(req: Request): Promise<NextResponse> {
             note: reason,
           });
 
-          // Fetch the most recent cash_movements row created for this settle
-          // (the last chunk) to return to the device in the 201 body.
-          // For multi-chunk settles the device only needs one row to confirm success.
-          if (settleResult.breakdown.length > 0) {
-            const lastChunk = settleResult.breakdown[settleResult.breakdown.length - 1]!;
-            // Find the cash_movement_id via supplier_payments join would require
-            // importing the schema — instead re-select the latest expense movement
-            // for this session + supplier written in this tx.
+          // Use the cashMovementId threaded back from the last chunk — avoids
+          // a heuristic re-query that could return a cross-payment row (oldest).
+          const lastChunk = settleResult.breakdown[settleResult.breakdown.length - 1];
+          if (lastChunk?.cashMovementId) {
             const [row] = await tx
               .select()
               .from(cashMovementsSchema)
-              .where(
-                and(
-                  eq(cashMovementsSchema.sessionId, open.id),
-                  eq(cashMovementsSchema.organizationId, ctx.organizationId),
-                  eq(cashMovementsSchema.supplierId, supplierId),
-                  eq(cashMovementsSchema.type, 'expense'),
-                ),
-              )
-              .orderBy(cashMovementsSchema.createdAt)
+              .where(eq(cashMovementsSchema.id, lastChunk.cashMovementId))
               .limit(1);
             created = row;
-            // Suppress unused-variable lint: lastChunk used implicitly via breakdown length check.
-            void lastChunk;
           }
 
           settleOutcome = {

@@ -879,9 +879,12 @@ describe('ARQUEO-UNCHANGED equivalence — caja settle vs legacy gasto', () => {
 });
 
 // ── Test 8: OQ-2 KPI guard ────────────────────────────────────────────────────
-// After migration 0071: getTodayCashKpis narrows gastos_hoy and gastos_operativos
-// to type='expense' AND expense_id IS NOT NULL. This test verifies the raw SQL
-// that backs that fix (mirrors the actual query in cash.ts getTodayCashKpis).
+// After migration 0071: getTodayCashKpis uses the OR-form filter:
+//   gastos_hoy:       type='expense' AND expense_id IS NOT NULL
+//   gastos_operativos: (type='expense' AND expense_id IS NOT NULL) OR type IN ('salary','inventory_purchase')
+// salary and inventory_purchase rows have expense_id=NULL by design (they are
+// ledger-only P&L entries, no expenses table row). The OR-form keeps them
+// counted while excluding caja settle rows (type='expense', expense_id=NULL).
 
 describe('OQ-2 KPI guard — settle does not inflate P&L gastos KPIs', () => {
   it('settle row (expense_id NULL): counts in pagosProveedores, NOT gastos_hoy/operativos', async () => {
@@ -905,7 +908,7 @@ describe('OQ-2 KPI guard — settle does not inflate P&L gastos KPIs', () => {
       `SELECT
          COALESCE(SUM(amount) FILTER (WHERE type = 'expense' AND expense_id IS NOT NULL), 0)::text AS gastos_hoy,
          COALESCE(SUM(amount) FILTER (WHERE supplier_id IS NOT NULL), 0)::text AS pagos_proveedores,
-         COALESCE(SUM(amount) FILTER (WHERE type IN ('expense','salary','inventory_purchase') AND expense_id IS NOT NULL), 0)::text AS gastos_operativos
+         COALESCE(SUM(amount) FILTER (WHERE (type = 'expense' AND expense_id IS NOT NULL) OR type IN ('salary','inventory_purchase')), 0)::text AS gastos_operativos
        FROM cash_movements WHERE organization_id = $1`,
       [ORG],
     );
@@ -915,7 +918,7 @@ describe('OQ-2 KPI guard — settle does not inflate P&L gastos KPIs', () => {
     expect(Number(kpi.rows[0]!.pagos_proveedores)).toBe(400); // IS a proveedor payment
   });
 
-  it('legacy gasto row (expense_id set): counts in ALL three KPIs', async () => {
+  it('legacy gasto row (expense_id set): counts in gastos_hoy and gastos_operativos', async () => {
     await seedSession(SESSION_ID);
     const expId = await seedGasto(SESSION_ID, 250);
     void expId; // used via seedGasto
@@ -928,7 +931,7 @@ describe('OQ-2 KPI guard — settle does not inflate P&L gastos KPIs', () => {
       `SELECT
          COALESCE(SUM(amount) FILTER (WHERE type = 'expense' AND expense_id IS NOT NULL), 0)::text AS gastos_hoy,
          COALESCE(SUM(amount) FILTER (WHERE supplier_id IS NOT NULL), 0)::text AS pagos_proveedores,
-         COALESCE(SUM(amount) FILTER (WHERE type IN ('expense','salary','inventory_purchase') AND expense_id IS NOT NULL), 0)::text AS gastos_operativos
+         COALESCE(SUM(amount) FILTER (WHERE (type = 'expense' AND expense_id IS NOT NULL) OR type IN ('salary','inventory_purchase')), 0)::text AS gastos_operativos
        FROM cash_movements WHERE organization_id = $1`,
       [ORG],
     );
@@ -936,6 +939,55 @@ describe('OQ-2 KPI guard — settle does not inflate P&L gastos KPIs', () => {
     expect(Number(kpi.rows[0]!.gastos_hoy)).toBe(250); // is a P&L gasto
     expect(Number(kpi.rows[0]!.gastos_operativos)).toBe(250); // is a P&L gasto
     expect(Number(kpi.rows[0]!.pagos_proveedores)).toBe(250); // also proveedor
+  });
+
+  it('salary row (expense_id NULL): counts in gastos_operativos, NOT gastos_hoy', async () => {
+    await seedSession(SESSION_ID);
+    // salary rows have no expense_id — they are direct ledger entries.
+    await pg.query(
+      `INSERT INTO cash_movements
+         (session_id, organization_id, type, amount, reason, created_by)
+       VALUES ($1, $2, 'salary', '800.00', 'nomina', 'user')`,
+      [SESSION_ID, ORG],
+    );
+
+    const kpi = await pg.query<{
+      gastos_hoy: string;
+      gastos_operativos: string;
+    }>(
+      `SELECT
+         COALESCE(SUM(amount) FILTER (WHERE type = 'expense' AND expense_id IS NOT NULL), 0)::text AS gastos_hoy,
+         COALESCE(SUM(amount) FILTER (WHERE (type = 'expense' AND expense_id IS NOT NULL) OR type IN ('salary','inventory_purchase')), 0)::text AS gastos_operativos
+       FROM cash_movements WHERE organization_id = $1`,
+      [ORG],
+    );
+
+    expect(Number(kpi.rows[0]!.gastos_hoy)).toBe(0); // salary is NOT a gastos_hoy expense
+    expect(Number(kpi.rows[0]!.gastos_operativos)).toBe(800); // salary DOES count as operating expense
+  });
+
+  it('inventory_purchase row (expense_id NULL): counts in gastos_operativos, NOT gastos_hoy', async () => {
+    await seedSession(SESSION_ID);
+    await pg.query(
+      `INSERT INTO cash_movements
+         (session_id, organization_id, type, amount, reason, created_by)
+       VALUES ($1, $2, 'inventory_purchase', '500.00', 'compra insumo', 'user')`,
+      [SESSION_ID, ORG],
+    );
+
+    const kpi = await pg.query<{
+      gastos_hoy: string;
+      gastos_operativos: string;
+    }>(
+      `SELECT
+         COALESCE(SUM(amount) FILTER (WHERE type = 'expense' AND expense_id IS NOT NULL), 0)::text AS gastos_hoy,
+         COALESCE(SUM(amount) FILTER (WHERE (type = 'expense' AND expense_id IS NOT NULL) OR type IN ('salary','inventory_purchase')), 0)::text AS gastos_operativos
+       FROM cash_movements WHERE organization_id = $1`,
+      [ORG],
+    );
+
+    expect(Number(kpi.rows[0]!.gastos_hoy)).toBe(0); // inventory_purchase is NOT a gastos_hoy expense
+    expect(Number(kpi.rows[0]!.gastos_operativos)).toBe(500); // inventory_purchase DOES count as operating expense
   });
 
   it('paidThisMonth (supplier_payments SUM) counts both caja and treasury settles', async () => {
@@ -981,5 +1033,115 @@ describe('OQ-2 KPI guard — settle does not inflate P&L gastos KPIs', () => {
     // Only the caja settle cash_movements row exists (treasury settle has no cash row)
     // → gastos_hoy = 0 because expense_id = NULL on the settle row.
     expect(Number(gastos.rows[0]!.gastos_hoy)).toBe(0);
+  });
+});
+
+// ── Test 9: P&L double-count guard — reports/analytics/dashboard sites ────────
+// Verifies the OR-form filter used in getFinanceBreakdown (reports.ts),
+// cashFlowStats (dashboard.ts), and getCashFlow (analytics.ts) does not
+// double-count settle rows but keeps salary and inventory_purchase.
+
+describe('P&L double-count guard — reports/analytics/dashboard OR-form filter', () => {
+  // The fixed filter used in all three sites:
+  //   (type = 'expense' AND expense_id IS NOT NULL) OR type IN ('salary','inventory_purchase')
+  const PNLFILTER = `(type = 'expense' AND expense_id IS NOT NULL) OR type IN ('salary','inventory_purchase')`;
+
+  it('caja settle row (expense_id NULL) does NOT inflate the reports expenses aggregate', async () => {
+    await seedSession(SESSION_ID);
+
+    // Settle row: should NOT count.
+    await pg.query(
+      `INSERT INTO cash_movements
+         (session_id, organization_id, type, amount, reason, created_by, supplier_id)
+       VALUES ($1, $2, 'expense', '350.00', 'pago proveedor', 'cajero', $3)`,
+      [SESSION_ID, ORG, SUPPLIER_ID],
+    );
+
+    const res = await pg.query<{ expenses: string }>(
+      `SELECT COALESCE(SUM(amount) FILTER (WHERE ${PNLFILTER}), 0)::text AS expenses
+       FROM cash_movements WHERE organization_id = $1`,
+      [ORG],
+    );
+
+    expect(Number(res.rows[0]!.expenses)).toBe(0);
+  });
+
+  it('real gasto (expense_id set) counts in the reports expenses aggregate', async () => {
+    await seedSession(SESSION_ID);
+    await seedGasto(SESSION_ID, 120);
+
+    const res = await pg.query<{ expenses: string }>(
+      `SELECT COALESCE(SUM(amount) FILTER (WHERE ${PNLFILTER}), 0)::text AS expenses
+       FROM cash_movements WHERE organization_id = $1`,
+      [ORG],
+    );
+
+    expect(Number(res.rows[0]!.expenses)).toBe(120);
+  });
+
+  it('salary row (expense_id NULL) counts in the reports expenses aggregate', async () => {
+    await seedSession(SESSION_ID);
+    await pg.query(
+      `INSERT INTO cash_movements
+         (session_id, organization_id, type, amount, reason, created_by)
+       VALUES ($1, $2, 'salary', '1200.00', 'nomina', 'user')`,
+      [SESSION_ID, ORG],
+    );
+
+    const res = await pg.query<{ expenses: string }>(
+      `SELECT COALESCE(SUM(amount) FILTER (WHERE ${PNLFILTER}), 0)::text AS expenses
+       FROM cash_movements WHERE organization_id = $1`,
+      [ORG],
+    );
+
+    expect(Number(res.rows[0]!.expenses)).toBe(1200);
+  });
+
+  it('inventory_purchase row (expense_id NULL) counts in the reports expenses aggregate', async () => {
+    await seedSession(SESSION_ID);
+    await pg.query(
+      `INSERT INTO cash_movements
+         (session_id, organization_id, type, amount, reason, created_by)
+       VALUES ($1, $2, 'inventory_purchase', '600.00', 'compra', 'user')`,
+      [SESSION_ID, ORG],
+    );
+
+    const res = await pg.query<{ expenses: string }>(
+      `SELECT COALESCE(SUM(amount) FILTER (WHERE ${PNLFILTER}), 0)::text AS expenses
+       FROM cash_movements WHERE organization_id = $1`,
+      [ORG],
+    );
+
+    expect(Number(res.rows[0]!.expenses)).toBe(600);
+  });
+
+  it('mixed: settle + salary + gasto — only gasto + salary count', async () => {
+    await seedSession(SESSION_ID);
+
+    // Settle — should NOT count
+    await pg.query(
+      `INSERT INTO cash_movements
+         (session_id, organization_id, type, amount, reason, created_by, supplier_id)
+       VALUES ($1, $2, 'expense', '400.00', 'settle', 'cajero', $3)`,
+      [SESSION_ID, ORG, SUPPLIER_ID],
+    );
+    // Salary — SHOULD count
+    await pg.query(
+      `INSERT INTO cash_movements
+         (session_id, organization_id, type, amount, reason, created_by)
+       VALUES ($1, $2, 'salary', '700.00', 'nomina', 'user')`,
+      [SESSION_ID, ORG],
+    );
+    // Real gasto — SHOULD count
+    await seedGasto(SESSION_ID, 150);
+
+    const res = await pg.query<{ expenses: string }>(
+      `SELECT COALESCE(SUM(amount) FILTER (WHERE ${PNLFILTER}), 0)::text AS expenses
+       FROM cash_movements WHERE organization_id = $1`,
+      [ORG],
+    );
+
+    // 700 (salary) + 150 (gasto) = 850; settle (400) excluded
+    expect(Number(res.rows[0]!.expenses)).toBe(850);
   });
 });

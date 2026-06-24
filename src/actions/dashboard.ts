@@ -252,7 +252,7 @@ async function cashFlowStats(
   const result = await db.execute(sql`
     SELECT
       COALESCE(SUM(amount) FILTER (WHERE type IN ('sale', 'deposit')), 0)::float8 AS income,
-      COALESCE(SUM(amount) FILTER (WHERE type IN ('expense', 'salary', 'inventory_purchase')), 0)::float8 AS expenses
+      COALESCE(SUM(amount) FILTER (WHERE (type = 'expense' AND expense_id IS NOT NULL) OR type IN ('salary', 'inventory_purchase')), 0)::float8 AS expenses
     FROM cash_movements
     WHERE organization_id = ${orgId}
       AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date

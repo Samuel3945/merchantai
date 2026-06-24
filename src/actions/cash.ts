@@ -1031,7 +1031,7 @@ export async function getTodayCashKpis(): Promise<TodayCashKpis> {
       COALESCE(SUM(amount) FILTER (WHERE type = 'expense' AND expense_id IS NOT NULL), 0)::float8 AS gastos_hoy,
       COALESCE(SUM(amount) FILTER (WHERE type = 'withdrawal'), 0)::float8 AS retiros_hoy,
       COALESCE(SUM(amount) FILTER (WHERE supplier_id IS NOT NULL), 0)::float8 AS pagos_proveedores,
-      COALESCE(SUM(amount) FILTER (WHERE type IN ('expense','salary','inventory_purchase') AND expense_id IS NOT NULL), 0)::float8 AS gastos_operativos
+      COALESCE(SUM(amount) FILTER (WHERE (type = 'expense' AND expense_id IS NOT NULL) OR type IN ('salary','inventory_purchase')), 0)::float8 AS gastos_operativos
     FROM cash_movements
     WHERE organization_id = ${orgId}
       AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date

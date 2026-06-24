@@ -506,6 +506,7 @@ export type SupplierOutstandingResult = {
     purchasedAt: Date;
     outstanding: number;
     status: 'open' | 'partial';
+    invoiceNumber: string | null;
   }>;
 };
 
@@ -522,8 +523,13 @@ export async function getSupplierOutstanding(
       creditedAmount: supplierPayablesSchema.creditedAmount,
       status: supplierPayablesSchema.status,
       purchasedAt: supplierPayablesSchema.purchasedAt,
+      invoiceNumber: supplierPurchasesSchema.invoiceNumber,
     })
     .from(supplierPayablesSchema)
+    .leftJoin(
+      supplierPurchasesSchema,
+      eq(supplierPayablesSchema.purchaseId, supplierPurchasesSchema.id),
+    )
     .where(
       and(
         eq(supplierPayablesSchema.organizationId, organizationId),
@@ -543,6 +549,7 @@ export async function getSupplierOutstanding(
     creditedAmount: string | null;
     status: 'open' | 'partial';
     purchasedAt: Date;
+    invoiceNumber: string | null;
   }) => {
     const total = round2(Number.parseFloat(r.totalAmount));
     const paid = round2(Number.parseFloat(r.paidAmount));
@@ -552,6 +559,7 @@ export async function getSupplierOutstanding(
       purchasedAt: r.purchasedAt,
       outstanding: round2(total - paid - credited),
       status: r.status,
+      invoiceNumber: r.invoiceNumber ?? null,
     };
   });
 
@@ -710,6 +718,8 @@ export type SupplierPaymentBreakdown = {
   payableId: string;
   chunk: number;
   payableStatus: 'open' | 'partial' | 'paid';
+  /** Set only for caja-funded chunks; undefined for treasury-funded chunks. */
+  cashMovementId?: string;
 };
 
 export type SupplierPaymentResult = {
@@ -815,6 +825,7 @@ export async function recordSupplierPayment(
           payableId: alloc.payableId,
           chunk: alloc.chunk,
           payableStatus: chunkResult.payableStatus,
+          cashMovementId: chunkResult.cashMovementId,
         });
       }
     }

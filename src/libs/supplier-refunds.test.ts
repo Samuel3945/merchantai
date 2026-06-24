@@ -142,16 +142,32 @@ const DDL = `
     )
   );
 
+  -- Minimal cash_movements stub — FK target for supplier_payments (migration 0071).
+  -- supplier-refunds tests do not exercise cash_movements directly.
+  CREATE TABLE cash_movements (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+    session_id uuid NOT NULL,
+    organization_id text NOT NULL,
+    type text NOT NULL,
+    amount numeric(12,2) NOT NULL,
+    reason text NOT NULL,
+    created_by text NOT NULL,
+    created_at timestamp DEFAULT now() NOT NULL
+  );
+
   CREATE TABLE supplier_payments (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     organization_id text NOT NULL,
     supplier_id text NOT NULL,
     payable_id uuid REFERENCES supplier_payables(id) ON DELETE SET NULL,
-    treasury_movement_id uuid NOT NULL REFERENCES treasury_movements(id) ON DELETE RESTRICT,
+    treasury_movement_id uuid REFERENCES treasury_movements(id) ON DELETE RESTRICT,
+    cash_movement_id uuid REFERENCES cash_movements(id) ON DELETE RESTRICT,
     amount numeric(12,2) NOT NULL,
     note text,
     created_by text,
-    created_at timestamp DEFAULT now() NOT NULL
+    created_at timestamp DEFAULT now() NOT NULL,
+    CONSTRAINT supplier_payments_funding_source_chk
+      CHECK (num_nonnulls(treasury_movement_id, cash_movement_id) = 1)
   );
 
   CREATE TABLE supplier_refunds (

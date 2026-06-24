@@ -686,9 +686,9 @@ describe('recordSupplierPaymentOutflow — TenantDb proxy regression', () => {
     expect(payment.rows[0]!.amount).toBe('600.00');
   });
 
-  it('supplier_payments.treasury_movement_id is always non-null (NOT NULL constraint enforced)', async () => {
-    // Attempt to insert a supplier_payments row WITHOUT a treasury_movement_id.
-    // With the NOT NULL constraint (migration 0066), this MUST fail.
+  it('supplier_payments requires exactly one funding source (num_nonnulls=1 CHECK enforced)', async () => {
+    // Attempt to insert a supplier_payments row with NEITHER funding source set.
+    // With the num_nonnulls=1 CHECK (migration 0071), this MUST fail.
     await seedPayable(PAYABLE_ID_2, 100);
 
     await expect(

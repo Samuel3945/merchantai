@@ -1,10 +1,11 @@
 'use client';
 
+import type { SupplierOutstandingRow } from '@/actions/treasury';
 import type { TreasuryAccountRow } from '@/libs/treasury';
-import { ArrowRightLeft, Plus, Tag } from 'lucide-react';
+import { ArrowRightLeft, Building2, Plus, Tag } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
-import { recordGasto } from '@/actions/treasury';
+import { listSuppliersWithOutstanding, recordGasto, recordSupplierPaymentFromConsole } from '@/actions/treasury';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -212,6 +213,218 @@ function GastoModal({
   );
 }
 
+// ── Pagar proveedor modal ─────────────────────────────────────────────────────
+
+function SupplierPaymentModal({
+  accountRows,
+  open,
+  onClose,
+}: {
+  accountRows: TreasuryAccountRow[];
+  open: boolean;
+  onClose: () => void;
+}) {
+  const router = useRouter();
+  const [isPending, startTransition] = useTransition();
+  const [suppliers, setSuppliers] = useState<SupplierOutstandingRow[]>([]);
+  const [loadingSuppliers, setLoadingSuppliers] = useState(false);
+  const [supplierId, setSupplierId] = useState('');
+  const [fromAccountId, setFromAccountId] = useState('');
+  const [amount, setAmount] = useState('');
+  const [note, setNote] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const eligible = accountRows.filter(
+    a => a.type === 'caja_fuerte' || a.type === 'banco',
+  );
+  const fromOptions = eligible.map(a => ({
+    value: a.id,
+    label: `${a.name} (${a.type === 'caja_fuerte' ? 'caja fuerte' : 'banco'})`,
+  }));
+
+  // Load suppliers with outstanding when the modal opens.
+  function handleOpen(isOpen: boolean) {
+    if (isOpen && suppliers.length === 0 && !loadingSuppliers) {
+      setLoadingSuppliers(true);
+      listSuppliersWithOutstanding().then((res) => {
+        if (res.ok) {
+          setSuppliers(res.data);
+        }
+        setLoadingSuppliers(false);
+      });
+    }
+    if (!isOpen) {
+      onClose();
+    }
+  }
+
+  const supplierOptions = suppliers.map(s => ({
+    value: s.supplierId,
+    label: `${s.name} — $${s.totalOutstanding.toLocaleString('es-CO')} pendiente`,
+  }));
+
+  const selectedSupplier = suppliers.find(s => s.supplierId === supplierId);
+
+  function submit() {
+    setError(null);
+    if (!supplierId) {
+      setError('Seleccioná un proveedor');
+      return;
+    }
+    if (!fromAccountId) {
+      setError('Seleccioná el contenedor de origen');
+      return;
+    }
+    const amt = Number.parseFloat(amount);
+    if (!amount || Number.isNaN(amt) || amt <= 0) {
+      setError('El monto debe ser mayor a 0');
+      return;
+    }
+    startTransition(async () => {
+      try {
+        const res = await recordSupplierPaymentFromConsole({
+          supplierId,
+          fromAccountId,
+          amount: amt,
+          note: note.trim() || null,
+        });
+        if (!res.ok) {
+          setError(res.error);
+          return;
+        }
+        // Reset and close.
+        setSupplierId('');
+        setFromAccountId('');
+        setAmount('');
+        setNote('');
+        setSuppliers([]); // force reload next open
+        onClose();
+        router.refresh();
+      } catch {
+        setError('Ocurrió un error inesperado. Intentá de nuevo.');
+      }
+    });
+  }
+
+  const hasEligible = eligible.length > 0;
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpen}>
+      <DialogContent className="
+        flex max-h-[90dvh] max-w-[460px] flex-col gap-0 overflow-hidden p-0
+      "
+      >
+        {/* Header */}
+        <div className="shrink-0 border-b border-border px-[22px] py-5">
+          <span className="
+            text-[11px] font-semibold tracking-widest text-primary uppercase
+          "
+          >
+            Pagar proveedor
+          </span>
+          <p className="mt-0.5 text-[12.5px] text-muted-foreground">
+            Salda una deuda pendiente con un proveedor desde una caja fuerte o cuenta bancaria.
+          </p>
+        </div>
+
+        {/* Body */}
+        <div className="
+          scrollbar-subtle min-h-0 flex-1 space-y-3 overflow-y-auto p-[22px]
+        "
+        >
+          {!hasEligible
+            ? (
+                <p className="text-xs text-muted-foreground">
+                  Necesitás al menos una caja fuerte o cuenta bancaria para pagar proveedores.
+                </p>
+              )
+            : loadingSuppliers
+              ? (
+                  <p className="text-xs text-muted-foreground">Cargando proveedores…</p>
+                )
+              : suppliers.length === 0 && !loadingSuppliers
+                ? (
+                    <p className="text-xs text-muted-foreground">
+                      No hay proveedores con deuda pendiente.
+                    </p>
+                  )
+                : (
+                    <>
+                      <Select
+                        value={supplierId}
+                        onValueChange={setSupplierId}
+                        options={supplierOptions}
+                        placeholder="Proveedor con deuda"
+                      />
+                      {selectedSupplier && (
+                        <p className="text-[11.5px] text-muted-foreground">
+                          Deuda total: $
+                          {selectedSupplier.totalOutstanding.toLocaleString('es-CO')}
+                        </p>
+                      )}
+                      <Select
+                        value={fromAccountId}
+                        onValueChange={setFromAccountId}
+                        options={fromOptions}
+                        placeholder="Desde (contenedor de origen)"
+                      />
+                      <input
+                        className={cashInputCls}
+                        type="number"
+                        inputMode="decimal"
+                        min="0"
+                        step="any"
+                        placeholder="Monto a pagar"
+                        value={amount}
+                        onChange={e => setAmount(e.target.value)}
+                      />
+                      <input
+                        className={cashInputCls}
+                        placeholder="Nota (opcional)"
+                        value={note}
+                        onChange={e => setNote(e.target.value)}
+                      />
+                      {error && (
+                        <div className="text-xs text-destructive">{error}</div>
+                      )}
+                    </>
+                  )}
+        </div>
+
+        {/* Footer */}
+        <div className="
+          flex shrink-0 gap-2.5 border-t border-border bg-background px-[22px]
+          pt-4 pb-[22px]
+        "
+        >
+          <Button
+            variant="outline"
+            className="h-11 px-[18px]"
+            disabled={isPending}
+            onClick={onClose}
+          >
+            Cancelar
+          </Button>
+          <Button
+            className="h-11 flex-1"
+            disabled={
+              isPending
+              || !hasEligible
+              || !supplierId
+              || !fromAccountId
+              || !amount
+              || suppliers.length === 0
+            }
+            onClick={submit}
+          >
+            Registrar pago
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ── TreasuryActions ───────────────────────────────────────────────────────────
 
 type TreasuryActionsProps = {
@@ -224,7 +437,7 @@ type TreasuryActionsProps = {
 
 /**
  * Action buttons row: "Mover dinero" → TransferWizard, "Agregar lugar" → CreateSlideover,
- * "Registrar gasto" → GastoModal (window, not an inline expander).
+ * "Registrar gasto" → GastoModal, "Pagar proveedor" → SupplierPaymentModal.
  * Wizard and slideover state is owned by TreasuryPageClient (shared with MoneyFlow).
  */
 export function TreasuryActions({
@@ -233,6 +446,7 @@ export function TreasuryActions({
   onOpenSlideover,
 }: TreasuryActionsProps) {
   const [gastoOpen, setGastoOpen] = useState(false);
+  const [supplierPayOpen, setSupplierPayOpen] = useState(false);
 
   return (
     <div className="flex flex-col gap-4">
@@ -279,6 +493,20 @@ export function TreasuryActions({
           <Tag className="size-[17px]" />
           Registrar gasto
         </button>
+
+        <button
+          type="button"
+          onClick={() => setSupplierPayOpen(true)}
+          className="
+            flex h-12 flex-1 items-center justify-center gap-2 rounded-[10px]
+            border border-input bg-card px-5 text-[15px] font-semibold
+            text-foreground transition-colors
+            hover:bg-muted
+          "
+        >
+          <Building2 className="size-[17px]" />
+          Pagar proveedor
+        </button>
       </div>
 
       {/* Gasto modal */}
@@ -286,6 +514,13 @@ export function TreasuryActions({
         accountRows={accountRows}
         open={gastoOpen}
         onClose={() => setGastoOpen(false)}
+      />
+
+      {/* Supplier payment modal */}
+      <SupplierPaymentModal
+        accountRows={accountRows}
+        open={supplierPayOpen}
+        onClose={() => setSupplierPayOpen(false)}
       />
     </div>
   );
