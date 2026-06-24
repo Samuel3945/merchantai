@@ -39,6 +39,10 @@ type ResolvedContext = {
   cash: CashPayload;
   canConfirmTransfers: boolean;
   sessionEpoch: number;
+  // Per-caja: this device may sell at stock 0 (no stock control). Mirrors the
+  // allow_oversell flag the sale endpoints already enforce, so the POS UI can
+  // stop blocking out-of-stock products on this register.
+  allowOversell: boolean;
 };
 
 // A missing row naturally yields '' / [] below, so we deliberately do NOT
@@ -153,6 +157,7 @@ async function resolveFromToken(jwt: string): Promise<ResolvedContext | null> {
     organizationId: orgId,
     canConfirmTransfers: row.cashierCanConfirmTransfers ?? true,
     sessionEpoch: row.token.sessionEpoch,
+    allowOversell: row.token.allowOversell,
     cash: {
       id: row.token.id,
       displayCode: row.token.deviceName.slice(0, 12),
@@ -188,6 +193,8 @@ async function resolveFromUser(jwt: string): Promise<ResolvedContext | null> {
     organizationId: user.organizationId,
     canConfirmTransfers: user.canConfirmTransfers,
     sessionEpoch: user.sessionEpoch,
+    // User-login fallback has no device row → stock control always enforced.
+    allowOversell: false,
     cash: {
       id: user.id,
       displayCode: user.name.slice(0, 12),
@@ -329,6 +336,7 @@ export async function GET(req: Request): Promise<NextResponse> {
       sellDigital: true,
       wholesale: true,
       canConfirmTransfers: ctx.canConfirmTransfers,
+      allowOversell: ctx.allowOversell,
     },
     paymentMethods: visiblePaymentMethods,
     cashiers,
