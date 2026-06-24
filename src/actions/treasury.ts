@@ -527,6 +527,33 @@ export async function listSuppliersWithOutstanding(): Promise<
   }
 }
 
+// ── getSupplierInvoicesAction ─────────────────────────────────────────────────
+// Returns per-invoice outstanding breakdown for a given supplier.
+// Used by the treasury "Pagar proveedor" modal to show the invoice list.
+
+export type SupplierInvoiceRow = {
+  payableId: string;
+  invoiceNumber: string | null;
+  purchasedAt: Date;
+  outstanding: number;
+  status: 'open' | 'partial';
+};
+
+export async function getSupplierInvoicesAction(
+  supplierId: string,
+): Promise<ActionResult<SupplierInvoiceRow[]>> {
+  const { orgId } = await requirePanelModule('cash');
+  try {
+    const result = await getSupplierOutstanding(db, orgId, supplierId);
+    return { ok: true, data: result.invoices };
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Error al obtener facturas del proveedor',
+    };
+  }
+}
+
 // ── Slice C: Financial Timeline ───────────────────────────────────────────────
 
 /**
