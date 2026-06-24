@@ -54,6 +54,7 @@ const RAW_DB_ALLOWLIST = new Set<string>([
   'pos/sales/route.ts',
   'pos/sales/[saleId]/return/route.ts',
   'pos/sales/reclassify/route.ts',
+  'pos/suppliers/[id]/outstanding/route.ts',
   'pos/suppliers/route.ts',
   'pos/sync/route.ts',
 ]);

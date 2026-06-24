@@ -245,17 +245,39 @@ const DDL = `
     ON supplier_payables (stock_movement_id)
     WHERE stock_movement_id IS NOT NULL;
 
-  -- Supplier payments ledger.
+  -- Supplier payments ledger (migration 0071: dual funding sources).
+  CREATE TABLE cash_movements (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+    session_id uuid NOT NULL REFERENCES cash_sessions(id) ON DELETE CASCADE,
+    organization_id text NOT NULL,
+    type "cash_movement_type" NOT NULL,
+    amount numeric(12,2) NOT NULL,
+    reason text NOT NULL,
+    category text,
+    authorized_by text,
+    created_by text NOT NULL,
+    sale_id uuid,
+    supplier_id uuid,
+    corrects_session_id uuid,
+    origin text,
+    treasury_movement_id uuid,
+    expense_id uuid,
+    created_at timestamp DEFAULT now() NOT NULL
+  );
+
   CREATE TABLE supplier_payments (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     organization_id text NOT NULL,
     supplier_id text NOT NULL,
     payable_id uuid REFERENCES supplier_payables(id) ON DELETE SET NULL,
-    treasury_movement_id uuid NOT NULL REFERENCES treasury_movements(id) ON DELETE RESTRICT,
+    treasury_movement_id uuid REFERENCES treasury_movements(id) ON DELETE RESTRICT,
+    cash_movement_id uuid REFERENCES cash_movements(id) ON DELETE RESTRICT,
     amount numeric(12,2) NOT NULL,
     note text,
     created_by text,
-    created_at timestamp DEFAULT now() NOT NULL
+    created_at timestamp DEFAULT now() NOT NULL,
+    CONSTRAINT supplier_payments_funding_source_chk
+      CHECK (num_nonnulls(treasury_movement_id, cash_movement_id) = 1)
   );
 `;
 
@@ -286,6 +308,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   // FK order: children before parents.
   await pg.exec('DELETE FROM supplier_payments');
+  await pg.exec('DELETE FROM cash_movements');
   await pg.exec('DELETE FROM supplier_payables');
   await pg.exec('DELETE FROM supplier_purchases');
   await pg.exec('DELETE FROM treasury_movements');

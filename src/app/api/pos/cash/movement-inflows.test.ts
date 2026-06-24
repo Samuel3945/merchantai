@@ -184,6 +184,54 @@ const SCHEMA = `
     active boolean DEFAULT true NOT NULL,
     salary numeric(12, 2)
   );
+
+  -- supplier_payables: needed by the route's getSupplierOutstanding call when
+  -- supplierId is present. No supplier_payments here (not tested in this suite).
+  CREATE TABLE supplier_purchases (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+    organization_id text NOT NULL,
+    supplier_id text NOT NULL,
+    invoice_number text,
+    purchased_at timestamp DEFAULT now() NOT NULL,
+    notes text,
+    created_by text,
+    created_at timestamp DEFAULT now() NOT NULL,
+    updated_at timestamp DEFAULT now() NOT NULL
+  );
+
+  CREATE TABLE supplier_payables (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+    organization_id text NOT NULL,
+    supplier_id text NOT NULL,
+    stock_movement_id uuid,
+    total_amount numeric(12,2) NOT NULL,
+    paid_amount numeric(12,2) DEFAULT '0' NOT NULL,
+    credited_amount numeric(12,2) DEFAULT '0' NOT NULL,
+    status text DEFAULT 'open' NOT NULL,
+    purchased_at timestamp DEFAULT now() NOT NULL,
+    purchase_id uuid REFERENCES supplier_purchases(id) ON DELETE SET NULL,
+    notes text,
+    created_by text,
+    created_at timestamp DEFAULT now() NOT NULL,
+    updated_at timestamp DEFAULT now() NOT NULL
+  );
+
+  -- supplier_payments: needed because recordCajaPayableSettle inserts here when
+  -- a settle path is taken. Must mirror migration 0071 schema (dual funding).
+  CREATE TABLE supplier_payments (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+    organization_id text NOT NULL,
+    supplier_id text NOT NULL,
+    payable_id uuid REFERENCES supplier_payables(id) ON DELETE SET NULL,
+    treasury_movement_id uuid REFERENCES treasury_movements(id) ON DELETE RESTRICT,
+    cash_movement_id uuid REFERENCES cash_movements(id) ON DELETE RESTRICT,
+    amount numeric(12,2) NOT NULL,
+    note text,
+    created_by text,
+    created_at timestamp DEFAULT now() NOT NULL,
+    CONSTRAINT supplier_payments_funding_source_chk
+      CHECK (num_nonnulls(treasury_movement_id, cash_movement_id) = 1)
+  );
 `;
 
 let pg: PGlite;
@@ -232,7 +280,10 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   // FK-safe order: children first (cash_movements.expense_id → expenses)
+  await pg.exec('DELETE FROM supplier_payments');
   await pg.exec('DELETE FROM cash_movements');
+  await pg.exec('DELETE FROM supplier_payables');
+  await pg.exec('DELETE FROM supplier_purchases');
   await pg.exec('DELETE FROM expenses');
   await pg.exec('DELETE FROM treasury_movements');
   await pg.exec('DELETE FROM cash_sessions');
