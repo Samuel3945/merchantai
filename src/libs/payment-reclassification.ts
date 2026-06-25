@@ -5,6 +5,8 @@ import {
   recordReclassificationMovement,
   toMoney,
 } from '@/libs/cash-helpers';
+import { createCredito } from '@/libs/creditos';
+import { isCreditoMethod } from '@/libs/creditos-math';
 import {
   createReconciliationForPayment,
   methodNeedsReconciliation,
@@ -227,6 +229,9 @@ export type ResplitArgs = {
   // sale's original (possibly closed) session.
   currentSessionId: string;
   createdBy: string;
+  // When the correction turns part of the sale into fiado, this carries the
+  // '[CREDITO] Nombre:… | Tel:…' segment so the debt is booked with a debtor.
+  notes?: string | null;
 };
 
 // Identity of a payment row for diffing old vs new. Two rows with the same key
@@ -255,6 +260,7 @@ export async function resplitPayment(
       id: salesSchema.id,
       total: salesSchema.total,
       posTokenId: salesSchema.posTokenId,
+      notes: salesSchema.notes,
     })
     .from(salesSchema)
     .where(
@@ -388,6 +394,39 @@ export async function resplitPayment(
     }
   }
 
+  // ── Fiado: if the corrected split now owes part on credito, book the debt so
+  // the money owed exists in the ledger (otherwise the credito payment row would
+  // claim "paid" with no debtor). The correction only ever STARTS from a
+  // non-credito sale (the button is hidden on credito sales), so there is no
+  // prior credito to settle — createCredito is idempotent on sale_id regardless.
+  const creditoAmount = Number.parseFloat(
+    desired
+      .reduce((s, d) => s + (isCreditoMethod(d.method) ? d.amount : 0), 0)
+      .toFixed(2),
+  );
+  if (creditoAmount > 0) {
+    // Replace only the [CREDITO] note segment; keep any other ([FACTURA] …).
+    const kept = (sale.notes ?? '')
+      .split(' || ')
+      .map(s => s.trim())
+      .filter(s => s && !s.startsWith('[CREDITO]'));
+    const creditoNote = (args.notes ?? '').trim();
+    const mergedNotes
+      = [creditoNote, ...kept].filter(Boolean).join(' || ') || null;
+    await executor
+      .update(salesSchema)
+      .set({ notes: mergedNotes })
+      .where(eq(salesSchema.id, sale.id));
+    await createCredito(executor, {
+      organizationId: args.organizationId,
+      saleId: sale.id,
+      originalAmount: creditoAmount,
+      dueDate: null,
+      createdBy: args.createdBy,
+      notes: mergedNotes,
+    });
+  }
+
   return { ok: true };
 }
 
@@ -398,6 +437,8 @@ export type PosResplitArgs = {
   saleId: string;
   payments: ResplitPaymentInput[];
   createdBy: string;
+  // '[CREDITO] …' segment when the correction adds fiado (see ResplitArgs.notes).
+  notes?: string | null;
 };
 
 // POS-side full re-split. Same in-shift guard as reclassifyPosSalePayment:
@@ -438,5 +479,6 @@ export async function resplitPosSalePayment(
     payments: args.payments,
     currentSessionId: args.session.id,
     createdBy: args.createdBy,
+    notes: args.notes,
   });
 }

@@ -21,6 +21,8 @@ type ResplitBody = {
     reference?: string | null;
     change_given?: number | string;
   }>;
+  // '[CREDITO] Nombre:… | Tel:…' segment, only when the correction adds fiado.
+  notes?: string | null;
 };
 
 export async function POST(req: Request): Promise<NextResponse> {
@@ -70,6 +72,7 @@ export async function POST(req: Request): Promise<NextResponse> {
         saleId,
         payments,
         createdBy: ctx.cashierName || 'Cajero',
+        notes: body.notes?.trim() || null,
       });
       if (!result.ok) {
         throw new Error(result.error);
