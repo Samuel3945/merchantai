@@ -13,6 +13,7 @@ import { requirePosAuth } from '@/libs/pos-auth';
 import { recordPosGastoBridge } from '@/libs/pos-gasto-bridge';
 import {
   getSupplierOutstanding,
+  recordSelectedPayablesPayment,
   recordSupplierPayment,
 } from '@/libs/supplier-invoice-payment';
 import { recordInflowSourceDebit } from '@/libs/treasury';
@@ -43,6 +44,10 @@ type MovementBody = {
   // sends the supplier id chosen from /pos/suppliers; it is validated against
   // the caja's org before being persisted to cash_movements.supplier_id.
   supplierId?: string | null;
+  // Optional: device-chosen invoices to settle (full or partial each). When sent
+  // on a type='expense' + supplierId payment, settles EXACTLY these payables
+  // instead of auto-allocating `amount` oldest-first. Omitted → legacy oldest-first.
+  payableSelections?: { payableId?: string; amount?: number | string }[] | null;
   // Optional (slice 3): origin discriminator for entrada movements.
   // Legacy devices that omit this field keep working unchanged (backward-compat).
   origin?: InternalOrigin | ExternalOrigin | null;
@@ -82,8 +87,39 @@ export async function POST(req: Request): Promise<NextResponse> {
     );
   }
 
+  // Parse optional device-chosen invoice selections. Each entry must be a
+  // non-empty payableId with a positive amount; an invalid shape is rejected
+  // outright so the settle path never receives a malformed selection.
+  let selections: { payableId: string; amount: number }[] | null = null;
+  if (body.payableSelections != null) {
+    if (!Array.isArray(body.payableSelections) || body.payableSelections.length === 0) {
+      return NextResponse.json(
+        { error: 'payableSelections debe ser una lista no vacía' },
+        { status: 400 },
+      );
+    }
+    const parsed: { payableId: string; amount: number }[] = [];
+    for (const s of body.payableSelections) {
+      const pid = typeof s?.payableId === 'string' ? s.payableId.trim() : '';
+      const amt = Number.parseFloat(toMoney(s?.amount ?? 0));
+      if (!pid || !(amt > 0)) {
+        return NextResponse.json(
+          { error: 'Cada factura seleccionada necesita un id y un monto mayor a 0' },
+          { status: 400 },
+        );
+      }
+      parsed.push({ payableId: pid, amount: amt });
+    }
+    selections = parsed;
+  }
+
+  // A selection-driven supplier settle defines its own total (sum of the chosen
+  // lines), so `amount` is optional there. Every other movement still needs amount.
+  const settleViaSelections
+    = selections != null && type === 'expense' && !!body.supplierId;
+
   const amount = toMoney(body.amount ?? 0);
-  if (Number.parseFloat(amount) <= 0) {
+  if (!settleViaSelections && Number.parseFloat(amount) <= 0) {
     return NextResponse.json(
       { error: 'amount debe ser > 0' },
       { status: 400 },
@@ -183,24 +219,39 @@ export async function POST(req: Request): Promise<NextResponse> {
 
         if (outstanding.totalOutstanding > 0) {
           // SETTLE PATH — caja-funded, no P&L, no expenses row.
-          const amtNum = Number.parseFloat(amount);
+          let settleResult;
+          if (settleViaSelections && selections) {
+            // Pay EXACTLY the device-chosen invoices (full or partial each). The
+            // primitive caps each line at its own outstanding under FOR UPDATE and
+            // settles all-or-nothing.
+            settleResult = await recordSelectedPayablesPayment(tx, {
+              organizationId: ctx.organizationId,
+              supplierId,
+              fundingSource: { kind: 'caja', sessionId: open.id },
+              selections,
+              createdBy: ctx.cashierName || 'Cajero',
+              note: reason,
+            });
+          } else {
+            const amtNum = Number.parseFloat(amount);
 
-          // Pre-check: reject overpay before entering the write path.
-          // Gives a clear Spanish message; the primitive also throws as a guard.
-          if (amtNum > outstanding.totalOutstanding + 0.005) {
-            throw new Error(
-              `El monto ($${amtNum.toFixed(2)}) supera la deuda del proveedor ($${outstanding.totalOutstanding.toFixed(2)}). Reducí el monto o registralo como gasto aparte.`,
-            );
+            // Pre-check: reject overpay before entering the write path.
+            // Gives a clear Spanish message; the primitive also throws as a guard.
+            if (amtNum > outstanding.totalOutstanding + 0.005) {
+              throw new Error(
+                `El monto ($${amtNum.toFixed(2)}) supera la deuda del proveedor ($${outstanding.totalOutstanding.toFixed(2)}). Reducí el monto o registralo como gasto aparte.`,
+              );
+            }
+
+            settleResult = await recordSupplierPayment(tx, {
+              organizationId: ctx.organizationId,
+              supplierId,
+              fundingSource: { kind: 'caja', sessionId: open.id },
+              amount: amtNum,
+              createdBy: ctx.cashierName || 'Cajero',
+              note: reason,
+            });
           }
-
-          const settleResult = await recordSupplierPayment(tx, {
-            organizationId: ctx.organizationId,
-            supplierId,
-            fundingSource: { kind: 'caja', sessionId: open.id },
-            amount: amtNum,
-            createdBy: ctx.cashierName || 'Cajero',
-            note: reason,
-          });
 
           // Use the cashMovementId threaded back from the last chunk — avoids
           // a heuristic re-query that could return a cross-payment row (oldest).

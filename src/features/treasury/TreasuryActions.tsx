@@ -6,7 +6,7 @@ import type { TreasuryAccountRow } from '@/libs/treasury';
 import { ArrowRightLeft, Building2, Plus, Tag } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState, useTransition } from 'react';
-import { getSupplierInvoicesAction, listSuppliersWithOutstanding, recordGasto, recordSupplierPaymentFromConsole } from '@/actions/treasury';
+import { getSupplierInvoicesAction, listSuppliersWithOutstanding, recordGasto, recordSelectedSupplierPaymentFromConsole } from '@/actions/treasury';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -283,11 +283,13 @@ function SupplierPaymentModal({
   const [loadingSuppliers, setLoadingSuppliers] = useState(false);
   const [supplierId, setSupplierId] = useState('');
   const [fromAccountId, setFromAccountId] = useState('');
-  const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [invoices, setInvoices] = useState<SupplierInvoiceRow[]>([]);
   const [loadingInvoices, setLoadingInvoices] = useState(false);
+  // Per-invoice selection + (possibly partial) amount, keyed by payableId.
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [amounts, setAmounts] = useState<Record<string, string>>({});
 
   // Fetch per-invoice breakdown whenever the selected supplier changes.
   // The `active` flag guards against stale responses when the supplier changes quickly.
@@ -308,6 +310,12 @@ function SupplierPaymentModal({
       }
       if (res.ok) {
         setInvoices(res.data);
+        // Default: every invoice ticked, full outstanding each. The owner unticks
+        // the ones to skip or edits an amount to pay partially.
+        setSelected(new Set(res.data.map(i => i.payableId)));
+        setAmounts(
+          Object.fromEntries(res.data.map(i => [i.payableId, String(i.outstanding)])),
+        );
       }
       setLoadingInvoices(false);
     });
@@ -370,6 +378,8 @@ function SupplierPaymentModal({
     if (!isOpen) {
       setSupplierId('');
       setInvoices([]);
+      setSelected(new Set());
+      setAmounts({});
       setLoadingInvoices(false);
       onClose();
     }
@@ -382,6 +392,33 @@ function SupplierPaymentModal({
 
   const selectedSupplier = suppliers.find(s => s.supplierId === supplierId);
 
+  function toggleInvoice(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }
+
+  function setInvoiceAmount(id: string, value: string) {
+    setAmounts(prev => ({ ...prev, [id]: value }));
+  }
+
+  const allSelected = invoices.length > 0 && invoices.every(i => selected.has(i.payableId));
+
+  function toggleAll() {
+    setSelected(allSelected ? new Set() : new Set(invoices.map(i => i.payableId)));
+  }
+
+  // Sum of the amounts entered on ticked invoices.
+  const selectedTotal = invoices
+    .filter(i => selected.has(i.payableId))
+    .reduce((s, i) => s + (Number.parseFloat(amounts[i.payableId] ?? '0') || 0), 0);
+
   function submit() {
     setError(null);
     if (!supplierId) {
@@ -392,17 +429,32 @@ function SupplierPaymentModal({
       setError('Seleccioná el contenedor de origen');
       return;
     }
-    const amt = Number.parseFloat(amount);
-    if (!amount || Number.isNaN(amt) || amt <= 0) {
-      setError('El monto debe ser mayor a 0');
+    const chosen = invoices.filter(i => selected.has(i.payableId));
+    if (chosen.length === 0) {
+      setError('Seleccioná al menos una factura');
       return;
+    }
+    const selections: { payableId: string; amount: number }[] = [];
+    for (const inv of chosen) {
+      const amt = Number.parseFloat(amounts[inv.payableId] ?? '');
+      if (Number.isNaN(amt) || amt <= 0) {
+        setError('El monto de cada factura seleccionada debe ser mayor a 0');
+        return;
+      }
+      if (amt > inv.outstanding + 0.005) {
+        setError(
+          `El monto de una factura ($${amt.toLocaleString('es-CO')}) supera su saldo pendiente ($${inv.outstanding.toLocaleString('es-CO')})`,
+        );
+        return;
+      }
+      selections.push({ payableId: inv.payableId, amount: amt });
     }
     startTransition(async () => {
       try {
-        const res = await recordSupplierPaymentFromConsole({
+        const res = await recordSelectedSupplierPaymentFromConsole({
           supplierId,
           fromAccountId,
-          amount: amt,
+          selections,
           note: note.trim() || null,
         });
         if (!res.ok) {
@@ -412,9 +464,10 @@ function SupplierPaymentModal({
         // Reset and close.
         setSupplierId('');
         setFromAccountId('');
-        setAmount('');
         setNote('');
         setInvoices([]);
+        setSelected(new Set());
+        setAmounts({});
         setSuppliers([]); // force reload next open
         onClose();
         router.refresh();
@@ -497,39 +550,86 @@ function SupplierPaymentModal({
                             </p>
                           )}
                           {!loadingInvoices && invoices.length > 0 && (
-                            <ul className="mt-1 space-y-0.5">
-                              {invoices.map(inv => (
-                                <li
-                                  key={inv.payableId}
+                            <div className="mt-1 space-y-2">
+                              <div className="flex items-center justify-between">
+                                <button
+                                  type="button"
+                                  onClick={toggleAll}
                                   className="
-                                    flex items-center justify-between
-                                    text-[11px] text-muted-foreground
+                                    text-[11px] font-medium text-primary
+                                    hover:underline
                                   "
                                 >
-                                  <span className="truncate">
-                                    {inv.invoiceNumber
-                                      ? `N° ${inv.invoiceNumber}`
-                                      : `Sin N° · ${new Date(inv.purchasedAt).toLocaleDateString('es-CO', { year: 'numeric', month: '2-digit', day: '2-digit' })}`}
-                                  </span>
-                                  <span
-                                    className="
-                                      ml-3 shrink-0 font-medium tabular-nums
-                                    "
-                                  >
-                                    {`$${inv.outstanding.toLocaleString('es-CO')}`}
-                                    {' '}
-                                    <span className={
-                                      inv.status === 'partial'
-                                        ? 'text-blue-500'
-                                        : 'text-amber-500'
-                                    }
+                                  {allSelected ? 'Quitar todas' : 'Seleccionar todas'}
+                                </button>
+                                <span className="
+                                  text-[11px] font-semibold text-foreground
+                                  tabular-nums
+                                "
+                                >
+                                  Total a pagar: $
+                                  {selectedTotal.toLocaleString('es-CO')}
+                                </span>
+                              </div>
+                              <ul className="space-y-1.5">
+                                {invoices.map((inv) => {
+                                  const isChecked = selected.has(inv.payableId);
+                                  return (
+                                    <li
+                                      key={inv.payableId}
+                                      className="
+                                        rounded-md border border-border p-2
+                                      "
                                     >
-                                      {`(${inv.status === 'partial' ? 'Parcial' : 'Pendiente'})`}
-                                    </span>
-                                  </span>
-                                </li>
-                              ))}
-                            </ul>
+                                      <label className="
+                                        flex cursor-pointer items-center gap-2
+                                      "
+                                      >
+                                        <input
+                                          type="checkbox"
+                                          className="size-4 accent-primary"
+                                          checked={isChecked}
+                                          onChange={() => toggleInvoice(inv.payableId)}
+                                        />
+                                        <span className="
+                                          flex-1 truncate text-[12px]
+                                          text-foreground
+                                        "
+                                        >
+                                          {inv.invoiceNumber
+                                            ? `N° ${inv.invoiceNumber}`
+                                            : `Sin N° · ${new Date(inv.purchasedAt).toLocaleDateString('es-CO', { year: 'numeric', month: '2-digit', day: '2-digit' })}`}
+                                        </span>
+                                        <span className="
+                                          shrink-0 text-[10.5px]
+                                          text-muted-foreground tabular-nums
+                                        "
+                                        >
+                                          Pendiente: $
+                                          {inv.outstanding.toLocaleString('es-CO')}
+                                        </span>
+                                      </label>
+                                      {isChecked && (
+                                        <input
+                                          className={`
+                                            ${cashInputCls}
+                                            mt-1.5
+                                          `}
+                                          type="number"
+                                          inputMode="decimal"
+                                          min="0"
+                                          step="any"
+                                          placeholder="Monto a pagar (parcial o total)"
+                                          value={amounts[inv.payableId] ?? ''}
+                                          onChange={e =>
+                                            setInvoiceAmount(inv.payableId, e.target.value)}
+                                        />
+                                      )}
+                                    </li>
+                                  );
+                                })}
+                              </ul>
+                            </div>
                           )}
                         </div>
                       )}
@@ -538,16 +638,6 @@ function SupplierPaymentModal({
                         onValueChange={setFromAccountId}
                         options={fromOptions}
                         placeholder="Desde (contenedor de origen)"
-                      />
-                      <input
-                        className={cashInputCls}
-                        type="number"
-                        inputMode="decimal"
-                        min="0"
-                        step="any"
-                        placeholder="Monto a pagar"
-                        value={amount}
-                        onChange={e => setAmount(e.target.value)}
                       />
                       <input
                         className={cashInputCls}
@@ -583,7 +673,8 @@ function SupplierPaymentModal({
               || !hasEligible
               || !supplierId
               || !fromAccountId
-              || !amount
+              || selected.size === 0
+              || selectedTotal <= 0
               || suppliers.length === 0
             }
             onClick={submit}
