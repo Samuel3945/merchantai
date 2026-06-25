@@ -534,6 +534,34 @@ export async function listSuppliersWithOutstanding(): Promise<
   }
 }
 
+// ── debugTreasuryOrg (TEMP deploy/org diagnostic) ─────────────────────────────
+// Returns the org the panel resolves for THIS admin session plus the raw count
+// of open/partial supplier payables in that org (no suppliers join). Surfaced in
+// the "Pagar proveedor" empty state to diagnose why a debt that the POS can see
+// is invisible to the admin panel. Remove once the org mismatch is confirmed.
+export async function debugTreasuryOrg(): Promise<
+  ActionResult<{ orgId: string; openPayables: number }>
+> {
+  const { orgId } = await requirePanelModule('cash');
+  try {
+    const [row] = await db
+      .select({ c: sql<number>`count(*)::int` })
+      .from(supplierPayablesSchema)
+      .where(
+        and(
+          eq(supplierPayablesSchema.organizationId, orgId),
+          inArray(supplierPayablesSchema.status, ['open', 'partial']),
+        ),
+      );
+    return { ok: true, data: { orgId, openPayables: row?.c ?? 0 } };
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'debug failed',
+    };
+  }
+}
+
 // ── getSupplierInvoicesAction ─────────────────────────────────────────────────
 // Returns per-invoice outstanding breakdown for a given supplier.
 // Used by the treasury "Pagar proveedor" modal to show the invoice list.
