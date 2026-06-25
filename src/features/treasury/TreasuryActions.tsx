@@ -421,7 +421,7 @@ function SupplierPaymentModal({
             text-[11px] font-semibold tracking-widest text-primary uppercase
           "
           >
-            Pagar proveedor · build 2026-06-25 #5
+            Pagar proveedor · build 2026-06-25 #6
           </span>
           <p className="mt-0.5 text-[12.5px] text-muted-foreground">
             Salda una deuda pendiente con un proveedor desde una caja fuerte o cuenta bancaria.

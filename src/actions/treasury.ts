@@ -484,6 +484,8 @@ export async function listSuppliersWithOutstanding(): Promise<
   ActionResult<{ orgId: string; rawCount: number; rows: SupplierOutstandingRow[] }>
 > {
   const { orgId } = await requirePanelModule('cash');
+  // TEMP server-side diagnostic — reliable channel (Easypanel container logs).
+  console.warn(`[DIAG-TREASURY] resolved orgId=${orgId}`);
 
   try {
     // Aggregate outstanding per supplier DIRECTLY from supplier_payables, then
@@ -538,6 +540,9 @@ export async function listSuppliersWithOutstanding(): Promise<
         ),
       );
 
+    console.warn(
+      `[DIAG-TREASURY] orgId=${orgId} rawOpenPayables=${countRow?.c ?? 0} groupedSuppliers=${rows.length}`,
+    );
     return { ok: true, data: { orgId, rawCount: countRow?.c ?? 0, rows } };
   } catch (err: unknown) {
     return {
