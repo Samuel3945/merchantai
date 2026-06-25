@@ -512,6 +512,13 @@
       "when": 1781900000010,
       "tag": "0072_treasury_unique_name_active_only",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1782405964457,
+      "tag": "0073_matias_einvoice_fields",
+      "breakpoints": true
     }
   ]
 }

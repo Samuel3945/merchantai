@@ -56,3 +56,36 @@ only READS the flag; it never flips it.
 Every inventory mutation writes `audit_logs` via `libs/audit-log.ts#logAction`
 (actor = Clerk user, before/after stock). The movement history resolves
 `created_by` (Clerk user id) to a readable name for the "Quién" column.
+
+## Electronic invoicing (MATIAS, DIAN)
+
+The e-invoicing provider is **MATIAS** (`docs.matias-api.com`), isolated behind an
+adapter — `libs/einvoice/matias-adapter.ts` is the ONLY module that knows its HTTP
+contract. **Sandbox only**: `MATIAS_API_BASE_URL` points at
+`sandbox-api.matias-api.com`; production is never wired in code. Factus is fully
+removed.
+
+- **Account is app-level** ("Casa de Software": ONE MATIAS account for all
+  tenants) → `MATIAS_ACCOUNT_EMAIL` / `MATIAS_ACCOUNT_PASSWORD` in env. Auth is
+  `POST /auth/login` → Bearer token, cached app-level (re-login on 401).
+- **Per-tenant** config lives in `app_settings` (org-scoped): `fiscal_nit`,
+  `fiscal_dian_resolution`, `einvoice_matias_resolution_number`,
+  `einvoice_matias_prefix`, `einvoice_cert_status`, `einvoice_auto`. Resolved by
+  `libs/einvoice/config.ts#loadEInvoiceConfig`.
+- **Emission** (`libs/einvoice/emit.ts`): a sale to a final consumer emits a **POS
+  electronic document** (`type_document_id 20`); a sale with an identified customer
+  (from the `[FACTURA] …` note tag) emits a **factura** (`type 7`). Documents use
+  MATIAS' **auto-increment** endpoints so the consecutive comes from the DIAN
+  resolution. CUFE = `XmlDocumentKey`; a `StatusCode` ≠ `"00"` is a DIAN rejection
+  (status `failed`). The trail is `einvoice_emissions`; `sales.einvoice_*` mirrors
+  the latest success.
+- **Auto-invoicing**: `maybeAutoEmitInvoice` / `maybeEmitCreditNote` (best-effort,
+  never block a sale) run only when `einvoice_auto` is on.
+- **Credits**: each emitted document consumes **1 credit** via
+  `consumeCreditForOrg(orgId, 'einvoice')` (same mechanism as AI credits;
+  entitlement key `ai_credits_einvoice`, set per plan in PlansStudio). No credits →
+  emission is blocked before calling MATIAS.
+
+See `docs/einvoice-matias/` for the spec and the "connect a new NIT" guide
+(`CONECTAR-NIT.md`). The DB change ships as migration
+`0073_matias_einvoice_fields` and is applied automatically on deploy (`db:migrate`).

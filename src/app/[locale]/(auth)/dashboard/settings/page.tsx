@@ -30,15 +30,14 @@ const KEYS = [
   // AI preview gate (default OFF, flipped per-org by the operator in /platform).
   // Domicilios rides with it, so its module toggle is hidden until AI is on.
   'modules.ai',
-  // E-invoicing (Factus/DIAN)
+  // E-invoicing (MATIAS/DIAN)
   'fiscal_nit',
+  'fiscal_dian_resolution',
   'fiscal_einvoice_provider',
-  'einvoice_factus_email',
-  'einvoice_factus_password',
-  'einvoice_factus_client_id',
-  'einvoice_factus_client_secret',
-  'einvoice_factus_env',
-  'einvoice_factus_base_url',
+  'einvoice_matias_resolution_number',
+  'einvoice_matias_prefix',
+  'einvoice_cert_status',
+  'einvoice_auto',
   // Returns
   'returns_enabled',
   'returns_max_days',
@@ -100,13 +99,12 @@ export default async function DashboardSettingsPage(props: {
         aiPreviewEnabled={asBool(map['modules.ai'], false)}
         fiscal={{
           fiscal_nit: map.fiscal_nit,
+          fiscal_dian_resolution: map.fiscal_dian_resolution,
           fiscal_einvoice_provider: map.fiscal_einvoice_provider,
-          einvoice_factus_email: map.einvoice_factus_email,
-          einvoice_factus_password: map.einvoice_factus_password,
-          einvoice_factus_client_id: map.einvoice_factus_client_id,
-          einvoice_factus_client_secret: map.einvoice_factus_client_secret,
-          einvoice_factus_env: map.einvoice_factus_env,
-          einvoice_factus_base_url: map.einvoice_factus_base_url,
+          einvoice_matias_resolution_number: map.einvoice_matias_resolution_number,
+          einvoice_matias_prefix: map.einvoice_matias_prefix,
+          einvoice_cert_status: map.einvoice_cert_status,
+          einvoice_auto: map.einvoice_auto,
         }}
         returns={{
           returns_enabled: asBool(map.returns_enabled, true),
