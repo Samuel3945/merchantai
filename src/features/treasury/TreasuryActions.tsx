@@ -8,12 +8,14 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useState, useTransition } from 'react';
 import { getSupplierInvoicesAction, listSuppliersWithOutstanding, recordGasto, recordSelectedSupplierPaymentFromConsole } from '@/actions/treasury';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
   DialogContent,
 } from '@/components/ui/dialog';
 import { Select } from '@/components/ui/select';
 import { cashInputCls } from '@/features/cash/cash-ui';
+import { cn } from '@/utils/Helpers';
 import {
   TREASURY_EXPENSE_CATEGORIES,
   TREASURY_EXPENSE_CATEGORY_LABELS,
@@ -527,18 +529,41 @@ function SupplierPaymentModal({
                   )
                 : (
                     <>
-                      <Select
-                        value={supplierId}
-                        onValueChange={setSupplierId}
-                        options={supplierOptions}
-                        placeholder="Proveedor con deuda"
-                      />
+                      <Field
+                        label="Proveedor"
+                        hint="Elegí a quién le vas a pagar. Solo aparecen los proveedores con deuda pendiente."
+                      >
+                        <Select
+                          value={supplierId}
+                          onValueChange={setSupplierId}
+                          options={supplierOptions}
+                          placeholder="Elegí un proveedor"
+                        />
+                      </Field>
+
                       {selectedSupplier && (
-                        <div className="space-y-1">
-                          <p className="text-[11.5px] text-muted-foreground">
-                            Deuda total: $
-                            {selectedSupplier.totalOutstanding.toLocaleString('es-CO')}
-                          </p>
+                        <div className="space-y-2.5">
+                          <div className="
+                            flex items-center justify-between rounded-md
+                            bg-muted/40 px-3 py-2
+                          "
+                          >
+                            <span className="
+                              text-[11.5px] text-muted-foreground
+                            "
+                            >
+                              Deuda total
+                            </span>
+                            <span className="
+                              text-[12.5px] font-semibold text-foreground
+                              tabular-nums
+                            "
+                            >
+                              $
+                              {selectedSupplier.totalOutstanding.toLocaleString('es-CO')}
+                            </span>
+                          </div>
+
                           {loadingInvoices && (
                             <p className="text-[11px] text-muted-foreground">
                               Cargando facturas…
@@ -550,7 +575,24 @@ function SupplierPaymentModal({
                             </p>
                           )}
                           {!loadingInvoices && invoices.length > 0 && (
-                            <div className="mt-1 space-y-2">
+                            <div className="space-y-2">
+                              <div className="flex flex-col gap-1.5">
+                                <span className="
+                                  text-[13.5px] font-medium text-foreground
+                                "
+                                >
+                                  Facturas por pagar
+                                </span>
+                                <p className="
+                                  text-[11.5px] leading-snug
+                                  text-muted-foreground
+                                "
+                                >
+                                  Marcá las que vas a pagar. Dejá el monto completo o
+                                  escribí uno menor para abonar parcial.
+                                </p>
+                              </div>
+
                               <div className="flex items-center justify-between">
                                 <button
                                   type="button"
@@ -571,55 +613,70 @@ function SupplierPaymentModal({
                                   {selectedTotal.toLocaleString('es-CO')}
                                 </span>
                               </div>
+
                               <ul className="space-y-1.5">
                                 {invoices.map((inv) => {
                                   const isChecked = selected.has(inv.payableId);
+                                  const checkboxId = `inv-${inv.payableId}`;
                                   return (
                                     <li
                                       key={inv.payableId}
-                                      className="
-                                        rounded-md border border-border p-2
-                                      "
+                                      className={cn(
+                                        `
+                                          rounded-lg border p-2.5
+                                          transition-colors
+                                        `,
+                                        isChecked
+                                          ? 'border-primary bg-primary/5'
+                                          : `
+                                            border-border
+                                            hover:border-primary/40
+                                          `,
+                                      )}
                                     >
-                                      <label className="
-                                        flex cursor-pointer items-center gap-2
-                                      "
-                                      >
-                                        <input
-                                          type="checkbox"
-                                          className="size-4 accent-primary"
+                                      <div className="flex items-center gap-2.5">
+                                        <Checkbox
+                                          id={checkboxId}
                                           checked={isChecked}
-                                          onChange={() => toggleInvoice(inv.payableId)}
+                                          onCheckedChange={() => toggleInvoice(inv.payableId)}
                                         />
-                                        <span className="
-                                          flex-1 truncate text-[12px]
-                                          text-foreground
-                                        "
+                                        <label
+                                          htmlFor={checkboxId}
+                                          className="
+                                            flex flex-1 cursor-pointer
+                                            items-center gap-2
+                                          "
                                         >
-                                          {inv.invoiceNumber
-                                            ? `N° ${inv.invoiceNumber}`
-                                            : `Sin N° · ${new Date(inv.purchasedAt).toLocaleDateString('es-CO', { year: 'numeric', month: '2-digit', day: '2-digit' })}`}
-                                        </span>
-                                        <span className="
-                                          shrink-0 text-[10.5px]
-                                          text-muted-foreground tabular-nums
-                                        "
-                                        >
-                                          Pendiente: $
-                                          {inv.outstanding.toLocaleString('es-CO')}
-                                        </span>
-                                      </label>
+                                          <span className="
+                                            flex-1 truncate text-[12px]
+                                            text-foreground
+                                          "
+                                          >
+                                            {inv.invoiceNumber
+                                              ? `N° ${inv.invoiceNumber}`
+                                              : `Sin N° · ${new Date(inv.purchasedAt).toLocaleDateString('es-CO', { year: 'numeric', month: '2-digit', day: '2-digit' })}`}
+                                          </span>
+                                          <span className="
+                                            shrink-0 text-[10.5px]
+                                            text-muted-foreground tabular-nums
+                                          "
+                                          >
+                                            Pendiente: $
+                                            {inv.outstanding.toLocaleString('es-CO')}
+                                          </span>
+                                        </label>
+                                      </div>
                                       {isChecked && (
                                         <input
                                           className={`
                                             ${cashInputCls}
-                                            mt-1.5
+                                            mt-2
                                           `}
                                           type="number"
                                           inputMode="decimal"
                                           min="0"
                                           step="any"
-                                          placeholder="Monto a pagar (parcial o total)"
+                                          placeholder="¿Cuánto pagás de esta factura?"
                                           value={amounts[inv.payableId] ?? ''}
                                           onChange={e =>
                                             setInvoiceAmount(inv.payableId, e.target.value)}
@@ -633,18 +690,35 @@ function SupplierPaymentModal({
                           )}
                         </div>
                       )}
-                      <Select
-                        value={fromAccountId}
-                        onValueChange={setFromAccountId}
-                        options={fromOptions}
-                        placeholder="Desde (contenedor de origen)"
-                      />
-                      <input
-                        className={cashInputCls}
-                        placeholder="Nota (opcional)"
-                        value={note}
-                        onChange={e => setNote(e.target.value)}
-                      />
+
+                      {selectedSupplier && invoices.length > 0 && (
+                        <Field
+                          label="¿De dónde sale la plata?"
+                          hint="La caja fuerte o cuenta bancaria de la que se va a descontar el pago."
+                        >
+                          <Select
+                            value={fromAccountId}
+                            onValueChange={setFromAccountId}
+                            options={fromOptions}
+                            placeholder="Elegí la caja fuerte o el banco"
+                          />
+                        </Field>
+                      )}
+
+                      {selectedSupplier && invoices.length > 0 && (
+                        <Field
+                          label="Nota (opcional)"
+                          hint="Para tu registro: número de recibo, motivo del pago, etc."
+                        >
+                          <input
+                            className={cashInputCls}
+                            placeholder="Ej: abono acordado por teléfono"
+                            value={note}
+                            onChange={e => setNote(e.target.value)}
+                          />
+                        </Field>
+                      )}
+
                       {error && (
                         <div className="text-xs text-destructive">{error}</div>
                       )}
