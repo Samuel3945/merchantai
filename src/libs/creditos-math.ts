@@ -88,6 +88,20 @@ export function planAbono(
   };
 }
 
+// Accent-insensitive, regional-tolerant credito detection. The default seeded
+// payment method is 'Crédito' (accented), but detection historically used
+// /credito/i, which does NOT match the accent ('é' ≠ 'e' after toLowerCase) — so
+// every sale paid with the default method silently skipped the credit ledger and
+// behaved like a plain non-cash sale. Match the accented form directly, and also
+// recognize the legacy/regional name 'fiado'. Single source of truth for "is this
+// payment method a credit?" across every sale path.
+export function isCreditoMethod(method: string | null | undefined): boolean {
+  // `cr[ée]dito` matches both 'credito' and the accented 'crédito' (the default
+  // seeded method name) without diacritic stripping; `fiado` covers the regional
+  // synonym.
+  return /cr[ée]dito|fiado/i.test(method ?? '');
+}
+
 // The credit a credito sale books: the total minus any upfront payment made with a
 // non-credito method. A 100%-credito sale owes the full total; a split sale (part
 // efectivo now, rest credito) owes only the remainder.
@@ -96,7 +110,7 @@ export function creditoAmountFor(
   payments: { method: string; amount: number | string }[],
 ): number {
   const nonCreditoPaid = payments
-    .filter(p => !/credito/i.test(p.method))
+    .filter(p => !isCreditoMethod(p.method))
     .reduce((acc, p) => acc + (Number.parseFloat(String(p.amount)) || 0), 0);
   return round2(total - nonCreditoPaid);
 }

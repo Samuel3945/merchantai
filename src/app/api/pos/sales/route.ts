@@ -5,7 +5,7 @@ import { NextResponse } from 'next/server';
 import { resolvePosActor } from '@/libs/audit-log';
 import { findOpenSession, toMoney } from '@/libs/cash-helpers';
 import { createCredito } from '@/libs/creditos';
-import { creditoAmountFor } from '@/libs/creditos-math';
+import { creditoAmountFor, isCreditoMethod } from '@/libs/creditos-math';
 import { db } from '@/libs/DB';
 import { consumeFifoExits } from '@/libs/fifo-cogs';
 import { requirePosAuth } from '@/libs/pos-auth';
@@ -187,9 +187,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     = body.payments && body.payments.length > 0
       ? body.payments.map(p => p.method ?? '')
       : [paymentType];
-  const requiresOpenCash = !paymentMethods.every(m =>
-    m.toLowerCase().includes('credito'),
-  );
+  const requiresOpenCash = !paymentMethods.every(m => isCreditoMethod(m));
   if (requiresOpenCash) {
     const openSession = await findOpenSession(db, ctx.organizationId, ctx.tokenId);
     if (!openSession) {
@@ -395,8 +393,8 @@ export async function POST(req: Request): Promise<NextResponse> {
       // non-credito method. Same rule as the dashboard createSale action.
       const creditoAmount = creditoAmountFor(total, paymentRows);
       const isCredito
-        = /credito/i.test(paymentType)
-          || paymentRows.some(p => /credito/i.test(p.method));
+        = isCreditoMethod(paymentType)
+          || paymentRows.some(p => isCreditoMethod(p.method));
       if (isCredito && creditoAmount > 0) {
         await createCredito(tx, {
           organizationId: ctx.organizationId,
