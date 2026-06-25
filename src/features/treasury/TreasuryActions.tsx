@@ -288,8 +288,9 @@ function SupplierPaymentModal({
   const [error, setError] = useState<string | null>(null);
   const [invoices, setInvoices] = useState<SupplierInvoiceRow[]>([]);
   const [loadingInvoices, setLoadingInvoices] = useState(false);
-  // TEMP org diagnostic — surfaced in the empty state. Remove once resolved.
+  // TEMP org diagnostic — surfaced in the header. Remove once resolved.
   const [diag, setDiag] = useState<{ orgId: string; openPayables: number } | null>(null);
+  const [diagErr, setDiagErr] = useState<string | null>(null);
 
   // Fetch per-invoice breakdown whenever the selected supplier changes.
   // The `active` flag guards against stale responses when the supplier changes quickly.
@@ -331,9 +332,13 @@ function SupplierPaymentModal({
     if (isOpen && suppliers.length === 0 && !loadingSuppliers) {
       setLoadingSuppliers(true);
       setError(null);
+      setDiag(null);
+      setDiagErr(null);
       debugTreasuryOrg().then((r) => {
         if (r.ok) {
           setDiag(r.data);
+        } else {
+          setDiagErr(r.error);
         }
       });
       listSuppliersWithOutstanding().then((res) => {
@@ -416,11 +421,23 @@ function SupplierPaymentModal({
             text-[11px] font-semibold tracking-widest text-primary uppercase
           "
           >
-            Pagar proveedor · build 2026-06-25 #2
+            Pagar proveedor · build 2026-06-25 #3
           </span>
           <p className="mt-0.5 text-[12.5px] text-muted-foreground">
             Salda una deuda pendiente con un proveedor desde una caja fuerte o cuenta bancaria.
           </p>
+          <div className="
+            mt-2 rounded-md border border-amber-400 bg-amber-50 px-2 py-1
+            font-mono text-[12px] break-all text-amber-900
+            dark:bg-amber-950/40 dark:text-amber-200
+          "
+          >
+            {diag
+              ? `DIAG  org=${diag.orgId}  payables=${diag.openPayables}`
+              : diagErr
+                ? `DIAG error: ${diagErr}`
+                : 'DIAG cargando…'}
+          </div>
         </div>
 
         {/* Body */}
