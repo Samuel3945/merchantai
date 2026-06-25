@@ -3,7 +3,7 @@
 import type { ActionResult } from '@/libs/action-result';
 import type { TreasuryAccount, TreasuryAccountRow, TreasuryTimelineEntry, TreasuryTimelinePage } from '@/libs/treasury';
 import { auth, currentUser } from '@clerk/nextjs/server';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
 import { toMoney } from '@/libs/cash-helpers';
@@ -486,39 +486,46 @@ export async function listSuppliersWithOutstanding(): Promise<
   const { orgId } = await requirePanelModule('cash');
 
   try {
-    // Find supplier IDs with at least one open/partial payable for this org.
-    const payableSupplierIds = await db
-      .selectDistinct({ supplierId: supplierPayablesSchema.supplierId })
+    // Aggregate outstanding per supplier DIRECTLY from supplier_payables, then
+    // resolve the name via LEFT JOIN with an explicit ::text cast — supplier_id
+    // is TEXT while suppliers.id is uuid, so a plain id match silently returns
+    // nothing (the bug that hid debts from this modal). Mirrors listOpenInvoices:
+    // a payable whose supplier_id has no matching suppliers row still surfaces,
+    // with a fallback name. The SUM matches the per-supplier figure the POS shows
+    // (getSupplierOutstanding) so both screens agree.
+    const grouped = await db
+      .select({
+        supplierId: supplierPayablesSchema.supplierId,
+        name: suppliersSchema.name,
+        totalOutstanding: sql<string>`COALESCE(SUM(
+          CAST(${supplierPayablesSchema.totalAmount} AS numeric)
+            - CAST(${supplierPayablesSchema.paidAmount} AS numeric)
+            - CAST(COALESCE(${supplierPayablesSchema.creditedAmount}, '0') AS numeric)
+        ), 0)::text`,
+      })
       .from(supplierPayablesSchema)
+      .leftJoin(
+        suppliersSchema,
+        sql`${suppliersSchema.id}::text = ${supplierPayablesSchema.supplierId}`,
+      )
       .where(
         and(
           eq(supplierPayablesSchema.organizationId, orgId),
           inArray(supplierPayablesSchema.status, ['open', 'partial']),
         ),
-      );
+      )
+      .groupBy(supplierPayablesSchema.supplierId, suppliersSchema.name);
 
-    if (payableSupplierIds.length === 0) {
-      return { ok: true, data: [] };
-    }
+    const data: SupplierOutstandingRow[] = grouped
+      .map(r => ({
+        supplierId: r.supplierId,
+        name: r.name ?? 'Proveedor sin nombre',
+        totalOutstanding: Number.parseFloat(r.totalOutstanding),
+      }))
+      .filter(r => r.totalOutstanding > 0)
+      .sort((a, b) => b.totalOutstanding - a.totalOutstanding);
 
-    const supplierIds = payableSupplierIds.map(r => r.supplierId);
-
-    const suppliers = await db
-      .select({ id: suppliersSchema.id, name: suppliersSchema.name })
-      .from(suppliersSchema)
-      .where(
-        inArray(suppliersSchema.id, supplierIds),
-      );
-
-    const rows: SupplierOutstandingRow[] = [];
-    for (const s of suppliers) {
-      const outstanding = await getSupplierOutstanding(db, orgId, s.id);
-      if (outstanding.totalOutstanding > 0) {
-        rows.push({ supplierId: s.id, name: s.name, totalOutstanding: outstanding.totalOutstanding });
-      }
-    }
-
-    return { ok: true, data: rows };
+    return { ok: true, data };
   } catch (err: unknown) {
     return {
       ok: false,

@@ -1,10 +1,11 @@
 'use client';
 
+import type { ReactNode } from 'react';
 import type { SupplierInvoiceRow, SupplierOutstandingRow } from '@/actions/treasury';
 import type { TreasuryAccountRow } from '@/libs/treasury';
 import { ArrowRightLeft, Building2, Plus, Tag } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { type ReactNode, useEffect, useState, useTransition } from 'react';
+import { useEffect, useState, useTransition } from 'react';
 import { getSupplierInvoicesAction, listSuppliersWithOutstanding, recordGasto, recordSupplierPaymentFromConsole } from '@/actions/treasury';
 import { Button } from '@/components/ui/button';
 import {
@@ -327,9 +328,12 @@ function SupplierPaymentModal({
   function handleOpen(isOpen: boolean) {
     if (isOpen && suppliers.length === 0 && !loadingSuppliers) {
       setLoadingSuppliers(true);
+      setError(null);
       listSuppliersWithOutstanding().then((res) => {
         if (res.ok) {
           setSuppliers(res.data);
+        } else {
+          setError(res.error);
         }
         setLoadingSuppliers(false);
       });
@@ -429,9 +433,15 @@ function SupplierPaymentModal({
                 )
               : suppliers.length === 0 && !loadingSuppliers
                 ? (
-                    <p className="text-xs text-muted-foreground">
-                      No hay proveedores con deuda pendiente.
-                    </p>
+                    error
+                      ? (
+                          <p className="text-xs text-destructive">{error}</p>
+                        )
+                      : (
+                          <p className="text-xs text-muted-foreground">
+                            No hay proveedores con deuda pendiente.
+                          </p>
+                        )
                   )
                 : (
                     <>
