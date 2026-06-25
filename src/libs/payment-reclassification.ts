@@ -202,3 +202,241 @@ export async function reclassifyPosSalePayment(
     createdBy: args.createdBy,
   });
 }
+
+// ── Full re-split ────────────────────────────────────────────────────────────
+// A correction can do more than move one amount between two methods: the cashier
+// re-enters the WHOLE payment using the same POS checkout they use to charge
+// (e.g. a sale booked as full cash was really cash + transfer). This applies the
+// new split as a unit while staying exactly equivalent to a sequence of
+// reclassifyPayment calls — the sale total never moves, only the NET cash delta
+// posts to the live session, and transfer reconciliations are rebuilt only for
+// the methods that actually changed.
+
+export type ResplitPaymentInput = {
+  method: string;
+  amount: number | string;
+  reference?: string | null;
+  changeGiven?: number | string;
+};
+
+export type ResplitArgs = {
+  organizationId: string;
+  saleId: string;
+  payments: ResplitPaymentInput[];
+  // The current OPEN session — where the signed net cash delta posts. Never the
+  // sale's original (possibly closed) session.
+  currentSessionId: string;
+  createdBy: string;
+};
+
+// Identity of a payment row for diffing old vs new. Two rows with the same key
+// are the SAME payment and must be left untouched, so an already-confirmed
+// transfer reconciliation is never reset to pending by a no-op correction.
+function paymentIdentity(p: {
+  method: string;
+  amount: number | string;
+  reference: string | null;
+  changeGiven: number | string;
+}): string {
+  return [
+    p.method.trim().toLowerCase(),
+    toMoney(p.amount),
+    (p.reference ?? '').trim(),
+    toMoney(p.changeGiven),
+  ].join('|');
+}
+
+export async function resplitPayment(
+  executor: Executor,
+  args: ResplitArgs,
+): Promise<ReclassifyResult> {
+  const [sale] = await executor
+    .select({
+      id: salesSchema.id,
+      total: salesSchema.total,
+      posTokenId: salesSchema.posTokenId,
+    })
+    .from(salesSchema)
+    .where(
+      and(
+        eq(salesSchema.id, args.saleId),
+        eq(salesSchema.organizationId, args.organizationId),
+      ),
+    )
+    .limit(1);
+  if (!sale) {
+    return { ok: false, error: 'Venta no encontrada' };
+  }
+
+  // ── Normalize + validate the desired split. The total is an invariant: a
+  // correction fixes HOW the customer paid, never how much.
+  const desired = args.payments.map(p => ({
+    method: p.method.trim(),
+    amount: Number.parseFloat(toMoney(p.amount)),
+    reference: p.reference?.trim() ? p.reference.trim() : null,
+    changeGiven: Number.parseFloat(toMoney(p.changeGiven ?? 0)),
+  }));
+  if (desired.length === 0) {
+    return { ok: false, error: 'Indicá al menos un método de pago' };
+  }
+  for (const d of desired) {
+    if (!d.method) {
+      return { ok: false, error: 'Método de pago requerido' };
+    }
+    if (!Number.isFinite(d.amount) || d.amount <= 0) {
+      return { ok: false, error: 'Cada pago debe ser mayor a 0' };
+    }
+  }
+  const newTotal = Number.parseFloat(
+    desired.reduce((s, d) => s + d.amount, 0).toFixed(2),
+  );
+  const saleTotal = Number.parseFloat(sale.total) || 0;
+  if (Math.abs(newTotal - saleTotal) > 0.01) {
+    return {
+      ok: false,
+      error: `Los pagos deben sumar el total de la venta (${toMoney(saleTotal)})`,
+    };
+  }
+
+  const existing = await executor
+    .select({
+      id: salePaymentsSchema.id,
+      method: salePaymentsSchema.method,
+      amount: salePaymentsSchema.amount,
+      reference: salePaymentsSchema.reference,
+      changeGiven: salePaymentsSchema.changeGiven,
+    })
+    .from(salePaymentsSchema)
+    .where(eq(salePaymentsSchema.saleId, sale.id));
+
+  // ── Diff by identity. Rows present in both stay as-is; rows only in the old
+  // set are removed (FK cascade drops their reconciliations); rows only in the
+  // new set are inserted.
+  const leftoverExisting = [...existing];
+  const toInsert: typeof desired = [];
+  for (const d of desired) {
+    const key = paymentIdentity(d);
+    const idx = leftoverExisting.findIndex(e => paymentIdentity(e) === key);
+    if (idx >= 0) {
+      leftoverExisting.splice(idx, 1);
+    } else {
+      toInsert.push(d);
+    }
+  }
+  for (const stale of leftoverExisting) {
+    await executor
+      .delete(salePaymentsSchema)
+      .where(eq(salePaymentsSchema.id, stale.id));
+  }
+
+  // ── Net cash delta over the WHOLE split, so the compensating movement equals
+  // what a chain of reclassifyPayment calls would have posted.
+  const cashTotal = (rows: { method: string; amount: number | string }[]) =>
+    rows.reduce(
+      (s, r) =>
+        s + (isCashMethod(r.method) ? Number.parseFloat(String(r.amount)) || 0 : 0),
+      0,
+    );
+  const cashDelta = Number.parseFloat(
+    (cashTotal(desired) - cashTotal(existing)).toFixed(2),
+  );
+
+  const inserted: { id: string; method: string; amount: string }[] = [];
+  for (const d of toInsert) {
+    const [row] = await executor
+      .insert(salePaymentsSchema)
+      .values({
+        saleId: sale.id,
+        method: d.method,
+        amount: toMoney(d.amount),
+        changeGiven: toMoney(d.changeGiven),
+        reference: d.reference,
+      })
+      .returning({
+        id: salePaymentsSchema.id,
+        method: salePaymentsSchema.method,
+        amount: salePaymentsSchema.amount,
+      });
+    if (row) {
+      inserted.push(row);
+    }
+  }
+
+  if (cashDelta !== 0) {
+    await recordReclassificationMovement(executor, {
+      organizationId: args.organizationId,
+      sessionId: args.currentSessionId,
+      amount: cashDelta,
+      reason: 'Corrección de método de pago',
+      saleId: sale.id,
+      createdBy: args.createdBy,
+    });
+  }
+
+  // ── Build reconciliations only for the genuinely new transfer rows. Unchanged
+  // transfer rows keep theirs (including a confirmed status); removed ones lost
+  // theirs via cascade.
+  for (const row of inserted) {
+    if (methodNeedsReconciliation(row.method)) {
+      await createReconciliationForPayment(executor, {
+        organizationId: args.organizationId,
+        salePaymentId: row.id,
+        method: row.method,
+        expectedAmount: row.amount,
+        posTokenId: sale.posTokenId,
+      });
+    }
+  }
+
+  return { ok: true };
+}
+
+export type PosResplitArgs = {
+  organizationId: string;
+  // The device's CURRENT open cash session — where the net cash delta lands.
+  session: { id: string; openedAt: Date; posTokenId: string | null };
+  saleId: string;
+  payments: ResplitPaymentInput[];
+  createdBy: string;
+};
+
+// POS-side full re-split. Same in-shift guard as reclassifyPosSalePayment:
+// correcting a past/closed-shift sale is rejected because its cash delta would
+// land in today's session and re-open a descuadre.
+export async function resplitPosSalePayment(
+  executor: Executor,
+  args: PosResplitArgs,
+): Promise<ReclassifyResult> {
+  const [sale] = await executor
+    .select({
+      saleCreatedAt: salesSchema.createdAt,
+      salePosTokenId: salesSchema.posTokenId,
+    })
+    .from(salesSchema)
+    .where(
+      and(
+        eq(salesSchema.id, args.saleId),
+        eq(salesSchema.organizationId, args.organizationId),
+      ),
+    )
+    .limit(1);
+  if (!sale) {
+    return { ok: false, error: 'Venta no encontrada' };
+  }
+
+  const sameDevice
+    = (sale.salePosTokenId ?? null) === (args.session.posTokenId ?? null);
+  const withinShift
+    = sale.saleCreatedAt.getTime() >= args.session.openedAt.getTime();
+  if (!sameDevice || !withinShift) {
+    return { ok: false, error: 'Solo podés corregir una venta del turno actual' };
+  }
+
+  return resplitPayment(executor, {
+    organizationId: args.organizationId,
+    saleId: args.saleId,
+    payments: args.payments,
+    currentSessionId: args.session.id,
+    createdBy: args.createdBy,
+  });
+}
