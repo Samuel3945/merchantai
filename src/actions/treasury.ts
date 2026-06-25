@@ -481,7 +481,7 @@ export type SupplierOutstandingRow = {
 };
 
 export async function listSuppliersWithOutstanding(): Promise<
-  ActionResult<SupplierOutstandingRow[]>
+  ActionResult<{ orgId: string; rawCount: number; rows: SupplierOutstandingRow[] }>
 > {
   const { orgId } = await requirePanelModule('cash');
 
@@ -516,7 +516,7 @@ export async function listSuppliersWithOutstanding(): Promise<
       )
       .groupBy(supplierPayablesSchema.supplierId, suppliersSchema.name);
 
-    const data: SupplierOutstandingRow[] = grouped
+    const rows: SupplierOutstandingRow[] = grouped
       .map(r => ({
         supplierId: r.supplierId,
         name: r.name ?? 'Proveedor sin nombre',
@@ -525,26 +525,10 @@ export async function listSuppliersWithOutstanding(): Promise<
       .filter(r => r.totalOutstanding > 0)
       .sort((a, b) => b.totalOutstanding - a.totalOutstanding);
 
-    return { ok: true, data };
-  } catch (err: unknown) {
-    return {
-      ok: false,
-      error: err instanceof Error ? err.message : 'Error al obtener proveedores con saldo',
-    };
-  }
-}
-
-// ── debugTreasuryOrg (TEMP deploy/org diagnostic) ─────────────────────────────
-// Returns the org the panel resolves for THIS admin session plus the raw count
-// of open/partial supplier payables in that org (no suppliers join). Surfaced in
-// the "Pagar proveedor" empty state to diagnose why a debt that the POS can see
-// is invisible to the admin panel. Remove once the org mismatch is confirmed.
-export async function debugTreasuryOrg(): Promise<
-  ActionResult<{ orgId: string; openPayables: number }>
-> {
-  try {
-    const { orgId } = await requirePanelModule('cash');
-    const [row] = await db
+    // TEMP diagnostic: raw count of open/partial payables for THIS resolved org
+    // (no suppliers join), surfaced in the modal to confirm whether the panel is
+    // querying the same org that holds the debt the POS can see.
+    const [countRow] = await db
       .select({ c: sql<number>`count(*)::int` })
       .from(supplierPayablesSchema)
       .where(
@@ -553,11 +537,12 @@ export async function debugTreasuryOrg(): Promise<
           inArray(supplierPayablesSchema.status, ['open', 'partial']),
         ),
       );
-    return { ok: true, data: { orgId, openPayables: row?.c ?? 0 } };
+
+    return { ok: true, data: { orgId, rawCount: countRow?.c ?? 0, rows } };
   } catch (err: unknown) {
     return {
       ok: false,
-      error: err instanceof Error ? err.message : 'debug failed',
+      error: err instanceof Error ? err.message : 'Error al obtener proveedores con saldo',
     };
   }
 }

@@ -6,7 +6,7 @@ import type { TreasuryAccountRow } from '@/libs/treasury';
 import { ArrowRightLeft, Building2, Plus, Tag } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState, useTransition } from 'react';
-import { debugTreasuryOrg, getSupplierInvoicesAction, listSuppliersWithOutstanding, recordGasto, recordSupplierPaymentFromConsole } from '@/actions/treasury';
+import { getSupplierInvoicesAction, listSuppliersWithOutstanding, recordGasto, recordSupplierPaymentFromConsole } from '@/actions/treasury';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -334,25 +334,21 @@ function SupplierPaymentModal({
       setError(null);
       setDiag(null);
       setDiagErr(null);
-      debugTreasuryOrg()
-        .then((r) => {
-          if (r.ok) {
-            setDiag(r.data);
+      listSuppliersWithOutstanding()
+        .then((res) => {
+          if (res.ok) {
+            setSuppliers(res.data.rows);
+            setDiag({ orgId: res.data.orgId, openPayables: res.data.rawCount });
           } else {
-            setDiagErr(r.error);
+            setError(res.error);
+            setDiagErr(res.error);
           }
+          setLoadingSuppliers(false);
         })
         .catch((e: unknown) => {
           setDiagErr(e instanceof Error ? e.message : String(e));
+          setLoadingSuppliers(false);
         });
-      listSuppliersWithOutstanding().then((res) => {
-        if (res.ok) {
-          setSuppliers(res.data);
-        } else {
-          setError(res.error);
-        }
-        setLoadingSuppliers(false);
-      });
     }
     if (!isOpen) {
       setSupplierId('');
@@ -425,7 +421,7 @@ function SupplierPaymentModal({
             text-[11px] font-semibold tracking-widest text-primary uppercase
           "
           >
-            Pagar proveedor · build 2026-06-25 #4
+            Pagar proveedor · build 2026-06-25 #5
           </span>
           <p className="mt-0.5 text-[12.5px] text-muted-foreground">
             Salda una deuda pendiente con un proveedor desde una caja fuerte o cuenta bancaria.
