@@ -105,15 +105,15 @@ export default async function DashboardLayout(props: DashboardLayoutProps) {
     getAppSetting('modules.ai'),
   ]);
   // Most modules default to ENABLED; the owner opts out in Ajustes → Módulos.
-  // The AI preview is the exception: it defaults OFF and is enabled per-org by
-  // the operator from /platform. Domicilios rides with it (the agent's phase-2
-  // use case), so it stays hidden until AI preview is on AND its own toggle is.
+  // AI preview and e-invoicing (Facturas) are the exceptions: both default OFF
+  // and are enabled per-org by the operator from /platform. Domicilios rides with
+  // the AI preview, so it stays hidden until AI preview is on AND its toggle is.
   const aiEnabled = aiSetting.value === 'true';
   const navFlags: NavModuleFlags = {
     credito: creditoSetting.value !== 'false',
     employees: employeesSetting.value !== 'false',
     delivery: aiEnabled && deliverySetting.value !== 'false',
-    facturas: facturasSetting.value !== 'false',
+    facturas: facturasSetting.value === 'true',
     suppliers: suppliersSetting.value !== 'false',
     ai: aiEnabled,
   };

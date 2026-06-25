@@ -94,9 +94,9 @@ export default async function DashboardSettingsPage(props: {
           'modules.employees': asBool(map['modules.employees'], true),
           'modules.delivery': asBool(map['modules.delivery'], true),
           'modules.suppliers': asBool(map['modules.suppliers'], true),
-          'modules.facturas': asBool(map['modules.facturas'], true),
         }}
         aiPreviewEnabled={asBool(map['modules.ai'], false)}
+        facturasEnabled={asBool(map['modules.facturas'], false)}
         fiscal={{
           fiscal_nit: map.fiscal_nit,
           fiscal_dian_resolution: map.fiscal_dian_resolution,

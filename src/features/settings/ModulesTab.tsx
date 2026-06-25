@@ -7,7 +7,6 @@ export type ModulesTabValues = {
   'modules.employees': boolean;
   'modules.delivery': boolean;
   'modules.suppliers': boolean;
-  'modules.facturas': boolean;
 };
 
 // Optional modules a one-person shop may never use. All default to ENABLED;
@@ -31,11 +30,6 @@ const MODULE_TOGGLES: Array<{
     key: 'modules.suppliers',
     label: 'Proveedores',
     description: 'Base de proveedores y pagos de mercancía.',
-  },
-  {
-    key: 'modules.facturas',
-    label: 'Facturas',
-    description: 'Facturación electrónica DIAN y su historial.',
   },
 ];
 

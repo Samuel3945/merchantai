@@ -25,9 +25,12 @@ const BASE_TABS: ReadonlyArray<Tab> = [
   { key: 'business', label: 'Negocio' },
   { key: 'payment-methods', label: 'Métodos de pago' },
   { key: 'modules', label: 'Módulos' },
-  { key: 'fiscal', label: 'Facturación' },
   { key: 'returns', label: 'Devoluciones' },
 ];
+
+// The Facturación tab only exists when the operator enabled e-invoicing for the
+// org (platform gate). Inserted right after Módulos to keep the order familiar.
+const FISCAL_TAB: Tab = { key: 'fiscal', label: 'Facturación' };
 
 const TRANSFER_SECURITY_TAB: Tab = { key: 'transfer-security', label: 'Transferencias' };
 const AUDIT_TAB: Tab = { key: 'audit', label: 'Auditoría' };
@@ -44,6 +47,8 @@ export type SettingsClientProps = {
   // When AI preview is off the Domicilios module does not exist for this org,
   // so its toggle is hidden from the Módulos tab.
   aiPreviewEnabled: boolean;
+  // E-invoicing is operator-gated: the Facturación tab is hidden until enabled.
+  facturasEnabled: boolean;
 };
 
 export function SettingsClient({
@@ -56,10 +61,16 @@ export function SettingsClient({
   transferSecurity,
   isAdmin,
   aiPreviewEnabled,
+  facturasEnabled,
 }: SettingsClientProps) {
+  const baseTabs: Tab[] = [...BASE_TABS];
+  if (facturasEnabled) {
+    const afterModules = baseTabs.findIndex(t => t.key === 'modules') + 1;
+    baseTabs.splice(afterModules, 0, FISCAL_TAB);
+  }
   const tabs = isAdmin
-    ? [...BASE_TABS, TRANSFER_SECURITY_TAB, AUDIT_TAB]
-    : BASE_TABS;
+    ? [...baseTabs, TRANSFER_SECURITY_TAB, AUDIT_TAB]
+    : baseTabs;
   const [activeTab, setActiveTab] = useState<string>(tabs[0]!.key);
 
   return (

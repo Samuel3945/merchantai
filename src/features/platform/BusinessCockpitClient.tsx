@@ -40,7 +40,7 @@ const STATUS_OPTIONS: { value: OrgStatus; label: string }[] = [
 ];
 
 const KNOWN_ADDONS = ['pos_device', 'pos_cashier'];
-const KNOWN_SETTING_KEYS = ['smartStockEnabled', 'modules.ai'];
+const KNOWN_SETTING_KEYS = ['smartStockEnabled', 'modules.ai', 'modules.facturas'];
 
 const AGENT_LABELS: Record<PlatformAgentKind, string> = {
   sales_manager: 'Sales Manager',
@@ -86,6 +86,10 @@ export function BusinessCockpitClient(props: {
   // OFF: only orgs the operator flips on here see the AI agent and Domicilios.
   const aiPreviewOn
     = org.settings.find(s => s.key === 'modules.ai')?.value === 'true';
+  // E-invoicing (Facturas) is also operator-gated, default OFF. Enable it only
+  // for clients who want DIAN invoicing; until then the org sees nothing fiscal.
+  const facturasOn
+    = org.settings.find(s => s.key === 'modules.facturas')?.value === 'true';
 
   const run = (fn: () => Promise<{ ok: boolean; error?: string }>) => {
     startTransition(async () => {
@@ -170,6 +174,34 @@ export function BusinessCockpitClient(props: {
                   ))}
             >
               {aiPreviewOn ? 'Desactivar IA' : 'Activar IA'}
+            </Button>
+          </div>
+        </div>
+      </Section>
+
+      <Section title="Facturación electrónica">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="max-w-xl text-sm text-muted-foreground">
+            Muestra la facturación electrónica (DIAN) a esta organización: panel,
+            Ajustes → Facturación y la APK del POS. Mientras esté inactiva, el
+            negocio no ve nada de facturación.
+          </p>
+          <div className="flex items-center gap-2">
+            <Badge variant={facturasOn ? 'default' : 'secondary'}>
+              {facturasOn ? 'Activa' : 'Inactiva'}
+            </Badge>
+            <Button
+              variant={facturasOn ? 'secondary' : 'default'}
+              disabled={pending}
+              onClick={() =>
+                run(() =>
+                  setOrgSetting(
+                    org.organizationId,
+                    'modules.facturas',
+                    facturasOn ? 'false' : 'true',
+                  ))}
+            >
+              {facturasOn ? 'Desactivar facturación' : 'Activar facturación'}
             </Button>
           </div>
         </div>
