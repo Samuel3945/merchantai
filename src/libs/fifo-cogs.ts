@@ -18,10 +18,16 @@ type RawTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 //
 // CASE (not `(reason = 'return_sale') DESC`) so a NULL reason sorts as a normal
 // batch instead of NULLS-FIRST jumping the queue.
+//
+// Columns are table-qualified (stock_movements.*) because getProductLots joins
+// supplier_payables, which ALSO has a created_at column — an unqualified
+// created_at there throws "column reference created_at is ambiguous" (42702).
+// All consumers query stock_movements as the (unaliased) base table, so the
+// qualifier is valid everywhere, join or no join.
 export const fifoBatchOrder = sql`
-  CASE WHEN reason = 'return_sale' THEN 0 ELSE 1 END ASC,
-  CASE WHEN reason = 'return_sale' THEN created_at END DESC,
-  created_at ASC
+  CASE WHEN stock_movements.reason = 'return_sale' THEN 0 ELSE 1 END ASC,
+  CASE WHEN stock_movements.reason = 'return_sale' THEN stock_movements.created_at END DESC,
+  stock_movements.created_at ASC
 `;
 
 export type FifoSaleLine = {
