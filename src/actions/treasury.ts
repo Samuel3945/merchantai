@@ -481,11 +481,9 @@ export type SupplierOutstandingRow = {
 };
 
 export async function listSuppliersWithOutstanding(): Promise<
-  ActionResult<{ orgId: string; rawCount: number; rows: SupplierOutstandingRow[] }>
+  ActionResult<SupplierOutstandingRow[]>
 > {
   const { orgId } = await requirePanelModule('cash');
-  // TEMP server-side diagnostic — reliable channel (Easypanel container logs).
-  console.warn(`[DIAG-TREASURY] resolved orgId=${orgId}`);
 
   try {
     // Aggregate outstanding per supplier DIRECTLY from supplier_payables, then
@@ -527,23 +525,7 @@ export async function listSuppliersWithOutstanding(): Promise<
       .filter(r => r.totalOutstanding > 0)
       .sort((a, b) => b.totalOutstanding - a.totalOutstanding);
 
-    // TEMP diagnostic: raw count of open/partial payables for THIS resolved org
-    // (no suppliers join), surfaced in the modal to confirm whether the panel is
-    // querying the same org that holds the debt the POS can see.
-    const [countRow] = await db
-      .select({ c: sql<number>`count(*)::int` })
-      .from(supplierPayablesSchema)
-      .where(
-        and(
-          eq(supplierPayablesSchema.organizationId, orgId),
-          inArray(supplierPayablesSchema.status, ['open', 'partial']),
-        ),
-      );
-
-    console.warn(
-      `[DIAG-TREASURY] orgId=${orgId} rawOpenPayables=${countRow?.c ?? 0} groupedSuppliers=${rows.length}`,
-    );
-    return { ok: true, data: { orgId, rawCount: countRow?.c ?? 0, rows } };
+    return { ok: true, data: rows };
   } catch (err: unknown) {
     return {
       ok: false,
