@@ -6,7 +6,7 @@ import type { TreasuryAccountRow } from '@/libs/treasury';
 import { ArrowRightLeft, Building2, Plus, Tag } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState, useTransition } from 'react';
-import { getSupplierInvoicesAction, listSuppliersWithOutstanding, recordGasto, recordSupplierPaymentFromConsole } from '@/actions/treasury';
+import { debugTreasuryOrg, getSupplierInvoicesAction, listSuppliersWithOutstanding, recordGasto, recordSupplierPaymentFromConsole } from '@/actions/treasury';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -288,6 +288,8 @@ function SupplierPaymentModal({
   const [error, setError] = useState<string | null>(null);
   const [invoices, setInvoices] = useState<SupplierInvoiceRow[]>([]);
   const [loadingInvoices, setLoadingInvoices] = useState(false);
+  // TEMP org diagnostic — surfaced in the empty state. Remove once resolved.
+  const [diag, setDiag] = useState<{ orgId: string; openPayables: number } | null>(null);
 
   // Fetch per-invoice breakdown whenever the selected supplier changes.
   // The `active` flag guards against stale responses when the supplier changes quickly.
@@ -329,6 +331,11 @@ function SupplierPaymentModal({
     if (isOpen && suppliers.length === 0 && !loadingSuppliers) {
       setLoadingSuppliers(true);
       setError(null);
+      debugTreasuryOrg().then((r) => {
+        if (r.ok) {
+          setDiag(r.data);
+        }
+      });
       listSuppliersWithOutstanding().then((res) => {
         if (res.ok) {
           setSuppliers(res.data);
@@ -409,7 +416,7 @@ function SupplierPaymentModal({
             text-[11px] font-semibold tracking-widest text-primary uppercase
           "
           >
-            Pagar proveedor · build 2026-06-25
+            Pagar proveedor · build 2026-06-25 #2
           </span>
           <p className="mt-0.5 text-[12.5px] text-muted-foreground">
             Salda una deuda pendiente con un proveedor desde una caja fuerte o cuenta bancaria.
@@ -438,9 +445,23 @@ function SupplierPaymentModal({
                           <p className="text-xs text-destructive">{error}</p>
                         )
                       : (
-                          <p className="text-xs text-muted-foreground">
-                            No hay proveedores con deuda pendiente.
-                          </p>
+                          <div className="space-y-1">
+                            <p className="text-xs text-muted-foreground">
+                              No hay proveedores con deuda pendiente.
+                            </p>
+                            {diag && (
+                              <p className="
+                                text-[10px] break-all text-muted-foreground/70
+                              "
+                              >
+                                diag · org:
+                                {' '}
+                                {diag.orgId}
+                                {' · payables: '}
+                                {diag.openPayables}
+                              </p>
+                            )}
+                          </div>
                         )
                   )
                 : (
