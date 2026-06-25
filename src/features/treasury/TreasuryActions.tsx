@@ -327,29 +327,53 @@ function SupplierPaymentModal({
     label: `${a.name} (${a.type === 'caja_fuerte' ? 'caja fuerte' : 'banco'})`,
   }));
 
-  // Load suppliers with outstanding when the modal opens.
-  function handleOpen(isOpen: boolean) {
-    if (isOpen && suppliers.length === 0 && !loadingSuppliers) {
+  // Load suppliers with outstanding when the modal opens. MUST be an effect keyed
+  // on `open`: the Dialog's onOpenChange does NOT fire when `open` is controlled
+  // externally (the parent button sets it), so the old handleOpen-based load never
+  // ran — that is why the list was always empty and the query never executed.
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    let active = true;
+    Promise.resolve().then(async () => {
+      if (!active) {
+        return;
+      }
       setLoadingSuppliers(true);
       setError(null);
       setDiag(null);
       setDiagErr(null);
-      listSuppliersWithOutstanding()
-        .then((res) => {
-          if (res.ok) {
-            setSuppliers(res.data.rows);
-            setDiag({ orgId: res.data.orgId, openPayables: res.data.rawCount });
-          } else {
-            setError(res.error);
-            setDiagErr(res.error);
-          }
-          setLoadingSuppliers(false);
-        })
-        .catch((e: unknown) => {
+      try {
+        const res = await listSuppliersWithOutstanding();
+        if (!active) {
+          return;
+        }
+        if (res.ok) {
+          setSuppliers(res.data.rows);
+          setDiag({ orgId: res.data.orgId, openPayables: res.data.rawCount });
+        } else {
+          setError(res.error);
+          setDiagErr(res.error);
+        }
+      } catch (e) {
+        if (active) {
           setDiagErr(e instanceof Error ? e.message : String(e));
+        }
+      } finally {
+        if (active) {
           setLoadingSuppliers(false);
-        });
-    }
+        }
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [open]);
+
+  // Reset on close. onOpenChange DOES fire for Radix-initiated closes (escape /
+  // overlay click); explicit Cancelar/submit call onClose directly.
+  function handleOpen(isOpen: boolean) {
     if (!isOpen) {
       setSupplierId('');
       setInvoices([]);
@@ -421,7 +445,7 @@ function SupplierPaymentModal({
             text-[11px] font-semibold tracking-widest text-primary uppercase
           "
           >
-            Pagar proveedor · build 2026-06-25 #6
+            Pagar proveedor · build 2026-06-25 #7
           </span>
           <p className="mt-0.5 text-[12.5px] text-muted-foreground">
             Salda una deuda pendiente con un proveedor desde una caja fuerte o cuenta bancaria.
