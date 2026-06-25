@@ -17,9 +17,13 @@ import {
 // the `plans` table and is operator-managed, so this is intentionally an open
 // string instead of a closed union.
 export type PlanName = string;
-export type AgentKind = 'sales_manager' | 'customer_service';
+export type AgentKind = 'sales_manager' | 'customer_service' | 'einvoice';
 
-const AGENT_KINDS: AgentKind[] = ['sales_manager', 'customer_service'];
+const AGENT_KINDS: AgentKind[] = [
+  'sales_manager',
+  'customer_service',
+  'einvoice',
+];
 
 // AI credit quotas come from the plan catalog (plan_entitlements), not from a
 // hardcoded map. Unknown slugs grant zero credits, matching the old fallback.
@@ -33,6 +37,9 @@ async function aiLimitsForPlan(
       : 0,
     customer_service: entitlements
       ? limitOf(entitlements, 'ai_credits_customer_service')
+      : 0,
+    einvoice: entitlements
+      ? limitOf(entitlements, 'ai_credits_einvoice')
       : 0,
   };
 }
@@ -101,7 +108,9 @@ export type PlanSnapshot = {
 };
 
 function isAgentKind(value: string): value is AgentKind {
-  return value === 'sales_manager' || value === 'customer_service';
+  return value === 'sales_manager'
+    || value === 'customer_service'
+    || value === 'einvoice';
 }
 
 async function requireOrg() {
@@ -434,10 +443,19 @@ export type ConsumeResult
 export async function consumeCredit(
   agentKind: AgentKind,
 ): Promise<ConsumeResult> {
+  const { orgId } = await requireOrg();
+  return consumeCreditForOrg(orgId, agentKind);
+}
+
+// Same as consumeCredit but for an explicit org — usable from background hooks
+// (e.g. auto e-invoicing after a sale) that run without a Clerk session.
+export async function consumeCreditForOrg(
+  orgId: string,
+  agentKind: AgentKind,
+): Promise<ConsumeResult> {
   if (!isAgentKind(agentKind)) {
     throw new Error(`Unknown agent kind: ${String(agentKind)}`);
   }
-  const { orgId } = await requireOrg();
 
   await ensureCountersForPlan(orgId, await getActivePlan(orgId));
 

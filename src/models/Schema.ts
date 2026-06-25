@@ -1927,7 +1927,7 @@ export const appSettingsSchema = pgTable(
 
 // ── DIAN e-invoicing emissions ──────────────────────────────────────────────
 // Append-only audit trail of every attempt to emit an electronic document for a
-// sale through a provider (currently Factus). One sale can have several rows: a
+// sale through a provider (MATIAS). One sale can have several rows: a
 // failed attempt then a successful retry (kind 'invoice'), plus a 'credit_note'
 // when the sale is later returned. The provider adapter writes the request
 // `payload` and raw `response` here so a failed emission is fully debuggable.
@@ -1940,15 +1940,21 @@ export const einvoiceEmissionsSchema = pgTable(
     saleId: uuid('sale_id')
       .notNull()
       .references(() => salesSchema.id, { onDelete: 'cascade' }),
-    // 'invoice' | 'credit_note'
+    // 'invoice' | 'pos' | 'credit_note'
     kind: text('kind').default('invoice').notNull(),
-    // 'factus' for now; the column lets a second adapter coexist later.
-    provider: text('provider').default('factus').notNull(),
+    // 'matias'; the column lets a second adapter coexist later.
+    provider: text('provider').default('matias').notNull(),
     // 'queued' | 'sent' | 'emitted' | 'failed'
     status: text('status').default('queued').notNull(),
     providerId: text('provider_id'),
     cufe: text('cufe'),
     number: text('number'),
+    // MATIAS result artifacts (also kept raw in `response`).
+    dianStatus: text('dian_status'),
+    pdfUrl: text('pdf_url'),
+    xmlUrl: text('xml_url'),
+    // Credits charged for this document (1 per emitted document; 0 on retries).
+    creditsConsumed: integer('credits_consumed').default(0).notNull(),
     customer: jsonb('customer'),
     payload: jsonb('payload'),
     response: jsonb('response'),

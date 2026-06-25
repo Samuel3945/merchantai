@@ -11,7 +11,7 @@ import {
 
   parseInvoiceNotes,
 } from '@/libs/einvoice/emit';
-import { FactusAdapter } from '@/libs/einvoice/factus-adapter';
+import { MatiasAdapter } from '@/libs/einvoice/matias-adapter';
 import { salesSchema } from '@/models/Schema';
 
 export type InvoiceTab = 'all' | 'pending' | 'emitted' | 'error';
@@ -42,7 +42,7 @@ export type InvoicesPayload = {
 };
 
 export type TestConnectionResult
-  = | { ok: true; env: string; baseUrl: string }
+  = | { ok: true; baseUrl: string }
     | { ok: false; message: string };
 
 async function requireOrg() {
@@ -176,22 +176,22 @@ export async function emitInvoice(
   return result;
 }
 
-/** Verifies the saved Factus credentials by requesting an OAuth token. */
+/** Verifies the app-level MATIAS account credentials against the sandbox. */
 export async function testEInvoiceConnection(): Promise<TestConnectionResult> {
   const { orgId } = await requireAdminOrg();
   const cfg = await loadEInvoiceConfig(orgId);
-  if (cfg.provider !== 'factus') {
-    return { ok: false, message: 'El proveedor seleccionado no es Factus.' };
+  if (cfg.provider !== 'matias') {
+    return { ok: false, message: 'El proveedor seleccionado no es MATIAS.' };
   }
-  if (!cfg.configured) {
+  if (!cfg.matias.email || !cfg.matias.password) {
     return {
       ok: false,
-      message: 'Faltan credenciales (email, password, client_id, client_secret).',
+      message: 'Faltan las credenciales de la cuenta MATIAS en el servidor.',
     };
   }
   try {
-    await FactusAdapter.accessToken(cfg);
-    return { ok: true, env: cfg.factus.env, baseUrl: cfg.factus.baseUrl };
+    await MatiasAdapter.accessToken(cfg);
+    return { ok: true, baseUrl: cfg.matias.baseUrl };
   } catch (e) {
     return { ok: false, message: e instanceof Error ? e.message : 'Error de conexión' };
   }

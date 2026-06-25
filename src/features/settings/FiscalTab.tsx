@@ -4,7 +4,7 @@ import { CheckCircle2, FileX2, Loader2, ReceiptText, XCircle } from 'lucide-reac
 import { useState } from 'react';
 import { testEInvoiceConnection } from '@/actions/einvoice';
 import { cn } from '@/utils/Helpers';
-import { MaskedField, SelectField, TextField } from './fields';
+import { SelectField, TextField, ToggleRow } from './fields';
 import { useSettingSave } from './useSettingSave';
 
 const EINVOICE_PROVIDERS = [
@@ -15,27 +15,27 @@ const EINVOICE_PROVIDERS = [
     icon: FileX2,
   },
   {
-    value: 'factus',
-    label: 'Factus (DIAN)',
-    description: 'Emite facturas electrónicas automáticamente con tu cuenta Factus.',
+    value: 'matias',
+    label: 'MATIAS (DIAN)',
+    description: 'Emite facturas y documentos POS electrónicos ante la DIAN.',
     icon: ReceiptText,
   },
 ] as const;
 
-const FACTUS_ENVS = [
-  { value: 'sandbox', label: 'Pruebas (sandbox)' },
-  { value: 'production', label: 'Producción' },
+const CERT_STATUSES = [
+  { value: 'none', label: 'Sin certificado' },
+  { value: 'activating', label: 'Activándose' },
+  { value: 'active', label: 'Activo' },
 ] as const;
 
 export type FiscalTabValues = {
   fiscal_nit: string;
+  fiscal_dian_resolution: string;
   fiscal_einvoice_provider: string;
-  einvoice_factus_email: string;
-  einvoice_factus_password: string;
-  einvoice_factus_client_id: string;
-  einvoice_factus_client_secret: string;
-  einvoice_factus_env: string;
-  einvoice_factus_base_url: string;
+  einvoice_matias_resolution_number: string;
+  einvoice_matias_prefix: string;
+  einvoice_cert_status: string;
+  einvoice_auto: string;
 };
 
 export function FiscalTab({ initial }: { initial: FiscalTabValues }) {
@@ -49,7 +49,7 @@ export function FiscalTab({ initial }: { initial: FiscalTabValues }) {
       <div>
         <h2 className="text-lg font-semibold">Facturación electrónica</h2>
         <p className="text-sm text-muted-foreground">
-          Conecta tu proveedor para emitir facturas electrónicas ante la DIAN.
+          Emití facturas y documentos POS electrónicos ante la DIAN con MATIAS.
         </p>
       </div>
 
@@ -112,12 +112,14 @@ export function FiscalTab({ initial }: { initial: FiscalTabValues }) {
         })}
       </div>
 
-      {provider === 'factus' && (
+      {provider === 'matias' && (
         <div className="space-y-4 rounded-md border border-border p-4">
           <div>
-            <h3 className="text-sm font-semibold">Cuenta Factus</h3>
+            <h3 className="text-sm font-semibold">Datos del emisor (este negocio)</h3>
             <p className="text-xs text-muted-foreground">
-              Credenciales de tu cuenta Factus y NIT con el que se emite.
+              El NIT, la resolución de numeración y el certificado con los que este
+              negocio emite ante la DIAN. La cuenta MATIAS es compartida y la
+              configura el equipo de la plataforma.
             </p>
           </div>
 
@@ -134,63 +136,60 @@ export function FiscalTab({ initial }: { initial: FiscalTabValues }) {
               onCommit={v => save('fiscal_nit', v.trim())}
             />
             <TextField
-              id="einvoice_factus_email"
-              label="Email de la cuenta Factus"
-              initial={initial.einvoice_factus_email}
-              placeholder="empresa@correo.co"
-              onCommit={v => save('einvoice_factus_email', v.trim())}
-            />
-            <MaskedField
-              id="einvoice_factus_password"
-              label="Contraseña"
-              initial={initial.einvoice_factus_password}
-              placeholder="Contraseña de la cuenta Factus"
-              onCommit={v => save('einvoice_factus_password', v)}
+              id="fiscal_dian_resolution"
+              label="Resolución DIAN (descripción)"
+              initial={initial.fiscal_dian_resolution}
+              placeholder="Resolución 187..."
+              onCommit={v => save('fiscal_dian_resolution', v.trim())}
             />
             <TextField
-              id="einvoice_factus_client_id"
-              label="Client ID"
-              initial={initial.einvoice_factus_client_id}
-              placeholder="client_id de la app Factus"
-              onCommit={v => save('einvoice_factus_client_id', v.trim())}
+              id="einvoice_matias_resolution_number"
+              label="Número de resolución"
+              initial={initial.einvoice_matias_resolution_number}
+              placeholder="18764074347312"
+              hint="El número de la resolución de numeración asignada por la DIAN."
+              onCommit={v =>
+                save('einvoice_matias_resolution_number', v.trim())}
             />
-            <MaskedField
-              id="einvoice_factus_client_secret"
-              label="Client Secret"
-              initial={initial.einvoice_factus_client_secret}
-              placeholder="client_secret de la app Factus"
-              onCommit={v => save('einvoice_factus_client_secret', v)}
+            <TextField
+              id="einvoice_matias_prefix"
+              label="Prefijo"
+              initial={initial.einvoice_matias_prefix}
+              placeholder="FEV"
+              onCommit={v => save('einvoice_matias_prefix', v.trim())}
             />
             <SelectField
-              id="einvoice_factus_env"
-              label="Entorno"
-              initial={initial.einvoice_factus_env || 'sandbox'}
-              options={FACTUS_ENVS}
-              onCommit={v => save('einvoice_factus_env', v)}
+              id="einvoice_cert_status"
+              label="Estado del certificado"
+              initial={
+                (initial.einvoice_cert_status || 'none') as
+                  'none' | 'activating' | 'active'
+              }
+              options={CERT_STATUSES}
+              hint="En sandbox MATIAS genera un certificado de prueba automáticamente; ponelo en «Activo» para poder emitir."
+              onCommit={v => save('einvoice_cert_status', v)}
             />
-            <TextField
-              id="einvoice_factus_base_url"
-              label="URL base (opcional)"
-              initial={initial.einvoice_factus_base_url}
-              placeholder="https://api.factus.com.co"
-              hint="Solo si necesitas sobrescribir la URL por defecto del entorno."
-              onCommit={v => save('einvoice_factus_base_url', v.trim())}
-            />
-            <div className="md:col-span-2">
-              <FactusConnectionTest />
-            </div>
           </div>
+
+          <ToggleRow
+            label="Facturación automática"
+            description="Cada venta emite su documento electrónico sola. Si está apagado, emitís manualmente desde Facturas."
+            initial={initial.einvoice_auto === '1'}
+            onCommit={v => save('einvoice_auto', v ? '1' : '0')}
+          />
+
+          <MatiasConnectionTest />
         </div>
       )}
     </div>
   );
 }
 
-function FactusConnectionTest() {
+function MatiasConnectionTest() {
   const [state, setState] = useState<
     | { status: 'idle' }
     | { status: 'loading' }
-    | { status: 'ok'; env: string }
+    | { status: 'ok'; baseUrl: string }
     | { status: 'error'; message: string }
   >({ status: 'idle' });
 
@@ -199,7 +198,7 @@ function FactusConnectionTest() {
     try {
       const result = await testEInvoiceConnection();
       if (result.ok) {
-        setState({ status: 'ok', env: result.env });
+        setState({ status: 'ok', baseUrl: result.baseUrl });
       } else {
         setState({ status: 'error', message: result.message });
       }
@@ -236,9 +235,7 @@ function FactusConnectionTest() {
         "
         >
           <CheckCircle2 className="size-4" />
-          Conexión exitosa (
-          {state.env}
-          )
+          Conexión exitosa con el sandbox
         </span>
       )}
       {state.status === 'error' && (

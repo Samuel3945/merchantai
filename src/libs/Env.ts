@@ -25,6 +25,15 @@ export const Env = createEnv({
     // Shared n8n webhook every WhatsApp channel forwards inbound messages to.
     // One URL for all instances; n8n maps to an org from the payload `instance`.
     WHATSAPP_N8N_WEBHOOK_URL: z.string().optional(),
+    // MATIAS electronic invoicing — app-level "Casa de Software" account (ONE
+    // account for all tenants). Base URL is locked to the DIAN sandbox; production
+    // is intentionally not wired here. Email/password optional: when absent,
+    // e-invoicing is simply unavailable (the Fiscal tab shows "not configured").
+    MATIAS_API_BASE_URL: z
+      .string()
+      .default('https://sandbox-api.matias-api.com/api/ubl2.1'),
+    MATIAS_ACCOUNT_EMAIL: z.string().optional(),
+    MATIAS_ACCOUNT_PASSWORD: z.string().optional(),
   },
   client: {
     NEXT_PUBLIC_APP_URL: z.string().optional(),
@@ -53,6 +62,9 @@ export const Env = createEnv({
     WHATSAPP_WEBHOOK_TOKEN: process.env.WHATSAPP_WEBHOOK_TOKEN,
     WHATSAPP_DEFAULT_ORG_ID: process.env.WHATSAPP_DEFAULT_ORG_ID,
     WHATSAPP_N8N_WEBHOOK_URL: process.env.WHATSAPP_N8N_WEBHOOK_URL,
+    MATIAS_API_BASE_URL: process.env.MATIAS_API_BASE_URL,
+    MATIAS_ACCOUNT_EMAIL: process.env.MATIAS_ACCOUNT_EMAIL,
+    MATIAS_ACCOUNT_PASSWORD: process.env.MATIAS_ACCOUNT_PASSWORD,
     NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
     NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:
       process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,

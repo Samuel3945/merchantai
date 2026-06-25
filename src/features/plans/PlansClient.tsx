@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button';
 const AGENT_LABELS: Record<AgentKind, string> = {
   sales_manager: 'Sales Manager',
   customer_service: 'Customer Service',
+  einvoice: 'Facturación electrónica',
 };
 
 const TOPUP_PRESETS: { requests: number; amountCop: number }[] = [
@@ -21,6 +22,18 @@ const TOPUP_PRESETS: { requests: number; amountCop: number }[] = [
   { requests: 500, amountCop: 79_000 },
   { requests: 1000, amountCop: 139_000 },
 ];
+
+// E-invoicing credits cost 50 COP each (1 credit = 1 emitted document).
+const EINVOICE_CREDIT_PRICE_COP = 50;
+const EINVOICE_TOPUP_PRESETS: { requests: number; amountCop: number }[] = [
+  { requests: 100, amountCop: 100 * EINVOICE_CREDIT_PRICE_COP },
+  { requests: 500, amountCop: 500 * EINVOICE_CREDIT_PRICE_COP },
+  { requests: 1000, amountCop: 1000 * EINVOICE_CREDIT_PRICE_COP },
+];
+
+function topUpPresetsFor(agentKind: AgentKind) {
+  return agentKind === 'einvoice' ? EINVOICE_TOPUP_PRESETS : TOPUP_PRESETS;
+}
 
 const copFmt = new Intl.NumberFormat('es-CO', {
   style: 'currency',
@@ -151,7 +164,8 @@ function TopUpModal({
   onConfirm: (requests: number, amountCop: number) => void;
 }) {
   const [selected, setSelected] = useState(0);
-  const preset = TOPUP_PRESETS[selected]!;
+  const presets = topUpPresetsFor(agentKind);
+  const preset = presets[selected]!;
 
   return (
     <div className="
@@ -169,7 +183,7 @@ function TopUpModal({
         </div>
 
         <div className="mt-4 space-y-2">
-          {TOPUP_PRESETS.map((p, i) => (
+          {presets.map((p, i) => (
             <label
               key={p.requests}
               className={`

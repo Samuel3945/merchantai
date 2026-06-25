@@ -129,7 +129,7 @@ export function InvoicesClient({
               Las facturas que pidan tus clientes quedan
               {' '}
               <strong>pendientes</strong>
-              . Cuando conectes Factus desde Ajustes, las emitís con un click.
+              . Cuando configures la facturación electrónica desde Ajustes, las emitís con un click.
             </p>
           </div>
           <Link

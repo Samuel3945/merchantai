@@ -13,6 +13,7 @@ import { cn } from '@/utils/Helpers';
 const AGENT_LABELS: Record<AgentKind, string> = {
   sales_manager: 'Créditos inteligentes',
   customer_service: 'Customer Service',
+  einvoice: 'Facturación electrónica',
 };
 
 const numberFmt = new Intl.NumberFormat('es-CO');

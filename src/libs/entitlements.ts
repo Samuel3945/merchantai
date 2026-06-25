@@ -17,7 +17,7 @@ import {
  *
  * Known keys (operators can add more from the platform console):
  *   max_cashiers, max_pos_devices,
- *   ai_credits_sales_manager, ai_credits_customer_service,
+ *   ai_credits_sales_manager, ai_credits_customer_service, ai_credits_einvoice,
  *   feature_smart_stock (0/1)
  */
 
@@ -37,6 +37,7 @@ const FALLBACK_ENTITLEMENTS: OrgEntitlements = {
     max_pos_devices: 1,
     ai_credits_sales_manager: 0,
     ai_credits_customer_service: 0,
+    ai_credits_einvoice: 0,
     feature_smart_stock: 0,
   },
 };

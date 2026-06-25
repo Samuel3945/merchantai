@@ -29,6 +29,7 @@ const KNOWN_ENTITLEMENT_KEYS = [
   'max_pos_devices',
   'ai_credits_sales_manager',
   'ai_credits_customer_service',
+  'ai_credits_einvoice',
   'feature_smart_stock',
 ];
 

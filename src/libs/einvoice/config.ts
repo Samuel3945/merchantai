@@ -1,49 +1,57 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '@/libs/DB';
+import { Env } from '@/libs/Env';
 import { appSettingsSchema } from '@/models/Schema';
 
-// DIAN e-invoicing configuration lives in `app_settings`, org-scoped. The fiscal
-// identity (NIT, DIAN resolution) is reused from the Fiscal tab; the Factus
-// credentials are dedicated keys so a second provider could coexist later.
+// MATIAS e-invoicing configuration.
 //
-// Secrets are entered by the admin in Ajustes → Fiscal and never committed.
+// "Casa de Software" model: ONE MATIAS account for the whole platform. The account
+// credentials are app-level (env, NEVER per tenant). What varies per tenant lives
+// in `app_settings` (org-scoped): the emitter NIT, the DIAN numbering resolution +
+// prefix, the certificate state and the auto-emit toggle.
+//
+// Secrets are never committed: the MATIAS account password lives in the VPS
+// environment; per-tenant certificate material (only when a tenant uploads its own
+// .p12) is stored encrypted.
+
 export const EINV_KEYS = {
-  provider: 'fiscal_einvoice_provider', // 'factus' | 'none'
-  factusEmail: 'einvoice_factus_email',
-  factusPassword: 'einvoice_factus_password',
-  factusClientId: 'einvoice_factus_client_id',
-  factusClientSecret: 'einvoice_factus_client_secret',
-  factusEnv: 'einvoice_factus_env', // 'sandbox' | 'production'
-  factusBaseUrl: 'einvoice_factus_base_url', // optional override
+  provider: 'fiscal_einvoice_provider', // 'matias' | 'none'
   emitterNit: 'fiscal_nit',
   resolution: 'fiscal_dian_resolution',
+  resolutionNumber: 'einvoice_matias_resolution_number',
+  prefix: 'einvoice_matias_prefix',
+  certStatus: 'einvoice_cert_status', // 'none' | 'activating' | 'active'
+  autoEmit: 'einvoice_auto', // '1' | '0'
 } as const;
 
-export type FactusEnv = 'sandbox' | 'production';
+export type CertStatus = 'none' | 'activating' | 'active';
 
 export type EInvoiceConfig = {
   provider: string;
-  factus: {
+  matias: {
+    baseUrl: string;
     email: string | null;
     password: string | null;
-    clientId: string | null;
-    clientSecret: string | null;
-    env: FactusEnv;
-    baseUrl: string;
   };
   emitterNit: string | null;
   resolution: string | null;
-  /** True only when the provider is Factus AND every credential is present. */
+  resolutionNumber: string | null;
+  prefix: string | null;
+  certStatus: CertStatus;
+  autoEmit: boolean;
+  /** True only when provider is MATIAS AND everything needed to emit is present. */
   configured: boolean;
 };
 
-const FACTUS_PROD_URL = 'https://api.factus.com.co';
-const FACTUS_SANDBOX_URL = 'https://api-sandbox.factus.com.co';
+function normalizeCertStatus(v: string | null): CertStatus {
+  return v === 'active' || v === 'activating' ? v : 'none';
+}
 
 /**
  * Reads the e-invoicing settings for an organization and resolves them into a
- * ready-to-use config. Empty strings are normalized to null so `configured`
- * is honest about which credentials are actually set.
+ * ready-to-use config. App-level MATIAS credentials come from env; per-tenant
+ * fiscal data comes from `app_settings`. Empty strings are normalized to null so
+ * `configured` is honest about what is actually set.
  */
 export async function loadEInvoiceConfig(
   organizationId: string,
@@ -65,34 +73,34 @@ export async function loadEInvoiceConfig(
     return v && v.trim().length > 0 ? v.trim() : null;
   };
 
-  const env: FactusEnv
-    = get(EINV_KEYS.factusEnv) === 'production' ? 'production' : 'sandbox';
-  const baseUrl
-    = get(EINV_KEYS.factusBaseUrl)
-      ?? (env === 'production' ? FACTUS_PROD_URL : FACTUS_SANDBOX_URL);
-
-  const factus = {
-    email: get(EINV_KEYS.factusEmail),
-    password: get(EINV_KEYS.factusPassword),
-    clientId: get(EINV_KEYS.factusClientId),
-    clientSecret: get(EINV_KEYS.factusClientSecret),
-    env,
-    baseUrl,
+  const matias = {
+    baseUrl: Env.MATIAS_API_BASE_URL,
+    email: Env.MATIAS_ACCOUNT_EMAIL ?? null,
+    password: Env.MATIAS_ACCOUNT_PASSWORD ?? null,
   };
 
   const provider = get(EINV_KEYS.provider) ?? 'none';
+  const certStatus = normalizeCertStatus(get(EINV_KEYS.certStatus));
+  const emitterNit = get(EINV_KEYS.emitterNit);
+  const resolutionNumber = get(EINV_KEYS.resolutionNumber);
+
   const configured
-    = provider === 'factus'
-      && !!factus.email
-      && !!factus.password
-      && !!factus.clientId
-      && !!factus.clientSecret;
+    = provider === 'matias'
+      && !!matias.email
+      && !!matias.password
+      && !!emitterNit
+      && !!resolutionNumber
+      && certStatus === 'active';
 
   return {
     provider,
-    factus,
-    emitterNit: get(EINV_KEYS.emitterNit),
+    matias,
+    emitterNit,
     resolution: get(EINV_KEYS.resolution),
+    resolutionNumber,
+    prefix: get(EINV_KEYS.prefix),
+    certStatus,
+    autoEmit: get(EINV_KEYS.autoEmit) === '1',
     configured,
   };
 }
