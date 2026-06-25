@@ -105,7 +105,12 @@ export async function POST(req: Request): Promise<NextResponse> {
         : Promise.resolve([]),
     ]);
 
-  const creditoEnabled = creditoEnabledRaw === 'true';
+  // Credito defaults ON when the setting was never saved (getSetting returns
+  // '' for an unset key). This MUST match the web/onboarding default
+  // (asBool(..., true) and useState(true)) — otherwise the toggle reads as ON
+  // in Settings while the POS silently hides Credito, which confuses owners.
+  // Only an explicit 'false' disables it.
+  const creditoEnabled = creditoEnabledRaw !== 'false';
 
   // Caja branch address if assigned, else the legacy global business_address.
   const branch = branchRows[0];
