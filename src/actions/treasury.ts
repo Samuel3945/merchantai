@@ -542,8 +542,8 @@ export async function listSuppliersWithOutstanding(): Promise<
 export async function debugTreasuryOrg(): Promise<
   ActionResult<{ orgId: string; openPayables: number }>
 > {
-  const { orgId } = await requirePanelModule('cash');
   try {
+    const { orgId } = await requirePanelModule('cash');
     const [row] = await db
       .select({ c: sql<number>`count(*)::int` })
       .from(supplierPayablesSchema)
