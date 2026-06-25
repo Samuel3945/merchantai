@@ -316,14 +316,14 @@ export async function GET(req: Request): Promise<NextResponse> {
     publish_at: p.publishAt,
   }));
 
-  // El método "Credito" (type credit) se controla por el toggle credito-enabled, no
-  // por su columna active. Si el toggle está apagado, no debe llegar al cajero
-  // como opción de pago aunque la fila siga active = true.
-  const visiblePaymentMethods = creditoEnabled
-    ? paymentMethods
-    : paymentMethods.filter(
-        pm => (pm as { type?: string }).type !== 'credit',
-      );
+  // El método sembrado "Crédito" (type credit) NUNCA se manda al POS como método
+  // de pago: el cajero ve un único tile de fiado que el checkout SINTETIZA cuando
+  // features.creditoEnabled está activo. Mandarlo además acá lo duplicaba (un
+  // "Crédito" tarjeta + el "Credito" fiado) y rompía la detección por la
+  // tilde/tipo. El toggle se sigue exponiendo en features.creditoEnabled.
+  const visiblePaymentMethods = paymentMethods.filter(
+    pm => (pm as { type?: string }).type !== 'credit',
+  );
 
   return NextResponse.json({
     cash: ctx.cash,
