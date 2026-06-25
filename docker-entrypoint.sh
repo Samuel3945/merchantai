@@ -1,6 +1,18 @@
 #!/bin/sh
 set -e
 
+# Self-heal the uploads volume permissions, then drop privileges. The container
+# starts as root so it can chown the mounted volume (EasyPanel mounts it
+# root-owned); the app itself must NOT run as root. When started as root we fix
+# ownership and re-exec this same script as `nextjs`, so migrations and the
+# server below always run unprivileged.
+UPLOAD_DIR="${UPLOAD_DIR:-/data/uploads}"
+if [ "$(id -u)" = "0" ]; then
+  mkdir -p "$UPLOAD_DIR"
+  chown -R nextjs:nodejs "$UPLOAD_DIR"
+  exec su-exec nextjs:nodejs "$0" "$@"
+fi
+
 # Always apply pending database migrations on boot. The runner is idempotent
 # (Drizzle records what it has applied), so re-running on every restart is a
 # cheap no-op once the schema is in sync. We intentionally do NOT honor a

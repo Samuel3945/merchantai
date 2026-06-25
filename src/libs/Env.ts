@@ -6,7 +6,10 @@ export const Env = createEnv({
     OPENAI_API_KEY: z.string().optional(),
     CLERK_SECRET_KEY: z.string().min(1),
     DATABASE_URL: z.string().min(1),
-    BLOB_READ_WRITE_TOKEN: z.string().optional(),
+    // Root dir for on-disk uploads (business logos, etc.). In production point
+    // this at a persistent volume (e.g. /data/uploads in EasyPanel) so files
+    // survive redeploys. Optional: falls back to a project-local folder in dev.
+    UPLOAD_DIR: z.string().optional(),
     // Email delivery (Resend). Optional: when absent, invitations fall back to a
     // copyable link instead of an automatic email.
     RESEND_API_KEY: z.string().optional(),
@@ -53,7 +56,7 @@ export const Env = createEnv({
     OPENAI_API_KEY: process.env.OPENAI_API_KEY,
     CLERK_SECRET_KEY: process.env.CLERK_SECRET_KEY,
     DATABASE_URL: process.env.DATABASE_URL,
-    BLOB_READ_WRITE_TOKEN: process.env.BLOB_READ_WRITE_TOKEN,
+    UPLOAD_DIR: process.env.UPLOAD_DIR,
     RESEND_API_KEY: process.env.RESEND_API_KEY,
     RESEND_FROM_EMAIL: process.env.RESEND_FROM_EMAIL,
     EVOLUTION_API_URL: process.env.EVOLUTION_API_URL,

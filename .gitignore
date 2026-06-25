@@ -1,5 +1,8 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
+# local uploads (logos, etc.) — persisted to a volume in production
+/.uploads
+
 # dependencies
 /node_modules
 /.pnp

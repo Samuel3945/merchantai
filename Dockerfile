@@ -67,8 +67,10 @@ ENV NODE_ENV=production \
     PORT=3000 \
     HOSTNAME=0.0.0.0
 
-# Non-root user for safety
-RUN addgroup --system --gid 1001 nodejs \
+# Non-root user for safety. su-exec lets the entrypoint chown the uploads volume
+# as root and then drop to this user before starting the app.
+RUN apk add --no-cache su-exec \
+  && addgroup --system --gid 1001 nodejs \
   && adduser --system --uid 1001 nextjs
 
 # Standalone server + its trimmed node_modules (includes ./migrations via
@@ -87,7 +89,9 @@ COPY --from=builder --chown=nextjs:nodejs /app/scripts ./scripts
 COPY --from=builder --chown=nextjs:nodejs /app/docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod +x ./docker-entrypoint.sh
 
-USER nextjs
+# NOTE: we intentionally do NOT set `USER nextjs` here. The entrypoint starts as
+# root to fix the uploads volume ownership, then re-execs itself as nextjs via
+# su-exec — so migrations and the server still run unprivileged.
 
 EXPOSE 3000
 

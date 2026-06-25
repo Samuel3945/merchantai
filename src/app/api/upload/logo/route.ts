@@ -1,18 +1,19 @@
 import { auth, clerkClient } from '@clerk/nextjs/server';
-import { put } from '@vercel/blob';
 import { NextResponse } from 'next/server';
-import { Env } from '@/libs/Env';
 import { logger } from '@/libs/Logger';
+import { publicUploadUrl, saveUpload } from '@/libs/uploads';
 
 export const runtime = 'nodejs';
 
 const MAX_BYTES = 2 * 1024 * 1024;
-const ALLOWED_TYPES = new Set([
-  'image/png',
-  'image/jpeg',
-  'image/webp',
-  'image/svg+xml',
-]);
+// MIME type → extension. Deriving the extension from the validated content type
+// (not the original filename) avoids trusting attacker-controlled names.
+const ALLOWED_EXT: Record<string, string> = {
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/webp': '.webp',
+  'image/svg+xml': '.svg',
+};
 
 export async function POST(request: Request) {
   const { userId, orgId, orgRole } = await auth();
@@ -25,12 +26,6 @@ export async function POST(request: Request) {
   if (orgRole !== 'org:admin') {
     return NextResponse.json({ error: 'Admin role required' }, { status: 403 });
   }
-  if (!Env.BLOB_READ_WRITE_TOKEN) {
-    return NextResponse.json(
-      { error: 'BLOB_READ_WRITE_TOKEN is not configured' },
-      { status: 500 },
-    );
-  }
 
   const formData = await request.formData();
   const file = formData.get('file');
@@ -38,7 +33,8 @@ export async function POST(request: Request) {
   if (!(file instanceof File)) {
     return NextResponse.json({ error: 'file is required' }, { status: 400 });
   }
-  if (!ALLOWED_TYPES.has(file.type)) {
+  const ext = ALLOWED_EXT[file.type];
+  if (!ext) {
     return NextResponse.json(
       { error: `Unsupported file type: ${file.type}` },
       { status: 415 },
@@ -51,17 +47,28 @@ export async function POST(request: Request) {
     );
   }
 
-  const ext = file.name.includes('.')
-    ? file.name.slice(file.name.lastIndexOf('.'))
-    : '';
-  const pathname = `logos/${orgId}/${Date.now()}${ext}`;
+  // Timestamp + random suffix keeps filenames unique so a new logo never serves
+  // a stale cached copy under the same URL.
+  const filename = `${Date.now()}-${crypto.randomUUID().slice(0, 8)}${ext}`;
+  const pathname = `logos/${orgId}/${filename}`;
 
-  const blob = await put(pathname, file, {
-    access: 'public',
-    contentType: file.type,
-    token: Env.BLOB_READ_WRITE_TOKEN,
-    addRandomSuffix: true,
-  });
+  try {
+    await saveUpload(pathname, file);
+  } catch (err) {
+    logger.error('logo_upload_write_failed', {
+      organizationId: orgId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return NextResponse.json(
+      {
+        error:
+          'No se pudo guardar el archivo. Verificá que el volumen de uploads exista y tenga permisos de escritura.',
+      },
+      { status: 500 },
+    );
+  }
+
+  const url = publicUploadUrl(pathname);
 
   // The business logo IS the organization logo: push it to Clerk so the org
   // switcher and panel avatar match. Best-effort — a Clerk failure must not
@@ -79,5 +86,5 @@ export async function POST(request: Request) {
     });
   }
 
-  return NextResponse.json({ url: blob.url, pathname: blob.pathname });
+  return NextResponse.json({ url, pathname });
 }
