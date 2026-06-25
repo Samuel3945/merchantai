@@ -853,3 +853,155 @@ export async function recordSupplierPayment(
   }
   return doWork(executor);
 }
+
+// ── recordSelectedPayablesPayment ─────────────────────────────────────────────
+// Pays a CALLER-CHOSEN set of supplier payables (full or partial per line) from
+// ONE funding source — unlike recordSupplierPayment, which auto-allocates a single
+// amount oldest-first across ALL the supplier's open payables. Powers the "elegí
+// qué facturas pagar" flow in both the treasury console and the POS.
+//
+// selections: one { payableId, amount } per chosen line. amount may be LESS than
+// the line's outstanding (partial) but must be > 0 and ≤ outstanding.
+//
+// fundingSource:
+//   { kind: 'treasury', accountId } → recordSupplierPaymentOutflow per line.
+//   { kind: 'caja',     sessionId } → recordCajaPayableSettle per line.
+//
+// Lock order matches recordSupplierPayment/recordInvoicePayment: the treasury path
+// locks the container first, then each payable; payables are processed in a
+// deterministic id-sorted order so no deadlock cycle can form. Each per-line
+// helper re-checks the outstanding cap under FOR UPDATE, so a concurrent payment
+// that shrank a line rolls back the whole selection — all-or-nothing.
+
+export type PayableSelection = { payableId: string; amount: number };
+
+export type SelectedPayablesPaymentInput = {
+  organizationId: string;
+  supplierId: string;
+  fundingSource: SupplierPaymentFundingSource;
+  selections: PayableSelection[];
+  createdBy: string;
+  note?: string | null;
+};
+
+export async function recordSelectedPayablesPayment(
+  executor: Executor,
+  input: SelectedPayablesPaymentInput,
+): Promise<SupplierPaymentResult> {
+  if (input.selections.length === 0) {
+    throw new Error('No seleccionaste ninguna factura');
+  }
+
+  // Reject duplicate payable ids — each chosen line is paid exactly once.
+  const ids = input.selections.map(s => s.payableId);
+  if (new Set(ids).size !== ids.length) {
+    throw new Error('Hay facturas repetidas en la selección');
+  }
+
+  // Normalize amounts; reject non-positive up front.
+  const wanted = new Map<string, number>();
+  for (const s of input.selections) {
+    const amt = round2(s.amount);
+    if (!(amt > 0)) {
+      throw new Error('El monto de cada factura debe ser mayor a 0');
+    }
+    wanted.set(s.payableId, amt);
+  }
+
+  // ── 1. Unlocked read of the selected payables (org + supplier + open/partial) ──
+  const payables = await executor
+    .select({
+      id: supplierPayablesSchema.id,
+      totalAmount: supplierPayablesSchema.totalAmount,
+      paidAmount: supplierPayablesSchema.paidAmount,
+      creditedAmount: supplierPayablesSchema.creditedAmount,
+    })
+    .from(supplierPayablesSchema)
+    .where(
+      and(
+        eq(supplierPayablesSchema.organizationId, input.organizationId),
+        eq(supplierPayablesSchema.supplierId, input.supplierId),
+        inArray(supplierPayablesSchema.id, ids),
+        inArray(supplierPayablesSchema.status, ['open', 'partial']),
+      ),
+    );
+
+  // ── 2. Validate every selected id resolved AND amount ≤ its outstanding ─────────
+  const outstandingById = new Map<string, number>();
+  for (const p of payables) {
+    const total = round2(Number.parseFloat(p.totalAmount));
+    const paid = round2(Number.parseFloat(p.paidAmount));
+    const credited = round2(Number.parseFloat(p.creditedAmount ?? '0'));
+    outstandingById.set(p.id, round2(total - paid - credited));
+  }
+
+  for (const id of ids) {
+    const outstanding = outstandingById.get(id);
+    if (outstanding === undefined) {
+      throw new Error(
+        'Una factura seleccionada ya no está pendiente o no pertenece a este proveedor',
+      );
+    }
+    const amt = wanted.get(id)!;
+    if (amt > outstanding + 0.005) {
+      throw new Error(
+        `El monto de una factura ($${amt.toFixed(2)}) supera su saldo pendiente ($${outstanding.toFixed(2)})`,
+      );
+    }
+  }
+
+  // ── 3. Execute every chosen line inside ONE outer transaction ──────────────────
+  // Deterministic id-sorted order → consistent lock acquisition, no deadlock.
+  const orderedIds = [...ids].sort();
+
+  const doWork = async (tx: Executor): Promise<SupplierPaymentResult> => {
+    const breakdown: SupplierPaymentBreakdown[] = [];
+    let appliedTotal = 0;
+
+    for (const payableId of orderedIds) {
+      const amount = wanted.get(payableId)!;
+      if (input.fundingSource.kind === 'treasury') {
+        const chunkResult = await recordSupplierPaymentOutflow(tx, {
+          organizationId: input.organizationId,
+          fromAccountId: input.fundingSource.accountId,
+          amount,
+          supplierId: input.supplierId,
+          payableId,
+          note: input.note ?? null,
+          createdBy: input.createdBy,
+        });
+        breakdown.push({
+          payableId,
+          chunk: amount,
+          payableStatus: chunkResult.payableStatus,
+        });
+      } else {
+        const chunkResult = await recordCajaPayableSettle(tx, {
+          organizationId: input.organizationId,
+          sessionId: input.fundingSource.sessionId,
+          payableId,
+          supplierId: input.supplierId,
+          amount,
+          note: input.note ?? null,
+          createdBy: input.createdBy,
+        });
+        breakdown.push({
+          payableId,
+          chunk: amount,
+          payableStatus: chunkResult.payableStatus,
+          cashMovementId: chunkResult.cashMovementId,
+        });
+      }
+      appliedTotal = round2(appliedTotal + amount);
+    }
+
+    return { appliedTotal, breakdown };
+  };
+
+  const isRealDb = typeof (executor as { transaction?: unknown }).transaction === 'function';
+  if (isRealDb) {
+    return (executor as { transaction: <T>(cb: (tx: Executor) => Promise<T>) => Promise<T> })
+      .transaction(tx => doWork(tx));
+  }
+  return doWork(executor);
+}

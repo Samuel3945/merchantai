@@ -28,6 +28,7 @@ import {
   listOpenInvoices,
   listOpenInvoicesForSupplier,
   recordInvoicePayment,
+  recordSelectedPayablesPayment,
 } from '@/libs/supplier-invoice-payment';
 
 // ── PGLite database types ─────────────────────────────────────────────────────
@@ -765,5 +766,141 @@ describe('listOpenInvoicesForSupplier', () => {
     const result = await listOpenInvoicesForSupplier(rawDb as never, ORG, SUPPLIER_ID);
 
     expect(result).toHaveLength(0);
+  });
+});
+
+// ── recordSelectedPayablesPayment ────────────────────────────────────────────
+
+describe('recordSelectedPayablesPayment — pays only the chosen payables', () => {
+  it('settles the selected payables in full and leaves the rest untouched', async () => {
+    await seedAccount(CONTAINER_ID, 10000);
+    await seedPayable(PAYABLE_A, 500, 0, 'open', null, 2);
+    await seedPayable(PAYABLE_B, 300, 0, 'open', null, 1);
+    await seedPayable(PAYABLE_STANDALONE, 200, 0, 'open', null, 0);
+
+    const result = await recordSelectedPayablesPayment(rawDb as never, {
+      organizationId: ORG,
+      supplierId: SUPPLIER_ID,
+      fundingSource: { kind: 'treasury', accountId: CONTAINER_ID },
+      selections: [
+        { payableId: PAYABLE_A, amount: 500 },
+        { payableId: PAYABLE_STANDALONE, amount: 200 },
+      ],
+      createdBy: 'user-1',
+    });
+
+    expect(result.appliedTotal).toBe(700);
+    expect(result.breakdown).toHaveLength(2);
+
+    const a = await pg.query<{ status: string; paid_amount: string }>(
+      'SELECT status, paid_amount FROM supplier_payables WHERE id = $1',
+      [PAYABLE_A],
+    );
+
+    expect(a.rows[0]!.status).toBe('paid');
+    expect(a.rows[0]!.paid_amount).toBe('500.00');
+
+    const c = await pg.query<{ status: string }>(
+      'SELECT status FROM supplier_payables WHERE id = $1',
+      [PAYABLE_STANDALONE],
+    );
+
+    expect(c.rows[0]!.status).toBe('paid');
+
+    // Unselected line stays open at 0.
+    const b = await pg.query<{ status: string; paid_amount: string }>(
+      'SELECT status, paid_amount FROM supplier_payables WHERE id = $1',
+      [PAYABLE_B],
+    );
+
+    expect(b.rows[0]!.status).toBe('open');
+    expect(b.rows[0]!.paid_amount).toBe('0.00');
+  });
+
+  it('supports a partial amount on a selected payable', async () => {
+    await seedAccount(CONTAINER_ID, 10000);
+    await seedPayable(PAYABLE_A, 500, 0, 'open', null, 0);
+
+    const result = await recordSelectedPayablesPayment(rawDb as never, {
+      organizationId: ORG,
+      supplierId: SUPPLIER_ID,
+      fundingSource: { kind: 'treasury', accountId: CONTAINER_ID },
+      selections: [{ payableId: PAYABLE_A, amount: 200 }],
+      createdBy: 'user-1',
+    });
+
+    expect(result.appliedTotal).toBe(200);
+
+    const a = await pg.query<{ status: string; paid_amount: string }>(
+      'SELECT status, paid_amount FROM supplier_payables WHERE id = $1',
+      [PAYABLE_A],
+    );
+
+    expect(a.rows[0]!.status).toBe('partial');
+    expect(a.rows[0]!.paid_amount).toBe('200.00');
+  });
+
+  it('rejects an amount above a line outstanding without writing anything', async () => {
+    await seedAccount(CONTAINER_ID, 10000);
+    await seedPayable(PAYABLE_A, 300, 0, 'open', null, 0);
+
+    await expect(
+      recordSelectedPayablesPayment(rawDb as never, {
+        organizationId: ORG,
+        supplierId: SUPPLIER_ID,
+        fundingSource: { kind: 'treasury', accountId: CONTAINER_ID },
+        selections: [{ payableId: PAYABLE_A, amount: 400 }],
+        createdBy: 'user-1',
+      }),
+    ).rejects.toThrow(/supera su saldo pendiente/);
+
+    const a = await pg.query<{ status: string; paid_amount: string }>(
+      'SELECT status, paid_amount FROM supplier_payables WHERE id = $1',
+      [PAYABLE_A],
+    );
+
+    expect(a.rows[0]!.status).toBe('open');
+    expect(a.rows[0]!.paid_amount).toBe('0.00');
+  });
+
+  it('rejects a payable that belongs to another supplier', async () => {
+    await seedAccount(CONTAINER_ID, 10000);
+    await seedPayable(
+      PAYABLE_OTHER_SUPPLIER,
+      300,
+      0,
+      'open',
+      null,
+      0,
+      SUPPLIER_ID_OTHER,
+    );
+
+    await expect(
+      recordSelectedPayablesPayment(rawDb as never, {
+        organizationId: ORG,
+        supplierId: SUPPLIER_ID,
+        fundingSource: { kind: 'treasury', accountId: CONTAINER_ID },
+        selections: [{ payableId: PAYABLE_OTHER_SUPPLIER, amount: 100 }],
+        createdBy: 'user-1',
+      }),
+    ).rejects.toThrow(/no pertenece a este proveedor|ya no está pendiente/);
+  });
+
+  it('rejects duplicate payable ids', async () => {
+    await seedAccount(CONTAINER_ID, 10000);
+    await seedPayable(PAYABLE_A, 500, 0, 'open', null, 0);
+
+    await expect(
+      recordSelectedPayablesPayment(rawDb as never, {
+        organizationId: ORG,
+        supplierId: SUPPLIER_ID,
+        fundingSource: { kind: 'treasury', accountId: CONTAINER_ID },
+        selections: [
+          { payableId: PAYABLE_A, amount: 100 },
+          { payableId: PAYABLE_A, amount: 100 },
+        ],
+        createdBy: 'user-1',
+      }),
+    ).rejects.toThrow(/repetidas/);
   });
 });
