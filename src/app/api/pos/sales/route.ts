@@ -539,7 +539,14 @@ export async function GET(req: Request): Promise<NextResponse> {
     );
   }
   if (paymentType) {
-    conds.push(eq(salesSchema.paymentType, paymentType));
+    // The credito chip sends 'credito', but sales store the method name as the
+    // cashier saw it ('Credito', the seeded 'Crédito', or 'fiado'). Match every
+    // credito variant the same way isCreditoMethod does, so fiado sales show up.
+    if (isCreditoMethod(paymentType)) {
+      conds.push(sql`${salesSchema.paymentType} ~* 'cr[ée]dito|fiado'`);
+    } else {
+      conds.push(eq(salesSchema.paymentType, paymentType));
+    }
   }
   // When the requester is a device token, scope to that register (own sales or legacy cashier match)
   if (ctx.source === 'token' && ctx.tokenId) {
