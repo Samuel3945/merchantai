@@ -257,6 +257,7 @@ export async function GET(req: Request): Promise<NextResponse> {
     businessName,
     businessPhone,
     creditoEnabledRaw,
+    facturasRaw,
     creditoTermDays,
     paymentMethods,
     cashiers,
@@ -265,6 +266,7 @@ export async function GET(req: Request): Promise<NextResponse> {
     getSetting(orgId, 'business_name'),
     getSetting(orgId, 'business_phone'),
     getSetting(orgId, 'credito-enabled'),
+    getSetting(orgId, 'modules.facturas'),
     getDefaultTermDays(db, orgId),
     listActivePaymentMethods(orgId),
     listCashiers(orgId),
@@ -342,6 +344,9 @@ export async function GET(req: Request): Promise<NextResponse> {
       wholesale: true,
       canConfirmTransfers: ctx.canConfirmTransfers,
       allowOversell: ctx.allowOversell,
+      // Operator-gated DIAN e-invoicing (modules.facturas, default OFF). The POS
+      // APK hides all invoice UI unless this is true.
+      einvoiceEnabled: facturasRaw === 'true',
     },
     paymentMethods: visiblePaymentMethods,
     cashiers,
