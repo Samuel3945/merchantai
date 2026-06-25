@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   clientKeyOf,
   creditoAmountFor,
+  isCreditoMethod,
   normalizeClientKey,
   parseClient,
   planAbono,
@@ -108,6 +109,31 @@ describe('creditoAmountFor (credited amount of a sale)', () => {
         { method: 'credito', amount: '250' },
       ]),
     ).toBe(250);
+  });
+
+  // Regression: the default seeded method is 'Crédito' (accented). The old
+  // /credito/i filter missed the accent, so an accented credito payment was
+  // counted as upfront-paid and the sale owed nothing — silently dropping the debt.
+  it('a 100%-Crédito (accented) sale still owes the full total', () => {
+    expect(creditoAmountFor(300, [{ method: 'Crédito', amount: '300.00' }])).toBe(300);
+  });
+});
+
+describe('isCreditoMethod (accent-insensitive credit detection)', () => {
+  it('matches credito with and without accent, any case', () => {
+    for (const m of ['credito', 'Credito', 'crédito', 'Crédito', 'CRÉDITO']) {
+      expect(isCreditoMethod(m)).toBe(true);
+    }
+  });
+
+  it('matches the regional synonym fiado', () => {
+    expect(isCreditoMethod('Fiado')).toBe(true);
+  });
+
+  it('does not match cash or digital methods', () => {
+    for (const m of ['Efectivo', 'Transferencia', 'Nequi', 'Daviplata', '', null, undefined]) {
+      expect(isCreditoMethod(m)).toBe(false);
+    }
   });
 });
 

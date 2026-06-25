@@ -3,6 +3,7 @@ import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { findOpenSession } from '@/libs/cash-helpers';
 import {
   clientKeyOf,
+  isCreditoMethod,
   normalizeClientKey,
   parseClient,
   planAbono,
@@ -207,7 +208,7 @@ export async function recordAbonoTx(
   if (!method) {
     throw new Error('Método de pago requerido');
   }
-  if (/credito/i.test(method)) {
+  if (isCreditoMethod(method)) {
     throw new Error('El abono no puede ser de tipo credito');
   }
 

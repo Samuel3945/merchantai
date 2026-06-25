@@ -31,7 +31,7 @@ import {
 } from '@/libs/caja-saturation';
 import { recordCashMovement } from '@/libs/cash-helpers';
 import { createCredito } from '@/libs/creditos';
-import { creditoAmountFor } from '@/libs/creditos-math';
+import { creditoAmountFor, isCreditoMethod } from '@/libs/creditos-math';
 import { db } from '@/libs/DB';
 import {
   maybeAutoEmitInvoice,
@@ -300,8 +300,8 @@ export async function createSale(input: CreateSaleInput) {
     // part still hits the drawer via recordCashMovement below.
     const creditoAmount = creditoAmountFor(total, paymentRows);
     const isCredito
-      = /credito/i.test(input.paymentType)
-        || paymentRows.some(p => /credito/i.test(p.method));
+      = isCreditoMethod(input.paymentType)
+        || paymentRows.some(p => isCreditoMethod(p.method));
     if (isCredito && creditoAmount > 0) {
       await createCredito(tx, {
         organizationId: orgId,

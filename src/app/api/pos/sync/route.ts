@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 import { touchLastSync, validatePosToken } from '@/actions/pos-tokens';
 import { toMoney } from '@/libs/cash-helpers';
 import { createCredito } from '@/libs/creditos';
-import { creditoAmountFor } from '@/libs/creditos-math';
+import { creditoAmountFor, isCreditoMethod } from '@/libs/creditos-math';
 import { db } from '@/libs/DB';
 import { consumeFifoExits } from '@/libs/fifo-cogs';
 import { requirePosAuth } from '@/libs/pos-auth';
@@ -355,8 +355,8 @@ export async function POST(req: Request): Promise<NextResponse> {
         // same rule as the online POS and dashboard paths.
         const creditoAmount = creditoAmountFor(total, paymentRows);
         const isCredito
-          = /credito/i.test(queuedSale.paymentType || '')
-            || paymentRows.some(p => /credito/i.test(p.method));
+          = isCreditoMethod(queuedSale.paymentType)
+            || paymentRows.some(p => isCreditoMethod(p.method));
         if (isCredito && creditoAmount > 0) {
           await createCredito(tx, {
             organizationId: orgId,
