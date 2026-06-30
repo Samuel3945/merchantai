@@ -2596,3 +2596,130 @@ export const supplierRefundsSchema = pgTable(
     ),
   ],
 );
+
+// ── AI Agent backbone (delivery-agent-backbone) ────────────────────────────
+// Three enums + three tables that back the n8n ↔ merchantai agent integration.
+// Migration: 0074_agent_backbone (additive only — no DROP/ALTER on existing tables).
+
+export const conversationStatusEnum = pgEnum('conversation_status', [
+  'active',
+  'handoff',
+  'closed',
+]);
+
+export const messageDirectionEnum = pgEnum('message_direction', [
+  'inbound',
+  'outbound',
+]);
+
+export const messageSenderTypeEnum = pgEnum('message_sender_type', [
+  'customer',
+  'bot',
+  'human',
+]);
+
+// One agent API token per WhatsApp channel. Created automatically when a channel
+// completes QR pairing; can be regenerated or revoked by an admin.
+// Auth flow: raw-db lookup resolves org from the token row; then db.forOrg scopes
+// the channel/capabilities query (mirrors pos-auth.ts:50).
+export const agentTokensSchema = pgTable(
+  'agent_tokens',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: text('organization_id').notNull(),
+    // FK set-null on channel delete: orphaned tokens → channelId=null → 401.
+    channelId: uuid('channel_id').references(() => whatsappChannelsSchema.id, {
+      onDelete: 'set null',
+    }),
+    // The bearer token value. UUID format, generated randomly at issuance.
+    // Mirrors pos_tokens.token (Schema.ts:858).
+    token: uuid('token').notNull().defaultRandom(),
+    description: text('description').notNull(),
+    active: boolean('active').default(true).notNull(),
+    expiresAt: timestamp('expires_at', { mode: 'date' }),
+    createdBy: text('created_by').notNull(),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+  },
+  table => [
+    uniqueIndex('agent_tokens_token_unique_idx').on(table.token),
+    index('agent_tokens_org_idx').on(table.organizationId),
+  ],
+);
+
+// One conversation per (org, channel, remoteJid) triple. Upserted on every
+// inbound message from n8n; carries bot-control state (pause / handoff).
+// channelId is NOT NULL + restrict to preserve history; caller must delete
+// conversations before deleting a channel (see deleteWhatsAppChannel).
+export const conversationsSchema = pgTable(
+  'conversations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: text('organization_id').notNull(),
+    channelId: uuid('channel_id')
+      .notNull()
+      .references(() => whatsappChannelsSchema.id, { onDelete: 'restrict' }),
+    customerId: uuid('customer_id').references(() => customersSchema.id, {
+      onDelete: 'set null',
+    }),
+    remoteJid: text('remote_jid').notNull(),
+    status: conversationStatusEnum('status').default('active').notNull(),
+    botPaused: boolean('bot_paused').default(false).notNull(),
+    botPausedUntil: timestamp('bot_paused_until', { mode: 'date' }),
+    botPausedBy: text('bot_paused_by'),
+    // 'bot' = automated; set to a user id on handoff.
+    attendedBy: text('attended_by').default('bot').notNull(),
+    lastMessageAt: timestamp('last_message_at', { mode: 'date' }),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { mode: 'date' })
+      .defaultNow()
+      .$onUpdate(() => new Date())
+      .notNull(),
+  },
+  table => [
+    uniqueIndex('conversations_org_channel_jid_unique_idx').on(
+      table.organizationId,
+      table.channelId,
+      table.remoteJid,
+    ),
+    index('conversations_org_status_idx').on(table.organizationId, table.status),
+    index('conversations_customer_idx').on(table.customerId),
+  ],
+);
+
+// Individual messages within a conversation. Persists both inbound (customer →
+// bot) and outbound (bot/human → customer) from day one.
+// externalId: the Evolution API message id, used for dedup (partial unique).
+export const messagesSchema = pgTable(
+  'messages',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: text('organization_id').notNull(),
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => conversationsSchema.id, { onDelete: 'cascade' }),
+    // External message id from the WhatsApp gateway (nullable: outbound may lack it).
+    externalId: text('external_id'),
+    direction: messageDirectionEnum('direction').notNull(),
+    senderType: messageSenderTypeEnum('sender_type').notNull(),
+    senderId: text('sender_id'),
+    contentType: text('content_type').default('text').notNull(),
+    body: text('body'),
+    // Arbitrary gateway metadata (media urls, quoted messages, etc.).
+    metadata: jsonb('metadata')
+      .$type<Record<string, unknown>>()
+      .default({})
+      .notNull(),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+  },
+  table => [
+    index('messages_conversation_created_idx').on(
+      table.conversationId,
+      table.createdAt,
+    ),
+    // Partial unique: only enforce dedup when externalId is provided.
+    // Mirrors customers.ts:1185 pattern.
+    uniqueIndex('messages_org_external_unique_idx')
+      .on(table.organizationId, table.externalId)
+      .where(sql`${table.externalId} IS NOT NULL`),
+  ],
+);

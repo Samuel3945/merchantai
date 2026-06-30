@@ -519,6 +519,13 @@
       "when": 1782405964457,
       "tag": "0073_matias_einvoice_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1782839723253,
+      "tag": "0074_complex_the_fury",
+      "breakpoints": true
     }
   ]
 }

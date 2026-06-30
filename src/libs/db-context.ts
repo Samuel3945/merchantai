@@ -55,6 +55,12 @@ const TENANT_TABLES: ReadonlySet<string> = new Set([
   // Treasury containers and ledger (accessed via helpers; proxy adds org filter).
   'treasury_accounts',
   'treasury_movements',
+  // AI agent backbone: token issuance, conversations, messages, and the channel
+  // table itself (capability lookup now uses db.forOrg inside agent-auth).
+  'agent_tokens',
+  'conversations',
+  'messages',
+  'whatsapp_channels',
 ]);
 
 const CHILD_TABLES: ReadonlySet<string> = new Set([
