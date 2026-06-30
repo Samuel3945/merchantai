@@ -56,6 +56,13 @@ export async function POST(req: Request) {
     return Response.json({ error: 'unauthorized' }, { status: 401 });
   }
 
+  // When n8n is the active processor, return a 200 no-op immediately.
+  // This prevents double-processing: n8n drives the LLM conversation and
+  // creates deliveries through its own webhook; the in-app agent must be silent.
+  if (Env.WHATSAPP_N8N_WEBHOOK_URL) {
+    return Response.json({ ok: true, neutralized: true });
+  }
+
   let payload: EvolutionPayload;
   try {
     payload = (await req.json()) as EvolutionPayload;
