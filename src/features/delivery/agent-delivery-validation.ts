@@ -34,5 +34,3 @@ export const agentDeliveryCreateSchema = z
     notes: z.string().trim().max(1000).optional(),
   })
   .strict();
-
-export type AgentDeliveryCreateInput = z.input<typeof agentDeliveryCreateSchema>;
