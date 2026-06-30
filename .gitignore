@@ -64,3 +64,6 @@ build-archive.log
 /test-results/
 /playwright-report/
 /playwright/.cache/
+
+# Gentle AI SDD local tooling artifacts
+.atl/
