@@ -4,14 +4,23 @@ Objetivo: que **al registrarse**, todo usuario acepte los Términos y la Políti
 de Privacidad. No se hace en el onboarding, sino en el formulario de registro
 (Clerk `<SignUp>`).
 
-## Lo que ya quedó en el código
+## Fuente única de los términos
 
-- **Páginas públicas** (accesibles sin login):
-  - `/legal/terminos` → `src/app/[locale]/legal/terminos/page.tsx`
-  - `/legal/privacidad` → `src/app/[locale]/legal/privacidad/page.tsx`
+Los Términos y la Política de Privacidad **canónicos** viven en el sitio público
+`pagemerchantai` (mymerchantai.com):
+
+- `https://mymerchantai.com/terminos`
+- `https://mymerchantai.com/privacidad`
+
+NO se duplican en esta app. (Hubo unas páginas `/legal/*` provisionales en la app;
+se eliminaron para no tener dos versiones divergentes.)
+
+## Lo que ya quedó en el código (de esta app)
+
 - **Aviso con enlaces** debajo del formulario de registro
   (`.../sign-up/[[...sign-up]]/page.tsx`): "Al registrarte aceptas nuestros
-  Términos… y Política de Privacidad…".
+  Términos de Servicio… y Política de Privacidad…", apuntando a las URLs de
+  mymerchantai.com.
 
 ## El paso que falta (1 sola vez, en el panel de Clerk)
 
@@ -24,11 +33,9 @@ consentimiento legal en el dashboard de Clerk:
    (en algunas versiones: **Configure → Legal**).
 3. Activa **"Require express consent to legal documents"**.
 4. En **Terms of Service URL** pon:
-   `https://TU-DOMINIO/legal/terminos`
+   `https://mymerchantai.com/terminos`
 5. En **Privacy Policy URL** pon:
-   `https://TU-DOMINIO/legal/privacidad`
-   (reemplaza `TU-DOMINIO` por el dominio real donde corre la app, p. ej.
-   `app.merchantai.com`).
+   `https://mymerchantai.com/privacidad`
 6. Guarda.
 
 Resultado: el `<SignUp>` mostrará automáticamente
@@ -44,4 +51,4 @@ Resultado: el `<SignUp>` mostrará automáticamente
 1. Abre el registro en una ventana de incógnito.
 2. Debe aparecer la casilla de aceptación; sin marcarla, el botón de registro
    queda deshabilitado.
-3. Los enlaces deben abrir `/legal/terminos` y `/legal/privacidad`.
+3. Los enlaces deben abrir `https://mymerchantai.com/terminos` y `/privacidad`.

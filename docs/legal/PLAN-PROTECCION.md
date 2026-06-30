@@ -22,11 +22,11 @@ solo accede al servicio — esa arquitectura es la primera y principal barrera.
 
 ### Integración en producto
 
-- [x] **Aceptación de Términos en el registro** (no en onboarding): páginas
-      públicas `/legal/terminos` y `/legal/privacidad`, y aviso con enlaces en el
-      formulario de registro. Falta activar el consentimiento legal en el panel
-      de Clerk para volverlo casilla obligatoria → ver
-      `docs/legal/ACEPTACION-TERMINOS.md`.
+- [x] **Aceptación de Términos en el registro** (no en onboarding): el aviso con
+      enlaces en el formulario de registro apunta a los Términos/Privacidad
+      canónicos del sitio público (mymerchantai.com / pagemerchantai). Falta
+      activar el consentimiento legal en el panel de Clerk para volverlo casilla
+      obligatoria → ver `docs/legal/ACEPTACION-TERMINOS.md`.
 - [ ] Enlazar Términos y Privacidad en el footer de la landing pública.
 
 ## Capa 3 — Técnica (REVISADO ✅)

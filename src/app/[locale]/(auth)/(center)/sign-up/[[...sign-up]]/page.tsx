@@ -1,7 +1,6 @@
 import type { Metadata } from 'next';
 import { SignUp } from '@clerk/nextjs';
 import { getTranslations, setRequestLocale } from 'next-intl/server';
-import Link from 'next/link';
 import { getI18nPath } from '@/utils/Helpers';
 
 type SignUpPageProps = {
@@ -31,15 +30,25 @@ export default async function SignUpPage(props: SignUpPageProps) {
       <p className="max-w-sm text-center text-xs text-muted-foreground">
         Al registrarte aceptas nuestros
         {' '}
-        <Link href="/legal/terminos" className="underline hover:text-foreground">
-          Términos y Condiciones
-        </Link>
+        <a
+          href="https://mymerchantai.com/terminos"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline hover:text-foreground"
+        >
+          Términos de Servicio
+        </a>
         {' '}
         y nuestra
         {' '}
-        <Link href="/legal/privacidad" className="underline hover:text-foreground">
+        <a
+          href="https://mymerchantai.com/privacidad"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline hover:text-foreground"
+        >
           Política de Privacidad
-        </Link>
+        </a>
         .
       </p>
     </div>
