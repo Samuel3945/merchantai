@@ -20,10 +20,13 @@ solo accede al servicio — esa arquitectura es la primera y principal barrera.
 - [x] Términos y Condiciones de Servicio → `docs/legal/TERMINOS.md`.
 - [x] Política de Tratamiento de Datos (Ley 1581) → `docs/legal/PRIVACIDAD.md`.
 
-### Pendiente de integración en producto (tú decides cuándo)
+### Integración en producto
 
-- [ ] Mostrar y exigir **aceptación de los Términos** en el registro/onboarding
-      (checkbox + guardar fecha/versión aceptada por organización).
+- [x] **Aceptación de Términos en el registro** (no en onboarding): páginas
+      públicas `/legal/terminos` y `/legal/privacidad`, y aviso con enlaces en el
+      formulario de registro. Falta activar el consentimiento legal en el panel
+      de Clerk para volverlo casilla obligatoria → ver
+      `docs/legal/ACEPTACION-TERMINOS.md`.
 - [ ] Enlazar Términos y Privacidad en el footer de la landing pública.
 
 ## Capa 3 — Técnica (REVISADO ✅)

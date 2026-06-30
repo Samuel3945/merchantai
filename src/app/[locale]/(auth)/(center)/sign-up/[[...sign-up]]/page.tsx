@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { SignUp } from '@clerk/nextjs';
 import { getTranslations, setRequestLocale } from 'next-intl/server';
+import Link from 'next/link';
 import { getI18nPath } from '@/utils/Helpers';
 
 type SignUpPageProps = {
@@ -25,6 +26,22 @@ export default async function SignUpPage(props: SignUpPageProps) {
   setRequestLocale(locale);
 
   return (
-    <SignUp path={getI18nPath('/sign-up', locale)} />
+    <div className="flex flex-col items-center gap-4">
+      <SignUp path={getI18nPath('/sign-up', locale)} />
+      <p className="max-w-sm text-center text-xs text-muted-foreground">
+        Al registrarte aceptas nuestros
+        {' '}
+        <Link href="/legal/terminos" className="underline hover:text-foreground">
+          Términos y Condiciones
+        </Link>
+        {' '}
+        y nuestra
+        {' '}
+        <Link href="/legal/privacidad" className="underline hover:text-foreground">
+          Política de Privacidad
+        </Link>
+        .
+      </p>
+    </div>
   );
 };
