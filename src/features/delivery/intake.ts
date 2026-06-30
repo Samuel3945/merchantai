@@ -14,6 +14,9 @@ type CreateOpts = {
   // Drives the ledger/audit actor. 'user' for a panel admin, 'api' for the
   // WhatsApp agent, 'cashier' for the POS.
   actorType?: 'user' | 'cashier' | 'system' | 'api';
+  // Caller-supplied key for exactly-once creation (e.g. WhatsApp message id).
+  // Stored on the row; the partial-unique index on (org, key) enforces dedup.
+  idempotencyKey?: string | null;
 };
 
 function computeTotals(
@@ -38,6 +41,7 @@ export async function createDeliveryForOrg(
   const source = opts.source ?? 'manual';
   const actorType = opts.actorType ?? 'user';
   const createdBy = opts.createdBy ?? null;
+  const idempotencyKey = opts.idempotencyKey ?? null;
   const { subtotal, total } = computeTotals(data.items, data.deliveryFee);
 
   const order = await db.transaction(async (tx) => {
@@ -56,6 +60,7 @@ export async function createDeliveryForOrg(
         source,
         notes: data.notes ?? null,
         createdBy,
+        idempotencyKey,
       })
       .returning();
 

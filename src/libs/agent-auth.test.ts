@@ -4,6 +4,7 @@
  * Uses PGlite + hand-written DDL (drizzle migrations don't run in tests).
  * Mocks @/libs/DB so both the direct raw-db lookup in agent-auth.ts AND the
  * db.forOrg proxy in db-context.ts use the same in-memory database.
+ * Mocks @/libs/Env to control N8N_SERVICE_SECRET per test.
  */
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -11,11 +12,18 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   db: null as unknown as ReturnType<typeof drizzle>,
+  serviceSecret: undefined as string | undefined,
 }));
 
 vi.mock('@/libs/DB', () => ({
   get db() {
     return h.db;
+  },
+}));
+
+vi.mock('@/libs/Env', () => ({
+  get Env() {
+    return { N8N_SERVICE_SECRET: h.serviceSecret };
   },
 }));
 
@@ -69,6 +77,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await pg.exec('DELETE FROM agent_tokens');
+  h.serviceSecret = undefined;
 });
 
 async function seedToken(overrides: {
@@ -183,6 +192,80 @@ describe('requireAgentAuth', () => {
 
     const result = await requireAgentAuth(makeRequest(TOKEN_VAL));
 
+    expect(result.ctx).toBeNull();
+    expect(result.errorResponse?.status).toBe(401);
+  });
+});
+
+// ─── Service-secret path ──────────────────────────────────────────────────────
+
+const SERVICE_SECRET = 'n8n-test-service-secret-abc123';
+const SERVICE_INSTANCE = 'inst1'; // seeded in beforeAll above
+
+function makeServiceRequest(secret: string, instance?: string): Request {
+  const headers: Record<string, string> = { authorization: `Bearer ${secret}` };
+  if (instance !== undefined) {
+    headers['x-agent-channel'] = instance;
+  }
+  return new Request('http://localhost/api/agent/test', { headers });
+}
+
+describe('requireAgentAuth — service-secret path', () => {
+  it('valid secret + valid X-Agent-Channel → ctx with org/channelId/capabilities; tokenId is null', async () => {
+    h.serviceSecret = SERVICE_SECRET;
+    const { requireAgentAuth } = await import('./agent-auth');
+
+    const result = await requireAgentAuth(makeServiceRequest(SERVICE_SECRET, SERVICE_INSTANCE));
+
+    expect(result.errorResponse).toBeNull();
+    expect(result.ctx).toMatchObject({
+      organizationId: ORG,
+      channelId: CHANNEL_ID,
+      tokenId: null,
+    });
+    expect(result.ctx?.capabilities).toMatchObject({ orders: true });
+  });
+
+  it('valid secret + unknown instance name → 401', async () => {
+    h.serviceSecret = SERVICE_SECRET;
+    const { requireAgentAuth } = await import('./agent-auth');
+
+    const result = await requireAgentAuth(makeServiceRequest(SERVICE_SECRET, 'nonexistent-instance'));
+
+    expect(result.ctx).toBeNull();
+    expect(result.errorResponse?.status).toBe(401);
+  });
+
+  it('valid secret + missing X-Agent-Channel header → 401', async () => {
+    h.serviceSecret = SERVICE_SECRET;
+    const { requireAgentAuth } = await import('./agent-auth');
+
+    const result = await requireAgentAuth(makeServiceRequest(SERVICE_SECRET /* no instance */));
+
+    expect(result.ctx).toBeNull();
+    expect(result.errorResponse?.status).toBe(401);
+  });
+
+  it('secret unset → service path skipped; valid UUID token still works via token path', async () => {
+    // h.serviceSecret is undefined (reset in beforeEach)
+    await seedToken();
+    const { requireAgentAuth } = await import('./agent-auth');
+
+    const result = await requireAgentAuth(makeRequest(TOKEN_VAL));
+
+    // Token path should succeed normally
+    expect(result.errorResponse).toBeNull();
+    expect(result.ctx?.tokenId).toBe(TOKEN_ID);
+  });
+
+  it('empty-string secret → service path NEVER taken even if bearer matches', async () => {
+    h.serviceSecret = '';
+    const { requireAgentAuth } = await import('./agent-auth');
+
+    // Bearer value equals the (empty) secret — must not match
+    const result = await requireAgentAuth(makeServiceRequest('', SERVICE_INSTANCE));
+
+    // An empty bearer is not extracted by extractBearer (returns null), so it's 401
     expect(result.ctx).toBeNull();
     expect(result.errorResponse?.status).toBe(401);
   });

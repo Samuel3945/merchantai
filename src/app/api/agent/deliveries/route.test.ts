@@ -79,6 +79,33 @@ const SCHEMA = `
     deleted boolean DEFAULT false NOT NULL,
     created_at timestamp DEFAULT now() NOT NULL
   );
+
+  CREATE TABLE delivery_orders (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+    organization_id text NOT NULL,
+    customer_id uuid,
+    sale_id uuid,
+    courier_id uuid,
+    status text DEFAULT 'pending' NOT NULL,
+    customer_name text,
+    customer_phone text,
+    address text NOT NULL,
+    address_notes text,
+    items jsonb DEFAULT '[]' NOT NULL,
+    subtotal numeric(12, 2) DEFAULT '0' NOT NULL,
+    delivery_fee numeric(12, 2) DEFAULT '0' NOT NULL,
+    total numeric(12, 2) DEFAULT '0' NOT NULL,
+    source text DEFAULT 'manual' NOT NULL,
+    notes text,
+    assigned_at timestamp,
+    in_transit_at timestamp,
+    delivered_at timestamp,
+    cancelled_at timestamp,
+    created_by text,
+    idempotency_key text,
+    created_at timestamp DEFAULT now() NOT NULL,
+    updated_at timestamp DEFAULT now() NOT NULL
+  );
 `;
 
 let pg: PGlite;
@@ -261,5 +288,78 @@ describe('POST /api/agent/deliveries', () => {
 
     expect(body.code).toBe('insufficient_stock');
     expect(createDeliveryMock).not.toHaveBeenCalled();
+  });
+
+  // ─── Idempotency dedup ────────────────────────────────────────────────────
+
+  it('known idempotencyKey (pre-existing row) → 200 with existing id, no duplicate creation', async () => {
+    // Simulate a row already created by a previous n8n invocation
+    await pg.query(
+      `INSERT INTO delivery_orders
+         (id, organization_id, address, items, subtotal, delivery_fee, total, source, idempotency_key, created_at, updated_at)
+       VALUES ('aaaaaaaa-d001-4001-8001-000000000001', $1, 'Calle 10', '[]', '0', '0', '0', 'ai_agent', 'wa-msg-idempotency-001', now(), now())`,
+      [ORG],
+    );
+
+    const { POST } = await import('./route');
+    const res = await POST(
+      postRequest({ ...VALID_BODY, idempotencyKey: 'wa-msg-idempotency-001' }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(createDeliveryMock).not.toHaveBeenCalled();
+
+    const body = await res.json();
+
+    expect(body.id).toBe('aaaaaaaa-d001-4001-8001-000000000001');
+  });
+
+  it('first call with new idempotencyKey → 201; second call after row exists → 200 same id', async () => {
+    const key = 'wa-msg-idempotency-002';
+    const { POST } = await import('./route');
+
+    // First call — row doesn't exist yet, mock creates it
+    const res1 = await POST(postRequest({ ...VALID_BODY, idempotencyKey: key }));
+
+    expect(res1.status).toBe(201);
+    expect(createDeliveryMock).toHaveBeenCalledOnce();
+
+    // Manually seed the row as if createDeliveryForOrg had inserted it
+    await pg.query(
+      `INSERT INTO delivery_orders
+         (id, organization_id, address, items, subtotal, delivery_fee, total, source, idempotency_key, created_at, updated_at)
+       VALUES ('bbbbbbbb-d002-4002-8002-000000000002', $1, 'Calle 20', '[]', '0', '0', '0', 'ai_agent', $2, now(), now())`,
+      [ORG, key],
+    );
+
+    createDeliveryMock.mockClear();
+
+    // Second call — row exists, should return 200 with the existing id
+    const res2 = await POST(postRequest({ ...VALID_BODY, idempotencyKey: key }));
+
+    expect(res2.status).toBe(200);
+    expect(createDeliveryMock).not.toHaveBeenCalled();
+
+    const body2 = await res2.json();
+
+    expect(body2.id).toBe('bbbbbbbb-d002-4002-8002-000000000002');
+  });
+
+  it('different idempotencyKey per call → distinct creation attempts (no dedup)', async () => {
+    const { POST } = await import('./route');
+
+    await POST(postRequest({ ...VALID_BODY, idempotencyKey: 'unique-key-aaa' }));
+    await POST(postRequest({ ...VALID_BODY, idempotencyKey: 'unique-key-bbb' }));
+
+    // Both calls should have triggered createDeliveryForOrg (two distinct orders)
+    expect(createDeliveryMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('no idempotencyKey → createDeliveryForOrg called normally (backward compat)', async () => {
+    const { POST } = await import('./route');
+    const res = await POST(postRequest(VALID_BODY));
+
+    expect(res.status).toBe(201);
+    expect(createDeliveryMock).toHaveBeenCalledOnce();
   });
 });

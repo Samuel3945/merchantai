@@ -2046,6 +2046,11 @@ export const deliveryOrdersSchema = pgTable(
     deliveredAt: timestamp('delivered_at', { mode: 'date' }),
     cancelledAt: timestamp('cancelled_at', { mode: 'date' }),
     createdBy: text('created_by'),
+    // Caller-supplied idempotency key (e.g. the WhatsApp message id). Nullable
+    // so existing rows and non-agent callers keep working. A partial UNIQUE index
+    // on (organization_id, idempotency_key) WHERE NOT NULL enforces one row per
+    // key per org, enabling safe n8n retries.
+    idempotencyKey: text('idempotency_key'),
     createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { mode: 'date' })
       .defaultNow()
@@ -2065,6 +2070,12 @@ export const deliveryOrdersSchema = pgTable(
       table.courierId,
     ),
     index('delivery_orders_customer_idx').on(table.customerId),
+    // Partial UNIQUE index for exactly-once n8n delivery creation. NULL rows
+    // (manual, pos, non-idempotent callers) are excluded so many NULLs coexist
+    // without violating uniqueness.
+    uniqueIndex('delivery_orders_org_idempotency_key_unique_idx')
+      .on(table.organizationId, table.idempotencyKey)
+      .where(sql`${table.idempotencyKey} IS NOT NULL`),
   ],
 );
 
