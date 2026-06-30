@@ -174,6 +174,7 @@ describe('createWhatsAppChannel — auto-creates agent_tokens + paired pos_token
       .where(eq(posTokensSchema.organizationId, h.orgId));
 
     const aiToken = posTokens.find(t => t.deviceName === 'ai_agent');
+
     expect(aiToken).toBeTruthy();
     expect(aiToken!.pin).toBe('');
     expect(aiToken!.allowOversell).toBe(false);
@@ -193,6 +194,7 @@ describe('regenerateAgentToken', () => {
       .where(eq(agentTokensSchema.channelId, channelId));
 
     expect(oldToken).toBeTruthy();
+
     const oldId = oldToken!.id;
     const oldTokenVal = oldToken!.token;
 
@@ -203,6 +205,7 @@ describe('regenerateAgentToken', () => {
       .select()
       .from(agentTokensSchema)
       .where(eq(agentTokensSchema.id, oldId));
+
     expect(revoked!.active).toBe(false);
 
     // New row must be active with a different token value
@@ -211,6 +214,7 @@ describe('regenerateAgentToken', () => {
       .from(agentTokensSchema)
       .where(eq(agentTokensSchema.channelId, channelId));
     const active = tokens.filter(t => t.active);
+
     expect(active).toHaveLength(1);
     expect(active[0]!.token).not.toBe(oldTokenVal);
   });
@@ -266,12 +270,14 @@ describe('deleteWhatsAppChannel', () => {
       .select({ id: conversationsSchema.id })
       .from(conversationsSchema)
       .where(eq(conversationsSchema.channelId, channelId));
+
     expect(convsBefore).toHaveLength(1);
 
     const msgsBefore = await h.db
       .select({ id: messagesSchema.id })
       .from(messagesSchema)
       .where(eq(messagesSchema.conversationId, convId));
+
     expect(msgsBefore).toHaveLength(2);
 
     // Delete the channel — must not throw.
@@ -282,6 +288,7 @@ describe('deleteWhatsAppChannel', () => {
       .select({ id: whatsappChannelsSchema.id })
       .from(whatsappChannelsSchema)
       .where(eq(whatsappChannelsSchema.id, channelId));
+
     expect(channelAfter).toHaveLength(0);
 
     // Conversations cascaded away.
@@ -289,6 +296,7 @@ describe('deleteWhatsAppChannel', () => {
       .select({ id: conversationsSchema.id })
       .from(conversationsSchema)
       .where(eq(conversationsSchema.channelId, channelId));
+
     expect(convsAfter).toHaveLength(0);
 
     // Messages cascaded away (via conversations FK ON DELETE CASCADE).
@@ -296,6 +304,7 @@ describe('deleteWhatsAppChannel', () => {
       .select({ id: messagesSchema.id })
       .from(messagesSchema)
       .where(eq(messagesSchema.conversationId, convId));
+
     expect(msgsAfter).toHaveLength(0);
   });
 });
