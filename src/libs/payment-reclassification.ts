@@ -232,6 +232,8 @@ export type ResplitArgs = {
   // When the correction turns part of the sale into fiado, this carries the
   // '[CREDITO] Nombre:… | Tel:…' segment so the debt is booked with a debtor.
   notes?: string | null;
+  // Manual credit due date ('YYYY-MM-DD'); null falls back to the org term.
+  dueDate?: string | null;
 };
 
 // Identity of a payment row for diffing old vs new. Two rows with the same key
@@ -421,7 +423,7 @@ export async function resplitPayment(
       organizationId: args.organizationId,
       saleId: sale.id,
       originalAmount: creditoAmount,
-      dueDate: null,
+      dueDate: args.dueDate ?? null,
       createdBy: args.createdBy,
       notes: mergedNotes,
     });
@@ -439,6 +441,8 @@ export type PosResplitArgs = {
   createdBy: string;
   // '[CREDITO] …' segment when the correction adds fiado (see ResplitArgs.notes).
   notes?: string | null;
+  // Manual credit due date ('YYYY-MM-DD'); null falls back to the org term.
+  dueDate?: string | null;
 };
 
 // POS-side full re-split. Same in-shift guard as reclassifyPosSalePayment:
@@ -480,5 +484,6 @@ export async function resplitPosSalePayment(
     currentSessionId: args.session.id,
     createdBy: args.createdBy,
     notes: args.notes,
+    dueDate: args.dueDate,
   });
 }

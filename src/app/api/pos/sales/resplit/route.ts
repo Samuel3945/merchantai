@@ -23,6 +23,8 @@ type ResplitBody = {
   }>;
   // '[CREDITO] Nombre:… | Tel:…' segment, only when the correction adds fiado.
   notes?: string | null;
+  // Manual credit due date ('YYYY-MM-DD') chosen by the cashier at correction.
+  due_date?: string | null;
 };
 
 export async function POST(req: Request): Promise<NextResponse> {
@@ -73,6 +75,7 @@ export async function POST(req: Request): Promise<NextResponse> {
         payments,
         createdBy: ctx.cashierName || 'Cajero',
         notes: body.notes?.trim() || null,
+        dueDate: body.due_date ?? null,
       });
       if (!result.ok) {
         throw new Error(result.error);
