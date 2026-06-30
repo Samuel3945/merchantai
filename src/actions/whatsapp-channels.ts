@@ -14,7 +14,12 @@ import {
   setWebhook,
 } from '@/libs/evolution';
 import { logger } from '@/libs/Logger';
-import { whatsappChannelsSchema } from '@/models/Schema';
+import {
+  agentTokensSchema,
+  conversationsSchema,
+  posTokensSchema,
+  whatsappChannelsSchema,
+} from '@/models/Schema';
 
 export type WhatsAppChannelStatus = 'connecting' | 'connected' | 'disconnected';
 
@@ -120,24 +125,53 @@ export async function createWhatsAppChannel(
 
   let row: typeof whatsappChannelsSchema.$inferSelect;
   try {
-    const inserted = await db
-      .insert(whatsappChannelsSchema)
-      .values({
-        organizationId: orgId,
-        instanceName,
-        label: input.label?.trim() || null,
-        purpose: input.purpose?.trim() || null,
-        capabilities: cleanCapabilities(input.capabilities),
-        status: 'connecting',
-        createdBy: userId,
-      })
-      .returning();
-    if (!inserted[0]) {
-      throw new Error('whatsapp_channel_insert_failed');
-    }
-    row = inserted[0];
+    // All three inserts run in a single atomic transaction: channel + agent token +
+    // paired POS device token. A failure in any insert rolls back the others.
+    row = await db.transaction(async (tx) => {
+      const inserted = await tx
+        .insert(whatsappChannelsSchema)
+        .values({
+          organizationId: orgId,
+          instanceName,
+          label: input.label?.trim() || null,
+          purpose: input.purpose?.trim() || null,
+          capabilities: cleanCapabilities(input.capabilities),
+          status: 'connecting',
+          createdBy: userId,
+        })
+        .returning();
+      if (!inserted[0]) {
+        throw new Error('whatsapp_channel_insert_failed');
+      }
+      const channelRow = inserted[0];
+
+      // Auto-create the agent API token that n8n uses to authenticate against the
+      // agent endpoints on this channel.
+      await tx
+        .insert(agentTokensSchema)
+        .values({
+          organizationId: orgId,
+          channelId: channelRow.id,
+          description: 'auto',
+          active: true,
+          createdBy: userId,
+        });
+
+      // Paired POS device token consumed by agent-token auth (allowOversell=false).
+      await tx
+        .insert(posTokensSchema)
+        .values({
+          organizationId: orgId,
+          deviceName: 'ai_agent',
+          pin: '',
+          allowOversell: false,
+          createdBy: userId,
+        });
+
+      return channelRow;
+    });
   } catch (err) {
-    // Roll the Evolution instance back so a failed insert leaves nothing behind.
+    // Roll the Evolution instance back so a failed DB transaction leaves nothing behind.
     await deleteInstance(instanceName).catch(() => {});
     throw err;
   }
@@ -260,6 +294,65 @@ export async function deleteWhatsAppChannel(id: string): Promise<void> {
     return;
   }
 
-  await deleteInstance(row.instanceName);
-  await db.delete(whatsappChannelsSchema).where(eq(whatsappChannelsSchema.id, id));
+  // Delete child rows + channel atomically. If the DB transaction fails the
+  // Evolution instance stays intact (no data torn between systems).
+  // Delete child conversations before the channel row so the
+  // conversations.channelId RESTRICT FK does not block the delete.
+  // Messages cascade automatically via conversations.id ON DELETE CASCADE.
+  await db.transaction(async (tx) => {
+    await tx.delete(conversationsSchema).where(eq(conversationsSchema.channelId, id));
+    await tx.delete(whatsappChannelsSchema).where(eq(whatsappChannelsSchema.id, id));
+  });
+
+  // Best-effort Evolution teardown — runs AFTER the DB transaction commits so a
+  // failure here never leaves DB rows orphaned with a missing Evolution instance.
+  await deleteInstance(row.instanceName).catch(() => {});
+}
+
+/**
+ * Rotate the agent API token for a channel.
+ * Deactivates the current active token and creates a replacement so in-flight
+ * n8n flows see a 401 and must be reconfigured with the new bearer.
+ */
+export async function regenerateAgentToken(channelId: string): Promise<void> {
+  const { userId, orgId } = await requireAdminOrg();
+
+  await db
+    .update(agentTokensSchema)
+    .set({ active: false })
+    .where(
+      and(
+        eq(agentTokensSchema.channelId, channelId),
+        eq(agentTokensSchema.organizationId, orgId),
+        eq(agentTokensSchema.active, true),
+      ),
+    );
+
+  await db
+    .insert(agentTokensSchema)
+    .values({
+      organizationId: orgId,
+      channelId,
+      description: 'regenerated',
+      active: true,
+      createdBy: userId,
+    });
+}
+
+/**
+ * Permanently revoke a specific agent token by id.
+ * The n8n flow using this token will receive 401 on its next request.
+ */
+export async function revokeAgentToken(tokenId: string): Promise<void> {
+  const { orgId } = await requireAdminOrg();
+
+  await db
+    .update(agentTokensSchema)
+    .set({ active: false })
+    .where(
+      and(
+        eq(agentTokensSchema.id, tokenId),
+        eq(agentTokensSchema.organizationId, orgId),
+      ),
+    );
 }
