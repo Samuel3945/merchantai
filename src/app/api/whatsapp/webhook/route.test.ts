@@ -67,7 +67,9 @@ describe('POST /api/whatsapp/webhook — neutralization guard', () => {
     const res = await POST(makeRequest({ some: 'payload' }));
 
     expect(res.status).toBe(200);
+
     const body = await res.json();
+
     expect(body).toEqual({ ok: true, neutralized: true });
     expect(h.generateText).not.toHaveBeenCalled();
   });
@@ -95,8 +97,10 @@ describe('POST /api/whatsapp/webhook — neutralization guard', () => {
     // the reason it returned early. generateText must NOT have been called by the
     // guard path.
     expect(h.generateText).not.toHaveBeenCalled();
+
     // The response must NOT carry neutralized:true
     const body = await res.json();
+
     expect(body.neutralized).toBeUndefined();
   });
 });

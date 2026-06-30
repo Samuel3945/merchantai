@@ -163,7 +163,7 @@ describe('requireAgentAuth', () => {
     const req = new Request('http://localhost/api/agent/test', {
       method: 'POST',
       headers: {
-        authorization: `Bearer ${TOKEN_VAL}`,
+        'authorization': `Bearer ${TOKEN_VAL}`,
         'content-type': 'application/json',
       },
       body: JSON.stringify({ organizationId: 'org_other' }),
