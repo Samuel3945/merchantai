@@ -32,5 +32,8 @@ export const agentDeliveryCreateSchema = z
     addressNotes: z.string().trim().max(500).optional(),
     deliveryFee: z.number().nonnegative().max(1_000_000_000).default(0),
     notes: z.string().trim().max(1000).optional(),
+    // n8n can supply the WhatsApp message id here for exactly-once creation.
+    // The route deduplicates on (org, idempotencyKey) before inserting.
+    idempotencyKey: z.string().min(1).max(200).optional(),
   })
   .strict();
