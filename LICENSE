@@ -1,21 +1,53 @@
-MIT License
+Copyright (c) 2026 Samuel Alzate Tejada. Todos los derechos reservados.
+All rights reserved.
 
-Copyright (c) 2026 Remi W.
+LICENCIA DE SOFTWARE PROPIETARIO — MerchantAI
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+Este software, su código fuente, código objeto, diseño, documentación,
+bases de datos, interfaces y todos los materiales asociados (en conjunto,
+el "Software") son propiedad exclusiva de Samuel Alzate Tejada (el "Titular")
+y están protegidos por las leyes de derecho de autor y los tratados
+internacionales aplicables, incluyendo la Ley 23 de 1982 de la República de
+Colombia y la Decisión Andina 351.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+EL SOFTWARE NO ES DE CÓDIGO ABIERTO Y NO SE LICENCIA BAJO NINGUNA LICENCIA
+LIBRE NI PERMISIVA.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+1. RESERVA DE DERECHOS
+   No se concede ningún derecho, licencia ni autorización, expresa o
+   implícita, sobre el Software salvo que conste por escrito y firmado por
+   el Titular. Toda utilización no autorizada está prohibida.
+
+2. PROHIBICIONES
+   Salvo autorización previa, expresa y por escrito del Titular, queda
+   estrictamente prohibido a cualquier persona o entidad:
+   (a) copiar, reproducir o duplicar el Software, total o parcialmente;
+   (b) usar, ejecutar, alojar u operar el Software;
+   (c) distribuir, publicar, sublicenciar, vender, alquilar, prestar o
+       poner a disposición de terceros el Software;
+   (d) modificar, adaptar, traducir o crear obras derivadas del Software;
+   (e) descompilar, desensamblar o aplicar ingeniería inversa, ni intentar
+       derivar el código fuente por cualquier medio;
+   (f) eliminar, ocultar o alterar avisos de propiedad, autoría o derecho
+       de autor.
+
+3. CONFIDENCIALIDAD
+   El Software constituye información confidencial y secreto empresarial del
+   Titular. Quien tenga acceso a él debe mantenerlo en estricta reserva.
+
+4. AUSENCIA DE GARANTÍA
+   EL SOFTWARE SE PROPORCIONA "TAL CUAL", SIN GARANTÍA DE NINGÚN TIPO,
+   EXPRESA O IMPLÍCITA, INCLUYENDO SIN LIMITACIÓN LAS GARANTÍAS DE
+   COMERCIABILIDAD, IDONEIDAD PARA UN FIN PARTICULAR Y NO INFRACCIÓN.
+
+5. LIMITACIÓN DE RESPONSABILIDAD
+   EN NINGÚN CASO EL TITULAR SERÁ RESPONSABLE POR RECLAMACIÓN, DAÑO O
+   RESPONSABILIDAD ALGUNA DERIVADA DEL SOFTWARE O DE SU USO.
+
+6. TERMINACIÓN
+   Cualquier uso no autorizado termina automáticamente todo derecho de
+   acceso y faculta al Titular a ejercer las acciones civiles y penales que
+   correspondan.
+
+Para solicitar una licencia o autorización de uso, contactar al Titular:
+samuelalzatetejada@gmail.com

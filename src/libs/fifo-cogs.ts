@@ -1,3 +1,7 @@
+/**
+ * MerchantAI — Copyright (c) 2026 Samuel Alzate Tejada. Todos los derechos reservados.
+ * Software propietario y confidencial. Ver LICENSE. Prohibida su copia o uso no autorizado.
+ */
 import type { db } from '@/libs/DB';
 import type { stockMovementsSchema } from '@/models/Schema';
 import { sql } from 'drizzle-orm';

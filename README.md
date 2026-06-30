@@ -1,5 +1,11 @@
 # MerchantAI
 
+> **Software propietario — Copyright (c) 2026 Samuel Alzate Tejada. Todos los derechos reservados.**
+> Este repositorio es privado y confidencial. No es de código abierto. Su uso,
+> copia, distribución o modificación sin autorización previa y por escrito del
+> titular está prohibido. Ver [`LICENSE`](./LICENSE), [`NOTICE`](./NOTICE) y los
+> documentos legales en [`docs/legal/`](./docs/legal/).
+
 SaaS multi-tenant para comercios: punto de venta (POS), inventario FIFO, ventas, fiados, delivery con notificaciones por WhatsApp, reportes, agente de IA y gestión multi-organización via Clerk.
 
 ## Tecnologías

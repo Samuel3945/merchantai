@@ -1,6 +1,10 @@
 {
-  "name": "saas-boilerplate",
-  "author": "Ixartz (https://github.com/ixartz)",
+  "name": "merchantai",
+  "version": "1.0.0",
+  "description": "MerchantAI — SaaS multi-tenant para comercios (POS, inventario, ventas, IA). Software propietario.",
+  "author": "Samuel Alzate Tejada <samuelalzatetejada@gmail.com>",
+  "license": "UNLICENSED",
+  "private": true,
   "engines": {
     "node": ">=24"
   },

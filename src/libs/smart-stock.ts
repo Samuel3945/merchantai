@@ -1,3 +1,7 @@
+/**
+ * MerchantAI — Copyright (c) 2026 Samuel Alzate Tejada. Todos los derechos reservados.
+ * Software propietario y confidencial. Ver LICENSE. Prohibida su copia o uso no autorizado.
+ */
 // Smart Stock heuristic — deterministic, NOT an LLM.
 //
 // Lives in a plain lib (not a "use server" module) so the math can be shared by

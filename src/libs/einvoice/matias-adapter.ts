@@ -1,3 +1,7 @@
+/**
+ * MerchantAI — Copyright (c) 2026 Samuel Alzate Tejada. Todos los derechos reservados.
+ * Software propietario y confidencial. Ver LICENSE. Prohibida su copia o uso no autorizado.
+ */
 import type { EInvoiceConfig } from './config';
 
 // MATIAS adapter — the ONLY module that knows MATIAS' HTTP contract.

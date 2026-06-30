@@ -1,3 +1,7 @@
+/**
+ * MerchantAI — Copyright (c) 2026 Samuel Alzate Tejada. Todos los derechos reservados.
+ * Software propietario y confidencial. Ver LICENSE. Prohibida su copia o uso no autorizado.
+ */
 import type { CreditoDueState } from '@/libs/creditos-shared';
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { findOpenSession } from '@/libs/cash-helpers';
