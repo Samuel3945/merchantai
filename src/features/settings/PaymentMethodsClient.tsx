@@ -30,7 +30,6 @@ import {
 import { Button } from '@/components/ui/button';
 import { useConfirm } from '@/components/ui/confirm';
 import { Switch } from '@/components/ui/switch';
-import { CreditoTermField } from '@/features/settings/CreditoTermField';
 import { ToggleRow } from './fields';
 import { useSettingSave } from './useSettingSave';
 
@@ -219,8 +218,6 @@ export function PaymentMethodsClient({
           initial={credito}
           onCommit={handleToggleCredito}
         />
-
-        {credito && <CreditoTermField />}
       </div>
 
       <div className="flex items-center justify-between pt-2">

@@ -2,15 +2,12 @@
 
 import { auth } from '@clerk/nextjs/server';
 import { revalidatePath } from 'next/cache';
-import { getAppSetting, setAppSetting } from '@/actions/app-settings';
 import {
-  DEFAULT_TERM_DAYS,
   extendCreditoTerm,
   getClientDetail,
   getCreditosHistory,
   getCreditosOverview,
   recordAbono,
-  TERM_SETTING_KEY,
 } from '@/libs/creditos';
 import { requirePanelModule } from '@/libs/panel-session';
 
@@ -93,23 +90,4 @@ export async function extenderPlazo(input: ExtenderPlazoInput) {
   });
   revalidatePath('/dashboard/creditos');
   return result;
-}
-
-// ── Default term setting (Configuración) ─────────────────────────────────────
-
-export async function getCreditoTermDays(): Promise<number> {
-  const { value } = await getAppSetting(TERM_SETTING_KEY);
-  const n = Number.parseInt(value, 10);
-  return Number.isFinite(n) && n > 0 ? n : DEFAULT_TERM_DAYS;
-}
-
-export async function setCreditoTermDays(days: number): Promise<number> {
-  const n = Math.trunc(days);
-  if (!Number.isFinite(n) || n < 1 || n > 365) {
-    throw new Error('El plazo debe estar entre 1 y 365 días');
-  }
-  await setAppSetting(TERM_SETTING_KEY, String(n));
-  revalidatePath('/dashboard/settings');
-  revalidatePath('/dashboard/creditos');
-  return n;
 }
