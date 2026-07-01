@@ -241,17 +241,19 @@ describe('courier shift actions', () => {
     expect(count[0]!.c).toBe(1);
   });
 
-  it('listOpenCajas returns only the open sessions with labels', async () => {
+  it('listOpenCajas returns only open DEVICE cajas, excluding the admin caja', async () => {
     await openSession(DEVICE_ID);
-    await openSession(null);
+    await openSession(null); // admin/dashboard session — must NOT be offered
+
     const { listOpenCajas } = await import('./shifts');
 
     const cajas = await listOpenCajas();
 
-    expect(cajas).toHaveLength(2);
-
-    const labels = cajas.map(c => c.label).sort();
-
-    expect(labels).toEqual(['Caja Mostrador', 'Caja administración']);
+    // The admin/dashboard caja (posTokenId null) is a system fallback the shop
+    // never explicitly opens, so it must not appear as a pickable courier caja.
+    expect(cajas).toHaveLength(1);
+    expect(cajas[0]!.posTokenId).toBe(DEVICE_ID);
+    expect(cajas.map(c => c.label)).toEqual(['Caja Mostrador']);
+    expect(cajas.some(c => c.posTokenId === null)).toBe(false);
   });
 });
