@@ -42,6 +42,18 @@ export const Env = createEnv({
       .default('https://sandbox-api.matias-api.com/api/ubl2.1'),
     MATIAS_ACCOUNT_EMAIL: z.string().optional(),
     MATIAS_ACCOUNT_PASSWORD: z.string().optional(),
+    // Wompi payments (sandbox for MVP). All optional: when the secrets are
+    // absent, the buy-credits flow is simply unavailable (no checkout offered).
+    // These three are SECRET — server only, never exposed to the client.
+    // WOMPI_PRIVATE_KEY: server-to-server API calls (query/confirm transactions).
+    // WOMPI_INTEGRITY_SECRET: signs the Web Checkout so the amount can't be tampered.
+    // WOMPI_EVENTS_SECRET: verifies inbound webhook event signatures.
+    WOMPI_PRIVATE_KEY: z.string().optional(),
+    WOMPI_INTEGRITY_SECRET: z.string().optional(),
+    WOMPI_EVENTS_SECRET: z.string().optional(),
+    // API base is locked to the Wompi sandbox for now; production is intentionally
+    // not wired here (mirrors the MATIAS sandbox-only approach).
+    WOMPI_API_BASE_URL: z.string().default('https://sandbox.wompi.co/v1'),
   },
   client: {
     NEXT_PUBLIC_APP_URL: z.string().optional(),
@@ -49,6 +61,9 @@ export const Env = createEnv({
     NEXT_PUBLIC_LOGGING_LEVEL: z.enum(['error', 'info', 'debug', 'warning', 'trace', 'fatal']).default('info'),
     NEXT_PUBLIC_BETTER_STACK_SOURCE_TOKEN: z.string().optional(),
     NEXT_PUBLIC_BETTER_STACK_INGESTING_HOST: z.string().optional(),
+    // Wompi public key (pub_test_/pub_prod_). Public by design — safe on the
+    // client. Optional: absent = payments not configured.
+    NEXT_PUBLIC_WOMPI_PUBLIC_KEY: z.string().optional(),
   },
   shared: {
     NODE_ENV: z.enum(['test', 'development', 'production']).optional(),
@@ -74,12 +89,17 @@ export const Env = createEnv({
     MATIAS_API_BASE_URL: process.env.MATIAS_API_BASE_URL,
     MATIAS_ACCOUNT_EMAIL: process.env.MATIAS_ACCOUNT_EMAIL,
     MATIAS_ACCOUNT_PASSWORD: process.env.MATIAS_ACCOUNT_PASSWORD,
+    WOMPI_PRIVATE_KEY: process.env.WOMPI_PRIVATE_KEY,
+    WOMPI_INTEGRITY_SECRET: process.env.WOMPI_INTEGRITY_SECRET,
+    WOMPI_EVENTS_SECRET: process.env.WOMPI_EVENTS_SECRET,
+    WOMPI_API_BASE_URL: process.env.WOMPI_API_BASE_URL,
     NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
     NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:
       process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
     NEXT_PUBLIC_LOGGING_LEVEL: process.env.NEXT_PUBLIC_LOGGING_LEVEL,
     NEXT_PUBLIC_BETTER_STACK_SOURCE_TOKEN: process.env.NEXT_PUBLIC_BETTER_STACK_SOURCE_TOKEN,
     NEXT_PUBLIC_BETTER_STACK_INGESTING_HOST: process.env.NEXT_PUBLIC_BETTER_STACK_INGESTING_HOST,
+    NEXT_PUBLIC_WOMPI_PUBLIC_KEY: process.env.NEXT_PUBLIC_WOMPI_PUBLIC_KEY,
     NODE_ENV: process.env.NODE_ENV,
   },
 });

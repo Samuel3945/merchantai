@@ -1,11 +1,16 @@
 'use server';
 
+import { randomUUID } from 'node:crypto';
 import { auth } from '@clerk/nextjs/server';
 import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
 import { getPlanEntitlementsBySlug, limitOf } from '@/libs/entitlements';
+import { Env } from '@/libs/Env';
+import { findPackage } from '@/libs/topup-catalog';
+import { buildCheckoutUrl } from '@/libs/wompi/client';
+import { integritySignature } from '@/libs/wompi/signature';
 import {
   plansSchema,
   subscriptionsSchema,
@@ -372,50 +377,172 @@ export async function cancelSubscription(): Promise<PlanSnapshot> {
   return currentPlan();
 }
 
-export async function topUp(
+// Starts a Wompi Web Checkout for an AI-credit top-up package. Records a
+// `pending` top_ups row up front (so the reference exists before the tenant
+// ever reaches Wompi) and grants NOTHING here — credits are only granted once
+// Wompi confirms the payment (see confirmTopUpPayment / applyApprovedTopUp,
+// driven by the webhook + an authoritative query fallback).
+export async function createTopUpCheckout(
   agentKind: AgentKind,
-  requests: number,
-  amountCop: number,
-): Promise<PlanSnapshot> {
+  packageId: string,
+): Promise<{ url: string }> {
   if (!isAgentKind(agentKind)) {
     throw new Error(`Unknown agent kind: ${String(agentKind)}`);
   }
-  if (!Number.isInteger(requests) || requests <= 0) {
-    throw new Error('requests must be a positive integer');
+
+  const { userId, orgId } = await requireAdminOrg();
+
+  const pkg = findPackage(agentKind, packageId);
+  if (!pkg) {
+    throw new Error(`Unknown top-up package: ${packageId}`);
   }
-  if (!Number.isFinite(amountCop) || amountCop < 0) {
-    throw new Error('amountCop must be a non-negative number');
+
+  if (!Env.WOMPI_INTEGRITY_SECRET || !Env.NEXT_PUBLIC_WOMPI_PUBLIC_KEY) {
+    throw new Error('Payments are not configured');
   }
 
-  const { orgId } = await requireAdminOrg();
+  const reference = `topup-${randomUUID()}`;
+  const amountInCents = Math.round(pkg.amountCop * 100);
 
-  await ensureCountersForPlan(orgId, await getActivePlan(orgId));
+  await db.insert(topUpsSchema).values({
+    organizationId: orgId,
+    agentKind,
+    amountCop: pkg.amountCop.toFixed(2),
+    requestsAdded: pkg.requests,
+    reference,
+    status: 'pending',
+  });
 
-  // The paid top-up record and the credit grant must commit together: a crash
-  // between them would either record a payment that granted no credits, or grant
-  // credits with no audit of the payment.
-  await db.transaction(async (tx) => {
-    await tx.insert(topUpsSchema).values({
-      organizationId: orgId,
+  const signature = integritySignature({
+    reference,
+    amountInCents,
+    currency: 'COP',
+    integritySecret: Env.WOMPI_INTEGRITY_SECRET,
+  });
+
+  const redirectUrl = Env.NEXT_PUBLIC_APP_URL
+    ? `${Env.NEXT_PUBLIC_APP_URL}/dashboard/plans?topup=${reference}`
+    : undefined;
+
+  const url = buildCheckoutUrl({
+    publicKey: Env.NEXT_PUBLIC_WOMPI_PUBLIC_KEY,
+    currency: 'COP',
+    amountInCents,
+    reference,
+    signature,
+    redirectUrl,
+  });
+
+  await logAction({
+    organizationId: orgId,
+    actor: { type: 'user', id: userId },
+    action: 'topup.checkout_created',
+    entityType: 'top_up',
+    entityId: reference,
+    after: {
       agentKind,
-      amountCop: amountCop.toFixed(2),
-      requestsAdded: requests,
-    });
+      packageId,
+      amountCop: pkg.amountCop,
+      requests: pkg.requests,
+    },
+  });
 
-    await tx
-      .update(usageCountersSchema)
-      .set({ toppedUp: sql`${usageCountersSchema.toppedUp} + ${requests}` })
+  return { url };
+}
+
+// The atomic claim-and-increment core of the APPROVED path. Extracted so it
+// can be exercised directly against PGlite (see topup-confirm.test.ts) without
+// needing the plan catalog / Clerk auth that confirmTopUpPayment depends on.
+//
+// The WHERE status='pending' guard on the UPDATE is the idempotency gate: two
+// callers racing for the same reference (webhook retry, or the webhook racing
+// the authoritative-query fallback) can only ever produce ONE increment — the
+// first to claim the row wins, the second finds zero rows and no-ops.
+//
+// Callers MUST ensure a usage_counters row already exists for
+// (organizationId, agentKind) — confirmTopUpPayment does so via
+// ensureCountersForPlan before calling this.
+export async function applyApprovedTopUp(
+  reference: string,
+  wompiTransactionId: string | null,
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    const claimed = await tx
+      .update(topUpsSchema)
+      .set({ status: 'approved', wompiTransactionId })
       .where(
         and(
-          eq(usageCountersSchema.organizationId, orgId),
-          eq(usageCountersSchema.agentKind, agentKind),
+          eq(topUpsSchema.reference, reference),
+          eq(topUpsSchema.status, 'pending'),
+        ),
+      )
+      .returning({
+        orgId: topUpsSchema.organizationId,
+        agentKind: topUpsSchema.agentKind,
+        requests: topUpsSchema.requestsAdded,
+      });
+
+    if (claimed.length === 0) {
+      return;
+    }
+
+    const row = claimed[0]!;
+    await tx
+      .update(usageCountersSchema)
+      .set({ toppedUp: sql`${usageCountersSchema.toppedUp} + ${row.requests}` })
+      .where(
+        and(
+          eq(usageCountersSchema.organizationId, row.orgId),
+          eq(usageCountersSchema.agentKind, row.agentKind),
         ),
       );
   });
+}
 
-  revalidatePath('/dashboard/plans');
+// Applies the outcome Wompi reported for a top-up's checkout `reference` —
+// called from the webhook (src/app/api/webhooks/wompi/route.ts) after
+// checksum verification and a best-effort authoritative status query.
+// Unknown references and already-processed (non-pending) references are
+// silently ignored: the former can be a checksum-valid event for someone
+// else's reference (impossible in practice, but harmless), the latter is the
+// expected shape of a Wompi retry.
+export async function confirmTopUpPayment(
+  reference: string,
+  wompiStatus: string,
+  wompiTransactionId: string | null,
+): Promise<void> {
+  if (wompiStatus.toUpperCase() !== 'APPROVED') {
+    await db
+      .update(topUpsSchema)
+      .set({ status: wompiStatus.toLowerCase(), wompiTransactionId })
+      .where(
+        and(
+          eq(topUpsSchema.reference, reference),
+          eq(topUpsSchema.status, 'pending'),
+        ),
+      );
+    return;
+  }
 
-  return currentPlan();
+  const [pending] = await db
+    .select({
+      organizationId: topUpsSchema.organizationId,
+      status: topUpsSchema.status,
+    })
+    .from(topUpsSchema)
+    .where(eq(topUpsSchema.reference, reference))
+    .limit(1);
+
+  if (!pending || pending.status !== 'pending') {
+    return;
+  }
+
+  await ensureCountersForPlan(
+    pending.organizationId,
+    await getActivePlan(pending.organizationId),
+  );
+
+  await applyApprovedTopUp(reference, wompiTransactionId);
 }
 
 async function getActivePlan(orgId: string): Promise<PlanName> {

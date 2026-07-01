@@ -7,33 +7,17 @@ import type {
   PlanSnapshot,
   PublicPlan,
 } from '@/actions/plans';
-import { useState, useTransition } from 'react';
-import { topUp, upgradePlan } from '@/actions/plans';
+import type { TopUpPackage } from '@/libs/topup-catalog';
+import { useEffect, useState, useTransition } from 'react';
+import { createTopUpCheckout, upgradePlan } from '@/actions/plans';
 import { Button } from '@/components/ui/button';
+import { TOPUP_CATALOG } from '@/libs/topup-catalog';
 
 const AGENT_LABELS: Record<AgentKind, string> = {
   sales_manager: 'Sales Manager',
   customer_service: 'Customer Service',
   einvoice: 'Facturación electrónica',
 };
-
-const TOPUP_PRESETS: { requests: number; amountCop: number }[] = [
-  { requests: 100, amountCop: 19_000 },
-  { requests: 500, amountCop: 79_000 },
-  { requests: 1000, amountCop: 139_000 },
-];
-
-// E-invoicing credits cost 50 COP each (1 credit = 1 emitted document).
-const EINVOICE_CREDIT_PRICE_COP = 50;
-const EINVOICE_TOPUP_PRESETS: { requests: number; amountCop: number }[] = [
-  { requests: 100, amountCop: 100 * EINVOICE_CREDIT_PRICE_COP },
-  { requests: 500, amountCop: 500 * EINVOICE_CREDIT_PRICE_COP },
-  { requests: 1000, amountCop: 1000 * EINVOICE_CREDIT_PRICE_COP },
-];
-
-function topUpPresetsFor(agentKind: AgentKind) {
-  return agentKind === 'einvoice' ? EINVOICE_TOPUP_PRESETS : TOPUP_PRESETS;
-}
 
 const copFmt = new Intl.NumberFormat('es-CO', {
   style: 'currency',
@@ -161,11 +145,11 @@ function TopUpModal({
   agentKind: AgentKind;
   busy: boolean;
   onClose: () => void;
-  onConfirm: (requests: number, amountCop: number) => void;
+  onConfirm: (packageId: string) => void;
 }) {
   const [selected, setSelected] = useState(0);
-  const presets = topUpPresetsFor(agentKind);
-  const preset = presets[selected]!;
+  const packages: TopUpPackage[] = TOPUP_CATALOG[agentKind];
+  const pkg = packages[selected]!;
 
   return (
     <div className="
@@ -183,9 +167,9 @@ function TopUpModal({
         </div>
 
         <div className="mt-4 space-y-2">
-          {presets.map((p, i) => (
+          {packages.map((p, i) => (
             <label
-              key={p.requests}
+              key={p.id}
               className={`
                 flex cursor-pointer items-center justify-between rounded-lg
                 border px-4 py-3
@@ -225,10 +209,10 @@ function TopUpModal({
             Cancelar
           </Button>
           <Button
-            onClick={() => onConfirm(preset.requests, preset.amountCop)}
+            onClick={() => onConfirm(pkg.id)}
             disabled={busy}
           >
-            {busy ? 'Procesando…' : 'Confirmar compra'}
+            {busy ? 'Procesando…' : 'Ir a pagar'}
           </Button>
         </div>
       </div>
@@ -248,7 +232,18 @@ export function PlansClient({
   const [snapshot, setSnapshot] = useState(initialSnapshot);
   const [topUpAgent, setTopUpAgent] = useState<AgentKind | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pendingTopUpRef, setPendingTopUpRef] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+
+  // Best-effort: show a "confirming payment" banner when redirected back from
+  // Wompi with ?topup=<reference>. No polling — the counters refresh next
+  // time the page loads (or when the webhook has already granted the credits).
+  useEffect(() => {
+    const ref = new URLSearchParams(window.location.search).get('topup');
+    if (ref) {
+      setPendingTopUpRef(ref);
+    }
+  }, []);
 
   const handleUpgrade = (plan: PlanName) => {
     setError(null);
@@ -262,16 +257,15 @@ export function PlansClient({
     });
   };
 
-  const handleTopUp = (requests: number, amountCop: number) => {
+  const handleTopUp = (packageId: string) => {
     if (!topUpAgent) {
       return;
     }
     setError(null);
     startTransition(async () => {
       try {
-        const next = await topUp(topUpAgent, requests, amountCop);
-        setSnapshot(next);
-        setTopUpAgent(null);
+        const { url } = await createTopUpCheckout(topUpAgent, packageId);
+        window.location.href = url;
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Error inesperado');
       }
@@ -287,6 +281,16 @@ export function PlansClient({
         "
         >
           {error}
+        </div>
+      )}
+
+      {pendingTopUpRef && (
+        <div className="
+          rounded-md border border-border bg-muted/50 px-4 py-3 text-sm
+          text-muted-foreground
+        "
+        >
+          Estamos confirmando tu pago; los créditos se acreditan al confirmar.
         </div>
       )}
 

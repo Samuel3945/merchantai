@@ -1147,18 +1147,32 @@ export const usageCountersSchema = pgTable(
   ],
 );
 
-// Append-only log of top-up purchases. The granted requests are also
-// applied to usage_counters.topped_up at write time.
-export const topUpsSchema = pgTable('top_ups', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  organizationId: text('organization_id').notNull(),
-  agentKind: text('agent_kind').notNull(),
-  amountCop: numeric('amount_cop', { precision: 12, scale: 2 })
-    .default('0')
-    .notNull(),
-  requestsAdded: integer('requests_added').default(0).notNull(),
-  createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
-});
+// Append-only log of top-up purchases. The granted requests are applied to
+// usage_counters.topped_up only once Wompi confirms payment (webhook +
+// authoritative query) — see actions/plans.ts#confirmTopUpPayment /
+// applyApprovedTopUp. `reference` is the Wompi checkout reference
+// ("topup-<uuid>"); its unique index is the idempotency key that guarantees a
+// given payment can only ever grant credits once.
+export const topUpsSchema = pgTable(
+  'top_ups',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: text('organization_id').notNull(),
+    agentKind: text('agent_kind').notNull(),
+    amountCop: numeric('amount_cop', { precision: 12, scale: 2 })
+      .default('0')
+      .notNull(),
+    requestsAdded: integer('requests_added').default(0).notNull(),
+    // 'pending' | 'approved' | 'declined' | 'voided' | 'error'
+    status: text('status').default('pending').notNull(),
+    reference: text('reference'),
+    wompiTransactionId: text('wompi_transaction_id'),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+  },
+  table => [
+    uniqueIndex('top_ups_reference_unique_idx').on(table.reference),
+  ],
+);
 
 export const customersSchema = pgTable(
   'customers',
