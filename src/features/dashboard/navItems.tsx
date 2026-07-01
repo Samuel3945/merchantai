@@ -6,6 +6,7 @@ import {
   CreditCard,
   HandCoins,
   LayoutDashboard,
+  MessagesSquare,
   Package,
   Receipt,
   ReceiptText,
@@ -80,6 +81,7 @@ export const navGroups: NavGroup[] = [
     title: 'Asistente IA',
     items: [
       { href: '/dashboard/ai-agent', label: 'Agente IA', icon: Sparkles },
+      { href: '/dashboard/conversaciones', label: 'Conversaciones', icon: MessagesSquare },
     ],
   },
   {
@@ -111,6 +113,7 @@ const GATED_HREF: Record<string, keyof NavModuleFlags> = {
   '/dashboard/facturas': 'facturas',
   '/dashboard/suppliers': 'suppliers',
   '/dashboard/ai-agent': 'ai',
+  '/dashboard/conversaciones': 'ai',
 };
 
 // Personal views that only make sense for non-owner members. The owner is a

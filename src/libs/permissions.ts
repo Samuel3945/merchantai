@@ -83,6 +83,7 @@ const OWNER_ONLY_PREFIXES = [
   '/dashboard/plans',
   '/dashboard/settings',
   '/dashboard/ai-agent',
+  '/dashboard/conversaciones',
 ];
 
 // Dashboard routes any panel user may open regardless of modules. "Mi día" is

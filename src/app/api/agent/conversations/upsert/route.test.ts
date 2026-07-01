@@ -54,6 +54,7 @@ const SCHEMA = `
     bot_paused_until timestamp,
     bot_paused_by text,
     attended_by text DEFAULT 'bot' NOT NULL,
+    blocked boolean DEFAULT false NOT NULL,
     last_message_at timestamp,
     created_at timestamp DEFAULT now() NOT NULL,
     updated_at timestamp DEFAULT now() NOT NULL,
@@ -134,6 +135,57 @@ describe('POST /api/agent/conversations/upsert', () => {
 
     expect(body.botPaused).toBe(true);
     expect(body.botPausedUntil).not.toBeNull();
+  });
+
+  it('auto-resume: an elapsed pause reactivates the bot on this inbound message', async () => {
+    // Seed a paused conversation whose pause window is already in the past.
+    await pg.query(
+      `INSERT INTO conversations (organization_id, channel_id, remote_jid, bot_paused, bot_paused_until, bot_paused_by, attended_by)
+       VALUES ($1, $2, $3, true, '2000-01-01 00:00:00', 'user_123', 'user_123')`,
+      [ORG, CHANNEL_ID, '5730022222@s.whatsapp.net'],
+    );
+
+    const { POST } = await import('./route');
+    const res = await POST(upsertRequest({ remoteJid: '5730022222@s.whatsapp.net' }));
+    const body = await res.json();
+
+    // Response reports the resumed state so n8n answers on this same turn.
+    expect(body.botPaused).toBe(false);
+    expect(body.botPausedUntil).toBeNull();
+    expect(body.attendedBy).toBe('bot');
+
+    // And the pause was persisted as cleared.
+    const rows = await pg.query<{
+      bot_paused: boolean;
+      bot_paused_until: string | null;
+      attended_by: string;
+    }>(
+      `SELECT bot_paused, bot_paused_until, attended_by FROM conversations WHERE remote_jid = $1`,
+      ['5730022222@s.whatsapp.net'],
+    );
+
+    expect(rows.rows[0]!.bot_paused).toBe(false);
+    expect(rows.rows[0]!.bot_paused_until).toBeNull();
+    expect(rows.rows[0]!.attended_by).toBe('bot');
+  });
+
+  it('response includes blocked (n8n reads it to stay silent)', async () => {
+    await pg.query(
+      `INSERT INTO conversations (organization_id, channel_id, remote_jid, blocked)
+       VALUES ($1, $2, $3, true)`,
+      [ORG, CHANNEL_ID, '5730033333@s.whatsapp.net'],
+    );
+
+    const { POST } = await import('./route');
+    const res = await POST(upsertRequest({ remoteJid: '5730033333@s.whatsapp.net' }));
+    const body = await res.json();
+
+    expect(body.blocked).toBe(true);
+
+    // A brand-new conversation defaults to not blocked.
+    const fresh = await POST(upsertRequest({ remoteJid: '5730044444@s.whatsapp.net' }));
+
+    expect((await fresh.json()).blocked).toBe(false);
   });
 
   it('cross-org body org → own org from token used', async () => {

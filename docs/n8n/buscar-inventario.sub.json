@@ -1,0 +1,115 @@
+{
+  "name": "Buscar Inventario",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "jsonExample",
+        "jsonExample": "{\n  \"query\": \"pan\",\n  \"instance\": \"org_3EPCHCTOJY1elrRwXnHbZtidQgz__07488f4f\"\n}"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "3649938b-f780-4b79-b6bd-6120d342d3ff",
+      "name": "Recibir consulta"
+    },
+    {
+      "parameters": {
+        "url": "https://app.mymerchantai.com/api/agent/products",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "specifyQuery": "keypair",
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "={{ $('Recibir consulta').first().json.query }}"
+            },
+            {
+              "name": "limit",
+              "value": "5"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Agent-Channel",
+              "value": "={{ $('Recibir consulta').first().json.instance }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        240,
+        0
+      ],
+      "id": "552b8b2c-664f-4540-8290-c0fe02b7a97d",
+      "name": "Buscar en el servidor",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "WiiMY4bj9pAJPl2X",
+          "name": "MerchantAI Agente"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Reshape the server's already-ranked response and GATE it by confidence.\n// The server (GET /api/agent/products) does trigram+FTS+ranking and tags each\n// result with match = exact|strong|partial|fuzzy. We split:\n//   confident = exact|strong  -> the agent MAY offer directly\n//   dudoso    = partial|fuzzy -> the agent must NEVER assert (pan->panela guard)\n// Input item json = the raw server response.\nconst r = $input.first().json || {};\nconst results = Array.isArray(r.results) ? r.results : [];\nconst alternatives = Array.isArray(r.alternatives) ? r.alternatives : [];\n\nconst CONFIDENT = new Set(['exact', 'strong']);\nconst slim = p => ({\n  id: p.id,\n  name: p.name,\n  price: p.price,\n  in_stock: p.in_stock,\n  size: p.size || null,\n  match: p.match,\n});\n\nconst confident = results.filter(p => CONFIDENT.has(p.match)).map(slim);\nconst dudoso = results.filter(p => !CONFIDENT.has(p.match)).map(slim);\n\n// Ask-before-guessing whenever there is no single clear winner.\nconst needs_confirmation =\n  r.status === 'multiple_matches' ||\n  confident.length > 1 ||\n  (confident.length === 0 && (dudoso.length > 0 || alternatives.length > 0));\n\nlet recommendation;\nif (confident.length === 1 && r.status !== 'multiple_matches') {\n  recommendation = `Match confiable: ofrece \"${confident[0].name}\" ($${confident[0].price}).`;\n} else if (confident.length > 1) {\n  recommendation = `Varias coincidencias confiables. NO elijas vos: preguntale al cliente cual quiere entre: ${confident.map(p => p.name).join(', ')}.`;\n} else if (dudoso.length > 0) {\n  recommendation = `SIN match confiable. Hay parecidos que probablemente NO son lo que pidio (${dudoso.map(p => p.name).join(', ')}). NO los ofrezcas como seguros: preguntá \"no estoy seguro, te referis a ...?\" antes de nada.`;\n} else if (alternatives.length > 0) {\n  recommendation = `No hay match exacto. Ofrece una alternativa como PREGUNTA, ej \"no tengo eso, te sirve ${alternatives[0].name}?\".`;\n} else {\n  recommendation = `No hay match para \"${r.query || ''}\". NO adivines ni ofrezcas nada. Pedile al cliente que sea mas especifico: que te diga el NOMBRE del producto puntual (marca y presentacion). El buscador trabaja por nombre, no por sintoma o uso.`;\n}\n\nreturn [{\n  json: {\n    status: r.status || 'not_found',\n    requested: r.query || '',\n    needs_confirmation,\n    confident,   // seguros: se pueden ofrecer\n    dudoso,      // NO ofrecer sin preguntar (guarda anti pan->panela)\n    alternatives: alternatives.map(a => ({ ...slim(a), reason: a.reason })),\n    recommendation,\n  },\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ],
+      "id": "8d142232-559c-489b-986d-d4b096150188",
+      "name": "Formatear para el agente"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Recibir consulta": {
+      "main": [
+        [
+          {
+            "node": "Buscar en el servidor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar en el servidor": {
+      "main": [
+        [
+          {
+            "node": "Formatear para el agente",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "102c06c7-d68f-4e20-8a9f-b42e0e708419",
+  "meta": {
+    "instanceId": "cc6a879bace2ab159a1a86a425f4d7a483a54103db2eee1c16dac1c42a253a26"
+  },
+  "nodeGroups": [],
+  "id": "mUSJG7kPjMsiywxI",
+  "tags": []
+}
