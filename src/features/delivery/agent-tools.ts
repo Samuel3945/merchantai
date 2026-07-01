@@ -23,6 +23,12 @@ export function createDeliveryOrderTool(orgId: string) {
             name: z.string().min(1),
             qty: z.number().int().positive(),
             price: z.number().nonnegative(),
+            // Optional: the LLM rarely resolves a catalog id from free text, so
+            // these lines usually lack it and are handled manually at delivery
+            // time. When present it flows into the snapshot like the API path.
+            // `.optional()` (not nullish) to stay assignable to the intake
+            // schema (deliveryItemSchema), which accepts undefined, not null.
+            productId: z.string().uuid().optional(),
           }),
         )
         .default([]),

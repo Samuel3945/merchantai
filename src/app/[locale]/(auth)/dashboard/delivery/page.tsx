@@ -4,6 +4,10 @@ import { getAppSetting } from '@/actions/app-settings';
 import { TitleBar } from '@/features/dashboard/TitleBar';
 import { getDeliveryKpis, listDeliveries } from '@/features/delivery/actions';
 import { DeliveryClient } from '@/features/delivery/DeliveryClient';
+import {
+  getActiveCourierShift,
+  listOpenCajas,
+} from '@/features/delivery/shifts';
 
 export default async function DashboardDeliveryPage(props: {
   params: Promise<{ locale: string }>;
@@ -19,9 +23,11 @@ export default async function DashboardDeliveryPage(props: {
     redirect('/dashboard');
   }
 
-  const [initial, kpis] = await Promise.all([
+  const [initial, kpis, activeShift, openCajas] = await Promise.all([
     listDeliveries({ status: 'active' }),
     getDeliveryKpis(),
+    getActiveCourierShift(),
+    listOpenCajas(),
   ]);
 
   return (
@@ -30,7 +36,12 @@ export default async function DashboardDeliveryPage(props: {
         title="Domicilios"
         description="Los pedidos que el domiciliario debe llevar: ver, ejecutar y notificar."
       />
-      <DeliveryClient initial={initial} kpis={kpis} />
+      <DeliveryClient
+        initial={initial}
+        kpis={kpis}
+        initialShift={activeShift}
+        openCajas={openCajas}
+      />
     </>
   );
 }

@@ -114,7 +114,12 @@ export async function POST(req: Request): Promise<Response> {
     qtyByProductId.set(item.productId, (qtyByProductId.get(item.productId) ?? 0) + item.qty);
   }
 
-  const translatedItems: Array<{ name: string; qty: number; price: number }> = [];
+  const translatedItems: Array<{
+    productId: string;
+    name: string;
+    qty: number;
+    price: number;
+  }> = [];
 
   for (const [productId, totalQty] of qtyByProductId) {
     const [product] = await db
@@ -156,8 +161,11 @@ export async function POST(req: Request): Promise<Response> {
       );
     }
 
-    // Server price only — LLM price discarded.
+    // Server price only — LLM price discarded. productId is carried into the
+    // snapshot so a delivered order can be turned into a real POS sale (stock +
+    // caja) by transitionDelivery.
     translatedItems.push({
+      productId,
       name: product.name,
       qty: totalQty,
       price: Number(product.price),

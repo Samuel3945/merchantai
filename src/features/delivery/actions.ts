@@ -2,13 +2,18 @@
 
 import type { DeliveryTransitionInput } from './validation';
 import type { WhatsAppSendResult } from '@/libs/delivery-whatsapp';
-import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
+import { createSaleForOrg } from '@/actions/sales';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
 import { sendWhatsAppTextForOrg } from '@/libs/delivery-whatsapp';
 import { getCurrentPanelUser, requirePanelModule } from '@/libs/panel-session';
-import { deliveryEventsSchema, deliveryOrdersSchema } from '@/models/Schema';
+import {
+  courierShiftsSchema,
+  deliveryEventsSchema,
+  deliveryOrdersSchema,
+} from '@/models/Schema';
 import { deliveryTransitionSchema } from './validation';
 
 export type DeliveryOrder = typeof deliveryOrdersSchema.$inferSelect;
@@ -99,6 +104,135 @@ export async function getDeliveryEvents(
     .orderBy(asc(deliveryEventsSchema.createdAt));
 }
 
+// Shown when the courier tries to deliver without having started their shift
+// (declared a caja). The delivered → cash-sale bridge has nowhere to book the
+// money until they do.
+const NO_ACTIVE_SHIFT_MESSAGE
+  = 'Iniciá tu jornada y elegí una caja antes de entregar.';
+
+// The courier's active shift (endedAt IS NULL) or null — just the fields
+// transitionDelivery needs to route the delivered order's cash sale.
+async function findActiveShift(
+  orgId: string,
+  courierId: string,
+): Promise<{ id: string; posTokenId: string | null } | null> {
+  const [shift] = await db
+    .select({
+      id: courierShiftsSchema.id,
+      posTokenId: courierShiftsSchema.posTokenId,
+    })
+    .from(courierShiftsSchema)
+    .where(
+      and(
+        eq(courierShiftsSchema.organizationId, orgId),
+        eq(courierShiftsSchema.courierId, courierId),
+        isNull(courierShiftsSchema.endedAt),
+      ),
+    )
+    .limit(1);
+  return shift ?? null;
+}
+
+// Translates a delivery order's item snapshot into POS sale lines. Every line
+// MUST carry a productId: createSaleForOrg re-prices and decrements stock BY
+// product, so a free-text line (legacy/manual, no productId) cannot become a
+// correct sale. We THROW rather than silently drop it — the operator handles
+// that order manually instead of the system booking a wrong sale.
+function buildDeliverySaleItems(
+  rawItems: DeliveryOrder['items'],
+): { productId: string; qty: number }[] {
+  const items = Array.isArray(rawItems) ? rawItems : [];
+  if (items.length === 0) {
+    throw new Error(
+      'Este pedido no tiene productos para facturar. Gestionalo manualmente.',
+    );
+  }
+  return items.map((it) => {
+    const productId = it?.productId;
+    const qty = Number(it?.qty);
+    if (typeof productId !== 'string' || productId.length === 0) {
+      throw new Error(
+        'Este pedido se creó antes de registrar el producto del catálogo, '
+        + 'así que no puede facturarse automáticamente. Registrá la venta manualmente.',
+      );
+    }
+    if (!Number.isFinite(qty) || qty <= 0) {
+      throw new Error(
+        'Este pedido tiene una cantidad inválida. Gestionalo manualmente.',
+      );
+    }
+    return { productId, qty };
+  });
+}
+
+// Turns a delivered order into a cash POS sale in the courier's declared caja,
+// returning the sale id to stamp on the order. Called BEFORE the status-flip tx
+// (createSaleForOrg owns its OWN transaction — never nest it). Throws — leaving
+// NO half state — when there is no active shift, when a line lacks a productId,
+// or when the sale itself fails (e.g. a product was deleted). Idempotent for an
+// already-delivered order (keeps the existing sale, creates nothing); the
+// `delivery:<id>` idempotency key is the second guard against double-selling.
+async function createDeliverySale(
+  deliveryOrderId: string,
+  orgId: string,
+  actor: Awaited<ReturnType<typeof getCurrentPanelUser>>,
+): Promise<string | null> {
+  // Only a linked courier (pos_users row) with an active shift may deliver.
+  if (!actor) {
+    throw new Error(NO_ACTIVE_SHIFT_MESSAGE);
+  }
+  const shift = await findActiveShift(orgId, actor.id);
+  if (!shift) {
+    throw new Error(NO_ACTIVE_SHIFT_MESSAGE);
+  }
+
+  const [order] = await db
+    .select()
+    .from(deliveryOrdersSchema)
+    .where(
+      and(
+        eq(deliveryOrdersSchema.id, deliveryOrderId),
+        eq(deliveryOrdersSchema.organizationId, orgId),
+      ),
+    )
+    .limit(1);
+
+  if (!order) {
+    throw new Error('Delivery order not found');
+  }
+  // Already delivered → idempotent: keep the existing sale, create nothing.
+  if (order.status === 'delivered') {
+    return order.saleId ?? null;
+  }
+  // Guard the state machine here too, so we never spend a createSaleForOrg on an
+  // illegal transition (the status-flip tx re-checks it as defense in depth).
+  if (!ALLOWED_TRANSITIONS[order.status].includes('delivered')) {
+    throw new Error(
+      `Transición no permitida: de "${order.status}" a "delivered"`,
+    );
+  }
+
+  const items = buildDeliverySaleItems(order.items);
+
+  // Contraentrega (COD): the courier collects cash, so paymentType 'efectivo' —
+  // createSaleForOrg's recordCashMovement books it into shift.posTokenId's open
+  // session (null = the admin/dashboard caja). Attributed to the courier
+  // (actorId = their pos_users id), actorType 'api' like the other non-Clerk
+  // sale paths. The sale total is the goods subtotal (createSaleForOrg re-prices
+  // from the catalog); the delivery fee is tracked separately, not sold here.
+  const sale = await createSaleForOrg({
+    orgId,
+    actorId: actor.id,
+    actorType: 'api',
+    items,
+    paymentType: 'efectivo',
+    posTokenId: shift.posTokenId,
+    idempotencyKey: `delivery:${deliveryOrderId}`,
+  });
+
+  return sale.id;
+}
+
 // Moves an order along the state machine, writing a status_change event to the
 // ledger in the same transaction. Idempotent on the current status (returns it
 // untouched) so a double-tap from the courier never errors or double-logs.
@@ -110,12 +244,23 @@ export async function transitionDelivery(
   const { status: next, note } = deliveryTransitionSchema.parse(input);
 
   // Who is acting: their pos_users row (linked to this Clerk identity). Used to
-  // stamp the courier on an "assigned" claim and to personalize the customer
-  // message. Null when there is no linked row (e.g. an owner with no cashier
-  // row) — the claim then falls back to the generic wording.
-  const actor = next === 'assigned'
+  // stamp the courier on an "assigned" claim, to personalize the customer
+  // message, AND — for "delivered" — to find their active shift and attribute
+  // the resulting cash sale. Null when there is no linked row (e.g. an owner
+  // with no cashier row); the claim then falls back to the generic wording, and
+  // a delivered attempt is rejected (a courier must be a real employee).
+  const actor = next === 'assigned' || next === 'delivered'
     ? await getCurrentPanelUser(userId, orgId)
     : null;
+
+  // DELIVERED is money-critical: the goods physically left, so the order becomes
+  // a cash sale in the courier's declared caja. Resolve + create the sale BEFORE
+  // flipping status — a failure (no shift, a free-text line, a vanished product)
+  // aborts the transition and leaves NO half state.
+  let deliveredSaleId: string | null = null;
+  if (next === 'delivered') {
+    deliveredSaleId = await createDeliverySale(id, orgId, actor);
+  }
 
   const updated = await db.transaction(async (tx) => {
     const [current] = await tx
@@ -156,6 +301,11 @@ export async function transitionDelivery(
       patch.inTransitAt = now;
     } else if (next === 'delivered') {
       patch.deliveredAt = now;
+      // Link the cash sale created above (null only for a legacy order that was
+      // already delivered — the same-status guard returns before this anyway).
+      if (deliveredSaleId) {
+        patch.saleId = deliveredSaleId;
+      }
     } else if (next === 'cancelled') {
       patch.cancelledAt = now;
     }

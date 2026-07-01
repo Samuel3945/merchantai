@@ -2033,9 +2033,15 @@ export const deliveryOrdersSchema = pgTable(
     customerPhone: text('customer_phone'),
     address: text('address').notNull(),
     addressNotes: text('address_notes'),
-    // What to deliver: [{ name, qty, price }]. A snapshot (not FKs) so the
-    // courier always sees what was agreed even if products change later.
-    items: jsonb('items').default([]).notNull(),
+    // What to deliver: [{ name, qty, price, productId? }]. A snapshot (not FKs)
+    // so the courier always sees what was agreed even if products change later.
+    // productId is captured on agent/POS orders so a delivered order can be
+    // turned into a real POS sale (stock + caja); legacy/manual free-text lines
+    // may lack it and are then handled manually at delivery time.
+    items: jsonb('items')
+      .$type<{ name: string; qty: number; price: number; productId?: string }[]>()
+      .default([])
+      .notNull(),
     subtotal: numeric('subtotal', { precision: 12, scale: 2 })
       .default('0')
       .notNull(),
@@ -2121,6 +2127,62 @@ export const deliveryEventsSchema = pgTable(
       table.createdAt,
     ),
   ],
+);
+
+// ── Courier shifts (delivery money core) ──────────────────────────────────
+// A courier declares an EXISTING open caja at the start of their shift; every
+// order they mark 'delivered' during the shift becomes a cash (Contraentrega →
+// efectivo) POS sale booked into that caja (see transitionDelivery). The shift
+// is the bridge that decides WHICH cash session a delivered order's money lands
+// in. A partial UNIQUE index guarantees a courier has at most ONE active shift.
+export const courierShiftsSchema = pgTable(
+  'courier_shifts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: text('organization_id').notNull(),
+    // The courier on shift (a pos_user). RESTRICT on delete: a courier with
+    // shift history (which drives sale attribution) must not be hard-deleted —
+    // employees are deactivated via pos_users.active, never physically removed,
+    // so the money trail stays intact.
+    courierId: uuid('courier_id')
+      .notNull()
+      .references(() => posUsersSchema.id, { onDelete: 'restrict' }),
+    // The declared caja/device for this shift. A device uuid → that register's
+    // till; NULL → the admin/dashboard caja (cash_sessions with a NULL
+    // pos_token_id). SET NULL so retiring a device never deletes shift history.
+    posTokenId: uuid('pos_token_id').references(() => posTokensSchema.id, {
+      onDelete: 'set null',
+    }),
+    startedAt: timestamp('started_at', { mode: 'date' }).defaultNow().notNull(),
+    // NULL while the shift is active; stamped when the courier ends their day.
+    endedAt: timestamp('ended_at', { mode: 'date' }),
+  },
+  table => [
+    // At most ONE active shift per courier per org (endedAt IS NULL). Partial so
+    // the many ended shifts (endedAt set) coexist without violating uniqueness.
+    uniqueIndex('courier_shifts_one_active_per_courier_idx')
+      .on(table.organizationId, table.courierId)
+      .where(sql`${table.endedAt} IS NULL`),
+    // "My shift" lookups scan org + courier.
+    index('courier_shifts_org_courier_idx').on(
+      table.organizationId,
+      table.courierId,
+    ),
+  ],
+);
+
+export const courierShiftsRelations = relations(
+  courierShiftsSchema,
+  ({ one }) => ({
+    courier: one(posUsersSchema, {
+      fields: [courierShiftsSchema.courierId],
+      references: [posUsersSchema.id],
+    }),
+    posToken: one(posTokensSchema, {
+      fields: [courierShiftsSchema.posTokenId],
+      references: [posTokensSchema.id],
+    }),
+  }),
 );
 
 // ── Operating expenses (P&L ledger) ───────────────────────────────────────
