@@ -6,6 +6,7 @@ import type {
   DeliveryOrder,
   DeliveryStatus,
 } from './actions';
+import type { ActiveCourierShift, OpenCaja } from './shifts';
 import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
 import { Toaster } from '@/components/ui/toast';
@@ -18,8 +19,25 @@ import {
   requestAddressClarification,
   transitionDelivery,
 } from './actions';
+import {
+  endCourierShift,
+  getActiveCourierShift,
+  listOpenCajas,
+  startCourierShift,
+} from './shifts';
 
-type DeliveryItem = { name: string; qty: number; price: number };
+// Sentinel select value for the admin/dashboard caja (posTokenId === null).
+const ADMIN_CAJA_VALUE = '__admin__';
+
+function cajaValue(posTokenId: string | null): string {
+  return posTokenId ?? ADMIN_CAJA_VALUE;
+}
+
+function valueToPosToken(value: string): string | null {
+  return value === ADMIN_CAJA_VALUE ? null : value;
+}
+
+type DeliveryItem = { name: string; qty: number; price: number; productId?: string };
 type Scope = DeliveryStatus | 'active' | 'all';
 
 // How often the board refetches so cancellations drop off and new (agent-made)
@@ -102,11 +120,15 @@ function StatCard({ label, value }: { label: string; value: string }) {
 export function DeliveryClient(props: {
   initial: DeliveryOrder[];
   kpis: DeliveryKpis;
+  initialShift: ActiveCourierShift | null;
+  openCajas: OpenCaja[];
 }) {
   const [rows, setRows] = useState<DeliveryOrder[]>(props.initial);
   const [kpis, setKpis] = useState<DeliveryKpis>(props.kpis);
   const [scope, setScope] = useState<Scope>('active');
   const [error, setError] = useState<string | null>(null);
+  const [shift, setShift] = useState<ActiveCourierShift | null>(props.initialShift);
+  const [cajas, setCajas] = useState<OpenCaja[]>(props.openCajas);
   const [pending, startTransition] = useTransition();
   const scopeRef = useRef<Scope>(scope);
   scopeRef.current = scope;
@@ -118,6 +140,17 @@ export function DeliveryClient(props: {
     ]);
     setRows(data);
     setKpis(freshKpis);
+  }, []);
+
+  // Re-read the courier's shift + the open-caja choices after they start/end a
+  // shift, so the board and the "Marcar entregado" gating update immediately.
+  const refreshShift = useCallback(async () => {
+    const [freshShift, freshCajas] = await Promise.all([
+      getActiveCourierShift(),
+      listOpenCajas(),
+    ]);
+    setShift(freshShift);
+    setCajas(freshCajas);
   }, []);
 
   // Refetch on scope change + poll on an interval so cancellations drop off and
@@ -159,6 +192,8 @@ export function DeliveryClient(props: {
 
   return (
     <div className="space-y-6">
+      <ShiftBar shift={shift} cajas={cajas} onChanged={refreshShift} />
+
       <div className="
         grid grid-cols-2 gap-3
         lg:grid-cols-4
@@ -232,6 +267,7 @@ export function DeliveryClient(props: {
                   key={order.id}
                   order={order}
                   pending={pending}
+                  hasShift={shift !== null}
                   onAct={act}
                 />
               ))}
@@ -243,13 +279,149 @@ export function DeliveryClient(props: {
   );
 }
 
+// Shift control: the courier declares an EXISTING open caja before delivering,
+// so every delivered order becomes a cash sale in it. Blocks nothing on its own
+// — the "Marcar entregado" gating lives on each card via hasShift — but this is
+// where the courier starts/ends their day and switches caja.
+function ShiftBar({
+  shift,
+  cajas,
+  onChanged,
+}: {
+  shift: ActiveCourierShift | null;
+  cajas: OpenCaja[];
+  onChanged: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [selected, setSelected] = useState<string | null>(null);
+
+  // The effective choice: the courier's pick when it's still an open caja, else
+  // the first open caja. Derived during render so a changing open-caja list
+  // never needs an effect to reconcile the selection.
+  const effectiveSelected
+    = selected && cajas.some(c => cajaValue(c.posTokenId) === selected)
+      ? selected
+      : (cajas[0] ? cajaValue(cajas[0].posTokenId) : '');
+
+  async function start() {
+    if (!effectiveSelected) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await startCourierShift(valueToPosToken(effectiveSelected));
+      toast.success('Jornada iniciada. Ya podés marcar entregas.');
+      await onChanged();
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : 'No se pudo iniciar la jornada.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function end() {
+    setBusy(true);
+    try {
+      await endCourierShift();
+      toast.success('Jornada terminada.');
+      await onChanged();
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : 'No se pudo terminar la jornada.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (shift) {
+    return (
+      <div className="
+        flex flex-wrap items-center gap-3 rounded-xl border border-border
+        bg-card p-4 shadow-xs
+      "
+      >
+        <span className="inline-flex size-2 shrink-0 rounded-full bg-success" />
+        <span className="text-sm font-medium">Jornada activa</span>
+        <span className="text-sm text-muted-foreground">
+          Caja:
+          {' '}
+          {shift.cajaLabel}
+        </span>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="ml-auto"
+          disabled={busy}
+          onClick={end}
+        >
+          {busy ? 'Terminando…' : 'Terminar jornada'}
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="
+      flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card
+      p-4 shadow-xs
+    "
+    >
+      <div className="min-w-0">
+        <div className="text-sm font-medium">Iniciá tu jornada</div>
+        <p className="text-xs text-muted-foreground">
+          Elegí la caja donde entrarán las ventas de tus entregas.
+        </p>
+      </div>
+      {cajas.length === 0
+        ? (
+            <span className="ml-auto text-sm text-muted-foreground">
+              No hay cajas abiertas. Pedí que abran una para empezar.
+            </span>
+          )
+        : (
+            <div className="ml-auto flex items-center gap-2">
+              <select
+                value={effectiveSelected}
+                onChange={e => setSelected(e.target.value)}
+                disabled={busy}
+                className="
+                  h-9 rounded-md border border-border bg-background px-2 text-sm
+                "
+              >
+                {cajas.map(c => (
+                  <option
+                    key={cajaValue(c.posTokenId)}
+                    value={cajaValue(c.posTokenId)}
+                  >
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+              <Button
+                size="sm"
+                disabled={busy || !effectiveSelected}
+                onClick={start}
+              >
+                {busy ? 'Iniciando…' : 'Iniciar jornada'}
+              </Button>
+            </div>
+          )}
+    </div>
+  );
+}
+
 function DeliveryCard({
   order,
   pending,
+  hasShift,
   onAct,
 }: {
   order: DeliveryOrder;
   pending: boolean;
+  hasShift: boolean;
   onAct: (order: DeliveryOrder, to: DeliveryStatus) => void;
 }) {
   const [showHistory, setShowHistory] = useState(false);
@@ -404,9 +576,26 @@ function DeliveryCard({
             </Button>
           )}
           {next && (
-            <Button size="sm" disabled={pending} onClick={() => onAct(order, next.to)}>
-              {next.label}
-            </Button>
+            next.to === 'delivered' && !hasShift
+              ? (
+                  <div className="flex flex-col items-end gap-1">
+                    <Button size="sm" disabled>
+                      {next.label}
+                    </Button>
+                    <span className="text-xs text-muted-foreground">
+                      Iniciá tu jornada para entregar.
+                    </span>
+                  </div>
+                )
+              : (
+                  <Button
+                    size="sm"
+                    disabled={pending}
+                    onClick={() => onAct(order, next.to)}
+                  >
+                    {next.label}
+                  </Button>
+                )
           )}
         </div>
       </div>

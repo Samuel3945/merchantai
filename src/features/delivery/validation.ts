@@ -13,11 +13,14 @@ function optionalText(max: number) {
 }
 
 // A line the courier has to deliver. A snapshot, not a product FK, so the order
-// always shows what was agreed even if the catalog changes later.
+// always shows what was agreed even if the catalog changes later. `productId` is
+// captured for agent/POS lines so a delivered order can become a real POS sale
+// (stock + caja); manual free-text lines may omit it (handled manually then).
 export const deliveryItemSchema = z.object({
   name: z.string().trim().min(1).max(200),
   qty: z.number().int().positive().max(100000),
   price: z.number().nonnegative().max(1_000_000_000),
+  productId: z.string().uuid().optional(),
 });
 
 export const deliveryCreateSchema = z.object({
