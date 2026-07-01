@@ -6,9 +6,18 @@ import type {
   DeliveryOrder,
   DeliveryStatus,
 } from './actions';
+import type { CancelReasonKey } from './cancellation-reasons';
 import type { ActiveCourierShift, OpenCaja } from './shifts';
 import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Toaster } from '@/components/ui/toast';
 import { toast } from '@/components/ui/toast-store';
 import { cn } from '@/utils/Helpers';
@@ -19,12 +28,26 @@ import {
   requestAddressClarification,
   transitionDelivery,
 } from './actions';
+import { CANCEL_REASONS } from './cancellation-reasons';
 import {
   endCourierShift,
   getActiveCourierShift,
   listOpenCajas,
   startCourierShift,
 } from './shifts';
+
+// A payment method the courier can pick at delivery — just its display name,
+// which is what createDeliverySale forwards to createSaleForOrg.
+export type DeliverPaymentMethod = { name: string };
+
+// Extra payload threaded from a dialog into a transition (payment method +
+// invoice intent for 'delivered'; reason for 'cancelled').
+type TransitionExtra = {
+  paymentType?: string;
+  wantsInvoice?: boolean;
+  cancelReason?: CancelReasonKey;
+  cancelReasonText?: string;
+};
 
 // Sentinel select value for the admin/dashboard caja (posTokenId === null).
 const ADMIN_CAJA_VALUE = '__admin__';
@@ -122,6 +145,10 @@ export function DeliveryClient(props: {
   kpis: DeliveryKpis;
   initialShift: ActiveCourierShift | null;
   openCajas: OpenCaja[];
+  // Org payment methods offered in the deliver dialog (P0-B).
+  paymentMethods: DeliverPaymentMethod[];
+  // Whether the org has e-invoicing configured — gates the invoice checkbox (P2-A).
+  einvoiceEnabled: boolean;
 }) {
   const [rows, setRows] = useState<DeliveryOrder[]>(props.initial);
   const [kpis, setKpis] = useState<DeliveryKpis>(props.kpis);
@@ -178,11 +205,15 @@ export function DeliveryClient(props: {
     };
   }, [scope]);
 
-  function act(order: DeliveryOrder, to: DeliveryStatus) {
+  function act(
+    order: DeliveryOrder,
+    to: DeliveryStatus,
+    extra?: TransitionExtra,
+  ) {
     setError(null);
     startTransition(async () => {
       try {
-        await transitionDelivery(order.id, { status: to });
+        await transitionDelivery(order.id, { status: to, ...extra });
         await refetch();
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Error inesperado');
@@ -268,6 +299,8 @@ export function DeliveryClient(props: {
                   order={order}
                   pending={pending}
                   hasShift={shift !== null}
+                  paymentMethods={props.paymentMethods}
+                  einvoiceEnabled={props.einvoiceEnabled}
                   onAct={act}
                 />
               ))}
@@ -417,15 +450,25 @@ function DeliveryCard({
   order,
   pending,
   hasShift,
+  paymentMethods,
+  einvoiceEnabled,
   onAct,
 }: {
   order: DeliveryOrder;
   pending: boolean;
   hasShift: boolean;
-  onAct: (order: DeliveryOrder, to: DeliveryStatus) => void;
+  paymentMethods: DeliverPaymentMethod[];
+  einvoiceEnabled: boolean;
+  onAct: (
+    order: DeliveryOrder,
+    to: DeliveryStatus,
+    extra?: TransitionExtra,
+  ) => void;
 }) {
   const [showHistory, setShowHistory] = useState(false);
   const [clarifying, setClarifying] = useState(false);
+  const [deliverOpen, setDeliverOpen] = useState(false);
+  const [cancelOpen, setCancelOpen] = useState(false);
   const meta = STATUS_META[order.status];
   const next = NEXT_ACTION[order.status];
   const items = Array.isArray(order.items) ? (order.items as DeliveryItem[]) : [];
@@ -570,23 +613,33 @@ function DeliveryCard({
                 hover:text-destructive
               "
               disabled={pending}
-              onClick={() => onAct(order, 'cancelled')}
+              onClick={() => setCancelOpen(true)}
             >
               Cancelar
             </Button>
           )}
           {next && (
-            next.to === 'delivered' && !hasShift
-              ? (
-                  <div className="flex flex-col items-end gap-1">
-                    <Button size="sm" disabled>
-                      {next.label}
-                    </Button>
-                    <span className="text-xs text-muted-foreground">
-                      Iniciá tu jornada para entregar.
-                    </span>
-                  </div>
-                )
+            next.to === 'delivered'
+              ? (!hasShift
+                  ? (
+                      <div className="flex flex-col items-end gap-1">
+                        <Button size="sm" disabled>
+                          {next.label}
+                        </Button>
+                        <span className="text-xs text-muted-foreground">
+                          Iniciá tu jornada para entregar.
+                        </span>
+                      </div>
+                    )
+                  : (
+                      <Button
+                        size="sm"
+                        disabled={pending}
+                        onClick={() => setDeliverOpen(true)}
+                      >
+                        {next.label}
+                      </Button>
+                    ))
               : (
                   <Button
                     size="sm"
@@ -601,7 +654,218 @@ function DeliveryCard({
       </div>
 
       {showHistory && <HistoryTimeline orderId={order.id} />}
+
+      {/* Mounted only while open so each open starts from fresh local state — no
+          reset effect needed, and no stale selection leaks between deliveries. */}
+      {deliverOpen && (
+        <DeliverDialog
+          onClose={() => setDeliverOpen(false)}
+          pending={pending}
+          paymentMethods={paymentMethods}
+          einvoiceEnabled={einvoiceEnabled}
+          onConfirm={(extra) => {
+            setDeliverOpen(false);
+            onAct(order, 'delivered', extra);
+          }}
+        />
+      )}
+
+      {cancelOpen && (
+        <CancelDialog
+          onClose={() => setCancelOpen(false)}
+          pending={pending}
+          onConfirm={(extra) => {
+            setCancelOpen(false);
+            onAct(order, 'cancelled', extra);
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+// Deliver dialog (P0-B + P2-A): pick the payment method the customer paid with,
+// and — only when the org has e-invoicing enabled — optionally request an
+// electronic invoice. Defaults to the first method (Efectivo is always seeded).
+function DeliverDialog({
+  onClose,
+  pending,
+  paymentMethods,
+  einvoiceEnabled,
+  onConfirm,
+}: {
+  onClose: () => void;
+  pending: boolean;
+  paymentMethods: DeliverPaymentMethod[];
+  einvoiceEnabled: boolean;
+  onConfirm: (extra: TransitionExtra) => void;
+}) {
+  // Fall back to Efectivo if the org somehow exposes no active method.
+  const methods = paymentMethods.length > 0
+    ? paymentMethods
+    : [{ name: 'Efectivo' }];
+  const [method, setMethod] = useState<string>(methods[0]!.name);
+  const [wantsInvoice, setWantsInvoice] = useState(false);
+
+  return (
+    <Dialog open onOpenChange={o => !o && onClose()}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Confirmar entrega</DialogTitle>
+          <DialogDescription>
+            Elegí cómo pagó el cliente. La venta entra a tu caja con ese método.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-3">
+          <label className="block text-sm font-medium" htmlFor="deliver-method">
+            Método de pago
+          </label>
+          <select
+            id="deliver-method"
+            value={method}
+            onChange={e => setMethod(e.target.value)}
+            disabled={pending}
+            className="
+              h-9 w-full rounded-md border border-border bg-background px-2
+              text-sm
+            "
+          >
+            {methods.map(m => (
+              <option key={m.name} value={m.name}>
+                {m.name}
+              </option>
+            ))}
+          </select>
+
+          {einvoiceEnabled && (
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={wantsInvoice}
+                onChange={e => setWantsInvoice(e.target.checked)}
+                disabled={pending}
+                className="size-4 rounded-sm border-border"
+              />
+              El cliente quiere factura electrónica
+            </label>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={pending}
+            onClick={onClose}
+          >
+            Cancelar
+          </Button>
+          <Button
+            size="sm"
+            disabled={pending}
+            onClick={() =>
+              onConfirm({ paymentType: method, wantsInvoice })}
+          >
+            Marcar entregado
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// Cancel dialog (P1): the reason is REQUIRED; 'otro' reveals a free-text field
+// whose content is stored on the event note (but not sent to the customer).
+function CancelDialog({
+  onClose,
+  pending,
+  onConfirm,
+}: {
+  onClose: () => void;
+  pending: boolean;
+  onConfirm: (extra: TransitionExtra) => void;
+}) {
+  const [reason, setReason] = useState<CancelReasonKey | ''>('');
+  const [text, setText] = useState('');
+
+  const canConfirm = reason !== '' && (reason !== 'otro' || text.trim() !== '');
+
+  return (
+    <Dialog open onOpenChange={o => !o && onClose()}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Cancelar pedido</DialogTitle>
+          <DialogDescription>
+            Elegí el motivo. Le avisamos al cliente con un mensaje acorde.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-3">
+          <label className="block text-sm font-medium" htmlFor="cancel-reason">
+            Motivo
+          </label>
+          <select
+            id="cancel-reason"
+            value={reason}
+            onChange={e => setReason(e.target.value as CancelReasonKey | '')}
+            disabled={pending}
+            className="
+              h-9 w-full rounded-md border border-border bg-background px-2
+              text-sm
+            "
+          >
+            <option value="" disabled>
+              Elegí un motivo…
+            </option>
+            {CANCEL_REASONS.map(r => (
+              <option key={r.key} value={r.key}>
+                {r.label}
+              </option>
+            ))}
+          </select>
+
+          {reason === 'otro' && (
+            <textarea
+              value={text}
+              onChange={e => setText(e.target.value)}
+              disabled={pending}
+              maxLength={500}
+              rows={3}
+              placeholder="Contanos qué pasó…"
+              className="
+                w-full rounded-md border border-border bg-background px-2 py-1.5
+                text-sm
+              "
+            />
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={pending}
+            onClick={onClose}
+          >
+            Volver
+          </Button>
+          <Button
+            variant="destructive"
+            size="sm"
+            disabled={pending || !canConfirm}
+            onClick={() =>
+              reason !== ''
+              && onConfirm({
+                cancelReason: reason,
+                cancelReasonText: reason === 'otro' ? text.trim() : undefined,
+              })}
+          >
+            Cancelar pedido
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

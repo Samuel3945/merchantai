@@ -1,0 +1,221 @@
+{
+  "name": "Buscar o Registrar Cliente",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "jsonExample",
+        "jsonExample": "{\n  \"phone\": \"573234580755\",\n  \"name\": \"Samuel\",\n  \"instance\": \"org_...__07488f4f\"\n}"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "aa000000-0000-4a00-8a00-000000000001",
+      "name": "Recibir datos"
+    },
+    {
+      "parameters": {
+        "url": "https://app.mymerchantai.com/api/agent/customers",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "specifyQuery": "keypair",
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "search",
+              "value": "={{ $('Recibir datos').first().json.phone }}"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Agent-Channel",
+              "value": "={{ $('Recibir datos').first().json.instance }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        220,
+        0
+      ],
+      "id": "aa000000-0000-4a00-8a00-000000000002",
+      "name": "Buscar por numero",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "WiiMY4bj9pAJPl2X",
+          "name": "MerchantAI Agente"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "aa000000-cond-0001",
+              "leftValue": "={{ ($json.items || []).length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        0
+      ],
+      "id": "aa000000-0000-4a00-8a00-000000000003",
+      "name": "Ya existe?"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Cliente encontrado: normaliza items[0] (el GET devuelve snake_case).\nconst items = ($input.first().json || {}).items || [];\nconst c = items[0] || {};\nreturn [{ json: {\n  registered: true,\n  id: c.id,\n  name: c.name,\n  whatsapp: c.whatsapp,\n  address: c.address ?? null,\n} }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        -120
+      ],
+      "id": "aa000000-0000-4a00-8a00-000000000004",
+      "name": "Cliente existente"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://app.mymerchantai.com/api/agent/customers",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Agent-Channel",
+              "value": "={{ $('Recibir datos').first().json.instance }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ name: $('Recibir datos').first().json.name, whatsapp: $('Recibir datos').first().json.phone }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        660,
+        120
+      ],
+      "id": "aa000000-0000-4a00-8a00-000000000005",
+      "name": "Registrar cliente",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "WiiMY4bj9pAJPl2X",
+          "name": "MerchantAI Agente"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Cliente recién creado: el POST devuelve la fila insertada (camelCase).\nconst c = $input.first().json || {};\nreturn [{ json: {\n  registered: false,\n  id: c.id,\n  name: c.name,\n  whatsapp: c.whatsapp ?? c.phone ?? null,\n  address: c.address ?? null,\n} }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        120
+      ],
+      "id": "aa000000-0000-4a00-8a00-000000000006",
+      "name": "Cliente nuevo"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Recibir datos": {
+      "main": [
+        [
+          {
+            "node": "Buscar por numero",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar por numero": {
+      "main": [
+        [
+          {
+            "node": "Ya existe?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ya existe?": {
+      "main": [
+        [
+          {
+            "node": "Cliente existente",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar cliente",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar cliente": {
+      "main": [
+        [
+          {
+            "node": "Cliente nuevo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "aa000000-vers-0001",
+  "meta": {
+    "instanceId": "cc6a879bace2ab159a1a86a425f4d7a483a54103db2eee1c16dac1c42a253a26"
+  },
+  "nodeGroups": [],
+  "id": "cliBuscarRegis01",
+  "tags": []
+}

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CANCEL_REASON_KEYS } from './cancellation-reasons';
 
 // Reusable optional text field: trims, caps length, and normalizes empty/absent
 // to null so the DB never stores empty strings.
@@ -46,6 +47,17 @@ export const deliveryStatusValues = [
 export const deliveryTransitionSchema = z.object({
   status: z.enum(deliveryStatusValues),
   note: optionalText(500),
+  // P0-B: the payment method the courier picks at delivery (a method NAME from
+  // the org's real list, e.g. 'Efectivo' | 'Nequi'). Only meaningful for the
+  // 'delivered' transition; the action defaults it to 'efectivo' when absent.
+  paymentType: z.string().trim().min(1).max(100).nullable().optional(),
+  // P2-A: the courier asked for an electronic invoice at delivery. Only honored
+  // when the org actually has e-invoicing enabled (checked server-side).
+  wantsInvoice: z.boolean().optional(),
+  // P1: cancellation reason (a preset key) + optional free text (used for 'otro').
+  // Only meaningful for the 'cancelled' transition.
+  cancelReason: z.enum(CANCEL_REASON_KEYS).optional(),
+  cancelReasonText: optionalText(500),
 });
 
 export type DeliveryCreateInput = z.input<typeof deliveryCreateSchema>;

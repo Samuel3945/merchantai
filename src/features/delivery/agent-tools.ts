@@ -1,5 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
+import { findOpenSession } from '@/libs/cash-helpers';
+import { db } from '@/libs/DB';
 import { createDeliveryForOrg } from './intake';
 
 /**
@@ -37,6 +39,20 @@ export function createDeliveryOrderTool(orgId: string) {
     }),
     execute: async (input) => {
       try {
+        // Open-caja guard (mirrors POST /api/agent/deliveries): a delivered order
+        // becomes a POS sale booked into a caja, so the assistant must not TAKE
+        // an order the business cannot settle. Any open session for the org
+        // qualifies (WhatsApp is not tied to a physical till).
+        const openCaja = await findOpenSession(db, orgId);
+        if (!openCaja) {
+          return {
+            success: false,
+            error: 'no_open_caja',
+            message:
+              'No hay una caja abierta. Pedile al comercio que abra la caja para tomar pedidos.',
+          };
+        }
+
         const order = await createDeliveryForOrg(orgId, input, {
           source: 'ai_agent',
           createdBy: 'ai_agent',

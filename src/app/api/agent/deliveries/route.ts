@@ -11,6 +11,10 @@
  *   5. customerId (if supplied) in db.forOrg — cross-org → 404
  *   6. Each product in db.forOrg — missing/deleted → 422 product_not_found
  *   7. stock < qty            — 422 insufficient_stock (agent token: no oversell)
+ *   7b. open caja required    — at least one OPEN cash_session for the org, else
+ *      409 no_open_caja. A delivered order becomes a POS sale booked into a caja
+ *      (see transitionDelivery), so there must be one open to take the order —
+ *      the same requirement POST /api/agent/orders enforces.
  *   8. resolveDeliveryFee — shipping computed from the org's config and the
  *      REAL subtotal, never from caller input
  *   9. createDeliveryForOrg(source:'ai_agent', actorType:'api', createdBy:tokenId??channelId)
@@ -19,14 +23,19 @@
  * discarded/rejected by the schema, and the server re-fetches/recomputes them
  * from db.forOrg + libs/delivery-fee.ts at order time.
  */
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { agentDeliveryCreateSchema } from '@/features/delivery/agent-delivery-validation';
 import { createDeliveryForOrg } from '@/features/delivery/intake';
 import { requireAgentAuth } from '@/libs/agent-auth';
 import { db } from '@/libs/db-context';
 import { resolveDeliveryFee } from '@/libs/delivery-fee';
-import { customersSchema, deliveryOrdersSchema, productsSchema } from '@/models/Schema';
+import {
+  cashSessionsSchema,
+  customersSchema,
+  deliveryOrdersSchema,
+  productsSchema,
+} from '@/models/Schema';
 
 export const dynamic = 'force-dynamic';
 
@@ -170,6 +179,30 @@ export async function POST(req: Request): Promise<Response> {
       qty: totalQty,
       price: Number(product.price),
     });
+  }
+
+  // Step 7b: open-caja guard. A delivery, once delivered, becomes a POS sale
+  // booked into an open caja (see transitionDelivery). Refuse to TAKE the order
+  // when the org has no open cash_session — the same requirement
+  // POST /api/agent/orders enforces — so nobody is stuck with an order that
+  // cannot be settled. Read-only endpoints (e.g. /quote) do NOT gate on this.
+  const [openCaja] = await db
+    .forOrg(organizationId)
+    .select({ id: cashSessionsSchema.id })
+    .from(cashSessionsSchema)
+    .where(eq(cashSessionsSchema.status, 'open'))
+    .orderBy(desc(cashSessionsSchema.openedAt))
+    .limit(1);
+
+  if (!openCaja) {
+    return NextResponse.json(
+      {
+        error: 'no_open_caja',
+        message:
+          'No hay una caja abierta. Pedile al comercio que abra la caja para tomar pedidos.',
+      },
+      { status: 409 },
+    );
   }
 
   // Step 8: compute the delivery fee server-side from the org's config and the

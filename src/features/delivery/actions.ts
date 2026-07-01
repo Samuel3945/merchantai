@@ -6,15 +6,27 @@ import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { createSaleForOrg } from '@/actions/sales';
 import { logAction } from '@/libs/audit-log';
+import { isCreditoMethod } from '@/libs/creditos-math';
 import { db } from '@/libs/DB';
 import { sendWhatsAppTextForOrg } from '@/libs/delivery-whatsapp';
+import { loadEInvoiceConfig } from '@/libs/einvoice/config';
+import { emitInvoiceForSale } from '@/libs/einvoice/emit';
 import { getCurrentPanelUser, requirePanelModule } from '@/libs/panel-session';
 import {
   courierShiftsSchema,
   deliveryEventsSchema,
   deliveryOrdersSchema,
 } from '@/models/Schema';
+import {
+  cancelReasonCustomerMessage,
+  cancelReasonEventNote,
+} from './cancellation-reasons';
+import { settleDeliveryFee } from './settlement';
 import { deliveryTransitionSchema } from './validation';
+
+// Contraentrega default when the courier's deliver dialog sends no explicit
+// method — keeps the historical behavior (efectivo → cash into the caja).
+const DEFAULT_DELIVERY_PAYMENT = 'efectivo';
 
 export type DeliveryOrder = typeof deliveryOrdersSchema.$inferSelect;
 export type DeliveryEvent = typeof deliveryEventsSchema.$inferSelect;
@@ -165,18 +177,31 @@ function buildDeliverySaleItems(
   });
 }
 
-// Turns a delivered order into a cash POS sale in the courier's declared caja,
+// What createDeliverySale hands back to transitionDelivery: the sale id to stamp
+// on the order, plus the caja (device) the sale was booked into — the fee
+// settlement (P2-B) needs the same session to keep the arqueo exact.
+type DeliverySaleResult = {
+  saleId: string | null;
+  shiftPosTokenId: string | null;
+};
+
+// Turns a delivered order into a POS sale in the courier's declared caja,
 // returning the sale id to stamp on the order. Called BEFORE the status-flip tx
 // (createSaleForOrg owns its OWN transaction — never nest it). Throws — leaving
 // NO half state — when there is no active shift, when a line lacks a productId,
 // or when the sale itself fails (e.g. a product was deleted). Idempotent for an
 // already-delivered order (keeps the existing sale, creates nothing); the
 // `delivery:<id>` idempotency key is the second guard against double-selling.
+//
+// `paymentType` is the method the courier picked at delivery (P0-B). A credito
+// method is rejected: a delivered contraentrega COLLECTS money into a caja, so a
+// credit debt would defeat the settlement (and bypass the open-caja requirement).
 async function createDeliverySale(
   deliveryOrderId: string,
   orgId: string,
   actor: Awaited<ReturnType<typeof getCurrentPanelUser>>,
-): Promise<string | null> {
+  paymentType: string,
+): Promise<DeliverySaleResult> {
   // Only a linked courier (pos_users row) with an active shift may deliver.
   if (!actor) {
     throw new Error(NO_ACTIVE_SHIFT_MESSAGE);
@@ -184,6 +209,11 @@ async function createDeliverySale(
   const shift = await findActiveShift(orgId, actor.id);
   if (!shift) {
     throw new Error(NO_ACTIVE_SHIFT_MESSAGE);
+  }
+  if (isCreditoMethod(paymentType)) {
+    throw new Error(
+      'No se puede entregar a crédito. Elegí un método de cobro (efectivo, transferencia, etc.).',
+    );
   }
 
   const [order] = await db
@@ -202,7 +232,7 @@ async function createDeliverySale(
   }
   // Already delivered → idempotent: keep the existing sale, create nothing.
   if (order.status === 'delivered') {
-    return order.saleId ?? null;
+    return { saleId: order.saleId ?? null, shiftPosTokenId: shift.posTokenId };
   }
   // Guard the state machine here too, so we never spend a createSaleForOrg on an
   // illegal transition (the status-flip tx re-checks it as defense in depth).
@@ -214,23 +244,24 @@ async function createDeliverySale(
 
   const items = buildDeliverySaleItems(order.items);
 
-  // Contraentrega (COD): the courier collects cash, so paymentType 'efectivo' —
-  // createSaleForOrg's recordCashMovement books it into shift.posTokenId's open
-  // session (null = the admin/dashboard caja). Attributed to the courier
-  // (actorId = their pos_users id), actorType 'api' like the other non-Clerk
-  // sale paths. The sale total is the goods subtotal (createSaleForOrg re-prices
-  // from the catalog); the delivery fee is tracked separately, not sold here.
+  // The courier's chosen method drives collection: a cash method (efectivo)
+  // books into shift.posTokenId's open session via recordCashMovement; a digital
+  // method flows through recordSaleTransferReconciliations — both inside
+  // createSaleForOrg. Attributed to the courier (actorId = their pos_users id),
+  // actorType 'api' like the other non-Clerk sale paths. The sale total is the
+  // goods subtotal (createSaleForOrg re-prices from the catalog); the delivery
+  // fee is settled separately (P2-B), never sold as a line here.
   const sale = await createSaleForOrg({
     orgId,
     actorId: actor.id,
     actorType: 'api',
     items,
-    paymentType: 'efectivo',
+    paymentType,
     posTokenId: shift.posTokenId,
     idempotencyKey: `delivery:${deliveryOrderId}`,
   });
 
-  return sale.id;
+  return { saleId: sale.id, shiftPosTokenId: shift.posTokenId };
 }
 
 // Moves an order along the state machine, writing a status_change event to the
@@ -241,7 +272,20 @@ export async function transitionDelivery(
   input: DeliveryTransitionInput,
 ): Promise<DeliveryOrder> {
   const { userId, orgId } = await requirePanelModule('delivery');
-  const { status: next, note } = deliveryTransitionSchema.parse(input);
+  const parsed = deliveryTransitionSchema.parse(input);
+  const { status: next, note } = parsed;
+
+  // The method the courier picked at delivery (P0-B); default to contraentrega
+  // cash so existing callers and the historical flow are unchanged.
+  const paymentType
+    = (parsed.paymentType && parsed.paymentType.trim()) || DEFAULT_DELIVERY_PAYMENT;
+
+  // P1: on a cancellation, the event note carries the chosen reason (+ free text
+  // for 'otro') so the timeline explains WHY. Falls back to any free-form note.
+  const eventNote
+    = next === 'cancelled' && parsed.cancelReason
+      ? cancelReasonEventNote(parsed.cancelReason, parsed.cancelReasonText)
+      : note ?? null;
 
   // Who is acting: their pos_users row (linked to this Clerk identity). Used to
   // stamp the courier on an "assigned" claim, to personalize the customer
@@ -254,12 +298,14 @@ export async function transitionDelivery(
     : null;
 
   // DELIVERED is money-critical: the goods physically left, so the order becomes
-  // a cash sale in the courier's declared caja. Resolve + create the sale BEFORE
+  // a POS sale in the courier's declared caja. Resolve + create the sale BEFORE
   // flipping status — a failure (no shift, a free-text line, a vanished product)
   // aborts the transition and leaves NO half state.
   let deliveredSaleId: string | null = null;
+  let deliverySale: DeliverySaleResult | null = null;
   if (next === 'delivered') {
-    deliveredSaleId = await createDeliverySale(id, orgId, actor);
+    deliverySale = await createDeliverySale(id, orgId, actor, paymentType);
+    deliveredSaleId = deliverySale.saleId;
   }
 
   const updated = await db.transaction(async (tx) => {
@@ -331,7 +377,7 @@ export async function transitionDelivery(
       type: 'status_change',
       fromStatus: current.status,
       toStatus: next,
-      note: note ?? null,
+      note: eventNote,
       actorType: 'user',
       createdBy: userId,
     });
@@ -348,13 +394,63 @@ export async function transitionDelivery(
     after: { id: updated.id, status: updated.status },
   });
 
+  // Post-commit settlement for a delivered order (P2-A/P2-B). Everything here is
+  // BEST-EFFORT and outside the transaction: the goods sale + status flip already
+  // succeeded, so a fee/invoice hiccup must never surface as a failed delivery.
+  if (next === 'delivered' && deliveredSaleId && deliverySale) {
+    // P2-B: settle the delivery fee — 'revenue' books the cash into the same caja
+    // session as the sale (arqueo stays exact); 'courier_tip' only notes it.
+    await settleDeliveryFee({
+      organizationId: orgId,
+      deliveryOrderId: updated.id,
+      saleId: deliveredSaleId,
+      posTokenId: deliverySale.shiftPosTokenId,
+      paymentType,
+      feeAmount: updated.deliveryFee,
+      actorId: actor?.id ?? userId,
+    }).catch(() => null);
+
+    // P2-A: the courier asked for an electronic invoice — emit it on demand
+    // (only when the org's e-invoicing is actually configured).
+    if (parsed.wantsInvoice) {
+      await maybeEmitDeliveryInvoice(orgId, deliveredSaleId);
+    }
+  }
+
   // L3 plugs in here: notify the customer over WhatsApp on each transition.
   // Kept outside the transaction on purpose — a messaging outage must never
   // roll back a real status change the courier already performed.
-  await notifyCustomerOfTransition(updated, note ?? null, userId, actor?.name ?? null);
+  await notifyCustomerOfTransition(
+    updated,
+    userId,
+    actor?.name ?? null,
+    next === 'cancelled' ? parsed.cancelReason ?? null : null,
+  );
 
   revalidatePath('/dashboard/delivery');
   return updated;
+}
+
+// P2-A: best-effort electronic invoice for a delivered sale, requested EXPLICITLY
+// by the courier via the deliver dialog. Unlike maybeAutoEmitInvoice (which only
+// fires when the einvoice_auto flag is on), this emits on demand — but still ONLY
+// when the org's e-invoicing is configured, and it NEVER blocks or fails the
+// delivery. emitInvoiceForSale is idempotent (an already-emitted sale is a no-op)
+// and consumes the credit itself, so a double call is safe.
+async function maybeEmitDeliveryInvoice(
+  orgId: string,
+  saleId: string,
+): Promise<void> {
+  try {
+    const cfg = await loadEInvoiceConfig(orgId);
+    if (!cfg.configured) {
+      return;
+    }
+    await emitInvoiceForSale(orgId, saleId, { actor: 'system' });
+  } catch {
+    // Best-effort: the sale already succeeded; the document stays retriable from
+    // the Facturas module.
+  }
 }
 
 // Generic "assigned" copy, used when we cannot resolve the courier's name.
@@ -446,13 +542,22 @@ export async function requestAddressClarification(
 // when WhatsApp is not configured or the org has no connected channel.
 async function notifyCustomerOfTransition(
   order: DeliveryOrder,
-  _note: string | null,
   actorId: string,
   courierName: string | null,
+  cancelReason: string | null,
 ): Promise<void> {
-  const message = order.status === 'assigned'
-    ? assignedMessage(courierName)
-    : STATUS_MESSAGES[order.status];
+  // The cancelled copy DEPENDS on the reason (P1): the customer waiting for the
+  // order gets a message that explains what happened, not a generic "cancelado".
+  let message: string | undefined;
+  if (order.status === 'assigned') {
+    message = assignedMessage(courierName);
+  } else if (order.status === 'cancelled') {
+    message = cancelReason
+      ? cancelReasonCustomerMessage(cancelReason)
+      : STATUS_MESSAGES.cancelled;
+  } else {
+    message = STATUS_MESSAGES[order.status];
+  }
   if (!message || !order.customerPhone) {
     return;
   }
