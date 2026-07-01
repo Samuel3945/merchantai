@@ -135,6 +135,14 @@ export const productsSchema = pgTable(
     digitalLimit: integer('digital_limit'),
     wholesaleTiers: jsonb('wholesale_tiers'),
     attributes: jsonb('attributes').default({}).notNull(),
+    // Parsed presentation/size (e.g. "2L", "500g"), derived deterministically
+    // from the product name by sizeFromName (src/features/products/search/size.ts)
+    // — the single source of truth also used by search ranking. Nullable:
+    // products with no recognizable size token (e.g. "Pan tajado") store null.
+    // NOT the same as `attributes` above: that column is the merchant's
+    // user-editable custom key/value fields, rendered as editable rows in the
+    // product form — a computed object there would break that editor.
+    size: jsonb('size').$type<{ value: number; unit: 'l' | 'ml' | 'kg' | 'g'; base: number; family: 'volume' | 'weight' }>(),
     status: productStatusEnum('status').default('published').notNull(),
     publishAt: timestamp('publish_at', { mode: 'date' }),
     deleted: boolean('deleted').default(false).notNull(),

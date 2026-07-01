@@ -79,6 +79,32 @@ export type CreateSaleInput = {
   dueDate?: string | null;
 };
 
+// Org-scoped core, decoupled from Clerk auth so it can run from the dashboard
+// server action (createSale, below) OR from an agent API route without a
+// session (POST /api/agent/orders). The caller supplies the resolved orgId and
+// actor identity — never trust a request body for either.
+//
+// HARD CONTRACT: when posTokenId/idempotencyKey are omitted, this must behave
+// BYTE-FOR-BYTE like the original createSale body (same insert shape, same
+// recordCashMovement(saleId, total) call signature with no ctx argument).
+export type CreateSaleForOrgInput = {
+  orgId: string;
+  // Clerk userId for the dashboard; ctx.tokenId ?? ctx.channelId for the agent.
+  actorId: string;
+  actorType?: 'user' | 'api';
+  items: { productId: string; qty: number }[];
+  paymentType: string;
+  payments?: SalePaymentInput[];
+  notes?: string | null;
+  dueDate?: string | null;
+  // Stamped on the sale row. Omitted (undefined) = dashboard, unchanged
+  // behavior. null = agent sale attributed to the admin/no-device cash
+  // session. A uuid = agent sale attributed to that POS device's session.
+  posTokenId?: string | null;
+  // Sets sale_idempotency_key. Omitted = no dedupe (dashboard, unchanged).
+  idempotencyKey?: string;
+};
+
 function toMoney(value: number | string): string {
   const n = typeof value === 'string' ? Number.parseFloat(value) : value;
   if (!Number.isFinite(n)) {
@@ -87,14 +113,19 @@ function toMoney(value: number | string): string {
   return n.toFixed(2);
 }
 
-export async function createSale(input: CreateSaleInput) {
-  const { userId, orgId } = await auth();
-  if (!userId) {
-    throw new Error('Not authenticated');
-  }
-  if (!orgId) {
-    throw new Error('No active organization');
-  }
+/** True when the error is a Postgres unique-constraint violation (23505). */
+function isUniqueConstraintViolation(err: unknown): boolean {
+  return (
+    typeof err === 'object'
+    && err !== null
+    && 'code' in err
+    && (err as { code: unknown }).code === '23505'
+  );
+}
+
+export async function createSaleForOrg(input: CreateSaleForOrgInput) {
+  const { orgId, actorId } = input;
+  const actorType = input.actorType ?? 'user';
 
   if (!input.items || input.items.length === 0) {
     throw new Error('Sale must include at least one item');
@@ -109,254 +140,342 @@ export async function createSale(input: CreateSaleInput) {
     }
   }
 
-  const result = await db.transaction(async (tx) => {
-    let total = 0;
-    const itemsToInsert: {
-      productId: string;
-      productName: string;
-      qty: number;
-      price: string;
-      subtotal: string;
-      unitType: string;
-    }[] = [];
-    // Reference cost per line (products.cost), used as a fallback when the FIFO
-    // ledger doesn't fully cover the sold quantity (e.g. legacy stock with no
-    // entry batches). Aligned by index with itemsToInsert.
-    const lineFallbackCost: string[] = [];
-    // Digital products skip the stock decrement below; their availability is
-    // the optional digitalLimit counter instead of physical stock.
-    const digitalById = new Map<string, { digitalLimit: number | null }>();
+  let deduped = false;
+  let result: typeof salesSchema.$inferSelect & {
+    items: (typeof saleItemsSchema.$inferSelect)[];
+    payments: (typeof salePaymentsSchema.$inferSelect)[];
+  };
 
-    for (const item of input.items) {
-      const [product] = await tx
-        .select()
-        .from(productsSchema)
-        .where(
-          and(
-            eq(productsSchema.id, item.productId),
-            eq(productsSchema.organizationId, orgId),
-            eq(productsSchema.deleted, false),
-          ),
-        )
-        .for('update')
-        .limit(1);
+  try {
+    result = await db.transaction(async (tx) => {
+      let total = 0;
+      const itemsToInsert: {
+        productId: string;
+        productName: string;
+        qty: number;
+        price: string;
+        subtotal: string;
+        unitType: string;
+      }[] = [];
+      // Reference cost per line (products.cost), used as a fallback when the FIFO
+      // ledger doesn't fully cover the sold quantity (e.g. legacy stock with no
+      // entry batches). Aligned by index with itemsToInsert.
+      const lineFallbackCost: string[] = [];
+      // Digital products skip the stock decrement below; their availability is
+      // the optional digitalLimit counter instead of physical stock.
+      const digitalById = new Map<string, { digitalLimit: number | null }>();
 
-      if (!product) {
-        throw new Error(`Product ${item.productId} not found`);
-      }
+      for (const item of input.items) {
+        const [product] = await tx
+          .select()
+          .from(productsSchema)
+          .where(
+            and(
+              eq(productsSchema.id, item.productId),
+              eq(productsSchema.organizationId, orgId),
+              eq(productsSchema.deleted, false),
+            ),
+          )
+          .for('update')
+          .limit(1);
 
-      // Only published products are sellable. Archived/draft must not enter a
-      // live sale — that's the whole point of archiving.
-      if (product.status !== 'published') {
-        throw new Error(
-          `"${product.name}" no está disponible para la venta.`,
-        );
-      }
+        if (!product) {
+          throw new Error(`Product ${item.productId} not found`);
+        }
 
-      if (product.isDigital) {
-        digitalById.set(product.id, { digitalLimit: product.digitalLimit });
-        if (product.digitalLimit !== null && product.digitalLimit < item.qty) {
+        // Only published products are sellable. Archived/draft must not enter a
+        // live sale — that's the whole point of archiving.
+        if (product.status !== 'published') {
           throw new Error(
-            `Límite de ventas alcanzado para "${product.name}" (disponible: ${product.digitalLimit}, solicitado: ${item.qty})`,
+            `"${product.name}" no está disponible para la venta.`,
           );
         }
-      } else if (product.stock < item.qty) {
-        throw new Error(
-          `Insufficient stock for "${product.name}" (available: ${product.stock}, requested: ${item.qty})`,
-        );
-      }
 
-      const basePrice = Number.parseFloat(product.price);
-      if (!Number.isFinite(basePrice)) {
-        throw new TypeError(`Invalid price for product ${product.id}`);
-      }
-      // Wholesale: qty-based tier pricing, same rule as the POS sale route.
-      const unitPrice = wholesaleUnitPrice(
-        basePrice,
-        product.isWholesale,
-        product.wholesaleTiers,
-        item.qty,
-      );
-      const subtotal = unitPrice * item.qty;
-      total += subtotal;
-
-      itemsToInsert.push({
-        productId: product.id,
-        productName: product.name,
-        qty: item.qty,
-        price: toMoney(unitPrice),
-        subtotal: toMoney(subtotal),
-        unitType: product.unitType,
-      });
-      lineFallbackCost.push(product.cost);
-    }
-
-    const totalStr = toMoney(total);
-
-    const saleNumber = await assignNextSaleNumber(tx, orgId);
-
-    const [sale] = await tx
-      .insert(salesSchema)
-      .values({
-        organizationId: orgId,
-        saleNumber,
-        total: totalStr,
-        paymentType: input.paymentType,
-        status: 'completed',
-        notes: input.notes ?? null,
-        cashierId: userId,
-      })
-      .returning();
-
-    if (!sale) {
-      throw new Error('Failed to create sale');
-    }
-
-    const insertedItems = await tx
-      .insert(saleItemsSchema)
-      .values(itemsToInsert.map(it => ({ saleId: sale.id, ...it })))
-      .returning();
-
-    // FIFO consumption + exit cost capture, shared by every sale path.
-    const exitRows = await consumeFifoExits(
-      tx,
-      orgId,
-      userId,
-      sale.id,
-      itemsToInsert.map((it, i) => ({
-        productId: it.productId,
-        productName: it.productName,
-        qty: it.qty,
-        fallbackCost: lineFallbackCost[i] ?? '0',
-      })),
-    );
-
-    // Stock on hand stays the authoritative quantity; the FIFO ledger above
-    // mirrors it batch by batch. Digital products keep stock at 0 and consume
-    // their sales-limit counter instead (no-op when unlimited).
-    for (const item of input.items) {
-      const digital = digitalById.get(item.productId);
-      if (digital) {
-        if (digital.digitalLimit !== null) {
-          await tx
-            .update(productsSchema)
-            .set({
-              digitalLimit: sql`GREATEST(0, ${productsSchema.digitalLimit} - ${item.qty})`,
-            })
-            .where(
-              and(
-                eq(productsSchema.id, item.productId),
-                eq(productsSchema.organizationId, orgId),
-              ),
+        if (product.isDigital) {
+          digitalById.set(product.id, { digitalLimit: product.digitalLimit });
+          if (product.digitalLimit !== null && product.digitalLimit < item.qty) {
+            throw new Error(
+              `Límite de ventas alcanzado para "${product.name}" (disponible: ${product.digitalLimit}, solicitado: ${item.qty})`,
             );
+          }
+        } else if (product.stock < item.qty) {
+          throw new Error(
+            `Insufficient stock for "${product.name}" (available: ${product.stock}, requested: ${item.qty})`,
+          );
         }
-        continue;
+
+        const basePrice = Number.parseFloat(product.price);
+        if (!Number.isFinite(basePrice)) {
+          throw new TypeError(`Invalid price for product ${product.id}`);
+        }
+        // Wholesale: qty-based tier pricing, same rule as the POS sale route.
+        const unitPrice = wholesaleUnitPrice(
+          basePrice,
+          product.isWholesale,
+          product.wholesaleTiers,
+          item.qty,
+        );
+        const subtotal = unitPrice * item.qty;
+        total += subtotal;
+
+        itemsToInsert.push({
+          productId: product.id,
+          productName: product.name,
+          qty: item.qty,
+          price: toMoney(unitPrice),
+          subtotal: toMoney(subtotal),
+          unitType: product.unitType,
+        });
+        lineFallbackCost.push(product.cost);
       }
-      await tx
-        .update(productsSchema)
-        .set({
-          stock: sql`GREATEST(0, ${productsSchema.stock} - ${item.qty})`,
+
+      const totalStr = toMoney(total);
+
+      const saleNumber = await assignNextSaleNumber(tx, orgId);
+
+      const [sale] = await tx
+        .insert(salesSchema)
+        .values({
+          organizationId: orgId,
+          saleNumber,
+          total: totalStr,
+          paymentType: input.paymentType,
+          status: 'completed',
+          notes: input.notes ?? null,
+          cashierId: actorId,
+          posTokenId: input.posTokenId ?? null,
+          saleIdempotencyKey: input.idempotencyKey ?? undefined,
         })
+        .returning();
+
+      if (!sale) {
+        throw new Error('Failed to create sale');
+      }
+
+      const insertedItems = await tx
+        .insert(saleItemsSchema)
+        .values(itemsToInsert.map(it => ({ saleId: sale.id, ...it })))
+        .returning();
+
+      // FIFO consumption + exit cost capture, shared by every sale path.
+      const exitRows = await consumeFifoExits(
+        tx,
+        orgId,
+        actorId,
+        sale.id,
+        itemsToInsert.map((it, i) => ({
+          productId: it.productId,
+          productName: it.productName,
+          qty: it.qty,
+          fallbackCost: lineFallbackCost[i] ?? '0',
+        })),
+      );
+
+      // Stock on hand stays the authoritative quantity; the FIFO ledger above
+      // mirrors it batch by batch. Digital products keep stock at 0 and consume
+      // their sales-limit counter instead (no-op when unlimited).
+      for (const item of input.items) {
+        const digital = digitalById.get(item.productId);
+        if (digital) {
+          if (digital.digitalLimit !== null) {
+            await tx
+              .update(productsSchema)
+              .set({
+                digitalLimit: sql`GREATEST(0, ${productsSchema.digitalLimit} - ${item.qty})`,
+              })
+              .where(
+                and(
+                  eq(productsSchema.id, item.productId),
+                  eq(productsSchema.organizationId, orgId),
+                ),
+              );
+          }
+          continue;
+        }
+        await tx
+          .update(productsSchema)
+          .set({
+            stock: sql`GREATEST(0, ${productsSchema.stock} - ${item.qty})`,
+          })
+          .where(
+            and(
+              eq(productsSchema.id, item.productId),
+              eq(productsSchema.organizationId, orgId),
+            ),
+          );
+      }
+
+      await tx.insert(stockMovementsSchema).values(exitRows);
+
+      const paymentRows
+        = input.payments && input.payments.length > 0
+          ? input.payments.map(p => ({
+              saleId: sale.id,
+              method: p.method,
+              amount: toMoney(p.amount),
+              reference: p.reference ?? null,
+              billsPaid: p.billsPaid ?? null,
+              changeGiven:
+                p.changeGiven !== undefined ? toMoney(p.changeGiven) : '0',
+            }))
+          : [
+              {
+                saleId: sale.id,
+                method: input.paymentType,
+                amount: totalStr,
+                reference: null,
+                billsPaid: null,
+                changeGiven: '0',
+              },
+            ];
+
+      const insertedPayments = await tx
+        .insert(salePaymentsSchema)
+        .values(paymentRows)
+        .returning();
+
+      // Credito: book the credit account for the portion NOT covered by an upfront
+      // non-credito payment. A 100%-credito sale owes the full total; a split sale
+      // (e.g. part efectivo now, rest credito) owes only the remainder. The efectivo
+      // part still hits the drawer via recordCashMovement below.
+      const creditoAmount = creditoAmountFor(total, paymentRows);
+      const isCredito
+        = isCreditoMethod(input.paymentType)
+          || paymentRows.some(p => isCreditoMethod(p.method));
+      if (isCredito && creditoAmount > 0) {
+        await createCredito(tx, {
+          organizationId: orgId,
+          saleId: sale.id,
+          originalAmount: creditoAmount,
+          dueDate: input.dueDate ?? null,
+          createdBy: actorId,
+          notes: input.notes ?? null,
+        });
+      }
+
+      return { ...sale, items: insertedItems, payments: insertedPayments };
+    });
+  } catch (err) {
+    // Belt-and-suspenders idempotency: a concurrent retry with the same
+    // idempotencyKey can lose the race on the partial unique index
+    // (organization_id, sale_idempotency_key). The whole transaction rolls
+    // back on that error (no partial writes, no double stock decrement) — so
+    // it's safe to just re-read the winner and return it instead of throwing.
+    if (input.idempotencyKey && isUniqueConstraintViolation(err)) {
+      const [existing] = await db
+        .select()
+        .from(salesSchema)
         .where(
           and(
-            eq(productsSchema.id, item.productId),
-            eq(productsSchema.organizationId, orgId),
+            eq(salesSchema.organizationId, orgId),
+            eq(salesSchema.saleIdempotencyKey, input.idempotencyKey),
           ),
-        );
+        )
+        .limit(1);
+      if (!existing) {
+        throw err;
+      }
+      const [items, payments] = await Promise.all([
+        db
+          .select()
+          .from(saleItemsSchema)
+          .where(eq(saleItemsSchema.saleId, existing.id)),
+        db
+          .select()
+          .from(salePaymentsSchema)
+          .where(eq(salePaymentsSchema.saleId, existing.id)),
+      ]);
+      deduped = true;
+      result = { ...existing, items, payments };
+    } else {
+      throw err;
     }
+  }
 
-    await tx.insert(stockMovementsSchema).values(exitRows);
-
-    const paymentRows
-      = input.payments && input.payments.length > 0
-        ? input.payments.map(p => ({
-            saleId: sale.id,
-            method: p.method,
-            amount: toMoney(p.amount),
-            reference: p.reference ?? null,
-            billsPaid: p.billsPaid ?? null,
-            changeGiven:
-              p.changeGiven !== undefined ? toMoney(p.changeGiven) : '0',
-          }))
-        : [
-            {
-              saleId: sale.id,
-              method: input.paymentType,
-              amount: totalStr,
-              reference: null,
-              billsPaid: null,
-              changeGiven: '0',
-            },
-          ];
-
-    const insertedPayments = await tx
-      .insert(salePaymentsSchema)
-      .values(paymentRows)
-      .returning();
-
-    // Credito: book the credit account for the portion NOT covered by an upfront
-    // non-credito payment. A 100%-credito sale owes the full total; a split sale
-    // (e.g. part efectivo now, rest credito) owes only the remainder. The efectivo
-    // part still hits the drawer via recordCashMovement below.
-    const creditoAmount = creditoAmountFor(total, paymentRows);
-    const isCredito
-      = isCreditoMethod(input.paymentType)
-        || paymentRows.some(p => isCreditoMethod(p.method));
-    if (isCredito && creditoAmount > 0) {
-      await createCredito(tx, {
+  if (!deduped) {
+    // Best-effort, exactly like the POS sale route: the sale transaction has
+    // already committed. A throw here would reject the caller AFTER a
+    // committed sale, so the operator/agent sees an error and retries —
+    // creating a DUPLICATE sale (double stock decrement, double revenue). A
+    // dropped cash movement only understates the drawer (reconciled at
+    // closing), which is far less harmful.
+    //
+    // posTokenId omitted (dashboard, unchanged): same no-ctx call as before,
+    // resolved from the current Clerk session inside recordCashMovement.
+    // posTokenId provided (agent path): book into THAT device's (or the
+    // admin, when null) session explicitly — there is no Clerk session here.
+    if (input.posTokenId !== undefined) {
+      await recordCashMovement(result.id, result.total, {
         organizationId: orgId,
-        saleId: sale.id,
-        originalAmount: creditoAmount,
-        dueDate: input.dueDate ?? null,
-        createdBy: userId,
-        notes: input.notes ?? null,
-      });
+        userId: actorId,
+        posTokenId: input.posTokenId,
+      }).catch(() => null);
+    } else {
+      await recordCashMovement(result.id, result.total).catch(() => null);
     }
 
-    return { ...sale, items: insertedItems, payments: insertedPayments };
+    // Mirror for non-cash money: feed the transfer reconciliation ledger so the
+    // digital collections can be confirmed against the account later. Same
+    // best-effort contract — a failure must never reject a committed sale.
+    await recordSaleTransferReconciliations(result.id).catch(() => null);
+
+    // Best-effort: emit the electronic invoice now if a provider is configured.
+    // Never awaited into the response — the sale already succeeded; a failed
+    // emission stays retriable from the Facturas module.
+    void maybeAutoEmitInvoice(orgId, result.id);
+
+    await logAction({
+      organizationId: orgId,
+      actor: { type: actorType, id: actorId },
+      action: 'sale.created',
+      entityType: 'sale',
+      entityId: result.id,
+      after: {
+        id: result.id,
+        total: result.total,
+        paymentType: result.paymentType,
+        status: result.status,
+        itemCount: result.items.length,
+      },
+      metadata: {
+        paymentType: input.paymentType,
+        payments: result.payments.map(p => ({
+          method: p.method,
+          amount: p.amount,
+        })),
+      },
+    });
+
+    revalidatePath('/dashboard/sales');
+    revalidatePath('/dashboard/products');
+  }
+
+  return { ...result, deduped };
+}
+
+export async function createSale(input: CreateSaleInput) {
+  const { userId, orgId } = await auth();
+  if (!userId) {
+    throw new Error('Not authenticated');
+  }
+  if (!orgId) {
+    throw new Error('No active organization');
+  }
+
+  // Dashboard callers never pass posTokenId/idempotencyKey, so createSaleForOrg
+  // takes its byte-for-byte-identical-to-today branch (no ctx to
+  // recordCashMovement, no dedupe). `deduped` is stripped here so the returned
+  // shape stays exactly what callers of createSale got before this extraction.
+  const { deduped: _deduped, ...result } = await createSaleForOrg({
+    orgId,
+    actorId: userId,
+    actorType: 'user',
+    items: input.items,
+    paymentType: input.paymentType,
+    payments: input.payments,
+    notes: input.notes,
+    dueDate: input.dueDate,
   });
-
-  // Best-effort, exactly like the POS sale route: the sale transaction has
-  // already committed. A throw here would reject createSale AFTER a committed
-  // sale, so the operator sees an error and retries — creating a DUPLICATE sale
-  // (double stock decrement, double revenue). A dropped cash movement only
-  // understates the drawer (reconciled at closing), which is far less harmful.
-  await recordCashMovement(result.id, result.total).catch(() => null);
-
-  // Mirror for non-cash money: feed the transfer reconciliation ledger so the
-  // digital collections can be confirmed against the account later. Same
-  // best-effort contract — a failure must never reject a committed sale.
-  await recordSaleTransferReconciliations(result.id).catch(() => null);
-
-  // Best-effort: emit the electronic invoice now if a provider is configured.
-  // Never awaited into the response — the sale already succeeded; a failed
-  // emission stays retriable from the Facturas module.
-  void maybeAutoEmitInvoice(orgId, result.id);
-
-  await logAction({
-    organizationId: orgId,
-    actor: { type: 'user', id: userId },
-    action: 'sale.created',
-    entityType: 'sale',
-    entityId: result.id,
-    after: {
-      id: result.id,
-      total: result.total,
-      paymentType: result.paymentType,
-      status: result.status,
-      itemCount: result.items.length,
-    },
-    metadata: {
-      paymentType: input.paymentType,
-      payments: result.payments.map(p => ({
-        method: p.method,
-        amount: p.amount,
-      })),
-    },
-  });
-
-  revalidatePath('/dashboard/sales');
-  revalidatePath('/dashboard/products');
 
   return result;
 }

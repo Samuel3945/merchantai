@@ -533,6 +533,27 @@
       "when": 1782852479871,
       "tag": "0075_romantic_infant_terrible",
       "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "7",
+      "when": 1782900000000,
+      "tag": "0076_remove_ai_agent_phantom_caja",
+      "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1782900000001,
+      "tag": "0077_product_search_trgm_fts",
+      "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1782900000002,
+      "tag": "0078_product_size_column",
+      "breakpoints": true
     }
   ]
 }
