@@ -65,6 +65,7 @@ const DDL = `
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     organization_id text NOT NULL,
     device_name text NOT NULL,
+    active boolean DEFAULT true NOT NULL,
     allow_oversell boolean DEFAULT false NOT NULL,
     default_sweep_destination_account_id uuid
   );
@@ -349,6 +350,23 @@ describe('getTreasuryPosition', () => {
 
     expect(vaultEntry?.balance).toBe(30);
     expect(balances['banco:Nequi']).toBe(50);
+  });
+
+  it('excludes deactivated (active=false) pos_token drawers (no phantom $0 cajas)', async () => {
+    // Migration 0076 deactivates the phantom 'ai_agent' pos_tokens; this view
+    // must hide them, not show them as $0 "cajas" in "Dónde está la plata".
+    await pg.query(
+      `INSERT INTO pos_tokens (id, organization_id, device_name, active) VALUES ($1, $2, 'ai_agent fantasma', false)`,
+      [TOKEN, ORG],
+    );
+    await pg.query(
+      `INSERT INTO cash_sessions (id, organization_id, pos_token_id, opened_by, opening_amount, status) VALUES ($1, $2, $3, 'x', '0', 'open')`,
+      [SESSION, ORG, TOKEN],
+    );
+
+    const accounts = await getTreasuryPosition(db, ORG);
+
+    expect(accounts.some(a => a.key === `caja:${TOKEN}`)).toBe(false);
   });
 
   it('excludes soft-deleted (active=false) accounts from the position', async () => {

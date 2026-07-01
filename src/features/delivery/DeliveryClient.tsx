@@ -8,11 +8,14 @@ import type {
 } from './actions';
 import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
+import { Toaster } from '@/components/ui/toast';
+import { toast } from '@/components/ui/toast-store';
 import { cn } from '@/utils/Helpers';
 import {
   getDeliveryEvents,
   getDeliveryKpis,
   listDeliveries,
+  requestAddressClarification,
   transitionDelivery,
 } from './actions';
 
@@ -235,6 +238,7 @@ export function DeliveryClient(props: {
             </div>
           )}
 
+      <Toaster />
     </div>
   );
 }
@@ -249,11 +253,38 @@ function DeliveryCard({
   onAct: (order: DeliveryOrder, to: DeliveryStatus) => void;
 }) {
   const [showHistory, setShowHistory] = useState(false);
+  const [clarifying, setClarifying] = useState(false);
   const meta = STATUS_META[order.status];
   const next = NEXT_ACTION[order.status];
   const items = Array.isArray(order.items) ? (order.items as DeliveryItem[]) : [];
   const canCancel = order.status !== 'delivered' && order.status !== 'cancelled';
   const phoneDigits = order.customerPhone?.replace(/\D/g, '') ?? '';
+
+  // Courier tool: ask the customer for details to arrive, over the org's own
+  // WhatsApp. Optimistic disable while sending; the toast reports the outcome.
+  async function askClarification() {
+    setClarifying(true);
+    try {
+      const res = await requestAddressClarification(order.id);
+      if (res.sent) {
+        toast.success('Le pedimos al cliente más detalles de la dirección.');
+      } else if (res.skipped) {
+        toast.error(
+          res.reason === 'no_connected_channel'
+            ? 'Conectá un WhatsApp del negocio para enviar mensajes.'
+            : res.reason === 'missing_recipient'
+              ? 'Este pedido no tiene teléfono del cliente.'
+              : 'WhatsApp no está configurado.',
+        );
+      } else {
+        toast.error('No se pudo enviar el mensaje. Intentá de nuevo.');
+      }
+    } catch {
+      toast.error('No se pudo enviar el mensaje. Intentá de nuevo.');
+    } finally {
+      setClarifying(false);
+    }
+  }
 
   return (
     <div className="rounded-xl border border-border bg-card p-4 shadow-xs">
@@ -330,6 +361,21 @@ function DeliveryCard({
           >
             WhatsApp
           </a>
+        )}
+        {canCancel && phoneDigits && (
+          <button
+            type="button"
+            onClick={askClarification}
+            disabled={clarifying}
+            className="
+              inline-flex h-8 items-center rounded-md border border-border px-3
+              text-sm font-medium text-muted-foreground
+              hover:text-foreground
+              disabled:opacity-60
+            "
+          >
+            {clarifying ? 'Enviando…' : 'Pedir aclaración de dirección'}
+          </button>
         )}
         <button
           type="button"

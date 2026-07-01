@@ -93,11 +93,20 @@ export async function getTreasuryPosition(
 ): Promise<TreasuryAccount[]> {
   const accounts: TreasuryAccount[] = [];
 
-  // Cajas POS — one drawer per device. UNCHANGED from Phase 1.
+  // Cajas POS — one drawer per ACTIVE device. Deactivated devices (active=false)
+  // must be hidden here exactly like the cajas panel (which filters active).
+  // Migration 0076 deactivates the phantom 'ai_agent' pos_tokens on the premise
+  // that "the panel only lists active devices" — but this view never honored
+  // active, so those phantoms resurfaced as $0 "cajas" in "Dónde está la plata".
   const tokens = await executor
     .select({ id: posTokensSchema.id, name: posTokensSchema.deviceName })
     .from(posTokensSchema)
-    .where(eq(posTokensSchema.organizationId, organizationId));
+    .where(
+      and(
+        eq(posTokensSchema.organizationId, organizationId),
+        eq(posTokensSchema.active, true),
+      ),
+    );
 
   // Batch-fetch the most recent closed session ID per pos_token (for R7 "entregado" label).
   // One query for all tokens avoids N+1. Result: Map<posTokenId, sessionId>.
