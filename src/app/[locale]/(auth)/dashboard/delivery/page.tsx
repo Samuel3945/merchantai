@@ -31,15 +31,27 @@ export default async function DashboardDeliveryPage(props: {
     redirect('/dashboard');
   }
 
-  const [initial, kpis, activeShift, openCajas, paymentMethods, einvoiceCfg]
-    = await Promise.all([
-      listDeliveries({ status: 'active' }),
-      getDeliveryKpis(),
-      getActiveCourierShift(),
-      listOpenCajas(),
-      listPaymentMethods({ activeOnly: true }),
-      loadEInvoiceConfig(orgId),
-    ]);
+  // Core data: the delivery list + KPIs. Access is already gated (requirePanelModule).
+  const [initial, kpis] = await Promise.all([
+    listDeliveries({ status: 'active' }),
+    getDeliveryKpis(),
+  ]);
+
+  // Settlement lookups degrade gracefully. A failure in ANY one of them — e.g. a
+  // not-yet-applied migration (courier_shifts) or e-invoicing not set up — must
+  // NOT white-screen the whole Domicilios page; it just disables that one
+  // affordance until the underlying cause is fixed.
+  const [shiftR, cajasR, methodsR, einvoiceR] = await Promise.allSettled([
+    getActiveCourierShift(),
+    listOpenCajas(),
+    listPaymentMethods({ activeOnly: true }),
+    loadEInvoiceConfig(orgId),
+  ]);
+  const activeShift = shiftR.status === 'fulfilled' ? shiftR.value : null;
+  const openCajas = cajasR.status === 'fulfilled' ? cajasR.value : [];
+  const paymentMethods = methodsR.status === 'fulfilled' ? methodsR.value : [];
+  const einvoiceEnabled
+    = einvoiceR.status === 'fulfilled' ? einvoiceR.value.configured : false;
 
   // The deliver dialog (P0-B) offers the org's real, active payment methods —
   // minus credito: a delivered contraentrega COLLECTS money into a caja, so a
@@ -60,7 +72,7 @@ export default async function DashboardDeliveryPage(props: {
         initialShift={activeShift}
         openCajas={openCajas}
         paymentMethods={deliverPaymentMethods}
-        einvoiceEnabled={einvoiceCfg.configured}
+        einvoiceEnabled={einvoiceEnabled}
       />
     </>
   );
