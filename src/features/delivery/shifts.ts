@@ -1,6 +1,6 @@
 'use server';
 
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, isNull } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { findOpenSession } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
@@ -36,9 +36,11 @@ function cajaLabel(posTokenId: string | null, deviceName: string | null): string
   return deviceName ?? 'Caja';
 }
 
-// Every caja that is OPEN right now for the org, so the UI can offer the courier
-// a real choice at shift start. Most-recently-opened first. Includes the
-// admin/dashboard caja (posTokenId null) when its session is open.
+// Every real DEVICE caja that is OPEN right now for the org, so the UI can offer
+// the courier a real choice at shift start. Most-recently-opened first. The
+// admin/dashboard session (posTokenId null) is EXCLUDED on purpose: it is a
+// system fallback the shop never explicitly opens, so it must not appear as a
+// pickable caja for the courier's cash to land in.
 export async function listOpenCajas(): Promise<OpenCaja[]> {
   const { orgId } = await requirePanelModule('delivery');
 
@@ -56,6 +58,7 @@ export async function listOpenCajas(): Promise<OpenCaja[]> {
       and(
         eq(cashSessionsSchema.organizationId, orgId),
         eq(cashSessionsSchema.status, 'open'),
+        isNotNull(cashSessionsSchema.posTokenId),
       ),
     )
     .orderBy(desc(cashSessionsSchema.openedAt));
