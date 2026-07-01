@@ -60,6 +60,14 @@ vi.mock('@/libs/audit-log', () => ({
 }));
 
 const SCHEMA = `
+  CREATE TABLE app_settings (
+    organization_id text NOT NULL,
+    key text NOT NULL,
+    value text DEFAULT '' NOT NULL,
+    updated_at timestamp DEFAULT now() NOT NULL,
+    PRIMARY KEY (organization_id, key)
+  );
+
   CREATE TABLE customers (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     organization_id text NOT NULL,
@@ -130,10 +138,20 @@ beforeAll(async () => {
   );
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   h.capabilities = { orders: true };
   createDeliveryMock.mockClear();
+  await pg.exec('DELETE FROM app_settings;');
 });
+
+async function setSetting(key: string, value: string): Promise<void> {
+  await pg.query(
+    `INSERT INTO app_settings (organization_id, key, value)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (organization_id, key) DO UPDATE SET value = $3`,
+    [ORG, key, value],
+  );
+}
 
 function postRequest(body: unknown): Request {
   return new Request('http://localhost/api/agent/deliveries', {
@@ -361,5 +379,57 @@ describe('POST /api/agent/deliveries', () => {
 
     expect(res.status).toBe(201);
     expect(createDeliveryMock).toHaveBeenCalledOnce();
+  });
+
+  // ─── Server-computed delivery fee ─────────────────────────────────────────
+
+  it('no fee configured (type none) → deliveryFee passed to intake is 0', async () => {
+    const { POST } = await import('./route');
+    await POST(postRequest(VALID_BODY));
+
+    expect(createDeliveryMock).toHaveBeenCalledOnce();
+
+    const [, inputArg] = createDeliveryMock.mock.calls[0]!;
+
+    expect((inputArg as { deliveryFee: number }).deliveryFee).toBe(0);
+  });
+
+  it('org config (type \'fixed\') → deliveryFee passed to intake uses the configured amount, not any caller value', async () => {
+    await setSetting('delivery_fee_type', 'fixed');
+    await setSetting('delivery_fee_value', '1500');
+
+    const { POST } = await import('./route');
+    // VALID_BODY has 2 x PRODUCT_ID (price 3500) = subtotal 7000; fixed fee is
+    // independent of subtotal.
+    await POST(postRequest(VALID_BODY));
+
+    expect(createDeliveryMock).toHaveBeenCalledOnce();
+
+    const [, inputArg] = createDeliveryMock.mock.calls[0]!;
+
+    expect((inputArg as { deliveryFee: number }).deliveryFee).toBe(1500);
+  });
+
+  it('org config (type \'percent\') → deliveryFee is computed from the real server subtotal', async () => {
+    await setSetting('delivery_fee_type', 'percent');
+    await setSetting('delivery_fee_value', '10');
+
+    const { POST } = await import('./route');
+    // 2 x PRODUCT_ID @ 3500 = subtotal 7000 → 10% = 700
+    await POST(postRequest(VALID_BODY));
+
+    expect(createDeliveryMock).toHaveBeenCalledOnce();
+
+    const [, inputArg] = createDeliveryMock.mock.calls[0]!;
+
+    expect((inputArg as { deliveryFee: number }).deliveryFee).toBe(700);
+  });
+
+  it('a caller-supplied deliveryFee in the body → 400 (strict schema rejects the unknown key)', async () => {
+    const { POST } = await import('./route');
+    const res = await POST(postRequest({ ...VALID_BODY, deliveryFee: 999_999 }));
+
+    expect(res.status).toBe(400);
+    expect(createDeliveryMock).not.toHaveBeenCalled();
   });
 });
