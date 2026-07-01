@@ -840,7 +840,11 @@ export function TransferReconciliationPanel(props: {
               </div>
             )
           : (
-              <ul className="max-h-112 divide-y divide-border overflow-y-auto">
+              <ul className="
+                scrollbar-subtle max-h-112 scrollbar-gutter-stable divide-y
+                divide-border overflow-y-auto
+              "
+              >
                 {shown.map((r) => {
                   const isPending = r.status === 'pending';
                   const isConfirmed

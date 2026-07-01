@@ -887,7 +887,8 @@ export function ProductsClient({
         >
           <div
             className="
-              max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg border
+              scrollbar-subtle max-h-[90vh] w-full max-w-lg
+              scrollbar-gutter-stable overflow-y-auto rounded-lg border
               bg-background p-6 shadow-lg
             "
             onClick={e => e.stopPropagation()}
