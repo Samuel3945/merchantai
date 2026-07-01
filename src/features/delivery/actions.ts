@@ -191,7 +191,8 @@ type DeliverySaleResult = {
 // NO half state — when there is no active shift, when a line lacks a productId,
 // or when the sale itself fails (e.g. a product was deleted). Idempotent for an
 // already-delivered order (keeps the existing sale, creates nothing); the
-// `delivery:<id>` idempotency key is the second guard against double-selling.
+// delivery order id, used as the sale idempotency key, is the second guard
+// against double-selling.
 //
 // `paymentType` is the method the courier picked at delivery (P0-B). A credito
 // method is rejected: a delivered contraentrega COLLECTS money into a caja, so a
@@ -258,7 +259,10 @@ async function createDeliverySale(
     items,
     paymentType,
     posTokenId: shift.posTokenId,
-    idempotencyKey: `delivery:${deliveryOrderId}`,
+    // The delivery order id (a UUID) IS the idempotency key. sale_idempotency_key
+    // is a UUID column, so a "delivery:" prefix would break the insert; the raw
+    // UUID keeps the (org, key) unique index as the second double-sell guard.
+    idempotencyKey: deliveryOrderId,
   });
 
   return { saleId: sale.id, shiftPosTokenId: shift.posTokenId };
