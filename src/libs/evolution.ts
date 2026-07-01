@@ -14,7 +14,7 @@ const WEBHOOK_EVENTS = ['MESSAGES_UPSERT'] as const;
 
 type ConnectionState = 'open' | 'connecting' | 'close' | 'unknown';
 
-function config(): { base: string; key: string } | null {
+export function config(): { base: string; key: string } | null {
   const base = Env.EVOLUTION_API_URL?.replace(/\/+$/, '');
   const key = Env.EVOLUTION_API_KEY;
   if (!base || !key) {
