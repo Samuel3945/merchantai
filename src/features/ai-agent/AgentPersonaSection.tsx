@@ -9,7 +9,7 @@ import { TextAreaField, TextField } from '@/features/settings/fields';
 // persisted yet, since the agent backend (channels, n8n) does not exist in
 // MerchantAI. Capabilities and schedules live per channel (see ChannelsSection).
 export function AgentPersonaSection() {
-  const [name, setName] = useState('Gerente IA');
+  const [name, setName] = useState('Samuel');
   const [persona, setPersona] = useState('');
 
   return (
@@ -30,6 +30,7 @@ export function AgentPersonaSection() {
           id="agent-name"
           label="Nombre del agente"
           initial={name}
+          hint="Es el nombre propio del agente. Por defecto es Samuel; podés cambiarlo cuando quieras."
           onCommit={setName}
         />
 
