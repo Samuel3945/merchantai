@@ -12,6 +12,7 @@
  * Body values for organizationId or channelId are IGNORED — the agent token is
  * the exclusive identity source (spec §Conversation Upsert).
  */
+import { eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { requireAgentAuth } from '@/libs/agent-auth';
@@ -69,12 +70,39 @@ export async function POST(req: Request): Promise<Response> {
     return NextResponse.json({ error: 'Upsert failed' }, { status: 500 });
   }
 
+  // The tenant-db insert proxy widens the returned row type; the row is a full
+  // conversations record, so re-narrow it to the schema select type.
+  const convo = row as typeof conversationsSchema.$inferSelect;
+
+  // AUTO-RESUME (the guarantee): a conversation whose pause window has already
+  // elapsed reactivates the bot on THIS very inbound message, so a handoff is
+  // never left silent forever. We clear the pause and hand it back to the bot,
+  // then report the resumed state so n8n answers on this same turn.
+  let { botPaused, botPausedUntil, attendedBy } = convo;
+  if (botPaused && botPausedUntil && botPausedUntil.getTime() <= now.getTime()) {
+    await db
+      .forOrg(organizationId)
+      .update(conversationsSchema)
+      .set({
+        botPaused: false,
+        botPausedUntil: null,
+        botPausedBy: null,
+        attendedBy: 'bot',
+        updatedAt: now,
+      })
+      .where(eq(conversationsSchema.id, convo.id));
+    botPaused = false;
+    botPausedUntil = null;
+    attendedBy = 'bot';
+  }
+
   return NextResponse.json({
-    id: row.id,
-    status: row.status,
-    botPaused: row.botPaused,
-    botPausedUntil: row.botPausedUntil ?? null,
-    attendedBy: row.attendedBy,
-    lastMessageAt: row.lastMessageAt ?? null,
+    id: convo.id,
+    status: convo.status,
+    botPaused,
+    botPausedUntil: botPausedUntil ?? null,
+    blocked: convo.blocked,
+    attendedBy,
+    lastMessageAt: convo.lastMessageAt ?? null,
   });
 }

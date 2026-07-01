@@ -2687,6 +2687,9 @@ export const conversationsSchema = pgTable(
     botPausedBy: text('bot_paused_by'),
     // 'bot' = automated; set to a user id on handoff.
     attendedBy: text('attended_by').default('bot').notNull(),
+    // Owner blocked this number from the inbox: the bot must stay silent even
+    // when not paused. n8n reads this flag from the upsert response.
+    blocked: boolean('blocked').default(false).notNull(),
     lastMessageAt: timestamp('last_message_at', { mode: 'date' }),
     createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { mode: 'date' })

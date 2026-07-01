@@ -34,6 +34,17 @@ const CAPABILITIES: { key: string; label: string; sub: string }[] = [
   { key: 'alerts', label: 'Enviar alertas', sub: 'Stock bajo, creditos, caja' },
 ];
 
+// The friendly one-switch preset. Turning "Agente de Domicilios" ON enables
+// exactly the capability bundle the delivery agent needs: product lookup +
+// order taking (the `orders` flag also governs /deliveries and /deliveries/quote;
+// customer lookup needs no flag). Advanced users still tune the granular flags
+// above under the "Avanzado" disclosure.
+const DELIVERY_PRESET_KEYS = ['products_lookup', 'orders'] as const;
+
+function isDeliveryPresetOn(caps: Record<string, boolean>): boolean {
+  return DELIVERY_PRESET_KEYS.every(key => caps[key] === true);
+}
+
 const STATUS_LABEL: Record<WhatsAppChannelRow['status'], string> = {
   connecting: 'Conectando…',
   connected: 'Conectado',
@@ -277,9 +288,25 @@ function ChannelFormDialog({
     channel?.capabilities ?? {},
   );
   const [submitting, setSubmitting] = useState(false);
+  // Open the advanced disclosure if the channel already has a non-preset flag on,
+  // so editing never hides a permission the owner had enabled.
+  const [showAdvanced, setShowAdvanced] = useState(() =>
+    Object.entries(channel?.capabilities ?? {}).some(
+      ([key, on]) =>
+        on === true && !(DELIVERY_PRESET_KEYS as readonly string[]).includes(key),
+    ),
+  );
 
   const toggle = (key: string, next: boolean) =>
     setCapabilities(prev => ({ ...prev, [key]: next }));
+
+  const deliveryPresetOn = isDeliveryPresetOn(capabilities);
+  const toggleDeliveryPreset = (next: boolean) =>
+    setCapabilities(prev => ({
+      ...prev,
+      products_lookup: next,
+      orders: next,
+    }));
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -343,46 +370,94 @@ function ChannelFormDialog({
             />
           </div>
 
-          <div>
+          <div className="space-y-3">
             <p className="
-              mb-2 text-xs font-semibold tracking-wider text-muted-foreground
+              text-xs font-semibold tracking-wider text-muted-foreground
               uppercase
             "
             >
               Permisos del bot en este canal
             </p>
-            <div className="
-              grid gap-2
-              sm:grid-cols-2
-            "
+
+            {/* Preset primario y amigable: una sola llave para el caso de uso real. */}
+            <label
+              htmlFor="wa-preset-delivery"
+              className={`
+                flex cursor-pointer items-start gap-3 rounded-lg border p-3
+                ${deliveryPresetOn
+      ? 'border-brand/50 bg-brand-soft/40'
+      : 'bg-background'}
+              `}
             >
-              {CAPABILITIES.map((c) => {
-                const on = capabilities[c.key] === true;
-                return (
-                  <label
-                    key={c.key}
-                    htmlFor={`wa-cap-${c.key}`}
-                    className={`
-                      flex cursor-pointer items-center gap-3 rounded-md border
-                      p-2.5
-                      ${on
-                    ? 'border-brand/40 bg-brand-soft/40'
-                    : `bg-background`}
-                    `}
-                  >
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-semibold">{c.label}</p>
-                      <p className="text-[10px] text-muted-foreground">{c.sub}</p>
-                    </div>
-                    <Switch
-                      id={`wa-cap-${c.key}`}
-                      checked={on}
-                      aria-label={c.label}
-                      onCheckedChange={next => toggle(c.key, next)}
-                    />
-                  </label>
-                );
-              })}
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold">Activar Agente de Domicilios</p>
+                <p className="text-xs text-muted-foreground">
+                  Enciende de una lo que el agente necesita para atender pedidos:
+                  consultar productos y tomar pedidos/domicilios. Los clientes se
+                  buscan solos.
+                </p>
+              </div>
+              <Switch
+                id="wa-preset-delivery"
+                checked={deliveryPresetOn}
+                aria-label="Activar Agente de Domicilios"
+                onCheckedChange={toggleDeliveryPreset}
+              />
+            </label>
+
+            {/* Los toggles granulares siguen siendo el límite de seguridad que cada
+                endpoint valida; quedan bajo "Avanzado" para no abrumar. */}
+            <div className="rounded-md border bg-background">
+              <button
+                type="button"
+                onClick={() => setShowAdvanced(s => !s)}
+                aria-expanded={showAdvanced}
+                className="
+                  flex w-full items-center justify-between px-3 py-2 text-xs
+                  font-semibold text-muted-foreground
+                "
+              >
+                <span>Avanzado · permisos individuales</span>
+                <span aria-hidden className="text-base leading-none">
+                  {showAdvanced ? '−' : '+'}
+                </span>
+              </button>
+
+              {showAdvanced && (
+                <div className="
+                  grid gap-2 border-t p-2.5
+                  sm:grid-cols-2
+                "
+                >
+                  {CAPABILITIES.map((c) => {
+                    const on = capabilities[c.key] === true;
+                    return (
+                      <label
+                        key={c.key}
+                        htmlFor={`wa-cap-${c.key}`}
+                        className={`
+                          flex cursor-pointer items-center gap-3 rounded-md
+                          border p-2.5
+                          ${on
+                        ? 'border-brand/40 bg-brand-soft/40'
+                        : `bg-background`}
+                        `}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="text-xs font-semibold">{c.label}</p>
+                          <p className="text-[10px] text-muted-foreground">{c.sub}</p>
+                        </div>
+                        <Switch
+                          id={`wa-cap-${c.key}`}
+                          checked={on}
+                          aria-label={c.label}
+                          onCheckedChange={next => toggle(c.key, next)}
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
 
