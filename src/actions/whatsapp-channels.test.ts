@@ -147,8 +147,8 @@ beforeEach(async () => {
   vi.clearAllMocks();
 });
 
-describe('createWhatsAppChannel — auto-creates agent_tokens + paired pos_tokens', () => {
-  it('channel QR complete → agent_tokens row inserted + paired pos_tokens row (deviceName=ai_agent, pin="", allowOversell=false)', async () => {
+describe('createWhatsAppChannel — auto-creates agent_tokens, never a caja', () => {
+  it('channel created → agent_tokens row inserted and NO ai_agent pos_token (agent must not create cajas)', async () => {
     const { createWhatsAppChannel } = await import('./whatsapp-channels');
     const result = await createWhatsAppChannel({ label: 'Test' });
 
@@ -167,17 +167,14 @@ describe('createWhatsAppChannel — auto-creates agent_tokens + paired pos_token
     expect(agentTokens[0]!.organizationId).toBe(h.orgId);
     expect(agentTokens[0]!.active).toBe(true);
 
-    // Verify paired pos_tokens row
+    // The agent must NOT provision its own POS device/caja. Creating one here
+    // surfaced phantom "cajas" in the cash panel that never open a shift.
     const posTokens = await h.db
       .select()
       .from(posTokensSchema)
       .where(eq(posTokensSchema.organizationId, h.orgId));
 
-    const aiToken = posTokens.find(t => t.deviceName === 'ai_agent');
-
-    expect(aiToken).toBeTruthy();
-    expect(aiToken!.pin).toBe('');
-    expect(aiToken!.allowOversell).toBe(false);
+    expect(posTokens.find(t => t.deviceName === 'ai_agent')).toBeUndefined();
   });
 });
 

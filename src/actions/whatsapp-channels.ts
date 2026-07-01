@@ -17,7 +17,6 @@ import { logger } from '@/libs/Logger';
 import {
   agentTokensSchema,
   conversationsSchema,
-  posTokensSchema,
   whatsappChannelsSchema,
 } from '@/models/Schema';
 
@@ -125,8 +124,8 @@ export async function createWhatsAppChannel(
 
   let row: typeof whatsappChannelsSchema.$inferSelect;
   try {
-    // All three inserts run in a single atomic transaction: channel + agent token +
-    // paired POS device token. A failure in any insert rolls back the others.
+    // Both inserts run in a single atomic transaction: channel + agent token.
+    // A failure in either insert rolls back the other.
     row = await db.transaction(async (tx) => {
       const inserted = await tx
         .insert(whatsappChannelsSchema)
@@ -157,16 +156,10 @@ export async function createWhatsAppChannel(
           createdBy: userId,
         });
 
-      // Paired POS device token consumed by agent-token auth (allowOversell=false).
-      await tx
-        .insert(posTokensSchema)
-        .values({
-          organizationId: orgId,
-          deviceName: 'ai_agent',
-          pin: '',
-          allowOversell: false,
-          createdBy: userId,
-        });
+      // The agent intentionally does NOT get its own POS device/caja. It must
+      // operate against whatever cash session is already open — a paired
+      // 'ai_agent' pos_token here surfaced phantom "cajas" in the cash panel that
+      // never open a shift, and nothing ever consumed that token.
 
       return channelRow;
     });

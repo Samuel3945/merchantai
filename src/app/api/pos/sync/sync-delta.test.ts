@@ -58,6 +58,7 @@ const SCHEMA = `
     is_digital boolean DEFAULT false NOT NULL,
     digital_limit integer,
     attributes jsonb DEFAULT '{}' NOT NULL,
+    size jsonb,
     status text DEFAULT 'published' NOT NULL,
     publish_at timestamp,
     deleted boolean DEFAULT false NOT NULL,

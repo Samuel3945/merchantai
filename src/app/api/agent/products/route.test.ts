@@ -1,10 +1,17 @@
+import type { AltItem, ResultItem, SearchResponse } from '@/features/products/search/ranking';
 /**
  * GET /api/agent/products
  *
- * Capability-gated product lookup. Price and stock ALWAYS come from the DB.
+ * Capability-gated product search. Price and stock ALWAYS come from the DB.
  * productsSchema is never queried when the capability is missing (403 first).
+ *
+ * Runs the real trigram/FTS query against PGlite (with the pg_trgm extension
+ * and the same immutable_unaccent function shipped in
+ * migrations/0077_product_search_trgm_fts.sql), so this exercises the actual
+ * SQL — not a mock of it.
  */
 import { PGlite } from '@electric-sql/pglite';
+import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -33,13 +40,35 @@ vi.mock('@/libs/agent-auth', () => ({
   })),
 }));
 
+// Mirrors migrations/0077_product_search_trgm_fts.sql exactly (pure
+// translate()+lower(), not the unaccent extension — IMMUTABLE, no extra deps).
+const UNACCENT_FN = `
+  CREATE OR REPLACE FUNCTION immutable_unaccent(text)
+    RETURNS text
+    LANGUAGE sql
+    IMMUTABLE
+    PARALLEL SAFE
+    STRICT
+  AS $$
+    SELECT translate(
+      lower($1),
+      'áàäâãéèëêíìïîóòöôõúùüûñçºª',
+      'aaaaaeeeeiiiiooooouuuuncoa'
+    )
+  $$;
+`;
+
 const SCHEMA = `
   CREATE TABLE products (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     organization_id text NOT NULL,
     name text NOT NULL,
+    barcode text,
     price numeric(10, 2) NOT NULL,
     stock numeric(12, 3) DEFAULT 0 NOT NULL,
+    category text,
+    unit_type text DEFAULT 'unit' NOT NULL,
+    status text DEFAULT 'published' NOT NULL,
     deleted boolean DEFAULT false NOT NULL,
     created_at timestamp DEFAULT now() NOT NULL
   );
@@ -48,16 +77,31 @@ const SCHEMA = `
 let pg: PGlite;
 
 beforeAll(async () => {
-  pg = new PGlite();
+  pg = new PGlite({ extensions: { pg_trgm } });
+  await pg.exec('CREATE EXTENSION IF NOT EXISTS pg_trgm;');
+  await pg.exec(UNACCENT_FN);
   await pg.exec(SCHEMA);
+  await pg.exec(
+    'CREATE INDEX products_name_trgm_idx ON products USING gin (immutable_unaccent(name) gin_trgm_ops);',
+  );
+  await pg.exec(
+    'CREATE INDEX products_search_fts_idx ON products USING gin (to_tsvector(\'spanish\', immutable_unaccent(name || \' \' || coalesce(category, \'\'))));',
+  );
   h.db = drizzle(pg);
-  // Seed products
+
+  // Seed products: two normal items, two "Coca Cola" presentations, one
+  // out-of-stock, one deleted, one archived (status filter proof).
   await pg.query(
-    `INSERT INTO products (id, organization_id, name, price, stock, deleted)
+    `INSERT INTO products (id, organization_id, name, barcode, price, stock, category, unit_type, status, deleted)
      VALUES
-       (gen_random_uuid(), $1, 'Arroz 500g', '3500.00', 10, false),
-       (gen_random_uuid(), $1, 'Azúcar 1kg', '4200.00', 5, false),
-       (gen_random_uuid(), $1, 'Aceite deleted', '1000.00', 0, true)`,
+       (gen_random_uuid(), $1, 'Arroz Diana 500g', null, '3500.00', 10, 'abarrotes', 'unit', 'published', false),
+       (gen_random_uuid(), $1, 'Panela', null, '2000.00', 8, 'abarrotes', 'unit', 'published', false),
+       (gen_random_uuid(), $1, 'Coca Cola 1.5L', '7701234567890', '3000.00', 10, 'bebidas', 'unit', 'published', false),
+       (gen_random_uuid(), $1, 'Coca Cola 3L', null, '6000.00', 5, 'bebidas', 'unit', 'published', false),
+       (gen_random_uuid(), $1, 'Coca Cola Light 1.5L', null, '3200.00', 0, 'bebidas', 'unit', 'published', false),
+       (gen_random_uuid(), $1, 'Coca Cola Zero 1.5L', null, '3200.00', 10, 'bebidas', 'unit', 'published', true),
+       (gen_random_uuid(), $1, 'Coca Cola Diet 1.5L', null, '3200.00', 10, 'bebidas', 'unit', 'archived', false),
+       (gen_random_uuid(), $1, 'Refresco Postobon 1.5L', null, '2800.00', 10, 'bebidas', 'unit', 'published', false)`,
     [ORG],
   );
 });
@@ -74,59 +118,86 @@ function getRequest(params: Record<string, string> = {}): Request {
   });
 }
 
+function allNames(body: SearchResponse): string[] {
+  return [...body.results, ...body.alternatives].map((item: ResultItem | AltItem) => item.name);
+}
+
 describe('GET /api/agent/products', () => {
-  it('capabilities.products_lookup=true → products returned with server price+stock', async () => {
+  it('capabilities.products_lookup=true → q=coca returns Coca Cola matches with server price+stock, excludes Panela/deleted/archived', async () => {
     const { GET } = await import('./route');
-    const res = await GET(getRequest());
+    const res = await GET(getRequest({ q: 'coca' }));
 
     expect(res.status).toBe(200);
 
-    const products = await res.json();
+    const body = (await res.json()) as SearchResponse;
+    const names = allNames(body);
 
-    // Should only include non-deleted products (2 results)
-    expect(products.length).toBe(2);
+    expect(names).toContain('Coca Cola 1.5L');
+    expect(names).toContain('Coca Cola 3L');
+    expect(names).not.toContain('Panela');
+    expect(names).not.toContain('Arroz Diana 500g');
+    expect(names).not.toContain('Coca Cola Zero 1.5L'); // deleted
+    expect(names).not.toContain('Coca Cola Diet 1.5L'); // archived
 
-    // Each product has server-side price and stock
-    for (const p of products) {
-      expect(p.price).toBeDefined();
-      expect(p.stock).toBeDefined();
+    for (const item of [...body.results, ...body.alternatives]) {
+      expect(item.price).toBeDefined();
+      expect(typeof item.stock).toBe('number');
     }
   });
 
   it('capabilities.products_lookup=false → 403, no DB query runs', async () => {
     h.capabilities = { orders: true }; // no products_lookup
     const { GET } = await import('./route');
-    const res = await GET(getRequest());
+    const res = await GET(getRequest({ q: 'coca' }));
 
     expect(res.status).toBe(403);
   });
 
-  it('q param → name filter applied', async () => {
+  it('q=arroz → returns Arroz Diana 500g', async () => {
     const { GET } = await import('./route');
     const res = await GET(getRequest({ q: 'arroz' }));
 
     expect(res.status).toBe(200);
 
-    const products = await res.json();
+    const body = (await res.json()) as SearchResponse;
 
-    expect(products.length).toBe(1);
-    expect(products[0].name.toLowerCase()).toContain('arroz');
+    expect(allNames(body)).toContain('Arroz Diana 500g');
   });
 
-  it('cross-org → only own org products (db.forOrg scoping)', async () => {
-    // Seed a product for another org
+  it('q=gaseosa → finds a "Refresco" product via ES-CO synonym expansion', async () => {
+    const { GET } = await import('./route');
+    const res = await GET(getRequest({ q: 'gaseosa' }));
+
+    expect(res.status).toBe(200);
+
+    const body = (await res.json()) as SearchResponse;
+
+    expect(allNames(body)).toContain('Refresco Postobon 1.5L');
+  });
+
+  it('empty q → not_found shape, no DB query needed', async () => {
+    const { GET } = await import('./route');
+    const res = await GET(getRequest());
+
+    expect(res.status).toBe(200);
+
+    const body = (await res.json()) as SearchResponse;
+
+    expect(body.status).toBe('not_found');
+    expect(body.results).toEqual([]);
+    expect(body.alternatives).toEqual([]);
+  });
+
+  it('cross-org → other org product never appears in results or alternatives (db.forOrg scoping)', async () => {
     await pg.query(
-      `INSERT INTO products (id, organization_id, name, price, stock, deleted)
-       VALUES (gen_random_uuid(), 'org_other', 'Other Org Product', '999.00', 1, false)`,
+      `INSERT INTO products (id, organization_id, name, price, stock, category, unit_type, status, deleted)
+       VALUES (gen_random_uuid(), 'org_other', 'Coca Cola Other Org', '999.00', 1, 'bebidas', 'unit', 'published', false)`,
     );
 
     const { GET } = await import('./route');
-    const res = await GET(getRequest());
-    const products = await res.json();
+    const res = await GET(getRequest({ q: 'coca' }));
+    const body = (await res.json()) as SearchResponse;
 
-    // Should not include the other org product
-    const otherOrgProduct = products.find((p: { name: string }) => p.name === 'Other Org Product');
-
-    expect(otherOrgProduct).toBeUndefined();
+    expect(allNames(body)).not.toContain('Coca Cola Other Org');
   });
 });

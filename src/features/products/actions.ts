@@ -22,6 +22,7 @@ import {
   stockMovementsSchema,
 } from '@/models/Schema';
 import { refreshCategory, upsertCategory } from './categories-db';
+import { sizeFromName } from './search/size';
 import {
 
   productCreateSchema,
@@ -241,6 +242,7 @@ export async function createProduct(input: ProductCreateInput) {
         digitalLimit: data.isDigital ? (data.digitalLimit ?? null) : null,
         wholesaleTiers: data.wholesaleTiers ?? null,
         attributes: data.attributes,
+        size: sizeFromName(data.name),
         status: data.status,
         publishAt: data.publishAt ?? null,
       })
@@ -398,7 +400,10 @@ export async function updateProduct(id: string, input: ProductUpdateInput) {
     const [updatedRow] = await tx
       .update(productsSchema)
       .set({
-        ...(data.name !== undefined && { name: data.name }),
+        ...(data.name !== undefined && {
+          name: data.name,
+          size: sizeFromName(data.name),
+        }),
         ...(data.barcode !== undefined && { barcode: data.barcode }),
         ...(data.price !== undefined && { price: data.price }),
         ...(data.cost !== undefined && { cost: data.cost }),
