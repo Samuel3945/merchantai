@@ -208,7 +208,7 @@ export function NotificationBell() {
             )}
           </div>
 
-          <div className="max-h-96 overflow-y-auto">
+          <div className="scrollbar-subtle max-h-96 overflow-y-auto">
             {items.length === 0
               ? (
                   <div className="
