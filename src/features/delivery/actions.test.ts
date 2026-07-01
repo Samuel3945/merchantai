@@ -4,8 +4,8 @@
  * Covers the money-critical rules:
  *   - delivered with an active shift → createSaleForOrg is called with the
  *     courier's caja (posTokenId), efectivo, items [{productId, qty}] and the
- *     `delivery:<id>` idempotency key; the order flips to delivered with saleId
- *     set and a status_change event recorded.
+ *     delivery order id as the idempotency key; the order flips to delivered
+ *     with saleId set and a status_change event recorded.
  *   - delivered WITHOUT a shift → rejected, no sale, status unchanged.
  *   - delivered with a legacy line missing productId → rejected, no sale.
  *   - a non-delivered transition (in_transit) needs no shift and no sale.
@@ -295,7 +295,7 @@ describe('transitionDelivery — delivered → cash sale', () => {
         actorType: 'api',
         paymentType: 'efectivo',
         posTokenId: DEVICE_ID,
-        idempotencyKey: `delivery:${ORDER_ID}`,
+        idempotencyKey: ORDER_ID,
         items: [{ productId: PRODUCT_ID, qty: 2 }],
       }),
     );
