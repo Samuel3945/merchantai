@@ -6,15 +6,18 @@
  * Guards (in order):
  *   1. requireAgentAuth       — invalid/expired token → 401
  *   2. capabilities.orders    — missing flag → 403
- *   3. agentDeliveryCreateSchema.parse — bad body → 400
+ *   3. agentDeliveryCreateSchema.parse — bad body → 400 (deliveryFee rejected: not in schema)
  *   4. idempotencyKey dedup   — if (org, key) row exists → 200 (no duplicate)
  *   5. customerId (if supplied) in db.forOrg — cross-org → 404
  *   6. Each product in db.forOrg — missing/deleted → 422 product_not_found
  *   7. stock < qty            — 422 insufficient_stock (agent token: no oversell)
- *   8. createDeliveryForOrg(source:'ai_agent', actorType:'api', createdBy:tokenId??channelId)
+ *   8. resolveDeliveryFee — shipping computed from the org's config and the
+ *      REAL subtotal, never from caller input
+ *   9. createDeliveryForOrg(source:'ai_agent', actorType:'api', createdBy:tokenId??channelId)
  *
- * The LLM MUST NOT supply price or stock — they are discarded by the schema and
- * the server re-fetches them from db.forOrg at order time.
+ * The LLM MUST NOT supply price, stock or the delivery fee — they are all
+ * discarded/rejected by the schema, and the server re-fetches/recomputes them
+ * from db.forOrg + libs/delivery-fee.ts at order time.
  */
 import { and, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
@@ -22,6 +25,7 @@ import { agentDeliveryCreateSchema } from '@/features/delivery/agent-delivery-va
 import { createDeliveryForOrg } from '@/features/delivery/intake';
 import { requireAgentAuth } from '@/libs/agent-auth';
 import { db } from '@/libs/db-context';
+import { resolveDeliveryFee } from '@/libs/delivery-fee';
 import { customersSchema, deliveryOrdersSchema, productsSchema } from '@/models/Schema';
 
 export const dynamic = 'force-dynamic';
@@ -160,7 +164,14 @@ export async function POST(req: Request): Promise<Response> {
     });
   }
 
-  // Step 8: create the delivery with ai_agent attribution.
+  // Step 8: compute the delivery fee server-side from the org's config and the
+  // REAL subtotal (translatedItems already carries server-fetched prices).
+  // The caller can never influence this value — agentDeliveryCreateSchema
+  // does not accept a deliveryFee field at all.
+  const subtotal = translatedItems.reduce((sum, it) => sum + it.qty * it.price, 0);
+  const shipping = await resolveDeliveryFee(organizationId, subtotal);
+
+  // Step 9: create the delivery with ai_agent attribution.
   try {
     const delivery = await createDeliveryForOrg(
       organizationId,
@@ -170,7 +181,7 @@ export async function POST(req: Request): Promise<Response> {
         address: body.address,
         addressNotes: body.addressNotes,
         items: translatedItems,
-        deliveryFee: body.deliveryFee,
+        deliveryFee: shipping,
         notes: body.notes,
       },
       {

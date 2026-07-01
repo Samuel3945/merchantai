@@ -1,14 +1,17 @@
 /**
- * Agent-facing delivery create schema.
+ * Agent-facing delivery create + quote schemas.
  *
- * Intentionally EXCLUDES price and stock fields — the LLM must NOT supply these.
- * The server re-fetches price + stock from db.forOrg at order time and discards
- * any caller-supplied value. This prevents price hallucination attacks.
+ * Intentionally EXCLUDE price, stock AND deliveryFee — the LLM must NOT supply
+ * any of these. The server re-fetches price + stock from db.forOrg at order
+ * time and computes the delivery fee from the org's config (libs/delivery-fee.ts),
+ * discarding any caller-supplied value. This prevents both price hallucination
+ * and shipping-fee manipulation attacks.
  *
  * Contrast with deliveryCreateSchema (validation.ts) which accepts the full
- * snapshot including price (used by manual/POS callers who already know the price).
- * createDeliveryForOrg() stays unchanged — the agent route translates items into
- * the snapshot format before calling it.
+ * snapshot including price and deliveryFee (used by manual/POS callers that
+ * already know the price and had the fee computed for them by the same
+ * libs/delivery-fee.ts helper). createDeliveryForOrg() stays unchanged — the
+ * agent route translates items into the snapshot format before calling it.
  */
 import { z } from 'zod';
 
@@ -30,10 +33,23 @@ export const agentDeliveryCreateSchema = z
     items: z.array(agentDeliveryItemSchema).min(1),
     address: z.string().trim().min(1).max(500),
     addressNotes: z.string().trim().max(500).optional(),
-    deliveryFee: z.number().nonnegative().max(1_000_000_000).default(0),
+    // deliveryFee is intentionally NOT accepted here — it is always computed
+    // server-side from the org's delivery fee config. A caller-supplied
+    // deliveryFee is rejected by .strict() below with a 400.
     notes: z.string().trim().max(1000).optional(),
     // n8n can supply the WhatsApp message id here for exactly-once creation.
     // The route deduplicates on (org, idempotencyKey) before inserting.
     idempotencyKey: z.string().min(1).max(200).optional(),
+  })
+  .strict();
+
+/**
+ * Agent-facing quote request — POST /api/agent/deliveries/quote.
+ * Same item shape as agentDeliveryCreateSchema (no price/stock from the
+ * caller); no address/customer fields since a quote never creates a row.
+ */
+export const agentDeliveryQuoteSchema = z
+  .object({
+    items: z.array(agentDeliveryItemSchema).min(1),
   })
   .strict();
