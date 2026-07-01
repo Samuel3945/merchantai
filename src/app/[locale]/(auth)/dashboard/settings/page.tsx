@@ -3,6 +3,7 @@ import { setRequestLocale } from 'next-intl/server';
 import { getAppSetting } from '@/actions/app-settings';
 import { listPaymentMethods } from '@/actions/payment-methods';
 import { TitleBar } from '@/features/dashboard/TitleBar';
+import { DELIVERY_FEE_MODE_KEY } from '@/features/delivery/settlement';
 import { SettingsClient } from '@/features/settings/SettingsClient';
 import {
   DELIVERY_FEE_TYPE_KEY,
@@ -39,6 +40,7 @@ const KEYS = [
   DELIVERY_FEE_TYPE_KEY,
   DELIVERY_FEE_VALUE_KEY,
   DELIVERY_FREE_ABOVE_KEY,
+  DELIVERY_FEE_MODE_KEY,
   // E-invoicing (MATIAS/DIAN)
   'fiscal_nit',
   'fiscal_dian_resolution',
@@ -114,6 +116,10 @@ export default async function DashboardSettingsPage(props: {
           delivery_fee_type: deliveryFeeType,
           delivery_fee_value: map[DELIVERY_FEE_VALUE_KEY],
           delivery_free_above: map[DELIVERY_FREE_ABOVE_KEY],
+          delivery_fee_mode:
+            map[DELIVERY_FEE_MODE_KEY] === 'courier_tip'
+              ? 'courier_tip'
+              : 'revenue',
         }}
         aiPreviewEnabled={asBool(map['modules.ai'], false)}
         facturasEnabled={asBool(map['modules.facturas'], false)}

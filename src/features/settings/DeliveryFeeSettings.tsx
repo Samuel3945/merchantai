@@ -6,17 +6,30 @@ import { useSettingSave } from './useSettingSave';
 
 export type DeliveryFeeType = 'none' | 'fixed' | 'percent';
 
+// How the delivery fee is treated at settlement (P2-B):
+//   'revenue'     — store income; when paid in cash it lands in the same caja
+//                   session as the sale so the arqueo stays exact.
+//   'courier_tip' — belongs to the courier (fixed wage), never store revenue and
+//                   never in the caja; only noted on the order timeline.
+export type DeliveryFeeMode = 'revenue' | 'courier_tip';
+
 export type DeliveryFeeSettingsValues = {
   delivery_fee_type: DeliveryFeeType;
   delivery_fee_value: string;
   // Empty string means "no threshold configured" (free shipping is off).
   delivery_free_above: string;
+  delivery_fee_mode: DeliveryFeeMode;
 };
 
 const TYPE_OPTIONS: ReadonlyArray<{ value: DeliveryFeeType; label: string }> = [
   { value: 'none', label: 'Sin costo de envío' },
   { value: 'fixed', label: 'Monto fijo' },
   { value: 'percent', label: 'Porcentaje del subtotal' },
+];
+
+const MODE_OPTIONS: ReadonlyArray<{ value: DeliveryFeeMode; label: string }> = [
+  { value: 'revenue', label: 'Ganancia del negocio (entra a la caja)' },
+  { value: 'courier_tip', label: 'Propina del domiciliario (no entra a la caja)' },
 ];
 
 // Small card rendered inside Ajustes → Módulos, right under the toggle
@@ -89,6 +102,19 @@ export function DeliveryFeeSettings({ initial }: { initial: DeliveryFeeSettingsV
               return;
             }
             save('delivery_free_above', String(n), { notifyConfigChange: true });
+          }}
+        />
+      )}
+
+      {type !== 'none' && (
+        <SelectField
+          id="delivery_fee_mode"
+          label="¿A quién pertenece el domicilio?"
+          initial={initial.delivery_fee_mode}
+          options={MODE_OPTIONS}
+          hint="Ganancia: el domicilio entra a la caja como ingreso. Propina: es del domiciliario y no se suma a la caja."
+          onCommit={(v) => {
+            save('delivery_fee_mode', v, { notifyConfigChange: true });
           }}
         />
       )}

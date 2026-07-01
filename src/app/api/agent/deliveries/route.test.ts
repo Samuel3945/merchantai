@@ -114,6 +114,14 @@ const SCHEMA = `
     created_at timestamp DEFAULT now() NOT NULL,
     updated_at timestamp DEFAULT now() NOT NULL
   );
+
+  CREATE TABLE cash_sessions (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+    organization_id text NOT NULL,
+    pos_token_id uuid,
+    status text DEFAULT 'open' NOT NULL,
+    opened_at timestamp DEFAULT now() NOT NULL
+  );
 `;
 
 let pg: PGlite;
@@ -142,6 +150,15 @@ beforeEach(async () => {
   h.capabilities = { orders: true };
   createDeliveryMock.mockClear();
   await pg.exec('DELETE FROM app_settings;');
+  // Reset the caja state and seed ONE open session so every "create" path can
+  // pass the open-caja guard (a delivered order becomes a POS sale into a caja).
+  // The no_open_caja test clears it explicitly.
+  await pg.exec('DELETE FROM cash_sessions;');
+  await pg.query(
+    `INSERT INTO cash_sessions (organization_id, pos_token_id, status)
+     VALUES ($1, NULL, 'open')`,
+    [ORG],
+  );
 });
 
 async function setSetting(key: string, value: string): Promise<void> {
@@ -374,6 +391,46 @@ describe('POST /api/agent/deliveries', () => {
   });
 
   it('no idempotencyKey → createDeliveryForOrg called normally (backward compat)', async () => {
+    const { POST } = await import('./route');
+    const res = await POST(postRequest(VALID_BODY));
+
+    expect(res.status).toBe(201);
+    expect(createDeliveryMock).toHaveBeenCalledOnce();
+  });
+
+  // ─── Open-caja guard ──────────────────────────────────────────────────────
+
+  it('no open caja → 409 no_open_caja, no order created', async () => {
+    await pg.exec('DELETE FROM cash_sessions;');
+
+    const { POST } = await import('./route');
+    const res = await POST(postRequest(VALID_BODY));
+
+    expect(res.status).toBe(409);
+
+    const body = await res.json();
+
+    expect(body.error).toBe('no_open_caja');
+    expect(createDeliveryMock).not.toHaveBeenCalled();
+  });
+
+  it('a DIFFERENT org has the open caja → still 409 for this org (tenant-scoped)', async () => {
+    await pg.exec('DELETE FROM cash_sessions;');
+    await pg.query(
+      `INSERT INTO cash_sessions (organization_id, pos_token_id, status)
+       VALUES ('some_other_org', NULL, 'open')`,
+    );
+
+    const { POST } = await import('./route');
+    const res = await POST(postRequest(VALID_BODY));
+
+    expect(res.status).toBe(409);
+    expect(createDeliveryMock).not.toHaveBeenCalled();
+  });
+
+  it('open caja present → order is created (201)', async () => {
+    // beforeEach already seeded an open caja; this asserts the happy path passes
+    // the guard.
     const { POST } = await import('./route');
     const res = await POST(postRequest(VALID_BODY));
 
