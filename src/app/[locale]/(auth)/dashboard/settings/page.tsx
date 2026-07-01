@@ -5,6 +5,11 @@ import { listPaymentMethods } from '@/actions/payment-methods';
 import { TitleBar } from '@/features/dashboard/TitleBar';
 import { SettingsClient } from '@/features/settings/SettingsClient';
 import {
+  DELIVERY_FEE_TYPE_KEY,
+  DELIVERY_FEE_VALUE_KEY,
+  DELIVERY_FREE_ABOVE_KEY,
+} from '@/libs/delivery-fee';
+import {
   BLOCK_CLOSE_SETTING_KEY,
   DEFAULT_RESOLUTION_SETTING_KEY,
 } from '@/libs/transfer-reconciliation';
@@ -30,6 +35,10 @@ const KEYS = [
   // AI preview gate (default OFF, flipped per-org by the operator in /platform).
   // Domicilios rides with it, so its module toggle is hidden until AI is on.
   'modules.ai',
+  // Delivery fee configuration (nested under the Domicilios module toggle)
+  DELIVERY_FEE_TYPE_KEY,
+  DELIVERY_FEE_VALUE_KEY,
+  DELIVERY_FREE_ABOVE_KEY,
   // E-invoicing (MATIAS/DIAN)
   'fiscal_nit',
   'fiscal_dian_resolution',
@@ -70,6 +79,12 @@ export default async function DashboardSettingsPage(props: {
     settings.map((s, i) => [KEYS[i] as SettingKey, s.value]),
   ) as Record<SettingKey, string>;
 
+  const rawDeliveryFeeType = map[DELIVERY_FEE_TYPE_KEY];
+  const deliveryFeeType
+    = rawDeliveryFeeType === 'fixed' || rawDeliveryFeeType === 'percent'
+      ? rawDeliveryFeeType
+      : 'none';
+
   return (
     <>
       <TitleBar
@@ -94,6 +109,11 @@ export default async function DashboardSettingsPage(props: {
           'modules.employees': asBool(map['modules.employees'], true),
           'modules.delivery': asBool(map['modules.delivery'], true),
           'modules.suppliers': asBool(map['modules.suppliers'], true),
+        }}
+        deliveryFee={{
+          delivery_fee_type: deliveryFeeType,
+          delivery_fee_value: map[DELIVERY_FEE_VALUE_KEY],
+          delivery_free_above: map[DELIVERY_FREE_ABOVE_KEY],
         }}
         aiPreviewEnabled={asBool(map['modules.ai'], false)}
         facturasEnabled={asBool(map['modules.facturas'], false)}

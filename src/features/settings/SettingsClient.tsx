@@ -1,6 +1,7 @@
 'use client';
 
 import type { BusinessTabValues } from './BusinessTab';
+import type { DeliveryFeeSettingsValues } from './DeliveryFeeSettings';
 import type { FiscalTabValues } from './FiscalTab';
 import type { ModulesTabValues } from './ModulesTab';
 import type { ReturnsTabValues } from './ReturnsTab';
@@ -40,6 +41,7 @@ export type SettingsClientProps = {
   creditoEnabled: boolean;
   business: BusinessTabValues;
   modules: ModulesTabValues;
+  deliveryFee: DeliveryFeeSettingsValues;
   fiscal: FiscalTabValues;
   returns: ReturnsTabValues;
   transferSecurity: TransferSecurityTabValues;
@@ -56,6 +58,7 @@ export function SettingsClient({
   creditoEnabled,
   business,
   modules,
+  deliveryFee,
   fiscal,
   returns: returnsValues,
   transferSecurity,
@@ -108,7 +111,11 @@ export function SettingsClient({
           />
         )}
         {activeTab === 'modules' && (
-          <ModulesTab initial={modules} aiPreviewEnabled={aiPreviewEnabled} />
+          <ModulesTab
+            initial={modules}
+            aiPreviewEnabled={aiPreviewEnabled}
+            deliveryFee={deliveryFee}
+          />
         )}
         {activeTab === 'fiscal' && <FiscalTab initial={fiscal} />}
         {activeTab === 'returns' && <ReturnsTab initial={returnsValues} />}

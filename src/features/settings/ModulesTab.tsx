@@ -1,5 +1,7 @@
 'use client';
 
+import type { DeliveryFeeSettingsValues } from './DeliveryFeeSettings';
+import { DeliveryFeeSettings } from './DeliveryFeeSettings';
 import { ToggleRow } from './fields';
 import { useSettingSave } from './useSettingSave';
 
@@ -36,9 +38,11 @@ const MODULE_TOGGLES: Array<{
 export function ModulesTab({
   initial,
   aiPreviewEnabled,
+  deliveryFee,
 }: {
   initial: ModulesTabValues;
   aiPreviewEnabled: boolean;
+  deliveryFee: DeliveryFeeSettingsValues;
 }) {
   const { save } = useSettingSave();
 
@@ -65,13 +69,19 @@ export function ModulesTab({
 
       <div className="space-y-3">
         {visibleToggles.map(m => (
-          <ToggleRow
-            key={m.key}
-            label={m.label}
-            description={m.description}
-            initial={initial[m.key]}
-            onCommit={v => persist(m.key, v)}
-          />
+          <div key={m.key}>
+            <ToggleRow
+              label={m.label}
+              description={m.description}
+              initial={initial[m.key]}
+              onCommit={v => persist(m.key, v)}
+            />
+            {m.key === 'modules.delivery' && initial[m.key] && (
+              <div className="mt-3">
+                <DeliveryFeeSettings initial={deliveryFee} />
+              </div>
+            )}
+          </div>
         ))}
       </div>
     </div>
