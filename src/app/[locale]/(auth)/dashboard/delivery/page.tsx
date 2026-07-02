@@ -58,7 +58,7 @@ export default async function DashboardDeliveryPage(props: {
   // credit debt makes no sense there (createDeliverySale rejects it too).
   const deliverPaymentMethods = paymentMethods
     .filter(m => m.type !== 'credit')
-    .map(m => ({ name: m.name }));
+    .map(m => ({ name: m.name, type: m.type }));
 
   return (
     <>

@@ -6,6 +6,7 @@ import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { createSaleForOrg } from '@/actions/sales';
 import { logAction } from '@/libs/audit-log';
+import { isCashMethod } from '@/libs/cash-helpers';
 import { isCreditoMethod } from '@/libs/creditos-math';
 import { db } from '@/libs/DB';
 import { sendWhatsAppTextForOrg } from '@/libs/delivery-whatsapp';
@@ -185,6 +186,10 @@ type DeliverySaleResult = {
   shiftPosTokenId: string | null;
 };
 
+// One entry of a mixed (split) contraentrega payment: a method NAME plus the
+// amount collected with it. Mirrors the POS checkout's per-method breakdown.
+type DeliveryPayment = { method: string; amount: number };
+
 // Turns a delivered order into a POS sale in the courier's declared caja,
 // returning the sale id to stamp on the order. Called BEFORE the status-flip tx
 // (createSaleForOrg owns its OWN transaction — never nest it). Throws — leaving
@@ -202,6 +207,7 @@ async function createDeliverySale(
   orgId: string,
   actor: Awaited<ReturnType<typeof getCurrentPanelUser>>,
   paymentType: string,
+  payments?: DeliveryPayment[],
 ): Promise<DeliverySaleResult> {
   // Only a linked courier (pos_users row) with an active shift may deliver.
   if (!actor) {
@@ -211,7 +217,12 @@ async function createDeliverySale(
   if (!shift) {
     throw new Error(NO_ACTIVE_SHIFT_MESSAGE);
   }
-  if (isCreditoMethod(paymentType)) {
+  // Reject credito on either the single method or any split entry: a delivered
+  // contraentrega COLLECTS money into a caja, so a credit debt makes no sense.
+  if (
+    isCreditoMethod(paymentType)
+    || (payments?.some(p => isCreditoMethod(p.method)) ?? false)
+  ) {
     throw new Error(
       'No se puede entregar a crédito. Elegí un método de cobro (efectivo, transferencia, etc.).',
     );
@@ -252,12 +263,24 @@ async function createDeliverySale(
   // actorType 'api' like the other non-Clerk sale paths. The sale total is the
   // goods subtotal (createSaleForOrg re-prices from the catalog); the delivery
   // fee is settled separately (P2-B), never sold as a line here.
+  // Split payment (pago mixto): book one sale_payments row per method. The
+  // summary label mirrors the POS — the single method's name for one row,
+  // 'Mixto' for several. createSaleForOrg re-prices from the catalog and already
+  // iterates the breakdown for cash/transfer reconciliation.
+  const hasSplit = payments != null && payments.length > 0;
+  const summaryMethod = hasSplit
+    ? (payments!.length === 1 ? payments![0]!.method : 'Mixto')
+    : paymentType;
+
   const sale = await createSaleForOrg({
     orgId,
     actorId: actor.id,
     actorType: 'api',
     items,
-    paymentType,
+    paymentType: summaryMethod,
+    payments: hasSplit
+      ? payments!.map(p => ({ method: p.method, amount: p.amount }))
+      : undefined,
     posTokenId: shift.posTokenId,
     // The delivery order id (a UUID) IS the idempotency key. sale_idempotency_key
     // is a UUID column, so a "delivery:" prefix would break the insert; the raw
@@ -284,6 +307,23 @@ export async function transitionDelivery(
   const paymentType
     = (parsed.paymentType && parsed.paymentType.trim()) || DEFAULT_DELIVERY_PAYMENT;
 
+  // Mixed (split) breakdown, if the courier combined methods. Undefined = the
+  // historical single-method path.
+  const payments: DeliveryPayment[] | undefined = parsed.payments?.map(p => ({
+    method: p.method,
+    amount: p.amount,
+  }));
+
+  // Which method the fee settlement should treat the CASH cobro as. With a split,
+  // only settle the fee as cash when the WHOLE collection was cash — if anything
+  // was digital the fee's method is ambiguous, so we pass 'Mixto' (not cash) and
+  // leave the fee for the arqueo. Understating the drawer is the accepted failure
+  // model here (see settlement.ts); we never invent cash that may not be present.
+  const feePaymentType
+    = payments && payments.length > 0
+      ? (payments.every(p => isCashMethod(p.method)) ? payments[0]!.method : 'Mixto')
+      : paymentType;
+
   // P1: on a cancellation, the event note carries the chosen reason (+ free text
   // for 'otro') so the timeline explains WHY. Falls back to any free-form note.
   const eventNote
@@ -308,7 +348,7 @@ export async function transitionDelivery(
   let deliveredSaleId: string | null = null;
   let deliverySale: DeliverySaleResult | null = null;
   if (next === 'delivered') {
-    deliverySale = await createDeliverySale(id, orgId, actor, paymentType);
+    deliverySale = await createDeliverySale(id, orgId, actor, paymentType, payments);
     deliveredSaleId = deliverySale.saleId;
   }
 
@@ -409,7 +449,7 @@ export async function transitionDelivery(
       deliveryOrderId: updated.id,
       saleId: deliveredSaleId,
       posTokenId: deliverySale.shiftPosTokenId,
-      paymentType,
+      paymentType: feePaymentType,
       feeAmount: updated.deliveryFee,
       actorId: actor?.id ?? userId,
     }).catch(() => null);
