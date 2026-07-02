@@ -8,7 +8,7 @@ import type {
 } from './actions';
 import type { CancelReasonKey } from './cancellation-reasons';
 import type { ActiveCourierShift, OpenCaja } from './shifts';
-import { Bike, Camera, Settings } from 'lucide-react';
+import { Bike, Camera, MessageCircle, Settings } from 'lucide-react';
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
@@ -32,6 +32,7 @@ import {
   transitionDelivery,
 } from './actions';
 import { CANCEL_REASONS } from './cancellation-reasons';
+import { DeliveryChatDialog } from './DeliveryChatDialog';
 import {
   endCourierShift,
   getActiveCourierShift,
@@ -780,6 +781,7 @@ function DeliveryCard({
   const [clarifying, setClarifying] = useState(false);
   const [deliverOpen, setDeliverOpen] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
   const meta = STATUS_META[order.status];
   const next = NEXT_ACTION[order.status];
   const items = Array.isArray(order.items) ? (order.items as DeliveryItem[]) : [];
@@ -881,6 +883,20 @@ function DeliveryCard({
       )}
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
+        {!isPool && phoneDigits && (
+          <button
+            type="button"
+            onClick={() => setChatOpen(true)}
+            className="
+              inline-flex h-8 items-center gap-1.5 rounded-md border
+              border-border px-3 text-sm font-medium text-muted-foreground
+              hover:text-foreground
+            "
+          >
+            <MessageCircle className="size-4" />
+            Chat
+          </button>
+        )}
         {!isPool && phoneDigits && (
           <a
             href={`https://wa.me/${phoneDigits}`}
@@ -1005,6 +1021,14 @@ function DeliveryCard({
             setCancelOpen(false);
             onAct(order, 'cancelled', extra);
           }}
+        />
+      )}
+
+      {chatOpen && (
+        <DeliveryChatDialog
+          orderId={order.id}
+          customerName={order.customerName}
+          onClose={() => setChatOpen(false)}
         />
       )}
     </div>
