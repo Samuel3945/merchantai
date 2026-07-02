@@ -4,11 +4,11 @@ import { randomUUID } from 'node:crypto';
 import { auth } from '@clerk/nextjs/server';
 import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
+import { getTopUpPackages } from '@/actions/topup-packages';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
 import { poolLimitForPlan } from '@/libs/entitlements';
 import { Env } from '@/libs/Env';
-import { findPackage } from '@/libs/topup-catalog';
 import { buildCheckoutUrl } from '@/libs/wompi/client';
 import { integritySignature } from '@/libs/wompi/signature';
 import {
@@ -333,7 +333,8 @@ export async function createTopUpCheckout(
 ): Promise<{ url: string }> {
   const { userId, orgId } = await requireAdminOrg();
 
-  const pkg = findPackage(packageId);
+  const packages = await getTopUpPackages();
+  const pkg = packages.find(p => p.id === packageId);
   if (!pkg) {
     throw new Error(`Unknown top-up package: ${packageId}`);
   }

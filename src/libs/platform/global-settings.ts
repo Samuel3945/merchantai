@@ -25,7 +25,7 @@ export const PLATFORM_GLOBAL_ORG_ID = '__platform_global__';
  */
 export const ONBOARDING_FORCED_KEY = 'platform.onboarding_forced';
 
-async function getGlobalSetting(key: string): Promise<string> {
+export async function getGlobalSetting(key: string): Promise<string> {
   const [row] = await db
     .select({ value: appSettingsSchema.value })
     .from(appSettingsSchema)

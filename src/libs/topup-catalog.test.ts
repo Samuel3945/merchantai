@@ -1,18 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { findPackage, TOPUP_CATALOG } from './topup-catalog';
+import { DEFAULT_TOPUP_PACKAGES, findPackage } from './topup-catalog';
 
-describe('TOPUP_CATALOG / findPackage', () => {
+describe('DEFAULT_TOPUP_PACKAGES / findPackage', () => {
   it('finds a known package with the right price', () => {
-    const pkg = findPackage('credits_500');
+    const pkg = findPackage(DEFAULT_TOPUP_PACKAGES, 'credits_500');
 
     expect(pkg).toEqual({ id: 'credits_500', requests: 500, amountCop: 79_000 });
   });
 
   it('returns undefined for a bogus package id', () => {
-    expect(findPackage('bogus')).toBeUndefined();
+    expect(findPackage(DEFAULT_TOPUP_PACKAGES, 'bogus')).toBeUndefined();
   });
 
-  it('has exactly 3 packages', () => {
-    expect(TOPUP_CATALOG).toHaveLength(3);
+  it('has exactly 3 default packages', () => {
+    expect(DEFAULT_TOPUP_PACKAGES).toHaveLength(3);
   });
 });

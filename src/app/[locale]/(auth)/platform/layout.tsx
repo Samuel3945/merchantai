@@ -76,6 +76,15 @@ export default async function PlatformLayout(props: PlatformLayoutProps) {
               Planes
             </Link>
             <Link
+              href="/platform/creditos"
+              className="
+                font-medium
+                hover:underline
+              "
+            >
+              Créditos
+            </Link>
+            <Link
               href="/platform/alerts"
               className="
                 font-medium

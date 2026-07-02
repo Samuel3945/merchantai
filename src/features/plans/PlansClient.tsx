@@ -10,7 +10,6 @@ import type { TopUpPackage } from '@/libs/topup-catalog';
 import { useEffect, useState, useTransition } from 'react';
 import { createTopUpCheckout, upgradePlan } from '@/actions/plans';
 import { Button } from '@/components/ui/button';
-import { TOPUP_CATALOG } from '@/libs/topup-catalog';
 
 const copFmt = new Intl.NumberFormat('es-CO', {
   style: 'currency',
@@ -130,16 +129,17 @@ function CounterCard({
 }
 
 function TopUpModal({
+  packages,
   busy,
   onClose,
   onConfirm,
 }: {
+  packages: TopUpPackage[];
   busy: boolean;
   onClose: () => void;
   onConfirm: (packageId: string) => void;
 }) {
   const [selected, setSelected] = useState(0);
-  const packages: TopUpPackage[] = TOPUP_CATALOG;
   const pkg = packages[selected]!;
 
   return (
@@ -212,10 +212,12 @@ function TopUpModal({
 export function PlansClient({
   initialSnapshot,
   plans,
+  packages,
   aiEnabled,
 }: {
   initialSnapshot: PlanSnapshot;
   plans: PublicPlan[];
+  packages: TopUpPackage[];
   aiEnabled: boolean;
 }) {
   const [snapshot, setSnapshot] = useState(initialSnapshot);
@@ -323,6 +325,7 @@ export function PlansClient({
 
           {topUpOpen && (
             <TopUpModal
+              packages={packages}
               busy={pending}
               onClose={() => setTopUpOpen(false)}
               onConfirm={handleTopUp}
