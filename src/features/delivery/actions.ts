@@ -14,6 +14,7 @@ import { loadEInvoiceConfig } from '@/libs/einvoice/config';
 import { emitInvoiceForSale } from '@/libs/einvoice/emit';
 import { getCurrentPanelUser, requirePanelModule } from '@/libs/panel-session';
 import {
+  appSettingsSchema,
   courierShiftsSchema,
   deliveryEventsSchema,
   deliveryOrdersSchema,
@@ -28,6 +29,11 @@ import { deliveryTransitionSchema } from './validation';
 // Contraentrega default when the courier's deliver dialog sends no explicit
 // method — keeps the historical behavior (efectivo → cash into the caja).
 const DEFAULT_DELIVERY_PAYMENT = 'efectivo';
+
+// The app_setting key that gates delivery photo evidence (settings/page.tsx
+// reads/writes the same literal key). Exported so the page server component can
+// share it instead of re-typing the string.
+export const DELIVERY_REQUIRE_PHOTO_KEY = 'delivery_require_photo';
 
 export type DeliveryOrder = typeof deliveryOrdersSchema.$inferSelect;
 export type DeliveryEvent = typeof deliveryEventsSchema.$inferSelect;
@@ -146,6 +152,23 @@ async function findActiveShift(
   return shift ?? null;
 }
 
+// Reads the org's photo-evidence requirement directly from app_settings
+// (mirrors settlement.ts#loadDeliveryFeeMode) — server-side enforcement must
+// never depend solely on the client's disabled confirm button.
+async function loadDeliveryRequirePhoto(organizationId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ value: appSettingsSchema.value })
+    .from(appSettingsSchema)
+    .where(
+      and(
+        eq(appSettingsSchema.organizationId, organizationId),
+        eq(appSettingsSchema.key, DELIVERY_REQUIRE_PHOTO_KEY),
+      ),
+    )
+    .limit(1);
+  return row?.value === 'true';
+}
+
 // Translates a delivery order's item snapshot into POS sale lines. Every line
 // MUST carry a productId: createSaleForOrg re-prices and decrements stock BY
 // product, so a free-text line (legacy/manual, no productId) cannot become a
@@ -208,6 +231,7 @@ async function createDeliverySale(
   actor: Awaited<ReturnType<typeof getCurrentPanelUser>>,
   paymentType: string,
   payments?: DeliveryPayment[],
+  deliveryPhotoUrl?: string | null,
 ): Promise<DeliverySaleResult> {
   // Only a linked courier (pos_users row) with an active shift may deliver.
   if (!actor) {
@@ -254,6 +278,15 @@ async function createDeliverySale(
     );
   }
 
+  // Defense in depth: the deliver dialog already disables its confirm button
+  // without a photo when the org requires one, but a client can be bypassed —
+  // reject here too, BEFORE any sale/money movement happens.
+  if (!deliveryPhotoUrl && (await loadDeliveryRequirePhoto(orgId))) {
+    throw new Error(
+      'Este negocio exige una foto de evidencia para marcar el pedido como entregado.',
+    );
+  }
+
   const items = buildDeliverySaleItems(order.items);
 
   // The courier's chosen method drives collection: a cash method (efectivo)
@@ -296,11 +329,22 @@ async function createDeliverySale(
 // untouched) so a double-tap from the courier never errors or double-logs.
 export async function transitionDelivery(
   id: string,
-  input: DeliveryTransitionInput,
+  // `deliveryPhotoUrl` is intersected in locally rather than added to
+  // deliveryTransitionSchema (validation.ts) — read straight off the raw input
+  // below, not through the zod-parsed `parsed` object.
+  input: DeliveryTransitionInput & { deliveryPhotoUrl?: string },
 ): Promise<DeliveryOrder> {
   const { userId, orgId } = await requirePanelModule('delivery');
   const parsed = deliveryTransitionSchema.parse(input);
   const { status: next, note } = parsed;
+
+  // P-photo: the courier-captured hand-off photo (uploaded client-side via
+  // /api/upload/delivery-photo before this call). Only meaningful for the
+  // 'delivered' transition.
+  const deliveryPhotoUrl
+    = typeof input.deliveryPhotoUrl === 'string' && input.deliveryPhotoUrl.trim()
+      ? input.deliveryPhotoUrl.trim()
+      : null;
 
   // The method the courier picked at delivery (P0-B); default to contraentrega
   // cash so existing callers and the historical flow are unchanged.
@@ -348,7 +392,14 @@ export async function transitionDelivery(
   let deliveredSaleId: string | null = null;
   let deliverySale: DeliverySaleResult | null = null;
   if (next === 'delivered') {
-    deliverySale = await createDeliverySale(id, orgId, actor, paymentType, payments);
+    deliverySale = await createDeliverySale(
+      id,
+      orgId,
+      actor,
+      paymentType,
+      payments,
+      deliveryPhotoUrl,
+    );
     deliveredSaleId = deliverySale.saleId;
   }
 
@@ -395,6 +446,10 @@ export async function transitionDelivery(
       // already delivered — the same-status guard returns before this anyway).
       if (deliveredSaleId) {
         patch.saleId = deliveredSaleId;
+      }
+      // Persist the hand-off evidence photo, when the courier provided one.
+      if (deliveryPhotoUrl) {
+        patch.deliveryPhotoUrl = deliveryPhotoUrl;
       }
     } else if (next === 'cancelled') {
       patch.cancelledAt = now;

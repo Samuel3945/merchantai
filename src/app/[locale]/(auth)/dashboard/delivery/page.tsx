@@ -4,7 +4,11 @@ import { redirect } from 'next/navigation';
 import { getAppSetting } from '@/actions/app-settings';
 import { listPaymentMethods } from '@/actions/payment-methods';
 import { TitleBar } from '@/features/dashboard/TitleBar';
-import { getDeliveryKpis, listDeliveries } from '@/features/delivery/actions';
+import {
+  DELIVERY_REQUIRE_PHOTO_KEY,
+  getDeliveryKpis,
+  listDeliveries,
+} from '@/features/delivery/actions';
 import { DeliveryClient } from '@/features/delivery/DeliveryClient';
 import {
   getActiveCourierShift,
@@ -31,11 +35,14 @@ export default async function DashboardDeliveryPage(props: {
     redirect('/dashboard');
   }
 
-  // Core data: the delivery list + KPIs. Access is already gated (requirePanelModule).
-  const [initial, kpis] = await Promise.all([
+  // Core data: the delivery list + KPIs, plus the photo-evidence toggle. Access
+  // is already gated (requirePanelModule).
+  const [initial, kpis, requirePhotoSetting] = await Promise.all([
     listDeliveries({ status: 'active' }),
     getDeliveryKpis(),
+    getAppSetting(DELIVERY_REQUIRE_PHOTO_KEY),
   ]);
+  const requirePhoto = requirePhotoSetting.value === 'true';
 
   // Settlement lookups degrade gracefully. A failure in ANY one of them — e.g. a
   // not-yet-applied migration (courier_shifts) or e-invoicing not set up — must
@@ -73,6 +80,7 @@ export default async function DashboardDeliveryPage(props: {
         openCajas={openCajas}
         paymentMethods={deliverPaymentMethods}
         einvoiceEnabled={einvoiceEnabled}
+        requirePhoto={requirePhoto}
       />
     </>
   );

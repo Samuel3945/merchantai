@@ -32,10 +32,12 @@ const MODE_OPTIONS: ReadonlyArray<{ value: DeliveryFeeMode; label: string }> = [
   { value: 'courier_tip', label: 'Propina del domiciliario (no entra a la caja)' },
 ];
 
-// Small card rendered inside Ajustes → Módulos, right under the toggle
-// "Domicilios". Persists via the same app_settings mechanism as every other
-// tab (useSettingSave → setAppSetting) — see libs/delivery-fee.ts for the
-// server-side reader + the pure fee computation.
+// Small card rendered inside Ajustes → Domicilios, above the delivery-photo
+// evidence toggle. The "Domicilios" module toggle itself stays in Ajustes →
+// Módulos; only this fee config lives here. Persists via the same
+// app_settings mechanism as every other tab (useSettingSave → setAppSetting)
+// — see libs/delivery-fee.ts for the server-side reader + the pure fee
+// computation.
 export function DeliveryFeeSettings({ initial }: { initial: DeliveryFeeSettingsValues }) {
   const { save } = useSettingSave();
   const [type, setType] = useState<DeliveryFeeType>(initial.delivery_fee_type);
