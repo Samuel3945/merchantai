@@ -1,6 +1,7 @@
 import { setRequestLocale } from 'next-intl/server';
 import { getAppSetting } from '@/actions/app-settings';
 import { currentPlan, listPublicPlans } from '@/actions/plans';
+import { getTopUpPackages } from '@/actions/topup-packages';
 import { TitleBar } from '@/features/dashboard/TitleBar';
 import { PlansClient } from '@/features/plans/PlansClient';
 
@@ -10,10 +11,11 @@ export default async function DashboardPlansPage(props: {
   const { locale } = await props.params;
   setRequestLocale(locale);
 
-  const [snapshot, plans, aiSetting] = await Promise.all([
+  const [snapshot, plans, aiSetting, packages] = await Promise.all([
     currentPlan(),
     listPublicPlans(),
     getAppSetting('modules.ai'),
+    getTopUpPackages(),
   ]);
   // AI preview gates the AI-credit consumption section below; default OFF.
   const aiEnabled = aiSetting.value === 'true';
@@ -27,6 +29,7 @@ export default async function DashboardPlansPage(props: {
       <PlansClient
         initialSnapshot={snapshot}
         plans={plans}
+        packages={packages}
         aiEnabled={aiEnabled}
       />
     </>
