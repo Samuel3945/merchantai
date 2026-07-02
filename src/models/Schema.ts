@@ -1125,9 +1125,13 @@ export const subscriptionsSchema = pgTable(
   ],
 );
 
-// One row per (org, agent_kind). monthly_limit comes from the plan;
-// topped_up accumulates extra requests purchased; used is the consumption
-// counter, reset on plan upgrade or billing-period rollover.
+// One row per org: a single shared AI-credit pool. monthly_limit comes from
+// the plan; topped_up accumulates extra requests purchased; used is the
+// consumption counter, reset on plan upgrade or billing-period rollover.
+// `agentKind` is always the constant 'pool' — kept as a column (rather than
+// dropped) so the table shape survives migration 0082_unify_credit_pool
+// without a rename. See migrations/0082_unify_credit_pool.sql for the
+// collapse of the old per-agent rows into this single-row-per-org shape.
 export const usageCountersSchema = pgTable(
   'usage_counters',
   {
@@ -1140,10 +1144,7 @@ export const usageCountersSchema = pgTable(
     resetAt: timestamp('reset_at', { mode: 'date' }),
   },
   table => [
-    uniqueIndex('usage_counters_org_agent_unique_idx').on(
-      table.organizationId,
-      table.agentKind,
-    ),
+    uniqueIndex('usage_counters_org_unique_idx').on(table.organizationId),
   ],
 );
 
@@ -1152,13 +1153,15 @@ export const usageCountersSchema = pgTable(
 // authoritative query) — see actions/plans.ts#confirmTopUpPayment /
 // applyApprovedTopUp. `reference` is the Wompi checkout reference
 // ("topup-<uuid>"); its unique index is the idempotency key that guarantees a
-// given payment can only ever grant credits once.
+// given payment can only ever grant credits once. `agentKind` is nullable and
+// unused since the credit-pool unification (migration 0082) — kept only so
+// historical rows still read; every row written from now on leaves it null.
 export const topUpsSchema = pgTable(
   'top_ups',
   {
     id: uuid('id').primaryKey().defaultRandom(),
     organizationId: text('organization_id').notNull(),
-    agentKind: text('agent_kind').notNull(),
+    agentKind: text('agent_kind'),
     amountCop: numeric('amount_cop', { precision: 12, scale: 2 })
       .default('0')
       .notNull(),

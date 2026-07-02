@@ -27,6 +27,7 @@ import { toast } from '@/components/ui/toast-store';
 const KNOWN_ENTITLEMENT_KEYS = [
   'max_cashiers',
   'max_pos_devices',
+  'ai_credits',
   'ai_credits_sales_manager',
   'ai_credits_customer_service',
   'ai_credits_einvoice',

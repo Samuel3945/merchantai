@@ -1,10 +1,9 @@
 'use client';
 
 import type {
-  AgentKind,
-  CounterRow,
   PlanName,
   PlanSnapshot,
+  PoolBalance,
   PublicPlan,
 } from '@/actions/plans';
 import type { TopUpPackage } from '@/libs/topup-catalog';
@@ -12,12 +11,6 @@ import { useEffect, useState, useTransition } from 'react';
 import { createTopUpCheckout, upgradePlan } from '@/actions/plans';
 import { Button } from '@/components/ui/button';
 import { TOPUP_CATALOG } from '@/libs/topup-catalog';
-
-const AGENT_LABELS: Record<AgentKind, string> = {
-  sales_manager: 'Sales Manager',
-  customer_service: 'Customer Service',
-  einvoice: 'Facturación electrónica',
-};
 
 const copFmt = new Intl.NumberFormat('es-CO', {
   style: 'currency',
@@ -73,38 +66,38 @@ function PlanCard({
 }
 
 function CounterCard({
-  counter,
+  pool,
   onTopUp,
 }: {
-  counter: CounterRow;
+  pool: PoolBalance;
   onTopUp: () => void;
 }) {
-  const cap = counter.monthlyLimit + counter.toppedUp;
-  const pct = cap > 0 ? Math.min(100, Math.round((counter.used / cap) * 100)) : 0;
-  const exhausted = cap > 0 && counter.remaining <= 0;
+  const cap = pool.monthlyLimit + pool.toppedUp;
+  const pct = cap > 0 ? Math.min(100, Math.round((pool.used / cap) * 100)) : 0;
+  const exhausted = cap > 0 && pool.remaining <= 0;
 
   return (
     <div className="rounded-xl border border-border bg-background p-5">
       <div className="flex items-center justify-between">
-        <div className="font-medium">{AGENT_LABELS[counter.agentKind]}</div>
+        <div className="font-medium">Créditos disponibles</div>
         <Button size="sm" variant="outline" onClick={onTopUp}>
           Comprar recarga
         </Button>
       </div>
 
       <div className="mt-3 text-2xl font-semibold">
-        {counter.used.toLocaleString('es-CO')}
+        {pool.used.toLocaleString('es-CO')}
         {' '}
         /
         {' '}
         {cap.toLocaleString('es-CO')}
       </div>
       <div className="text-xs text-muted-foreground">
-        {counter.monthlyLimit.toLocaleString('es-CO')}
+        {pool.monthlyLimit.toLocaleString('es-CO')}
         {' '}
         del plan
-        {counter.toppedUp > 0
-          ? ` + ${counter.toppedUp.toLocaleString('es-CO')} extra`
+        {pool.toppedUp > 0
+          ? ` + ${pool.toppedUp.toLocaleString('es-CO')} extra`
           : ''}
       </div>
 
@@ -130,25 +123,23 @@ function CounterCard({
           ? 'No incluido en tu plan'
           : exhausted
             ? 'Sin consultas disponibles'
-            : `${counter.remaining.toLocaleString('es-CO')} consultas disponibles`}
+            : `${pool.remaining.toLocaleString('es-CO')} consultas disponibles`}
       </div>
     </div>
   );
 }
 
 function TopUpModal({
-  agentKind,
   busy,
   onClose,
   onConfirm,
 }: {
-  agentKind: AgentKind;
   busy: boolean;
   onClose: () => void;
   onConfirm: (packageId: string) => void;
 }) {
   const [selected, setSelected] = useState(0);
-  const packages: TopUpPackage[] = TOPUP_CATALOG[agentKind];
+  const packages: TopUpPackage[] = TOPUP_CATALOG;
   const pkg = packages[selected]!;
 
   return (
@@ -158,12 +149,10 @@ function TopUpModal({
     >
       <div className="w-full max-w-md rounded-xl bg-background p-6 shadow-lg">
         <div className="text-lg font-semibold">
-          Comprar recarga ·
-          {' '}
-          {AGENT_LABELS[agentKind]}
+          Comprar recarga
         </div>
         <div className="mt-1 text-sm text-muted-foreground">
-          Suma consultas extra al contador actual. No expiran este mes.
+          Suma consultas extra al pool actual. No expiran este mes.
         </div>
 
         <div className="mt-4 space-y-2">
@@ -230,7 +219,7 @@ export function PlansClient({
   aiEnabled: boolean;
 }) {
   const [snapshot, setSnapshot] = useState(initialSnapshot);
-  const [topUpAgent, setTopUpAgent] = useState<AgentKind | null>(null);
+  const [topUpOpen, setTopUpOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pendingTopUpRef, setPendingTopUpRef] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -258,13 +247,10 @@ export function PlansClient({
   };
 
   const handleTopUp = (packageId: string) => {
-    if (!topUpAgent) {
-      return;
-    }
     setError(null);
     startTransition(async () => {
       try {
-        const { url } = await createTopUpCheckout(topUpAgent, packageId);
+        const { url } = await createTopUpCheckout(packageId);
         window.location.href = url;
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Error inesperado');
@@ -327,26 +313,18 @@ export function PlansClient({
         <>
           <section>
             <h2 className="mb-4 text-lg font-semibold">Consumo del periodo</h2>
-            <div className="
-              grid grid-cols-1 gap-4
-              md:grid-cols-2
-            "
-            >
-              {snapshot.counters.map(c => (
-                <CounterCard
-                  key={c.agentKind}
-                  counter={c}
-                  onTopUp={() => setTopUpAgent(c.agentKind)}
-                />
-              ))}
+            <div className="max-w-md">
+              <CounterCard
+                pool={snapshot.pool}
+                onTopUp={() => setTopUpOpen(true)}
+              />
             </div>
           </section>
 
-          {topUpAgent && (
+          {topUpOpen && (
             <TopUpModal
-              agentKind={topUpAgent}
               busy={pending}
-              onClose={() => setTopUpAgent(null)}
+              onClose={() => setTopUpOpen(false)}
               onConfirm={handleTopUp}
             />
           )}

@@ -6,7 +6,7 @@ import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
-import { getPlanEntitlementsBySlug, limitOf } from '@/libs/entitlements';
+import { poolLimitForPlan } from '@/libs/entitlements';
 import { Env } from '@/libs/Env';
 import { findPackage } from '@/libs/topup-catalog';
 import { buildCheckoutUrl } from '@/libs/wompi/client';
@@ -22,32 +22,11 @@ import {
 // the `plans` table and is operator-managed, so this is intentionally an open
 // string instead of a closed union.
 export type PlanName = string;
-export type AgentKind = 'sales_manager' | 'customer_service' | 'einvoice';
 
-const AGENT_KINDS: AgentKind[] = [
-  'sales_manager',
-  'customer_service',
-  'einvoice',
-];
-
-// AI credit quotas come from the plan catalog (plan_entitlements), not from a
-// hardcoded map. Unknown slugs grant zero credits, matching the old fallback.
-async function aiLimitsForPlan(
-  planSlug: string,
-): Promise<Record<AgentKind, number>> {
-  const entitlements = await getPlanEntitlementsBySlug(planSlug);
-  return {
-    sales_manager: entitlements
-      ? limitOf(entitlements, 'ai_credits_sales_manager')
-      : 0,
-    customer_service: entitlements
-      ? limitOf(entitlements, 'ai_credits_customer_service')
-      : 0,
-    einvoice: entitlements
-      ? limitOf(entitlements, 'ai_credits_einvoice')
-      : 0,
-  };
-}
+// usage_counters is now a single row per org (the shared credit pool); this
+// is the constant agent_kind value that row is stored under. See migration
+// 0082_unify_credit_pool.
+const POOL_AGENT_KIND = 'pool';
 
 // The plan an org sits on without an active subscription row.
 async function getDefaultPlanSlug(): Promise<string> {
@@ -98,8 +77,7 @@ export async function listPublicPlans(): Promise<PublicPlan[]> {
   }));
 }
 
-export type CounterRow = {
-  agentKind: AgentKind;
+export type PoolBalance = {
   used: number;
   monthlyLimit: number;
   toppedUp: number;
@@ -109,14 +87,8 @@ export type CounterRow = {
 
 export type PlanSnapshot = {
   subscription: CurrentPlan;
-  counters: CounterRow[];
+  pool: PoolBalance;
 };
-
-function isAgentKind(value: string): value is AgentKind {
-  return value === 'sales_manager'
-    || value === 'customer_service'
-    || value === 'einvoice';
-}
 
 async function requireOrg() {
   const { userId, orgId } = await auth();
@@ -144,47 +116,38 @@ async function requireAdminOrg() {
 }
 
 async function ensureCountersForPlan(orgId: string, plan: PlanName) {
-  const limits = await aiLimitsForPlan(plan);
-  for (const kind of AGENT_KINDS) {
-    await db
-      .insert(usageCountersSchema)
-      .values({
-        organizationId: orgId,
-        agentKind: kind,
-        used: 0,
-        monthlyLimit: limits[kind],
-        toppedUp: 0,
-      })
-      .onConflictDoNothing({
-        target: [
-          usageCountersSchema.organizationId,
-          usageCountersSchema.agentKind,
-        ],
-      });
-  }
+  const monthlyLimit = await poolLimitForPlan(plan);
+  await db
+    .insert(usageCountersSchema)
+    .values({
+      organizationId: orgId,
+      agentKind: POOL_AGENT_KIND,
+      used: 0,
+      monthlyLimit,
+      toppedUp: 0,
+    })
+    .onConflictDoNothing({
+      target: [usageCountersSchema.organizationId],
+    });
 }
 
-async function readCounters(orgId: string): Promise<CounterRow[]> {
-  const rows = await db
+async function readPool(orgId: string): Promise<PoolBalance> {
+  const [row] = await db
     .select()
     .from(usageCountersSchema)
-    .where(eq(usageCountersSchema.organizationId, orgId));
+    .where(eq(usageCountersSchema.organizationId, orgId))
+    .limit(1);
 
-  const byKind = new Map(rows.map(r => [r.agentKind, r] as const));
-  return AGENT_KINDS.map((kind) => {
-    const r = byKind.get(kind);
-    const used = r?.used ?? 0;
-    const monthlyLimit = r?.monthlyLimit ?? 0;
-    const toppedUp = r?.toppedUp ?? 0;
-    return {
-      agentKind: kind,
-      used,
-      monthlyLimit,
-      toppedUp,
-      remaining: Math.max(0, monthlyLimit + toppedUp - used),
-      resetAt: r?.resetAt ? r.resetAt.toISOString() : null,
-    };
-  });
+  const used = row?.used ?? 0;
+  const monthlyLimit = row?.monthlyLimit ?? 0;
+  const toppedUp = row?.toppedUp ?? 0;
+  return {
+    used,
+    monthlyLimit,
+    toppedUp,
+    remaining: Math.max(0, monthlyLimit + toppedUp - used),
+    resetAt: row?.resetAt ? row.resetAt.toISOString() : null,
+  };
 }
 
 export async function currentPlan(): Promise<PlanSnapshot> {
@@ -206,7 +169,7 @@ export async function currentPlan(): Promise<PlanSnapshot> {
 
   await ensureCountersForPlan(orgId, plan);
 
-  const counters = await readCounters(orgId);
+  const pool = await readPool(orgId);
 
   const [planRow] = await db
     .select({ name: plansSchema.name })
@@ -224,7 +187,7 @@ export async function currentPlan(): Promise<PlanSnapshot> {
         : null,
       periodEnd: active?.periodEnd ? active.periodEnd.toISOString() : null,
     },
-    counters,
+    pool,
   };
 }
 
@@ -246,10 +209,10 @@ export async function upgradePlan(plan: PlanName): Promise<PlanSnapshot> {
 
   const previousPlan = await getActivePlan(orgId);
 
-  const limits = await aiLimitsForPlan(plan);
+  const monthlyLimit = await poolLimitForPlan(plan);
 
   // One atomic swap: deactivate the old subscription, activate the new one and
-  // reset the AI counters together. A crash between these steps would otherwise
+  // reset the pool together. A crash between these steps would otherwise
   // leave the org with zero active subscriptions (silently on the free tier) or
   // with the new plan but the old quota.
   await db.transaction(async (tx) => {
@@ -269,35 +232,25 @@ export async function upgradePlan(plan: PlanName): Promise<PlanSnapshot> {
       active: true,
     });
 
-    for (const kind of AGENT_KINDS) {
-      const inserted = await tx
-        .insert(usageCountersSchema)
-        .values({
-          organizationId: orgId,
-          agentKind: kind,
-          used: 0,
-          monthlyLimit: limits[kind],
-          toppedUp: 0,
-        })
-        .onConflictDoNothing({
-          target: [
-            usageCountersSchema.organizationId,
-            usageCountersSchema.agentKind,
-          ],
-        })
-        .returning({ id: usageCountersSchema.id });
+    const inserted = await tx
+      .insert(usageCountersSchema)
+      .values({
+        organizationId: orgId,
+        agentKind: POOL_AGENT_KIND,
+        used: 0,
+        monthlyLimit,
+        toppedUp: 0,
+      })
+      .onConflictDoNothing({
+        target: [usageCountersSchema.organizationId],
+      })
+      .returning({ id: usageCountersSchema.id });
 
-      if (inserted.length === 0) {
-        await tx
-          .update(usageCountersSchema)
-          .set({ used: 0, monthlyLimit: limits[kind], toppedUp: 0 })
-          .where(
-            and(
-              eq(usageCountersSchema.organizationId, orgId),
-              eq(usageCountersSchema.agentKind, kind),
-            ),
-          );
-      }
+    if (inserted.length === 0) {
+      await tx
+        .update(usageCountersSchema)
+        .set({ used: 0, monthlyLimit, toppedUp: 0 })
+        .where(eq(usageCountersSchema.organizationId, orgId));
     }
   });
 
@@ -328,7 +281,7 @@ export async function cancelSubscription(): Promise<PlanSnapshot> {
     return currentPlan();
   }
 
-  const limits = await aiLimitsForPlan(defaultSlug);
+  const monthlyLimit = await poolLimitForPlan(defaultSlug);
 
   // Atomic downgrade to the default plan — same reasoning as upgradePlan: the
   // deactivate + activate + counter reset must not be interruptible.
@@ -349,17 +302,10 @@ export async function cancelSubscription(): Promise<PlanSnapshot> {
       active: true,
     });
 
-    for (const kind of AGENT_KINDS) {
-      await tx
-        .update(usageCountersSchema)
-        .set({ used: 0, monthlyLimit: limits[kind], toppedUp: 0 })
-        .where(
-          and(
-            eq(usageCountersSchema.organizationId, orgId),
-            eq(usageCountersSchema.agentKind, kind),
-          ),
-        );
-    }
+    await tx
+      .update(usageCountersSchema)
+      .set({ used: 0, monthlyLimit, toppedUp: 0 })
+      .where(eq(usageCountersSchema.organizationId, orgId));
   });
 
   await logAction({
@@ -383,16 +329,11 @@ export async function cancelSubscription(): Promise<PlanSnapshot> {
 // Wompi confirms the payment (see confirmTopUpPayment / applyApprovedTopUp,
 // driven by the webhook + an authoritative query fallback).
 export async function createTopUpCheckout(
-  agentKind: AgentKind,
   packageId: string,
 ): Promise<{ url: string }> {
-  if (!isAgentKind(agentKind)) {
-    throw new Error(`Unknown agent kind: ${String(agentKind)}`);
-  }
-
   const { userId, orgId } = await requireAdminOrg();
 
-  const pkg = findPackage(agentKind, packageId);
+  const pkg = findPackage(packageId);
   if (!pkg) {
     throw new Error(`Unknown top-up package: ${packageId}`);
   }
@@ -406,7 +347,6 @@ export async function createTopUpCheckout(
 
   await db.insert(topUpsSchema).values({
     organizationId: orgId,
-    agentKind,
     amountCop: pkg.amountCop.toFixed(2),
     requestsAdded: pkg.requests,
     reference,
@@ -440,7 +380,6 @@ export async function createTopUpCheckout(
     entityType: 'top_up',
     entityId: reference,
     after: {
-      agentKind,
       packageId,
       amountCop: pkg.amountCop,
       requests: pkg.requests,
@@ -459,9 +398,8 @@ export async function createTopUpCheckout(
 // the authoritative-query fallback) can only ever produce ONE increment — the
 // first to claim the row wins, the second finds zero rows and no-ops.
 //
-// Callers MUST ensure a usage_counters row already exists for
-// (organizationId, agentKind) — confirmTopUpPayment does so via
-// ensureCountersForPlan before calling this.
+// Callers MUST ensure a usage_counters row already exists for organizationId
+// — confirmTopUpPayment does so via ensureCountersForPlan before calling this.
 export async function applyApprovedTopUp(
   reference: string,
   wompiTransactionId: string | null,
@@ -478,7 +416,6 @@ export async function applyApprovedTopUp(
       )
       .returning({
         orgId: topUpsSchema.organizationId,
-        agentKind: topUpsSchema.agentKind,
         requests: topUpsSchema.requestsAdded,
       });
 
@@ -490,12 +427,7 @@ export async function applyApprovedTopUp(
     await tx
       .update(usageCountersSchema)
       .set({ toppedUp: sql`${usageCountersSchema.toppedUp} + ${row.requests}` })
-      .where(
-        and(
-          eq(usageCountersSchema.organizationId, row.orgId),
-          eq(usageCountersSchema.agentKind, row.agentKind),
-        ),
-      );
+      .where(eq(usageCountersSchema.organizationId, row.orgId));
   });
 }
 
@@ -564,26 +496,21 @@ export type ConsumeResult
   = | { success: true; remaining: number }
     | { success: false; remaining: 0 };
 
-// Atomically decrements quota. The WHERE clause `used < monthly_limit + topped_up`
-// is the race guard — Postgres serializes the UPDATE on the row, so concurrent
-// callers either succeed (and we get a row back) or fail (no rows updated).
-export async function consumeCredit(
-  agentKind: AgentKind,
-): Promise<ConsumeResult> {
+// Atomically decrements the shared pool. The WHERE clause
+// `used < monthly_limit + topped_up` is the race guard — Postgres serializes
+// the UPDATE on the row, so concurrent callers either succeed (and we get a
+// row back) or fail (no rows updated). Every AI/e-invoicing action draws 1
+// credit from this same org-wide pool.
+export async function consumeCredit(): Promise<ConsumeResult> {
   const { orgId } = await requireOrg();
-  return consumeCreditForOrg(orgId, agentKind);
+  return consumeCreditForOrg(orgId);
 }
 
 // Same as consumeCredit but for an explicit org — usable from background hooks
 // (e.g. auto e-invoicing after a sale) that run without a Clerk session.
 export async function consumeCreditForOrg(
   orgId: string,
-  agentKind: AgentKind,
 ): Promise<ConsumeResult> {
-  if (!isAgentKind(agentKind)) {
-    throw new Error(`Unknown agent kind: ${String(agentKind)}`);
-  }
-
   await ensureCountersForPlan(orgId, await getActivePlan(orgId));
 
   const updated = await db
@@ -592,7 +519,6 @@ export async function consumeCreditForOrg(
     .where(
       and(
         eq(usageCountersSchema.organizationId, orgId),
-        eq(usageCountersSchema.agentKind, agentKind),
         sql`${usageCountersSchema.used} < ${usageCountersSchema.monthlyLimit} + ${usageCountersSchema.toppedUp}`,
       ),
     )

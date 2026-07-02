@@ -82,8 +82,9 @@ removed.
 - **Auto-invoicing**: `maybeAutoEmitInvoice` / `maybeEmitCreditNote` (best-effort,
   never block a sale) run only when `einvoice_auto` is on.
 - **Credits**: each emitted document consumes **1 credit** via
-  `consumeCreditForOrg(orgId, 'einvoice')` (same mechanism as AI credits;
-  entitlement key `ai_credits_einvoice`, set per plan in PlansStudio). No credits →
+  `consumeCreditForOrg(orgId)` from the org's single shared AI-credit pool
+  (same pool every AI action draws from; entitlement key `ai_credits`, set per
+  plan in PlansStudio — see migration `0082_unify_credit_pool`). No credits →
   emission is blocked before calling MATIAS.
 
 See `docs/einvoice-matias/` for the spec and the "connect a new NIT" guide
