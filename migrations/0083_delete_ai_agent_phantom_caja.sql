@@ -1,0 +1,14 @@
+-- Follow-up to 0076. That migration only deactivated the phantom 'ai_agent'
+-- pos_tokens (active = false), which hid them from every panel that filters on
+-- active. But the Cajas POS panel (src/actions/pos-tokens.ts#listPosTokens)
+-- deliberately lists ALL of the org's cajas regardless of active so admins can
+-- unblock them, so the deactivated 'ai_agent' rows still surfaced there as
+-- "Bloqueada".
+--
+-- These rows are phantom devices the WhatsApp agent no longer provisions
+-- (creation was removed in src/actions/whatsapp-channels.ts and is guarded by a
+-- regression test). They never open a shift and hold no cash history. Every FK
+-- that references pos_tokens.id is ON DELETE SET NULL, so hard-deleting them is
+-- safe and cannot break referential integrity. Remove them for good so they do
+-- not appear anywhere.
+DELETE FROM "pos_tokens" WHERE "device_name" = 'ai_agent';
