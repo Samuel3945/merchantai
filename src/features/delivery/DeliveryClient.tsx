@@ -8,7 +8,7 @@ import type {
 } from './actions';
 import type { CancelReasonKey } from './cancellation-reasons';
 import type { ActiveCourierShift, OpenCaja } from './shifts';
-import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -36,18 +36,25 @@ import {
   startCourierShift,
 } from './shifts';
 
-// A payment method the courier can pick at delivery — just its display name,
-// which is what createDeliverySale forwards to createSaleForOrg.
-export type DeliverPaymentMethod = { name: string };
+// A payment method the courier can pick at delivery: its display name (forwarded
+// to createSaleForOrg) plus its type, so the checkout knows which method is cash
+// (the only one that can give change / vuelto in a mixed payment).
+export type DeliverPaymentMethod = { name: string; type?: string };
 
 // Extra payload threaded from a dialog into a transition (payment method +
-// invoice intent for 'delivered'; reason for 'cancelled').
+// invoice intent for 'delivered'; reason for 'cancelled'). `payments` carries a
+// mixed (split) breakdown; when present, `paymentType` is the summary 'Mixto'.
 type TransitionExtra = {
   paymentType?: string;
+  payments?: { method: string; amount: number }[];
   wantsInvoice?: boolean;
   cancelReason?: CancelReasonKey;
   cancelReasonText?: string;
 };
+
+// Cash-method name hints (client mirror of cash-helpers' CASH_PAYMENT_METHODS),
+// used only as a fallback when a method carries no explicit type.
+const CLIENT_CASH_HINTS = ['efectivo', 'cash'];
 
 // Sentinel select value for the admin/dashboard caja (posTokenId === null).
 const ADMIN_CAJA_VALUE = '__admin__';
@@ -661,6 +668,11 @@ function DeliveryCard({
         <DeliverDialog
           onClose={() => setDeliverOpen(false)}
           pending={pending}
+          // Split the GOODS subtotal only: the sale is priced goods-only and the
+          // delivery fee is settled separately (settleDeliveryFee). order.total
+          // = subtotal + fee, so splitting it would double-count the fee.
+          goodsTotal={Number(order.subtotal) || 0}
+          deliveryFee={Number(order.deliveryFee) || 0}
           paymentMethods={paymentMethods}
           einvoiceEnabled={einvoiceEnabled}
           onConfirm={(extra) => {
@@ -684,28 +696,147 @@ function DeliveryCard({
   );
 }
 
-// Deliver dialog (P0-B + P2-A): pick the payment method the customer paid with,
-// and — only when the org has e-invoicing enabled — optionally request an
-// electronic invoice. Defaults to the first method (Efectivo is always seeded).
+// Deliver dialog (P0-B + P2-A): a POS-style checkout for a contraentrega. The
+// courier taps the single method the customer paid with, or switches on
+// "Combinar métodos" to split the goods total across several methods (pago
+// mixto) — one row per method + amount, with a live "Falta / Vuelto" readout.
+// Only cash can exceed its share (change); a purely-digital split must land on
+// the total exactly. When the org has e-invoicing on, a "quiere factura"
+// checkbox rides along. Defaults to the first method (Efectivo is always seeded).
 function DeliverDialog({
   onClose,
   pending,
+  goodsTotal,
+  deliveryFee,
   paymentMethods,
   einvoiceEnabled,
   onConfirm,
 }: {
   onClose: () => void;
   pending: boolean;
+  // The GOODS subtotal — what the sale is priced at and what the split must sum
+  // to. NOT order.total (that includes the delivery fee, settled separately).
+  goodsTotal: number;
+  deliveryFee: number;
   paymentMethods: DeliverPaymentMethod[];
   einvoiceEnabled: boolean;
   onConfirm: (extra: TransitionExtra) => void;
 }) {
   // Fall back to Efectivo if the org somehow exposes no active method.
-  const methods = paymentMethods.length > 0
-    ? paymentMethods
-    : [{ name: 'Efectivo' }];
-  const [method, setMethod] = useState<string>(methods[0]!.name);
+  const methods = useMemo(
+    () => (paymentMethods.length > 0
+      ? paymentMethods
+      : [{ name: 'Efectivo', type: 'cash' }]),
+    [paymentMethods],
+  );
+
+  // Cash is the only method that can be handed in above its share (→ vuelto).
+  // Prefer the explicit type from the org catalog; fall back to a name hint.
+  const isCash = useCallback(
+    (name: string) =>
+      methods.find(m => m.name === name)?.type === 'cash'
+      || CLIENT_CASH_HINTS.some(h => name.toLowerCase().includes(h)),
+    [methods],
+  );
+
+  const [combine, setCombine] = useState(false);
+  // Single-method path: the one tapped method (defaults to the first).
+  const [single, setSingle] = useState<string>(methods[0]!.name);
+  // Mixed path: one draft row per method the customer used, seeded with the full
+  // total on the first method.
+  const [drafts, setDrafts] = useState<{ method: string; amount: string }[]>([
+    { method: methods[0]!.name, amount: String(goodsTotal) },
+  ]);
   const [wantsInvoice, setWantsInvoice] = useState(false);
+
+  const amountOf = (a: string) => Number.parseFloat(a) || 0;
+
+  // Mirrors the POS checkout math: cash is "handed in" (may exceed its share →
+  // vuelto), every other method applies its full amount straight to the bill.
+  const totals = useMemo(() => {
+    let appliedToBill = 0;
+    let cashHandedIn = 0;
+    for (const d of drafts) {
+      const v = amountOf(d.amount);
+      if (isCash(d.method)) {
+        cashHandedIn += v;
+      } else {
+        appliedToBill += v;
+      }
+    }
+    const cashApplied = Math.min(
+      cashHandedIn,
+      Math.max(0, goodsTotal - appliedToBill),
+    );
+    const change = Math.max(0, cashHandedIn - cashApplied);
+    const remaining = Math.max(0, goodsTotal - appliedToBill - cashApplied);
+    // Only CASH may exceed its share (→ vuelto). Digital methods over the bill
+    // would book a sale_payment above the sale total, so they invalidate.
+    const overpaidDigital = appliedToBill > goodsTotal;
+    return { change, remaining, overpaidDigital };
+  }, [drafts, goodsTotal, isCash]);
+
+  const mixedValid
+    = totals.remaining === 0
+      && !totals.overpaidDigital
+      && drafts.some(d => amountOf(d.amount) > 0);
+
+  function addDraft() {
+    const nextMethod
+      = methods.find(m => !drafts.some(d => d.method === m.name))?.name
+        ?? methods[0]!.name;
+    setDrafts(ds => [
+      ...ds,
+      {
+        method: nextMethod,
+        amount: totals.remaining > 0 ? String(totals.remaining) : '',
+      },
+    ]);
+  }
+  function updateDraft(
+    i: number,
+    patch: Partial<{ method: string; amount: string }>,
+  ) {
+    setDrafts(ds => ds.map((d, idx) => (idx === i ? { ...d, ...patch } : d)));
+  }
+  function removeDraft(i: number) {
+    setDrafts(ds => ds.filter((_, idx) => idx !== i));
+  }
+
+  function confirm() {
+    if (!combine) {
+      onConfirm({ paymentType: single, wantsInvoice });
+      return;
+    }
+    // Build the sale_payments breakdown: cash contributes only what covers the
+    // bill (the rest is vuelto), other methods their full amount. Matches the POS.
+    let cashBudget = Math.max(
+      0,
+      goodsTotal
+      - drafts
+        .filter(d => !isCash(d.method))
+        .reduce((s, d) => s + amountOf(d.amount), 0),
+    );
+    const payments: { method: string; amount: number }[] = [];
+    for (const d of drafts) {
+      const v = amountOf(d.amount);
+      if (v <= 0) {
+        continue;
+      }
+      if (isCash(d.method)) {
+        const cover = Math.min(v, cashBudget);
+        cashBudget -= cover;
+        if (cover > 0) {
+          payments.push({ method: d.method, amount: cover });
+        }
+      } else {
+        payments.push({ method: d.method, amount: v });
+      }
+    }
+    onConfirm({ paymentType: 'Mixto', payments, wantsInvoice });
+  }
+
+  const canConfirm = !pending && (combine ? mixedValid : true);
 
   return (
     <Dialog open onOpenChange={o => !o && onClose()}>
@@ -717,26 +848,170 @@ function DeliverDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-3">
-          <label className="block text-sm font-medium" htmlFor="deliver-method">
-            Método de pago
-          </label>
-          <select
-            id="deliver-method"
-            value={method}
-            onChange={e => setMethod(e.target.value)}
+        <div className="space-y-4">
+          <div className="flex items-baseline justify-between">
+            <span className="text-sm text-muted-foreground">
+              {deliveryFee > 0 ? 'Venta (mercancía)' : 'Total a cobrar'}
+            </span>
+            <span className="font-display text-xl font-medium tabular-nums">
+              {money(goodsTotal)}
+            </span>
+          </div>
+          {deliveryFee > 0 && (
+            <p className="-mt-2 text-xs text-muted-foreground">
+              + Domicilio
+              {' '}
+              <span className="tabular-nums">{money(deliveryFee)}</span>
+              {' '}
+              se cobra aparte (no entra en el reparto).
+            </p>
+          )}
+
+          {!combine
+            ? (
+                // Single method: a tap-once grid of the org's methods.
+                <div className="grid grid-cols-2 gap-2">
+                  {methods.map(m => (
+                    <button
+                      key={m.name}
+                      type="button"
+                      disabled={pending}
+                      onClick={() => setSingle(m.name)}
+                      className={cn(
+                        `
+                          flex h-11 items-center justify-center rounded-md
+                          border px-3 text-sm font-medium
+                          disabled:opacity-60
+                        `,
+                        single === m.name
+                          ? 'border-primary bg-primary/10 text-foreground'
+                          : `
+                            border-border text-muted-foreground
+                            hover:text-foreground
+                          `,
+                      )}
+                    >
+                      {m.name}
+                    </button>
+                  ))}
+                </div>
+              )
+            : (
+                // Mixed: a row per method (own amount) plus a live Falta/Vuelto line.
+                <div className="space-y-2">
+                  {drafts.map((d, i) => (
+                    // eslint-disable-next-line react/no-array-index-key
+                    <div key={i} className="flex items-center gap-2">
+                      <select
+                        value={d.method}
+                        onChange={e => updateDraft(i, { method: e.target.value })}
+                        disabled={pending}
+                        className="
+                          h-9 flex-1 rounded-md border border-border
+                          bg-background px-2 text-sm
+                        "
+                      >
+                        {methods.map(m => (
+                          <option key={m.name} value={m.name}>
+                            {m.name}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        min={0}
+                        value={d.amount}
+                        onChange={e => updateDraft(i, { amount: e.target.value })}
+                        disabled={pending}
+                        placeholder="0"
+                        className="
+                          h-9 w-28 rounded-md border border-border bg-background
+                          px-2 text-right text-sm tabular-nums
+                        "
+                      />
+                      {drafts.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => removeDraft(i)}
+                          disabled={pending}
+                          aria-label="Quitar método"
+                          className="
+                            flex size-9 shrink-0 items-center justify-center
+                            rounded-md text-muted-foreground
+                            hover:text-destructive
+                          "
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
+                  ))}
+
+                  {drafts.length < methods.length && (
+                    <button
+                      type="button"
+                      onClick={addDraft}
+                      disabled={pending}
+                      className="
+                        text-sm font-medium text-primary
+                        hover:underline
+                      "
+                    >
+                      + Agregar método
+                    </button>
+                  )}
+
+                  <div className="
+                    flex justify-between border-t border-border pt-2 text-sm
+                  "
+                  >
+                    {totals.overpaidDigital
+                      ? (
+                          <span className="text-destructive">
+                            Los métodos digitales superan el total
+                          </span>
+                        )
+                      : totals.remaining > 0
+                        ? (
+                            <span className="text-destructive">
+                              Falta
+                              {' '}
+                              <span className="tabular-nums">
+                                {money(totals.remaining)}
+                              </span>
+                            </span>
+                          )
+                        : (
+                            <span className="text-muted-foreground">Cubierto</span>
+                          )}
+                    {totals.change > 0 && (
+                      <span className="text-muted-foreground">
+                        Vuelto
+                        {' '}
+                        <span className="tabular-nums">{money(totals.change)}</span>
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+
+          <button
+            type="button"
+            onClick={() => setCombine(c => !c)}
             disabled={pending}
-            className="
-              h-9 w-full rounded-md border border-border bg-background px-2
-              text-sm
-            "
+            className={cn(
+              'text-sm font-medium',
+              combine
+                ? 'text-primary'
+                : `
+                  text-muted-foreground
+                  hover:text-foreground
+                `,
+            )}
           >
-            {methods.map(m => (
-              <option key={m.name} value={m.name}>
-                {m.name}
-              </option>
-            ))}
-          </select>
+            {combine ? '✓ Pago mixto' : '+ Combinar métodos'}
+          </button>
 
           {einvoiceEnabled && (
             <label className="flex items-center gap-2 text-sm">
@@ -763,9 +1038,8 @@ function DeliverDialog({
           </Button>
           <Button
             size="sm"
-            disabled={pending}
-            onClick={() =>
-              onConfirm({ paymentType: method, wantsInvoice })}
+            disabled={!canConfirm}
+            onClick={confirm}
           >
             Marcar entregado
           </Button>

@@ -50,7 +50,25 @@ export const deliveryTransitionSchema = z.object({
   // P0-B: the payment method the courier picks at delivery (a method NAME from
   // the org's real list, e.g. 'Efectivo' | 'Nequi'). Only meaningful for the
   // 'delivered' transition; the action defaults it to 'efectivo' when absent.
+  // For a mixed (split) payment this is the summary label 'Mixto'.
   paymentType: z.string().trim().min(1).max(100).nullable().optional(),
+  // P0-B (mixed): optional split-payment breakdown — one entry per method the
+  // customer used, each a method NAME + amount. When present, the amounts sum to
+  // the goods total (enforced in the dialog) and the sale books one sale_payments
+  // row per entry. Absent = single-method sale driven by `paymentType`. Credito
+  // is never a delivery method, so the action rejects a credit entry here too.
+  payments: z
+    .array(
+      z.object({
+        method: z.string().trim().min(1).max(100),
+        // Strictly positive: a zero-amount split row is meaningless and the
+        // dialog never emits one — reject it rather than book an empty payment.
+        amount: z.number().positive().max(1_000_000_000),
+      }),
+    )
+    .min(1)
+    .max(10)
+    .optional(),
   // P2-A: the courier asked for an electronic invoice at delivery. Only honored
   // when the org actually has e-invoicing enabled (checked server-side).
   wantsInvoice: z.boolean().optional(),

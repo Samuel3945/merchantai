@@ -408,6 +408,81 @@ describe('transitionDelivery — payment method at delivery (P0-B)', () => {
   });
 });
 
+describe('transitionDelivery — mixed (split) payment', () => {
+  it('threads a split as payments[] into createSaleForOrg with a Mixto summary', async () => {
+    await seedShift(DEVICE_ID);
+    await seedOrder('assigned', [
+      { productId: PRODUCT_ID, qty: 2, name: 'Arroz', price: 1000 },
+    ]);
+
+    const { transitionDelivery } = await import('./actions');
+    await transitionDelivery(ORDER_ID, {
+      status: 'delivered',
+      paymentType: 'Mixto',
+      payments: [
+        { method: 'Efectivo', amount: 1000 },
+        { method: 'Nequi', amount: 1000 },
+      ],
+    });
+
+    expect(h.createSale).toHaveBeenCalledWith(
+      expect.objectContaining({
+        paymentType: 'Mixto',
+        payments: [
+          { method: 'Efectivo', amount: 1000 },
+          { method: 'Nequi', amount: 1000 },
+        ],
+        idempotencyKey: ORDER_ID,
+      }),
+    );
+    expect((await orderRow()).status).toBe('delivered');
+  });
+
+  it('a single-entry split uses that method name as the summary, not Mixto', async () => {
+    await seedShift(DEVICE_ID);
+    await seedOrder('assigned', [
+      { productId: PRODUCT_ID, qty: 2, name: 'Arroz', price: 1000 },
+    ]);
+
+    const { transitionDelivery } = await import('./actions');
+    await transitionDelivery(ORDER_ID, {
+      status: 'delivered',
+      paymentType: 'Mixto',
+      payments: [{ method: 'Nequi', amount: 2000 }],
+    });
+
+    expect(h.createSale).toHaveBeenCalledWith(
+      expect.objectContaining({
+        paymentType: 'Nequi',
+        payments: [{ method: 'Nequi', amount: 2000 }],
+      }),
+    );
+  });
+
+  it('rejects a credito entry inside a split — no sale, status unchanged', async () => {
+    await seedShift(DEVICE_ID);
+    await seedOrder('assigned', [
+      { productId: PRODUCT_ID, qty: 1, name: 'Arroz', price: 1000 },
+    ]);
+
+    const { transitionDelivery } = await import('./actions');
+
+    await expect(
+      transitionDelivery(ORDER_ID, {
+        status: 'delivered',
+        paymentType: 'Mixto',
+        payments: [
+          { method: 'Efectivo', amount: 500 },
+          { method: 'Crédito', amount: 500 },
+        ],
+      }),
+    ).rejects.toThrow(/cr[ée]dito/i);
+
+    expect(h.createSale).not.toHaveBeenCalled();
+    expect((await orderRow()).status).toBe('assigned');
+  });
+});
+
 describe('transitionDelivery — cancellation reasons (P1)', () => {
   it('stores the reason label on the status_change note and notifies with reason-specific copy', async () => {
     await seedOrder(
@@ -480,6 +555,54 @@ describe('transitionDelivery — delivery fee settlement (P2-B)', () => {
     await transitionDelivery(ORDER_ID, { status: 'delivered', paymentType: 'Nequi' });
 
     expect(await cashMovements()).toHaveLength(0);
+  });
+
+  it('revenue mode + mixed with a digital method: no deposit (fee left for arqueo)', async () => {
+    await seedShift(DEVICE_ID);
+    await seedOpenSession(DEVICE_ID);
+    await seedOrder('assigned', [
+      { productId: PRODUCT_ID, qty: 2, name: 'Arroz', price: 1000 },
+    ]);
+
+    const { transitionDelivery } = await import('./actions');
+    await transitionDelivery(ORDER_ID, {
+      status: 'delivered',
+      paymentType: 'Mixto',
+      payments: [
+        { method: 'Efectivo', amount: 1000 },
+        { method: 'Nequi', amount: 1000 },
+      ],
+    });
+
+    // Mixed collection with a digital leg → fee method is ambiguous, so we do NOT
+    // invent a cash deposit; it is reconciled at close (understated, not wrong).
+    expect(await cashMovements()).toHaveLength(0);
+  });
+
+  it('revenue mode + all-cash split: books exactly one fee deposit', async () => {
+    await seedShift(DEVICE_ID);
+    await seedOpenSession(DEVICE_ID);
+    await seedOrder('assigned', [
+      { productId: PRODUCT_ID, qty: 2, name: 'Arroz', price: 1000 },
+    ]);
+
+    const { transitionDelivery } = await import('./actions');
+    await transitionDelivery(ORDER_ID, {
+      status: 'delivered',
+      paymentType: 'Mixto',
+      payments: [{ method: 'Efectivo', amount: 2000 }],
+    });
+
+    // Every leg is cash → the fee's method resolves to cash → deposit the fee
+    // once (the goods themselves are booked inside the mocked createSaleForOrg).
+    const mv = await cashMovements();
+
+    expect(mv).toHaveLength(1);
+    expect(mv[0]).toMatchObject({
+      type: 'deposit',
+      amount: '1000.00',
+      reason: 'Cobro de domicilio',
+    });
   });
 
   it('courier_tip mode: records a tip note, never a caja deposit', async () => {
