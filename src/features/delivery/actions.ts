@@ -23,17 +23,13 @@ import {
   cancelReasonCustomerMessage,
   cancelReasonEventNote,
 } from './cancellation-reasons';
+import { DELIVERY_REQUIRE_PHOTO_KEY } from './constants';
 import { settleDeliveryFee } from './settlement';
 import { deliveryTransitionSchema } from './validation';
 
 // Contraentrega default when the courier's deliver dialog sends no explicit
 // method — keeps the historical behavior (efectivo → cash into the caja).
 const DEFAULT_DELIVERY_PAYMENT = 'efectivo';
-
-// The app_setting key that gates delivery photo evidence (settings/page.tsx
-// reads/writes the same literal key). Exported so the page server component can
-// share it instead of re-typing the string.
-export const DELIVERY_REQUIRE_PHOTO_KEY = 'delivery_require_photo';
 
 export type DeliveryOrder = typeof deliveryOrdersSchema.$inferSelect;
 export type DeliveryEvent = typeof deliveryEventsSchema.$inferSelect;

@@ -5,11 +5,11 @@ import { getAppSetting } from '@/actions/app-settings';
 import { listPaymentMethods } from '@/actions/payment-methods';
 import { TitleBar } from '@/features/dashboard/TitleBar';
 import {
-  DELIVERY_REQUIRE_PHOTO_KEY,
   getDeliveryKpis,
   listDeliveries,
   listDeliveriesForCourier,
 } from '@/features/delivery/actions';
+import { DELIVERY_REQUIRE_PHOTO_KEY } from '@/features/delivery/constants';
 import { DeliveryClient } from '@/features/delivery/DeliveryClient';
 import {
   getActiveCourierShift,
