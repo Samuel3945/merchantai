@@ -589,6 +589,13 @@
       "when": 1782900003004,
       "tag": "0083_delete_ai_agent_phantom_caja",
       "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1782900004004,
+      "tag": "0084_delivery_photo_evidence",
+      "breakpoints": true
     }
   ]
 }

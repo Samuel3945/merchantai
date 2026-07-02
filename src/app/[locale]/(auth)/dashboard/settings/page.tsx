@@ -36,11 +36,12 @@ const KEYS = [
   // AI preview gate (default OFF, flipped per-org by the operator in /platform).
   // Domicilios rides with it, so its module toggle is hidden until AI is on.
   'modules.ai',
-  // Delivery fee configuration (nested under the Domicilios module toggle)
+  // Delivery configuration (own "Domicilios" tab, gated by modules.ai)
   DELIVERY_FEE_TYPE_KEY,
   DELIVERY_FEE_VALUE_KEY,
   DELIVERY_FREE_ABOVE_KEY,
   DELIVERY_FEE_MODE_KEY,
+  'delivery_require_photo',
   // E-invoicing (MATIAS/DIAN)
   'fiscal_nit',
   'fiscal_dian_resolution',
@@ -112,7 +113,7 @@ export default async function DashboardSettingsPage(props: {
           'modules.delivery': asBool(map['modules.delivery'], true),
           'modules.suppliers': asBool(map['modules.suppliers'], true),
         }}
-        deliveryFee={{
+        domicilios={{
           delivery_fee_type: deliveryFeeType,
           delivery_fee_value: map[DELIVERY_FEE_VALUE_KEY],
           delivery_free_above: map[DELIVERY_FREE_ABOVE_KEY],
@@ -120,6 +121,7 @@ export default async function DashboardSettingsPage(props: {
             map[DELIVERY_FEE_MODE_KEY] === 'courier_tip'
               ? 'courier_tip'
               : 'revenue',
+          delivery_require_photo: asBool(map.delivery_require_photo, false),
         }}
         aiPreviewEnabled={asBool(map['modules.ai'], false)}
         facturasEnabled={asBool(map['modules.facturas'], false)}

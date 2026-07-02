@@ -1,7 +1,7 @@
 'use client';
 
 import type { BusinessTabValues } from './BusinessTab';
-import type { DeliveryFeeSettingsValues } from './DeliveryFeeSettings';
+import type { DomiciliosTabValues } from './DomiciliosTab';
 import type { FiscalTabValues } from './FiscalTab';
 import type { ModulesTabValues } from './ModulesTab';
 import type { ReturnsTabValues } from './ReturnsTab';
@@ -10,6 +10,7 @@ import type { PaymentMethodRow } from '@/actions/payment-methods';
 import { useState } from 'react';
 import { AuditTab } from './AuditTab';
 import { BusinessTab } from './BusinessTab';
+import { DomiciliosTab } from './DomiciliosTab';
 import { FiscalTab } from './FiscalTab';
 import { ModulesTab } from './ModulesTab';
 import { PaymentMethodsClient } from './PaymentMethodsClient';
@@ -30,8 +31,14 @@ const BASE_TABS: ReadonlyArray<Tab> = [
 ];
 
 // The Facturación tab only exists when the operator enabled e-invoicing for the
-// org (platform gate). Inserted right after Módulos to keep the order familiar.
+// org (platform gate). Inserted right after Módulos (or after Domicilios, if
+// present) to keep the order familiar.
 const FISCAL_TAB: Tab = { key: 'fiscal', label: 'Facturación' };
+
+// Domicilios rides with the AI preview (operator-gated in /platform), same
+// gate as the "Domicilios" module toggle in Módulos. Inserted right after
+// Módulos to keep the fee config next to where the module lives.
+const DOMICILIOS_TAB: Tab = { key: 'domicilios', label: 'Domicilios' };
 
 const TRANSFER_SECURITY_TAB: Tab = { key: 'transfer-security', label: 'Transferencias' };
 const AUDIT_TAB: Tab = { key: 'audit', label: 'Auditoría' };
@@ -41,13 +48,14 @@ export type SettingsClientProps = {
   creditoEnabled: boolean;
   business: BusinessTabValues;
   modules: ModulesTabValues;
-  deliveryFee: DeliveryFeeSettingsValues;
+  domicilios: DomiciliosTabValues;
   fiscal: FiscalTabValues;
   returns: ReturnsTabValues;
   transferSecurity: TransferSecurityTabValues;
   isAdmin: boolean;
   // When AI preview is off the Domicilios module does not exist for this org,
-  // so its toggle is hidden from the Módulos tab.
+  // so its toggle is hidden from the Módulos tab and the Domicilios tab itself
+  // is hidden.
   aiPreviewEnabled: boolean;
   // E-invoicing is operator-gated: the Facturación tab is hidden until enabled.
   facturasEnabled: boolean;
@@ -58,7 +66,7 @@ export function SettingsClient({
   creditoEnabled,
   business,
   modules,
-  deliveryFee,
+  domicilios,
   fiscal,
   returns: returnsValues,
   transferSecurity,
@@ -67,8 +75,14 @@ export function SettingsClient({
   facturasEnabled,
 }: SettingsClientProps) {
   const baseTabs: Tab[] = [...BASE_TABS];
+  let insertAfterKey = 'modules';
+  if (aiPreviewEnabled) {
+    const afterModules = baseTabs.findIndex(t => t.key === insertAfterKey) + 1;
+    baseTabs.splice(afterModules, 0, DOMICILIOS_TAB);
+    insertAfterKey = 'domicilios';
+  }
   if (facturasEnabled) {
-    const afterModules = baseTabs.findIndex(t => t.key === 'modules') + 1;
+    const afterModules = baseTabs.findIndex(t => t.key === insertAfterKey) + 1;
     baseTabs.splice(afterModules, 0, FISCAL_TAB);
   }
   const tabs = isAdmin
@@ -114,9 +128,9 @@ export function SettingsClient({
           <ModulesTab
             initial={modules}
             aiPreviewEnabled={aiPreviewEnabled}
-            deliveryFee={deliveryFee}
           />
         )}
+        {activeTab === 'domicilios' && <DomiciliosTab initial={domicilios} />}
         {activeTab === 'fiscal' && <FiscalTab initial={fiscal} />}
         {activeTab === 'returns' && <ReturnsTab initial={returnsValues} />}
         {activeTab === 'transfer-security' && isAdmin && (

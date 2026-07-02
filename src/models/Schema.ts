@@ -2072,6 +2072,13 @@ export const deliveryOrdersSchema = pgTable(
     // agent-created orders apart and drive analytics.
     source: text('source').default('manual').notNull(),
     notes: text('notes'),
+    // Delivery evidence photo (courier-captured hand-off), uploaded via
+    // POST /api/upload/delivery-photo and stored under
+    // deliveries/<orgId>/<deliveryOrderId>/. Nullable — a NOT NULL constraint
+    // would break every historical row and every org that leaves the
+    // `delivery_require_photo` app_setting off; that toggle is enforced instead
+    // in transitionDelivery (server-side, defense in depth against the client).
+    deliveryPhotoUrl: text('delivery_photo_url'),
     assignedAt: timestamp('assigned_at', { mode: 'date' }),
     inTransitAt: timestamp('in_transit_at', { mode: 'date' }),
     deliveredAt: timestamp('delivered_at', { mode: 'date' }),

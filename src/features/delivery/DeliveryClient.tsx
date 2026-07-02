@@ -8,6 +8,7 @@ import type {
 } from './actions';
 import type { CancelReasonKey } from './cancellation-reasons';
 import type { ActiveCourierShift, OpenCaja } from './shifts';
+import { Camera } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
 import {
@@ -50,6 +51,8 @@ type TransitionExtra = {
   wantsInvoice?: boolean;
   cancelReason?: CancelReasonKey;
   cancelReasonText?: string;
+  // P-photo: the courier-captured hand-off photo URL, set only on 'delivered'.
+  deliveryPhotoUrl?: string;
 };
 
 // Cash-method name hints (client mirror of cash-helpers' CASH_PAYMENT_METHODS),
@@ -156,6 +159,9 @@ export function DeliveryClient(props: {
   paymentMethods: DeliverPaymentMethod[];
   // Whether the org has e-invoicing configured — gates the invoice checkbox (P2-A).
   einvoiceEnabled: boolean;
+  // The org's `delivery_require_photo` app_setting — gates the photo-evidence
+  // block in the deliver dialog and disables its confirm button without one.
+  requirePhoto: boolean;
 }) {
   const [rows, setRows] = useState<DeliveryOrder[]>(props.initial);
   const [kpis, setKpis] = useState<DeliveryKpis>(props.kpis);
@@ -308,6 +314,7 @@ export function DeliveryClient(props: {
                   hasShift={shift !== null}
                   paymentMethods={props.paymentMethods}
                   einvoiceEnabled={props.einvoiceEnabled}
+                  requirePhoto={props.requirePhoto}
                   onAct={act}
                 />
               ))}
@@ -459,6 +466,7 @@ function DeliveryCard({
   hasShift,
   paymentMethods,
   einvoiceEnabled,
+  requirePhoto,
   onAct,
 }: {
   order: DeliveryOrder;
@@ -466,6 +474,7 @@ function DeliveryCard({
   hasShift: boolean;
   paymentMethods: DeliverPaymentMethod[];
   einvoiceEnabled: boolean;
+  requirePhoto: boolean;
   onAct: (
     order: DeliveryOrder,
     to: DeliveryStatus,
@@ -668,6 +677,7 @@ function DeliveryCard({
         <DeliverDialog
           onClose={() => setDeliverOpen(false)}
           pending={pending}
+          orderId={order.id}
           // Split the GOODS subtotal only: the sale is priced goods-only and the
           // delivery fee is settled separately (settleDeliveryFee). order.total
           // = subtotal + fee, so splitting it would double-count the fee.
@@ -675,6 +685,7 @@ function DeliveryCard({
           deliveryFee={Number(order.deliveryFee) || 0}
           paymentMethods={paymentMethods}
           einvoiceEnabled={einvoiceEnabled}
+          requirePhoto={requirePhoto}
           onConfirm={(extra) => {
             setDeliverOpen(false);
             onAct(order, 'delivered', extra);
@@ -706,20 +717,28 @@ function DeliveryCard({
 function DeliverDialog({
   onClose,
   pending,
+  orderId,
   goodsTotal,
   deliveryFee,
   paymentMethods,
   einvoiceEnabled,
+  requirePhoto,
   onConfirm,
 }: {
   onClose: () => void;
   pending: boolean;
+  // The delivery order id — the photo-evidence upload is stored under
+  // deliveries/<orgId>/<orderId>/ on the server.
+  orderId: string;
   // The GOODS subtotal — what the sale is priced at and what the split must sum
   // to. NOT order.total (that includes the delivery fee, settled separately).
   goodsTotal: number;
   deliveryFee: number;
   paymentMethods: DeliverPaymentMethod[];
   einvoiceEnabled: boolean;
+  // The org's `delivery_require_photo` app_setting — when true, a photo is
+  // mandatory before the confirm button unlocks (server re-checks it too).
+  requirePhoto: boolean;
   onConfirm: (extra: TransitionExtra) => void;
 }) {
   // Fall back to Efectivo if the org somehow exposes no active method.
@@ -748,6 +767,43 @@ function DeliverDialog({
     { method: methods[0]!.name, amount: String(goodsTotal) },
   ]);
   const [wantsInvoice, setWantsInvoice] = useState(false);
+
+  // P-photo: the hand-off evidence photo. Uploaded eagerly on file select (not
+  // deferred to confirm) so the courier sees the thumbnail before committing.
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [photoError, setPhotoError] = useState<string | null>(null);
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
+
+  async function handlePhotoFile(file: File | undefined) {
+    if (!file) {
+      return;
+    }
+    setUploadingPhoto(true);
+    setPhotoError(null);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('deliveryOrderId', orderId);
+      const res = await fetch('/api/upload/delivery-photo', {
+        method: 'POST',
+        body: fd,
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? `Error al subir (${res.status})`);
+      }
+      const data = (await res.json()) as { url: string };
+      setPhotoUrl(data.url);
+    } catch (e) {
+      setPhotoError(e instanceof Error ? e.message : 'No se pudo subir la foto');
+    } finally {
+      setUploadingPhoto(false);
+      if (photoInputRef.current) {
+        photoInputRef.current.value = '';
+      }
+    }
+  }
 
   const amountOf = (a: string) => Number.parseFloat(a) || 0;
 
@@ -804,8 +860,9 @@ function DeliverDialog({
   }
 
   function confirm() {
+    const photoExtra = photoUrl ? { deliveryPhotoUrl: photoUrl } : {};
     if (!combine) {
-      onConfirm({ paymentType: single, wantsInvoice });
+      onConfirm({ paymentType: single, wantsInvoice, ...photoExtra });
       return;
     }
     // Build the sale_payments breakdown: cash contributes only what covers the
@@ -833,10 +890,14 @@ function DeliverDialog({
         payments.push({ method: d.method, amount: v });
       }
     }
-    onConfirm({ paymentType: 'Mixto', payments, wantsInvoice });
+    onConfirm({ paymentType: 'Mixto', payments, wantsInvoice, ...photoExtra });
   }
 
-  const canConfirm = !pending && (combine ? mixedValid : true);
+  const canConfirm
+    = !pending
+      && !uploadingPhoto
+      && (combine ? mixedValid : true)
+      && (!requirePhoto || !!photoUrl);
 
   return (
     <Dialog open onOpenChange={o => !o && onClose()}>
@@ -1024,6 +1085,77 @@ function DeliverDialog({
               />
               El cliente quiere factura electrónica
             </label>
+          )}
+
+          {requirePhoto && (
+            <div className="space-y-2 border-t border-border pt-3">
+              <div className="text-sm font-medium">Evidencia de entrega</div>
+              <p className="text-xs text-muted-foreground">
+                Este negocio exige una foto del pedido entregado para confirmar.
+              </p>
+              <input
+                ref={photoInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="hidden"
+                onChange={e => handlePhotoFile(e.target.files?.[0])}
+              />
+              {photoUrl
+                ? (
+                    <div className="flex items-center gap-3">
+                      {/* eslint-disable-next-line next/no-img-element */}
+                      <img
+                        src={photoUrl}
+                        alt="Evidencia de entrega"
+                        className="
+                          size-16 rounded-md border border-border object-cover
+                        "
+                      />
+                      <div className="flex flex-col items-start gap-1">
+                        <button
+                          type="button"
+                          disabled={pending || uploadingPhoto}
+                          onClick={() => photoInputRef.current?.click()}
+                          className="
+                            text-sm font-medium text-primary
+                            hover:underline
+                            disabled:opacity-60
+                          "
+                        >
+                          Cambiar foto
+                        </button>
+                        <button
+                          type="button"
+                          disabled={pending || uploadingPhoto}
+                          onClick={() => setPhotoUrl(null)}
+                          className="
+                            text-sm font-medium text-destructive
+                            hover:underline
+                            disabled:opacity-60
+                          "
+                        >
+                          Quitar
+                        </button>
+                      </div>
+                    </div>
+                  )
+                : (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={pending || uploadingPhoto}
+                      onClick={() => photoInputRef.current?.click()}
+                    >
+                      <Camera className="size-4" />
+                      {uploadingPhoto ? 'Subiendo…' : 'Tomar o subir foto'}
+                    </Button>
+                  )}
+              {photoError && (
+                <p className="text-xs text-destructive">{photoError}</p>
+              )}
+            </div>
           )}
         </div>
 
