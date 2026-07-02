@@ -1,9 +1,10 @@
 'use server';
 
 import { auth } from '@clerk/nextjs/server';
-import { desc, eq } from 'drizzle-orm';
+import { asc, desc, eq } from 'drizzle-orm';
 import { db } from '@/libs/db-context';
-import { conversationsSchema, customersSchema } from '@/models/Schema';
+import { sendWhatsAppTextForOrg } from '@/libs/delivery-whatsapp';
+import { conversationsSchema, customersSchema, messagesSchema } from '@/models/Schema';
 import { PAUSE_MINUTES } from './status';
 
 // Owner/admin controls for the WhatsApp Conversaciones inbox. These are DASHBOARD
@@ -118,22 +119,30 @@ async function updateConversation(
   return toPatch(updated);
 }
 
+// The takeover patch shared by "Atender yo" (pauseConversationBot) and the
+// implicit takeover that happens when the operator sends a manual reply
+// (sendConversationMessage): pause the bot for PAUSE_MINUTES and stamp who took
+// over. The bot auto-resumes on the next inbound message once the window lapses,
+// or immediately when the operator clicks "Conversación finalizada".
+function takeoverPatch(userId: string): Partial<ConversationSelect> {
+  return {
+    botPaused: true,
+    botPausedUntil: new Date(Date.now() + PAUSE_MINUTES * 60_000),
+    botPausedBy: userId,
+    attendedBy: userId,
+  };
+}
+
 /**
- * "Atender yo": pause the bot for PAUSE_MINUTES and record who took over. The
- * bot auto-resumes on the next inbound message once the window lapses, so the
- * conversation is never stuck silent.
+ * "Atender yo": take over the conversation WITHOUT sending a message yet. Pauses
+ * the bot for PAUSE_MINUTES and records who took over, so the conversation is
+ * never stuck silent.
  */
 export async function pauseConversationBot(
   id: string,
 ): Promise<ConversationControlPatch> {
   const { userId, orgId } = await requireOwnerOrg();
-  const until = new Date(Date.now() + PAUSE_MINUTES * 60_000);
-  return updateConversation(orgId, id, {
-    botPaused: true,
-    botPausedUntil: until,
-    botPausedBy: userId,
-    attendedBy: userId,
-  });
+  return updateConversation(orgId, id, takeoverPatch(userId));
 }
 
 /** "Reactivar bot ahora": hand the conversation back to the bot immediately. */
@@ -156,4 +165,156 @@ export async function setConversationBlocked(
 ): Promise<ConversationControlPatch> {
   const { orgId } = await requireOwnerOrg();
   return updateConversation(orgId, id, { blocked });
+}
+
+// ─── Thread (inbox detail pane) ─────────────────────────────────────────
+// Message history + manual reply for the master/detail inbox UI. These reuse
+// the SAME `messages` table n8n writes to via /api/agent/conversations/:id/
+// messages, but that route is agent-token-authed (for n8n), not callable from
+// the dashboard's Clerk session — so the dashboard gets its own Clerk-authed,
+// org-scoped actions here instead of hitting the API route.
+
+export type MessageRow = {
+  id: string;
+  direction: 'inbound' | 'outbound';
+  senderType: 'customer' | 'bot' | 'human';
+  body: string | null;
+  contentType: string;
+  createdAt: string;
+};
+
+// sendConversationMessage returns BOTH the appended message and the conversation
+// control patch produced by the implicit takeover (auto-pause), so the client can
+// append the bubble AND update the row's badge/countdown in one round-trip.
+export type SendMessageResult = {
+  message: MessageRow;
+  conversation: ConversationControlPatch;
+};
+
+const THREAD_LIMIT = 100;
+
+async function requireOwnedConversation(
+  orgId: string,
+  conversationId: string,
+): Promise<{ id: string; remoteJid: string }> {
+  const [conv] = await db
+    .forOrg(orgId)
+    .select({ id: conversationsSchema.id, remoteJid: conversationsSchema.remoteJid })
+    .from(conversationsSchema)
+    .where(eq(conversationsSchema.id, conversationId))
+    .limit(1);
+  if (!conv) {
+    throw new Error('Conversación no encontrada');
+  }
+  return conv;
+}
+
+/** Full message thread for one conversation, oldest first (for the thread pane). */
+export async function listConversationMessages(
+  conversationId: string,
+): Promise<MessageRow[]> {
+  const { orgId } = await requireOwnerOrg();
+  await requireOwnedConversation(orgId, conversationId);
+
+  const rows = await db
+    .forOrg(orgId)
+    .select({
+      id: messagesSchema.id,
+      direction: messagesSchema.direction,
+      senderType: messagesSchema.senderType,
+      body: messagesSchema.body,
+      contentType: messagesSchema.contentType,
+      createdAt: messagesSchema.createdAt,
+    })
+    .from(messagesSchema)
+    .where(eq(messagesSchema.conversationId, conversationId))
+    .orderBy(asc(messagesSchema.createdAt))
+    .limit(THREAD_LIMIT);
+
+  return rows.map(r => ({ ...r, createdAt: r.createdAt.toISOString() }));
+}
+
+/**
+ * "Respondé vos": sends a free-text WhatsApp message through the org's own
+ * connected channel — the SAME sendWhatsAppTextForOrg path the delivery
+ * feature's "Pedir aclaración de dirección" button uses — records it on the
+ * thread as an outbound/human message, AND implicitly takes over from the bot.
+ *
+ * The takeover is the SAME one "Atender yo" performs (takeoverPatch): the first
+ * reply pauses the bot for PAUSE_MINUTES and stamps the operator as attendedBy,
+ * so nobody has to click "Atender yo" separately. The bot comes back either when
+ * the operator clicks "Conversación finalizada" (resumeConversationBot) or when
+ * the 30-min window lapses on the next inbound message — whichever is first.
+ */
+export async function sendConversationMessage(
+  conversationId: string,
+  body: string,
+): Promise<SendMessageResult> {
+  const { userId, orgId } = await requireOwnerOrg();
+  const text = body.trim();
+  if (!text) {
+    throw new Error('Escribí un mensaje para enviar');
+  }
+
+  const conv = await requireOwnedConversation(orgId, conversationId);
+  // remoteJid looks like "5730012345@s.whatsapp.net"; sendWhatsAppTextForOrg
+  // strips non-digits anyway, but this avoids sending the "@s.whatsapp.net"
+  // suffix through as part of the number.
+  const phone = conv.remoteJid.split('@')[0] ?? conv.remoteJid;
+
+  const result = await sendWhatsAppTextForOrg(orgId, phone, text);
+  if (!result.sent) {
+    throw new Error(
+      result.skipped && result.reason === 'no_connected_channel'
+        ? 'Conectá un WhatsApp del negocio para enviar mensajes.'
+        : result.skipped
+          ? 'WhatsApp no está configurado.'
+          : 'No se pudo enviar el mensaje. Intentá de nuevo.',
+    );
+  }
+
+  const [inserted] = await db
+    .forOrg(orgId)
+    .insert(messagesSchema)
+    .values({
+      conversationId,
+      direction: 'outbound',
+      senderType: 'human',
+      senderId: userId,
+      contentType: 'text',
+      body: text,
+    })
+    .returning({
+      id: messagesSchema.id,
+      direction: messagesSchema.direction,
+      senderType: messagesSchema.senderType,
+      body: messagesSchema.body,
+      contentType: messagesSchema.contentType,
+      createdAt: messagesSchema.createdAt,
+    });
+
+  if (!inserted) {
+    throw new Error('El mensaje se envió pero no se pudo guardar en el historial');
+  }
+
+  // Auto-pause on first reply: fold the takeover into the same update that
+  // stamps lastMessageAt, so a manual reply always implies a human takeover.
+  // updateConversation adds updatedAt and returns the control patch the client
+  // merges into the row (badge → "Atendiendo vos", the countdown starts).
+  const conversation = await updateConversation(orgId, conversationId, {
+    ...takeoverPatch(userId),
+    lastMessageAt: new Date(),
+  });
+
+  return {
+    message: {
+      id: inserted.id,
+      direction: inserted.direction,
+      senderType: inserted.senderType,
+      body: inserted.body,
+      contentType: inserted.contentType,
+      createdAt: inserted.createdAt.toISOString(),
+    },
+    conversation,
+  };
 }
