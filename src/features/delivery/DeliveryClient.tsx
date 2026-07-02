@@ -4,11 +4,12 @@ import type {
   DeliveryEvent,
   DeliveryKpis,
   DeliveryOrder,
+  DeliveryOrderWithContact,
   DeliveryStatus,
 } from './actions';
 import type { CancelReasonKey } from './cancellation-reasons';
 import type { ActiveCourierShift, OpenCaja } from './shifts';
-import { Bike, Camera, MessageCircle, Settings } from 'lucide-react';
+import { Bike, Camera, MessageCircle, Phone, Settings } from 'lucide-react';
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
@@ -32,6 +33,7 @@ import {
   transitionDelivery,
 } from './actions';
 import { CANCEL_REASONS } from './cancellation-reasons';
+import { logDeliveryContact } from './contact-log-actions';
 import { DeliveryChatDialog } from './DeliveryChatDialog';
 import {
   endCourierShift,
@@ -75,6 +77,16 @@ function valueToPosToken(value: string): string | null {
 
 type DeliveryItem = { name: string; qty: number; price: number; productId?: string };
 type Scope = DeliveryStatus | 'active' | 'all';
+
+// Card-level order shape: the admin board's list (listDeliveries) carries
+// contact flags (DeliveryOrderWithContact); the courier board's pool/mine
+// (listDeliveriesForCourier) does not fetch them, so DeliveryCard/
+// CourierSections accept them as optional and treat "missing" as "no contact
+// logged yet" — never a per-card fetch either way.
+type DeliveryCardOrder = DeliveryOrder & {
+  contactedCall?: boolean;
+  contactedWhatsapp?: boolean;
+};
 
 // How often the board refetches so cancellations drop off and new (agent-made)
 // orders appear without a manual reload. Polling, not realtime — deliberately
@@ -208,7 +220,7 @@ type DeliveryClientCommonProps = {
 // role applies server-side — this component never re-derives it, only
 // branches rendering on `viewerRole`.
 type DeliveryClientProps = DeliveryClientCommonProps & (
-  | { viewerRole: 'admin'; initial: DeliveryOrder[]; kpis: DeliveryKpis }
+  | { viewerRole: 'admin'; initial: DeliveryOrderWithContact[]; kpis: DeliveryKpis }
   | { viewerRole: 'courier'; pool: DeliveryOrder[]; mine: DeliveryOrder[] }
 );
 
@@ -218,7 +230,7 @@ export function DeliveryClient(props: DeliveryClientProps) {
   // Admin control-view data (all-org orders + KPIs). Also the SOURCE for an
   // admin's own "Modo repartidor" pool/mine (derived below via useMemo) — no
   // separate query, since the admin already has every order in `rows`.
-  const [rows, setRows] = useState<DeliveryOrder[]>(
+  const [rows, setRows] = useState<DeliveryOrderWithContact[]>(
     props.viewerRole === 'admin' ? props.initial : [],
   );
   const [kpis, setKpis] = useState<DeliveryKpis>(
@@ -529,8 +541,8 @@ function CourierSections({
   requirePhoto,
   onAct,
 }: {
-  pool: DeliveryOrder[];
-  mine: DeliveryOrder[];
+  pool: DeliveryCardOrder[];
+  mine: DeliveryCardOrder[];
   pending: boolean;
   hasShift: boolean;
   paymentMethods: DeliverPaymentMethod[];
@@ -764,7 +776,7 @@ function DeliveryCard({
   requirePhoto,
   onAct,
 }: {
-  order: DeliveryOrder;
+  order: DeliveryCardOrder;
   pending: boolean;
   hasShift: boolean;
   variant?: 'full' | 'pool';
@@ -793,6 +805,8 @@ function DeliveryCard({
   // Courier tool: ask the customer for details to arrive, over the org's own
   // WhatsApp. Optimistic disable while sending; the toast reports the outcome.
   async function askClarification() {
+    // Fire-and-forget contact log — never blocks or fails the actual request.
+    logDeliveryContact(order.id, 'whatsapp').catch(() => {});
     setClarifying(true);
     try {
       const res = await requestAddressClarification(order.id);
@@ -834,6 +848,30 @@ function DeliveryCard({
           {orphan && (
             <span className="ml-2 text-xs font-medium text-destructive">
               {orphan}
+            </span>
+          )}
+          {!isPool && order.contactedCall && (
+            <span className="ml-2 text-xs" title="Contactado por llamada">
+              📞
+            </span>
+          )}
+          {!isPool && order.contactedWhatsapp && (
+            <span className="ml-2 text-xs" title="Contactado por WhatsApp">
+              💬
+            </span>
+          )}
+          {!isPool
+            && order.status === 'cancelled'
+            && !order.contactedCall
+            && !order.contactedWhatsapp && (
+            <span
+              className="
+                ml-2 inline-flex items-center rounded-full bg-destructive/10
+                px-2 py-0.5 text-xs font-medium text-destructive
+              "
+              title="Sin contacto"
+            >
+              🚩 Sin contacto
             </span>
           )}
           <p className="mt-2 font-medium">{order.customerName ?? 'Sin nombre'}</p>
@@ -884,9 +922,28 @@ function DeliveryCard({
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
         {!isPool && phoneDigits && (
+          <a
+            href={`tel:${phoneDigits}`}
+            onClick={() => {
+              logDeliveryContact(order.id, 'call').catch(() => {});
+            }}
+            className="
+              inline-flex h-8 items-center gap-1.5 rounded-md border
+              border-border px-3 text-sm font-medium text-muted-foreground
+              hover:text-foreground
+            "
+          >
+            <Phone className="size-4" />
+            Llamar
+          </a>
+        )}
+        {!isPool && phoneDigits && (
           <button
             type="button"
-            onClick={() => setChatOpen(true)}
+            onClick={() => {
+              logDeliveryContact(order.id, 'whatsapp').catch(() => {});
+              setChatOpen(true);
+            }}
             className="
               inline-flex h-8 items-center gap-1.5 rounded-md border
               border-border px-3 text-sm font-medium text-muted-foreground
@@ -902,6 +959,9 @@ function DeliveryCard({
             href={`https://wa.me/${phoneDigits}`}
             target="_blank"
             rel="noreferrer"
+            onClick={() => {
+              logDeliveryContact(order.id, 'whatsapp').catch(() => {});
+            }}
             className="
               inline-flex h-8 items-center rounded-md border border-border px-3
               text-sm font-medium text-muted-foreground
@@ -1638,7 +1698,9 @@ function HistoryTimeline({ orderId }: { orderId: string }) {
           <span className="mt-1 size-1.5 shrink-0 rounded-full bg-brand" />
           <div className="min-w-0">
             <span className="font-medium">{describeEvent(ev)}</span>
-            {ev.note && <span className="text-muted-foreground">{` — ${ev.note}`}</span>}
+            {ev.note && !isContactNote(ev.note) && (
+              <span className="text-muted-foreground">{` — ${ev.note}`}</span>
+            )}
             <div className="text-muted-foreground">{timeAgo(ev.createdAt)}</div>
           </div>
         </li>
@@ -1647,12 +1709,26 @@ function HistoryTimeline({ orderId }: { orderId: string }) {
   );
 }
 
+// Contact-log markers (contact-log-actions.ts#logDeliveryContact) are internal
+// bookkeeping, not a human note — describeEvent() renders a clean label for
+// them instead, so the raw 'contact:call'/'contact:whatsapp' string never
+// leaks into the Historial timeline.
+function isContactNote(note: string): boolean {
+  return note === 'contact:call' || note === 'contact:whatsapp';
+}
+
 function describeEvent(ev: DeliveryEvent): string {
   if (ev.type === 'created') {
     return 'Pedido creado';
   }
   if (ev.type === 'customer_notified') {
     return 'Cliente notificado';
+  }
+  if (ev.type === 'note' && ev.note === 'contact:call') {
+    return 'Llamada al cliente';
+  }
+  if (ev.type === 'note' && ev.note === 'contact:whatsapp') {
+    return 'Contacto por WhatsApp';
   }
   if (ev.type === 'note') {
     return 'Nota';
