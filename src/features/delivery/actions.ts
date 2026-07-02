@@ -39,6 +39,19 @@ export type DeliveryOrder = typeof deliveryOrdersSchema.$inferSelect;
 export type DeliveryEvent = typeof deliveryEventsSchema.$inferSelect;
 export type DeliveryStatus = DeliveryOrder['status'];
 
+// Courier contact logging (see contact-log-actions.ts#logDeliveryContact): the
+// admin board's per-order flags, derived from 'note' events whose `note` is
+// exactly 'contact:call' / 'contact:whatsapp'. Only listDeliveries (the admin
+// list) resolves these — listDeliveriesForCourier does not.
+export type DeliveryOrderWithContact = DeliveryOrder & {
+  contactedCall: boolean;
+  contactedWhatsapp: boolean;
+};
+
+// Structured markers logDeliveryContact writes into delivery_events.note.
+const CONTACT_CALL_NOTE = 'contact:call';
+const CONTACT_WHATSAPP_NOTE = 'contact:whatsapp';
+
 // Statuses that still need courier action — the "active board" the courier sees
 // by default. delivered/cancelled drop off the board into the history.
 const ACTIVE_STATUSES: DeliveryStatus[] = ['pending', 'assigned', 'in_transit'];
@@ -66,7 +79,7 @@ export type DeliveryKpis = {
 // 'all' = everything, or a single concrete status.
 export async function listDeliveries(
   params?: { status?: DeliveryStatus | 'active' | 'all' },
-): Promise<DeliveryOrder[]> {
+): Promise<DeliveryOrderWithContact[]> {
   const { orgId } = await requirePanelModule('delivery');
   const scope = params?.status ?? 'active';
 
@@ -77,12 +90,51 @@ export async function listDeliveries(
     filters.push(eq(deliveryOrdersSchema.status, scope));
   }
 
-  return db
+  const orders = await db
     .select()
     .from(deliveryOrdersSchema)
     .where(and(...filters))
     .orderBy(desc(deliveryOrdersSchema.createdAt))
     .limit(LIST_LIMIT);
+
+  if (orders.length === 0) {
+    return [];
+  }
+
+  // Contact flags: ONE aggregate query for every order on this page, grouped
+  // in JS below — never a per-card lookup (no N+1).
+  const orderIds = orders.map(o => o.id);
+  const contactRows = await db
+    .select({
+      deliveryOrderId: deliveryEventsSchema.deliveryOrderId,
+      note: deliveryEventsSchema.note,
+    })
+    .from(deliveryEventsSchema)
+    .where(
+      and(
+        eq(deliveryEventsSchema.organizationId, orgId),
+        inArray(deliveryEventsSchema.deliveryOrderId, orderIds),
+        eq(deliveryEventsSchema.type, 'note'),
+        inArray(deliveryEventsSchema.note, [CONTACT_CALL_NOTE, CONTACT_WHATSAPP_NOTE]),
+      ),
+    );
+
+  const contactMap = new Map<string, { call: boolean; whatsapp: boolean }>();
+  for (const row of contactRows) {
+    const entry = contactMap.get(row.deliveryOrderId) ?? { call: false, whatsapp: false };
+    if (row.note === CONTACT_CALL_NOTE) {
+      entry.call = true;
+    } else if (row.note === CONTACT_WHATSAPP_NOTE) {
+      entry.whatsapp = true;
+    }
+    contactMap.set(row.deliveryOrderId, entry);
+  }
+
+  return orders.map(order => ({
+    ...order,
+    contactedCall: contactMap.get(order.id)?.call ?? false,
+    contactedWhatsapp: contactMap.get(order.id)?.whatsapp ?? false,
+  }));
 }
 
 // Statuses a courier's own order can be in while it's still "theirs" to work.
