@@ -1005,53 +1005,6 @@ export async function getFraudAlerts(days = 14): Promise<FraudAlert[]> {
   return alerts;
 }
 
-export type TodayCashKpis = {
-  /** Gastos de tipo `expense` del día (gasto menor, proveedor, devolución…). */
-  gastosHoy: number;
-  /** Retiros de seguridad del día (type = withdrawal). */
-  retirosHoy: number;
-  /** Pagos a proveedores del día (movimientos con supplier_id). */
-  pagosProveedores: number;
-  /** Gastos operativos P&L del día (expense + salary + inventory_purchase). */
-  gastosOperativos: number;
-};
-
-// Same-day (America/Bogota) financial snapshot for the Caja header KPIs. Derived
-// live from the cash ledger — the single source of truth — and scoped to today
-// across whatever sessions ran, not to a single open session.
-export async function getTodayCashKpis(): Promise<TodayCashKpis> {
-  const { orgId } = await requireOrg();
-
-  const result = await db.execute(sql`
-    SELECT
-      -- OQ-2 fix (migration 0071): caja-funded supplier settles write type='expense'
-      -- with expense_id=NULL (no P&L anchor). Narrow to expense_id IS NOT NULL so
-      -- a settle row does NOT inflate P&L gasto KPIs. Legacy gastos always had an
-      -- expenses row so this predicate is backward-compatible with all pre-0071 rows.
-      COALESCE(SUM(amount) FILTER (WHERE type = 'expense' AND expense_id IS NOT NULL), 0)::float8 AS gastos_hoy,
-      COALESCE(SUM(amount) FILTER (WHERE type = 'withdrawal'), 0)::float8 AS retiros_hoy,
-      COALESCE(SUM(amount) FILTER (WHERE supplier_id IS NOT NULL), 0)::float8 AS pagos_proveedores,
-      COALESCE(SUM(amount) FILTER (WHERE (type = 'expense' AND expense_id IS NOT NULL) OR type IN ('salary','inventory_purchase')), 0)::float8 AS gastos_operativos
-    FROM cash_movements
-    WHERE organization_id = ${orgId}
-      AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
-          = (now() AT TIME ZONE 'America/Bogota')::date
-  `);
-
-  const row = (result.rows?.[0] ?? {}) as Record<string, unknown>;
-  const num = (v: unknown): number => {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : 0;
-  };
-
-  return {
-    gastosHoy: num(row.gastos_hoy),
-    retirosHoy: num(row.retiros_hoy),
-    pagosProveedores: num(row.pagos_proveedores),
-    gastosOperativos: num(row.gastos_operativos),
-  };
-}
-
 export type MethodCollection = { name: string; amount: number };
 export type TodayCollections = { methods: MethodCollection[]; total: number };
 

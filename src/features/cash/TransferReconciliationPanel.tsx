@@ -1,5 +1,6 @@
 'use client';
 
+import type { AccountCuadre, TransferCuadreOverview } from '@/actions/transfer-reconciliation';
 import type { ActionResult } from '@/libs/action-result';
 import type {
   ReconciliationStatus,
@@ -9,6 +10,9 @@ import {
   AlertTriangle,
   ArrowDownWideNarrow,
   ArrowUpWideNarrow,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Clock,
   Pencil,
   Search,
@@ -102,36 +106,6 @@ function StateBadge({ status }: { status: ReconciliationStatus }) {
   );
 }
 
-function StatCard(props: {
-  count: number;
-  label: string;
-  sub: string;
-  tone: 'success' | 'warn' | 'destructive';
-}) {
-  const dot = {
-    success: 'bg-success',
-    warn: 'bg-warn',
-    destructive: 'bg-destructive',
-  }[props.tone];
-  const ink = {
-    success: 'text-success',
-    warn: 'text-warn',
-    destructive: 'text-destructive',
-  }[props.tone];
-  return (
-    <Card className="flex items-center gap-4 p-4">
-      <span className={cn('size-3.5 shrink-0 rounded-full', dot)} />
-      <div className="min-w-0 flex-1">
-        <div className="text-sm font-semibold">{props.label}</div>
-        <div className="text-xs text-muted-foreground">{props.sub}</div>
-      </div>
-      <div className={cn('font-display text-3xl font-semibold tabular-nums', ink)}>
-        {props.count}
-      </div>
-    </Card>
-  );
-}
-
 // Row reference line: "10 jun 2026, 14:02 · Ref. M5K8-2210".
 function RowMeta({ row }: { row: TransferReconciliation }) {
   return (
@@ -151,6 +125,256 @@ function RowMeta({ row }: { row: TransferReconciliation }) {
         </>
       )}
     </div>
+  );
+}
+
+// ── Compact pending row (per-account disclosure + "sin cuenta asignada") ────
+// Same Confirmar/Novedad flow as the pending rows in the main list below,
+// extracted so the cuadre-per-account disclosure and the unresolved-methods
+// group can reuse it without duplicating the shared novelty-editor state.
+type PendingRowCompactProps = {
+  row: TransferReconciliation;
+  pending: boolean;
+  run: (fn: () => Promise<ActionResult<unknown>>, onSuccess?: () => void) => void;
+  noveltyId: string | null;
+  noveltyStage: 'choice' | 'partial';
+  noveltyAmount: string;
+  onStartNovelty: (id: string) => void;
+  onNoveltyStageChange: (stage: 'choice' | 'partial') => void;
+  onNoveltyAmountChange: (value: string) => void;
+  onCloseNovelty: () => void;
+};
+
+function PendingRowCompact({
+  row: r,
+  pending,
+  run,
+  noveltyId,
+  noveltyStage,
+  noveltyAmount,
+  onStartNovelty,
+  onNoveltyStageChange,
+  onNoveltyAmountChange,
+  onCloseNovelty,
+}: PendingRowCompactProps) {
+  const isOpen = noveltyId === r.id;
+  return (
+    <li className="p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="
+            flex size-9 shrink-0 items-center justify-center rounded-lg
+            bg-secondary text-muted-foreground
+          "
+          >
+            <Send className="size-4" />
+          </span>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-sm font-medium">
+              <span>{r.method}</span>
+              <span className="font-display tabular-nums">
+                {money(r.expectedAmount)}
+              </span>
+            </div>
+            <RowMeta row={r} />
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <StateBadge status={r.status} />
+          <Button
+            size="sm"
+            disabled={pending}
+            onClick={() => run(() => confirmTransfer(r.id))}
+          >
+            Confirmar
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={pending}
+            onClick={() => onStartNovelty(r.id)}
+          >
+            Novedad
+          </Button>
+        </div>
+      </div>
+
+      {isOpen && (
+        <div className="
+          mt-3 space-y-2 rounded-lg border border-border bg-background p-3
+        "
+        >
+          {noveltyStage === 'choice'
+            ? (
+                <>
+                  <div className="text-xs text-muted-foreground">
+                    ¿Qué pasó con esta transferencia? Elegí si llegó incompleta
+                    o si no llegó nada.
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={pending}
+                      onClick={() => onNoveltyStageChange('partial')}
+                    >
+                      Llegó incompleta
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      disabled={pending}
+                      onClick={() =>
+                        run(() => recordTransferNovelty(r.id, 0), onCloseNovelty)}
+                    >
+                      No llegó
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={pending}
+                      onClick={onCloseNovelty}
+                    >
+                      Cancelar
+                    </Button>
+                  </div>
+                </>
+              )
+            : (
+                <>
+                  <div className="text-xs text-muted-foreground">
+                    Ingresá el monto que sí llegó. El faltante va a
+                    investigación o pérdida según Ajustes de transferencias.
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      aria-label="Monto que llegó realmente"
+                      className={cn(cashInputCls, 'max-w-40')}
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      placeholder="Monto que llegó"
+                      value={noveltyAmount}
+                      onChange={e => onNoveltyAmountChange(e.target.value)}
+                    />
+                    <Button
+                      size="sm"
+                      disabled={pending || noveltyAmount === ''}
+                      onClick={() =>
+                        run(
+                          () => recordTransferNovelty(r.id, noveltyAmount),
+                          onCloseNovelty,
+                        )}
+                    >
+                      Guardar novedad
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={pending}
+                      onClick={() => onNoveltyStageChange('choice')}
+                    >
+                      Volver
+                    </Button>
+                  </div>
+                </>
+              )}
+        </div>
+      )}
+    </li>
+  );
+}
+
+// ── Cuadre-per-account card ──────────────────────────────────────────────────
+// The core of the redesign: instead of reviewing every pending transfer one by
+// one, the owner compares ONE number — "en tu banco deberías tener" — against
+// their banking app. Matches → one click confirms every pending transfer for
+// this account. Doesn't match → the disclosure below still lets them review
+// the pending rows for JUST this account, one by one.
+function AccountCuadreCard(props: {
+  account: AccountCuadre;
+  pending: boolean;
+  onConfirmAll: (accountId: string) => void;
+  reviewOpen: boolean;
+  onToggleReview: () => void;
+  children?: React.ReactNode;
+}) {
+  const { account } = props;
+  const allClear = account.pendingCount === 0;
+
+  return (
+    <Card className="flex flex-col gap-3 p-5">
+      <div className="
+        text-xs font-semibold tracking-wide text-muted-foreground uppercase
+      "
+      >
+        {account.accountName}
+      </div>
+
+      <div>
+        <div className="text-sm text-muted-foreground">
+          En tu banco deberías tener
+        </div>
+        <div className="font-display text-3xl font-semibold tabular-nums">
+          {money(account.expectedTotal)}
+        </div>
+      </div>
+
+      {allClear
+        ? (
+            <div className="flex items-center gap-1.5 text-sm text-success">
+              <CheckCircle2 className="size-4" />
+              Todo cuadra
+            </div>
+          )
+        : (
+            <>
+              <div className="text-xs text-muted-foreground">
+                {money(account.confirmedBalance)}
+                {' '}
+                confirmado +
+                {' '}
+                {money(account.pendingTotal)}
+                {' '}
+                sin confirmar (
+                {account.pendingCount}
+                )
+              </div>
+              <Button
+                size="sm"
+                disabled={props.pending}
+                onClick={() => props.onConfirmAll(account.accountId)}
+              >
+                <CheckCircle2 className="size-3.5" />
+                {`Coincide con mi banco → Confirmar las ${account.pendingCount}`}
+              </Button>
+              <button
+                type="button"
+                aria-expanded={props.reviewOpen}
+                onClick={props.onToggleReview}
+                className="
+                  inline-flex items-center gap-1 self-start text-xs
+                  font-semibold text-muted-foreground
+                  hover:text-foreground
+                "
+              >
+                ¿No coincide? Revisar una por una
+                {props.reviewOpen
+                  ? <ChevronUp className="size-3.5" />
+                  : <ChevronDown className="size-3.5" />}
+              </button>
+              {props.reviewOpen && (
+                <ul className="
+                  -mx-5 mt-1 -mb-5 divide-y divide-border border-t border-border
+                "
+                >
+                  {props.children}
+                </ul>
+              )}
+            </>
+          )}
+    </Card>
   );
 }
 
@@ -382,14 +606,14 @@ function RecoveryModal({ state, pending, onConfirm, onClose }: RecoveryModalProp
 
 // ── Filtering ────────────────────────────────────────────────────────────────
 
-type Chip = 'all' | 'pending' | 'confirmed' | 'loss';
+// Pending transfers no longer appear in this flat list — each one lives under
+// its account's "¿No coincide? Revisar una por una" disclosure (or the "Sin
+// cuenta asignada" bucket). This list is now the verified/closed history only.
+type Chip = 'all' | 'confirmed' | 'loss';
 
 function rowMatchesChip(row: TransferReconciliation, chip: Chip): boolean {
   if (chip === 'all') {
     return true;
-  }
-  if (chip === 'pending') {
-    return row.status === 'pending';
   }
   if (chip === 'loss') {
     return row.status === 'resolved' && row.resolutionType === 'loss';
@@ -419,7 +643,14 @@ export function TransferReconciliationPanel(props: {
   investigating: TransferReconciliation[]; // not_arrived
   history: TransferReconciliation[]; // confirmed + mismatch + resolved
   pendingCount: number;
-  counts: { pending: number; confirmedToday: number; notArrived: number };
+  // Only `notArrived` survives the StatCard removal — it drives the demoted
+  // "No llegó" alert. The pending/confirmedToday counters are no longer shown.
+  counts: { notArrived: number };
+  /**
+   * Per-banco-account cuadre: confirmed balance + pending unconfirmed, and the
+   * unresolved (no single account) bucket. Drives the redesigned top section.
+   */
+  cuadre: TransferCuadreOverview;
   /** Whether the current user is org:admin. Controls admin-only action buttons. */
   isAdmin: boolean;
 }) {
@@ -453,6 +684,15 @@ export function TransferReconciliationPanel(props: {
   const [chip, setChip] = useState<Chip>('all');
   const [sortDesc, setSortDesc] = useState(true);
 
+  // Cuadre-per-account: which account's "revisar una por una" disclosure is
+  // open (one at a time — mirrors the single-active-row pattern below).
+  const [reviewOpenAccountId, setReviewOpenAccountId] = useState<string | null>(null);
+
+  // Scroll target for the demoted "No llegó" alert's "Resolver" action — jumps
+  // to the full "En investigación" block already rendered above instead of
+  // duplicating its content.
+  const investigacionRef = useRef<HTMLDivElement>(null);
+
   function run(fn: () => Promise<ActionResult<unknown>>, onSuccess?: () => void) {
     setError(null);
     startTransition(async () => {
@@ -469,6 +709,59 @@ export function TransferReconciliationPanel(props: {
       }
     });
   }
+
+  // Opens the novelty editor for a row (or closes it if already open),
+  // resetting its stage/amount — shared by the bottom list and every
+  // PendingRowCompact usage (cuadre disclosure + "sin cuenta asignada").
+  function startNovelty(id: string) {
+    setNoveltyId(noveltyId === id ? null : id);
+    setNoveltyStage('choice');
+    setNoveltyAmount('');
+  }
+
+  function closeNovelty() {
+    setNoveltyId(null);
+    setNoveltyStage('choice');
+    setNoveltyAmount('');
+  }
+
+  // Pending rows grouped by lowercased method — lets the cuadre cards and the
+  // "sin cuenta asignada" group filter down to just the rows for their
+  // account's methods, without a second server round-trip.
+  const pendingRowsByMethod = useMemo(() => {
+    const map = new Map<string, TransferReconciliation[]>();
+    for (const r of props.reconciliations) {
+      const key = r.method.toLowerCase();
+      const list = map.get(key);
+      if (list) {
+        list.push(r);
+      } else {
+        map.set(key, [r]);
+      }
+    }
+    return map;
+  }, [props.reconciliations]);
+
+  // De-dupes by lowercased key first — two differently-cased method strings
+  // that resolve to the same account (e.g. "Nequi" and "NEQUI") must not cause
+  // the same underlying rows to be pushed twice.
+  function rowsForMethods(methods: string[]): TransferReconciliation[] {
+    const keys = new Set(methods.map(m => m.toLowerCase()));
+    const rows: TransferReconciliation[] = [];
+    for (const key of keys) {
+      const list = pendingRowsByMethod.get(key);
+      if (list) {
+        rows.push(...list);
+      }
+    }
+    return rows;
+  }
+
+  const unresolvedRows = useMemo(
+    () => rowsForMethods(props.cuadre.unresolved.methods.map(m => m.method)),
+    // eslint-disable-next-line react/exhaustive-deps -- rowsForMethods reads pendingRowsByMethod, already a dep
+    [pendingRowsByMethod, props.cuadre.unresolved.methods],
+  );
 
   function handleCreditoConfirm(
     rowId: string,
@@ -506,9 +799,11 @@ export function TransferReconciliationPanel(props: {
     [props.history],
   );
 
+  // The flat list is history only — pending rows are reviewed per account
+  // above (cuadre disclosures + "Sin cuenta asignada"), never duplicated here.
   const allRows = useMemo(
-    () => [...props.reconciliations, ...editableHistory, ...resolvedLossRows],
-    [props.reconciliations, editableHistory, resolvedLossRows],
+    () => [...editableHistory, ...resolvedLossRows],
+    [editableHistory, resolvedLossRows],
   );
 
   const shown = useMemo(() => {
@@ -527,10 +822,6 @@ export function TransferReconciliationPanel(props: {
     {
       k: 'confirmed',
       label: `Confirmadas · ${editableHistory.length}`,
-    },
-    {
-      k: 'pending',
-      label: `Por verificar · ${props.reconciliations.length}`,
     },
     ...(props.isAdmin
       ? [{ k: 'loss' as const, label: `Pérdidas · ${resolvedLossRows.length}` }]
@@ -561,7 +852,7 @@ export function TransferReconciliationPanel(props: {
           didn't arrive, so it sits right under "¿Cuánta plata entró hoy?" and
           above the full reconciliation list. */}
       {props.investigating.length > 0 && (
-        <div className="space-y-3">
+        <div ref={investigacionRef} className="space-y-3">
           <div>
             <h3 className="font-display text-lg font-semibold">
               En investigación
@@ -718,30 +1009,133 @@ export function TransferReconciliationPanel(props: {
         )}
       </div>
 
-      <div className="
-        grid grid-cols-1 gap-3
-        sm:grid-cols-3
-      "
-      >
-        <StatCard
-          count={props.counts.confirmedToday}
-          label="Cuadran"
-          sub="ya verificadas hoy"
-          tone="success"
-        />
-        <StatCard
-          count={props.counts.pending}
-          label="Por verificar"
-          sub="el cajero las revisa"
-          tone="warn"
-        />
-        <StatCard
-          count={props.counts.notArrived}
-          label="No llegó"
-          sub="hay que averiguar"
-          tone="destructive"
-        />
-      </div>
+      {/* Cuadre per account — the new hero metric: "en tu banco deberías
+          tener" = confirmado + pendiente sin confirmar. Matches the bank app
+          → one click confirms everything for that account. Doesn't match →
+          the disclosure below still allows a per-row review, scoped to just
+          that account. */}
+      {props.cuadre.accounts.length === 0
+        ? (
+            <div className="
+              rounded-lg border border-dashed border-border p-4 text-sm
+              text-muted-foreground
+            "
+            >
+              Todavía no tenés una cuenta bancaria configurada para
+              transferencias. Configurala en Tesorería para ver acá cuánto
+              deberías tener en cada banco.
+            </div>
+          )
+        : (
+            <div className="
+              grid grid-cols-1 gap-3
+              sm:grid-cols-2
+              lg:grid-cols-3
+            "
+            >
+              {props.cuadre.accounts.map((account) => {
+                const accountRows = rowsForMethods(account.methods);
+                return (
+                  <AccountCuadreCard
+                    key={account.accountId}
+                    account={account}
+                    pending={pending}
+                    onConfirmAll={accountId =>
+                      run(() => confirmAllPendingTransfers({ accountId }))}
+                    reviewOpen={reviewOpenAccountId === account.accountId}
+                    onToggleReview={() =>
+                      setReviewOpenAccountId(
+                        reviewOpenAccountId === account.accountId
+                          ? null
+                          : account.accountId,
+                      )}
+                  >
+                    {accountRows.map(r => (
+                      <PendingRowCompact
+                        key={r.id}
+                        row={r}
+                        pending={pending}
+                        run={run}
+                        noveltyId={noveltyId}
+                        noveltyStage={noveltyStage}
+                        noveltyAmount={noveltyAmount}
+                        onStartNovelty={startNovelty}
+                        onNoveltyStageChange={setNoveltyStage}
+                        onNoveltyAmountChange={setNoveltyAmount}
+                        onCloseNovelty={closeNovelty}
+                      />
+                    ))}
+                  </AccountCuadreCard>
+                );
+              })}
+            </div>
+          )}
+
+      {/* Sin cuenta asignada — the method didn't resolve to exactly one bank
+          account (none, or more than one), so it can't be attributed to a
+          cuadre card above. The money stays visible here instead of vanishing. */}
+      {unresolvedRows.length > 0 && (
+        <Card className="overflow-hidden p-0">
+          <div className="border-b border-border p-4">
+            <div className="text-sm font-semibold">Sin cuenta asignada</div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Estas transferencias no están linkeadas a una única cuenta
+              bancaria (el método de pago no apunta a ningún banco, o apunta a
+              más de uno). La plata sigue acá — revisala una por una.
+            </p>
+          </div>
+          <ul className="divide-y divide-border">
+            {unresolvedRows.map(r => (
+              <PendingRowCompact
+                key={r.id}
+                row={r}
+                pending={pending}
+                run={run}
+                noveltyId={noveltyId}
+                noveltyStage={noveltyStage}
+                noveltyAmount={noveltyAmount}
+                onStartNovelty={startNovelty}
+                onNoveltyStageChange={setNoveltyStage}
+                onNoveltyAmountChange={setNoveltyAmount}
+                onCloseNovelty={closeNovelty}
+              />
+            ))}
+          </ul>
+        </Card>
+      )}
+
+      {/* "No llegó" — demoted from a peer KPI tile to a status alert: it's not
+          just a count, it's money that needs an owner decision. "Resolver"
+          jumps to the full investigation list already rendered above (never
+          duplicated here). */}
+      {props.counts.notArrived > 0 && (
+        <div className="
+          flex flex-wrap items-center gap-3 rounded-lg border
+          border-destructive/30 bg-destructive/5 px-4 py-3 text-sm
+          text-destructive
+        "
+        >
+          <AlertTriangle className="size-4 shrink-0" />
+          <span className="flex-1">
+            {props.counts.notArrived === 1
+              ? '1 transferencia no llegó'
+              : `${props.counts.notArrived} transferencias no llegaron`}
+            {' '}
+            — hay que averiguar qué pasó.
+          </span>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() =>
+              investigacionRef.current?.scrollIntoView({
+                behavior: 'smooth',
+                block: 'start',
+              })}
+          >
+            Resolver
+          </Button>
+        </div>
+      )}
 
       {error && (
         <div className="
@@ -846,7 +1240,6 @@ export function TransferReconciliationPanel(props: {
               "
               >
                 {shown.map((r) => {
-                  const isPending = r.status === 'pending';
                   const isConfirmed
                     = r.status === 'confirmed' || r.status === 'mismatch';
                   const isLoss
@@ -894,29 +1287,6 @@ export function TransferReconciliationPanel(props: {
                                 </span>
                               )
                             : <StateBadge status={r.status} />}
-                          {isPending && (
-                            <>
-                              <Button
-                                size="sm"
-                                disabled={pending}
-                                onClick={() => run(() => confirmTransfer(r.id))}
-                              >
-                                Confirmar
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                disabled={pending}
-                                onClick={() => {
-                                  setNoveltyId(noveltyId === r.id ? null : r.id);
-                                  setNoveltyStage('choice');
-                                  setNoveltyAmount('');
-                                }}
-                              >
-                                Novedad
-                              </Button>
-                            </>
-                          )}
                           {isConfirmed && (
                             <Button
                               size="sm"
@@ -945,110 +1315,6 @@ export function TransferReconciliationPanel(props: {
                           )}
                         </div>
                       </div>
-
-                      {isPending && noveltyId === r.id && (
-                        <div className="
-                          mt-3 space-y-2 rounded-lg border border-border
-                          bg-background p-3
-                        "
-                        >
-                          {noveltyStage === 'choice'
-                            ? (
-                                <>
-                                  <div className="text-xs text-muted-foreground">
-                                    ¿Qué pasó con esta transferencia? Elegí si
-                                    llegó incompleta o si no llegó nada.
-                                  </div>
-                                  <div className="
-                                    flex flex-wrap items-center gap-2
-                                  "
-                                  >
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      disabled={pending}
-                                      onClick={() => {
-                                        setNoveltyStage('partial');
-                                        setNoveltyAmount('');
-                                      }}
-                                    >
-                                      Llegó incompleta
-                                    </Button>
-                                    <Button
-                                      size="sm"
-                                      variant="destructive"
-                                      disabled={pending}
-                                      onClick={() =>
-                                        run(
-                                          () => recordTransferNovelty(r.id, 0),
-                                          () => {
-                                            setNoveltyId(null);
-                                            setNoveltyStage('choice');
-                                          },
-                                        )}
-                                    >
-                                      No llegó
-                                    </Button>
-                                    <Button
-                                      size="sm"
-                                      variant="ghost"
-                                      disabled={pending}
-                                      onClick={() => setNoveltyId(null)}
-                                    >
-                                      Cancelar
-                                    </Button>
-                                  </div>
-                                </>
-                              )
-                            : (
-                                <>
-                                  <div className="text-xs text-muted-foreground">
-                                    Ingresá el monto que sí llegó. El faltante va
-                                    a investigación o pérdida según Ajustes de
-                                    transferencias.
-                                  </div>
-                                  <div className="
-                                    flex flex-wrap items-center gap-2
-                                  "
-                                  >
-                                    <input
-                                      aria-label="Monto que llegó realmente"
-                                      className={cn(cashInputCls, 'max-w-40')}
-                                      type="number"
-                                      inputMode="decimal"
-                                      min="0"
-                                      placeholder="Monto que llegó"
-                                      value={noveltyAmount}
-                                      onChange={e => setNoveltyAmount(e.target.value)}
-                                    />
-                                    <Button
-                                      size="sm"
-                                      disabled={pending || noveltyAmount === ''}
-                                      onClick={() =>
-                                        run(
-                                          () => recordTransferNovelty(r.id, noveltyAmount),
-                                          () => {
-                                            setNoveltyId(null);
-                                            setNoveltyStage('choice');
-                                            setNoveltyAmount('');
-                                          },
-                                        )}
-                                    >
-                                      Guardar novedad
-                                    </Button>
-                                    <Button
-                                      size="sm"
-                                      variant="ghost"
-                                      disabled={pending}
-                                      onClick={() => setNoveltyStage('choice')}
-                                    >
-                                      Volver
-                                    </Button>
-                                  </div>
-                                </>
-                              )}
-                        </div>
-                      )}
 
                       {isConfirmed && editId === r.id && (
                         <div className="

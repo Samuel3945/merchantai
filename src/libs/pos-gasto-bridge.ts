@@ -29,7 +29,7 @@ export type PosGastoBridgeInput = {
   /**
    * Optional supplier link (Pago a proveedor sent as type='expense'). Persisted
    * on the cash_movements row so the payment stays linked to the supplier and
-   * appears in getTodayCashKpis.pagosProveedores. Validated by the route.
+   * appears in the gasto-KPI queries (pagosProveedores). Validated by the route.
    */
   supplierId?: string | null;
 };

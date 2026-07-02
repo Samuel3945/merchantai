@@ -5,6 +5,7 @@ import type {
   ReconciliationStatus,
   ResolutionType,
   TransferReconciliation,
+  UnresolvedPendingBucket,
 } from '@/libs/transfer-reconciliation';
 import { auth, currentUser } from '@clerk/nextjs/server';
 import { and, eq, isNull } from 'drizzle-orm';
@@ -23,6 +24,8 @@ import {
   createRecoveryReconciliation,
   DEFAULT_RESOLUTION_SETTING_KEY,
   getDefaultResolution,
+  getPendingReconciliationIdsForAccount,
+  getPendingReconciliationsByAccount,
   getReconciliationById,
   getReconciliationSale,
   listReconciliations,
@@ -34,6 +37,8 @@ import {
 import {
   adjustConfirmedTransferDeposit,
   depositConfirmedTransfer,
+  ensurePaymentMethodAccounts,
+  getTreasuryPosition,
 } from '@/libs/treasury';
 import {
   transferReconciliationsSchema,
@@ -112,6 +117,78 @@ export async function getTransferStatusCounts(): Promise<
     confirmedSince,
   });
   return { ok: true, data: counts };
+}
+
+// ── Cuadre-per-account overview ──────────────────────────────────────────────
+// The redesigned reconciliation UX: instead of reviewing every pending
+// transfer one by one, the owner compares ONE number per bank account against
+// their banking app — "en tu banco deberías tener" = the confirmed treasury
+// balance (already landed + booked) plus whatever is still pending
+// confirmation for that same account. If it matches, one click confirms every
+// pending transfer for that account; if it doesn't, the per-row review is
+// still there, now scoped to just that account (see confirmAllPendingTransfers'
+// accountId filter below).
+export type AccountCuadre = {
+  accountId: string;
+  accountName: string;
+  confirmedBalance: number;
+  pendingTotal: number;
+  pendingCount: number;
+  expectedTotal: number;
+  // Raw method labels resolved to this account — drives the per-account
+  // "revisar una por una" filter client-side.
+  methods: string[];
+};
+
+export type TransferCuadreOverview = {
+  accounts: AccountCuadre[];
+  unresolved: UnresolvedPendingBucket;
+};
+
+export async function getTransferCuadreByAccount(): Promise<
+  ActionResult<TransferCuadreOverview>
+> {
+  const { userId, orgId } = await requirePanelModule(MODULE);
+
+  // Lazy, idempotent backfill (same pattern as listTreasuryAccounts): a
+  // transfer payment method configured today should surface its banco account
+  // here immediately, without requiring a visit to Tesorería first.
+  const actor = await getActorName(userId);
+  await ensurePaymentMethodAccounts(db, orgId, actor).catch(() => {});
+
+  const [position, pendingByAccount] = await Promise.all([
+    getTreasuryPosition(db, orgId),
+    getPendingReconciliationsByAccount(db, orgId),
+  ]);
+
+  const pendingMap = new Map(
+    pendingByAccount.byAccount.map(p => [p.accountId, p]),
+  );
+
+  const accounts: AccountCuadre[] = position
+    .filter(
+      (a): a is typeof a & { accountId: string } =>
+        a.type === 'banco' && typeof a.accountId === 'string',
+    )
+    .map((a) => {
+      const pending = pendingMap.get(a.accountId);
+      const pendingTotal = pending?.total ?? 0;
+      const pendingCount = pending?.count ?? 0;
+      return {
+        accountId: a.accountId,
+        accountName: a.name,
+        confirmedBalance: a.balance,
+        pendingTotal,
+        pendingCount,
+        expectedTotal: Number.parseFloat((a.balance + pendingTotal).toFixed(2)),
+        methods: pending?.methods ?? [],
+      };
+    });
+
+  return {
+    ok: true,
+    data: { accounts, unresolved: pendingByAccount.unresolved },
+  };
 }
 
 export async function confirmTransfer(
@@ -462,17 +539,49 @@ export async function correctConfirmedTransfer(
 }
 
 export async function confirmAllPendingTransfers(
-  period?: { ids?: string[]; from?: Date; to?: Date },
+  period?: { ids?: string[]; from?: Date; to?: Date; accountId?: string },
 ): Promise<ActionResult<{ confirmed: number }>> {
   const { userId, orgId } = await requirePanelModule(MODULE);
   const actor = await getActorName(userId);
+
+  // Money-safety: accountId and an explicit ids array are MUTUALLY EXCLUSIVE.
+  // Accepting both would let a raw ids array silently bypass account scoping
+  // and confirm rows that don't belong to this account (a footgun in money
+  // code). Reject the ambiguous combination instead of guessing.
+  if (period?.accountId && period?.ids) {
+    return {
+      ok: false,
+      error: 'No se puede combinar accountId con una lista de ids explícita',
+    };
+  }
+
+  // Per-account scoping (cuadre-per-account redesign): when accountId is set it
+  // is AUTHORITATIVE — the ids ALWAYS come from resolving that banco account, so
+  // "Confirmar las N" for NEQUI can never touch a DAVIPLATA (or unresolved)
+  // pending row. No accountId and no ids means the ORIGINAL org-wide behavior is
+  // unchanged: no filter at all confirms every pending transfer.
+  let ids = period?.ids;
+  if (period?.accountId) {
+    ids = await getPendingReconciliationIdsForAccount(db, {
+      organizationId: orgId,
+      accountId: period.accountId,
+    });
+    // Nothing resolves to this account — confirm nothing. Never fall through
+    // to an org-wide confirm-all just because the id list came back empty.
+    if (ids.length === 0) {
+      return { ok: true, data: { confirmed: 0 } };
+    }
+  }
+
   // Confirm the batch first, then bridge each deposit best-effort (same rule as
   // the single confirm: bookkeeping must never block or 500 the confirmation).
   const confirmedRows = await db.transaction(async tx =>
     bulkConfirmPending(tx, {
       organizationId: orgId,
       reconciledBy: actor,
-      ...period,
+      ids,
+      from: period?.from,
+      to: period?.to,
     }),
   );
   let depositError: string | null = null;

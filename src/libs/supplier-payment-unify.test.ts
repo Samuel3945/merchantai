@@ -900,7 +900,8 @@ describe('ARQUEO-UNCHANGED equivalence — caja settle vs legacy gasto', () => {
 });
 
 // ── Test 8: OQ-2 KPI guard ────────────────────────────────────────────────────
-// After migration 0071: getTodayCashKpis uses the OR-form filter:
+// After migration 0071: the gasto-KPI queries (dashboard/analytics/reports) use
+// the OR-form filter:
 //   gastos_hoy:       type='expense' AND expense_id IS NOT NULL
 //   gastos_operativos: (type='expense' AND expense_id IS NOT NULL) OR type IN ('salary','inventory_purchase')
 // salary and inventory_purchase rows have expense_id=NULL by design (they are

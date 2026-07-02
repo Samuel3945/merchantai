@@ -5,6 +5,7 @@ import {
   BLOCK_CLOSE_SETTING_KEY,
   DEFAULT_RESOLUTION_SETTING_KEY,
 } from '@/libs/transfer-reconciliation-keys';
+import { resolveBancoForMethod } from '@/libs/treasury';
 import {
   appSettingsSchema,
   salePaymentsSchema,
@@ -215,6 +216,141 @@ export async function countReconciliationsByStatus(
     confirmedToday: Number(row?.confirmedToday ?? 0),
     notArrived: Number(row?.notArrived ?? 0),
   };
+}
+
+// ── Pending-by-account grouping (cuadre-per-account redesign) ────────────────
+// Sums PENDING transfer_reconciliations by the SAME banco account that
+// depositConfirmedTransfer would credit on confirm. Reuses resolveBancoForMethod's
+// EXACT join (payment_methods by lower(name), type='transfer', joined to its
+// linked banco treasury_account) so the "what should be in each bank" preview
+// never disagrees with where the money actually lands on confirm.
+//
+// A method that resolves to ZERO or MORE THAN ONE banco account is never
+// silently dropped — its pending rows land in `unresolved` instead (broken
+// down per method) so the owner still sees that money, even without a single
+// account to attribute it to.
+export type PendingByAccount = {
+  accountId: string;
+  total: number;
+  count: number;
+  // Raw method labels aggregated into this account — lets the caller filter
+  // the underlying pending rows for a per-account "revisar una por una" view.
+  methods: string[];
+};
+
+export type UnresolvedMethodBreakdown = {
+  method: string;
+  total: number;
+  count: number;
+};
+
+export type UnresolvedPendingBucket = {
+  total: number;
+  count: number;
+  methods: UnresolvedMethodBreakdown[];
+};
+
+export type PendingReconciliationsByAccount = {
+  byAccount: PendingByAccount[];
+  unresolved: UnresolvedPendingBucket;
+};
+
+export async function getPendingReconciliationsByAccount(
+  executor: Executor,
+  organizationId: string,
+): Promise<PendingReconciliationsByAccount> {
+  const methodTotals = await executor
+    .select({
+      method: transferReconciliationsSchema.method,
+      total: sql<string>`COALESCE(SUM(${transferReconciliationsSchema.expectedAmount}), 0)::text`,
+      count: sql<number>`COUNT(*)::int`,
+    })
+    .from(transferReconciliationsSchema)
+    .where(
+      and(
+        eq(transferReconciliationsSchema.organizationId, organizationId),
+        eq(transferReconciliationsSchema.status, 'pending'),
+      ),
+    )
+    .groupBy(transferReconciliationsSchema.method);
+
+  const byAccountMap = new Map<string, PendingByAccount>();
+  const unresolvedMethods: UnresolvedMethodBreakdown[] = [];
+
+  for (const row of methodTotals) {
+    const total = Number.parseFloat(row.total) || 0;
+    const count = Number(row.count) || 0;
+    // Bounded by the org's distinct pending methods (typically a handful) —
+    // one resolution per method, mirroring the exact join the real bank
+    // deposit relies on (Slice E, treasury.ts).
+    const accountId = await resolveBancoForMethod(executor, {
+      organizationId,
+      method: row.method,
+    });
+    if (accountId) {
+      const existing = byAccountMap.get(accountId);
+      byAccountMap.set(accountId, {
+        accountId,
+        total: Number.parseFloat(((existing?.total ?? 0) + total).toFixed(2)),
+        count: (existing?.count ?? 0) + count,
+        methods: [...(existing?.methods ?? []), row.method],
+      });
+    } else {
+      unresolvedMethods.push({ method: row.method, total, count });
+    }
+  }
+
+  const unresolvedTotal = unresolvedMethods.reduce((s, m) => s + m.total, 0);
+  const unresolvedCount = unresolvedMethods.reduce((s, m) => s + m.count, 0);
+
+  return {
+    byAccount: Array.from(byAccountMap.values()),
+    unresolved: {
+      total: Number.parseFloat(unresolvedTotal.toFixed(2)),
+      count: unresolvedCount,
+      methods: unresolvedMethods,
+    },
+  };
+}
+
+// Resolves the PENDING reconciliation ids whose method maps to exactly the
+// given banco account — powers the per-account "Confirmar las N" bulk
+// confirm. Same resolution rule as above: a method that is ambiguous for the
+// org as a whole (0 or 2+ banks) is never included, so a per-account confirm
+// can never touch money that isn't unambiguously this account's.
+export async function getPendingReconciliationIdsForAccount(
+  executor: Executor,
+  args: { organizationId: string; accountId: string },
+): Promise<string[]> {
+  const rows = await executor
+    .select({
+      id: transferReconciliationsSchema.id,
+      method: transferReconciliationsSchema.method,
+    })
+    .from(transferReconciliationsSchema)
+    .where(
+      and(
+        eq(transferReconciliationsSchema.organizationId, args.organizationId),
+        eq(transferReconciliationsSchema.status, 'pending'),
+      ),
+    );
+
+  const resolutionCache = new Map<string, string | null>();
+  const ids: string[] = [];
+  for (const row of rows) {
+    let resolved = resolutionCache.get(row.method);
+    if (resolved === undefined) {
+      resolved = await resolveBancoForMethod(executor, {
+        organizationId: args.organizationId,
+        method: row.method,
+      });
+      resolutionCache.set(row.method, resolved);
+    }
+    if (resolved === args.accountId) {
+      ids.push(row.id);
+    }
+  }
+  return ids;
 }
 
 type MutationBase = {

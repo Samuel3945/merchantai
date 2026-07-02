@@ -581,8 +581,9 @@ export async function getSupplierOutstanding(
 //
 // Does NOT write: expenses (no P&L), treasury_movements (no container debit).
 // Lock: SELECT ... FOR UPDATE on the payable row ONLY (oldest-first by caller).
-// OQ-2 fix: expense_id=NULL lets getTodayCashKpis narrow gastos_hoy to
-//           type='expense' AND expense_id IS NOT NULL without counting this row.
+// OQ-2 fix: expense_id=NULL lets the gasto-KPI queries (dashboard/analytics/
+//           reports) narrow gastos_hoy to type='expense' AND expense_id IS NOT
+//           NULL without counting this row.
 
 type CajaPayableSettleInput = {
   organizationId: string;

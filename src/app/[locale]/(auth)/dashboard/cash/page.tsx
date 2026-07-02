@@ -1,3 +1,4 @@
+import type { TransferCuadreOverview } from '@/actions/transfer-reconciliation';
 import type { TransferReconciliation } from '@/libs/transfer-reconciliation';
 import { auth } from '@clerk/nextjs/server';
 import { setRequestLocale } from 'next-intl/server';
@@ -9,6 +10,7 @@ import {
 import { listPaymentMethods } from '@/actions/payment-methods';
 import {
   getPendingTransfersOverview,
+  getTransferCuadreByAccount,
   getTransferStatusCounts,
   listTransferReconciliations,
 } from '@/actions/transfer-reconciliation';
@@ -45,6 +47,10 @@ export default async function DashboardCashPage(props: {
   let history: TransferReconciliation[] = [];
   let pendingTransfers = { count: 0, total: 0 };
   let transferCounts = { pending: 0, confirmedToday: 0, notArrived: 0 };
+  let cuadre: TransferCuadreOverview = {
+    accounts: [],
+    unresolved: { total: 0, count: 0, methods: [] },
+  };
   if (hasTransferMethods) {
     const [
       reconResult,
@@ -78,6 +84,16 @@ export default async function DashboardCashPage(props: {
       ? overviewResult.data
       : { count: 0, total: 0 };
     transferCounts = countsResult?.ok ? countsResult.data : transferCounts;
+
+    // Cuadre reads the CONFIRMED treasury balance ("en tu banco deberías
+    // tener"). The listTransferReconciliations calls above each run the
+    // idempotent depositConfirmedTransfer backfill (a just-failed deposit lands
+    // then). If cuadre ran in that same Promise.all it could read treasury
+    // BEFORE the backfill committed, understating the hero number for one load.
+    // Awaiting it AFTER the batch guarantees the backfill is done first; every
+    // other fetch above stays parallel.
+    const cuadreResult = await getTransferCuadreByAccount().catch(() => null);
+    cuadre = cuadreResult?.ok ? cuadreResult.data : cuadre;
   }
 
   return (
@@ -99,6 +115,7 @@ export default async function DashboardCashPage(props: {
             history={history}
             pendingCount={pendingTransfers.count}
             counts={transferCounts}
+            cuadre={cuadre}
             isAdmin={isAdmin}
           />
         )}

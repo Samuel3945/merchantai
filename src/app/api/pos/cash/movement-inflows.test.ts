@@ -633,7 +633,7 @@ describe('(j2) POS expense bridge — supplier link is preserved', () => {
 
     expect(cm).toHaveLength(1);
     // The supplier link must survive the bridge (else it vanishes from
-    // getTodayCashKpis.pagosProveedores).
+    // the gasto-KPI pagosProveedores aggregation).
     expect(cm[0]!.supplier_id).toBe(SUPPLIER_ID);
     // And the P&L anchor link must still be set.
     expect(cm[0]!.expense_id).not.toBeNull();
