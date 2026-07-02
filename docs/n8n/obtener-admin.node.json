@@ -1,0 +1,38 @@
+{
+  "name": "Obtener número admin",
+  "nodes": [
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://app.mymerchantai.com/api/agent/admin-phone",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Agent-Channel",
+              "value": "={{ $('Mensaje User').item.json.body.instance }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1728,
+        256
+      ],
+      "id": "b14c4a7e-0001-4000-8a00-000000000001",
+      "name": "Obtener número admin",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "WiiMY4bj9pAJPl2X",
+          "name": "MerchantAI Agente"
+        }
+      }
+    }
+  ],
+  "connections": {}
+}
