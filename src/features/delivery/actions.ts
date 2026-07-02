@@ -85,6 +85,64 @@ export async function listDeliveries(
     .limit(LIST_LIMIT);
 }
 
+// Statuses a courier's own order can be in while it's still "theirs" to work.
+// Never 'pending' — courierId is only ever stamped starting from the
+// 'assigned' claim (see transitionDelivery), so a pending+courierId row never
+// occurs; listed explicitly anyway so the query reads as "non-terminal", not
+// as an accident of the state machine.
+const MINE_STATUSES: DeliveryStatus[] = ['assigned', 'in_transit'];
+
+// Role-aware fetch for the non-admin courier layout: POOL (unclaimed pending
+// orders anyone can self-claim) + MINE (this courier's own active orders).
+// Defense in depth: `courierId` is NEVER trusted from the caller as an
+// authorization input — re-derived from the authenticated session via
+// getCurrentPanelUser and asserted to match, so one courier can never read
+// another courier's queue even if this were called with a forged id.
+export async function listDeliveriesForCourier(
+  orgId: string,
+  courierId: string,
+): Promise<{ pool: DeliveryOrder[]; mine: DeliveryOrder[] }> {
+  const auth = await requirePanelModule('delivery');
+  if (auth.orgId !== orgId) {
+    throw new Error('Organización no coincide.');
+  }
+  const self = await getCurrentPanelUser(auth.userId, auth.orgId);
+  if (!self || self.id !== courierId) {
+    throw new Error('No autorizado para ver estos pedidos.');
+  }
+
+  const [pool, mine] = await Promise.all([
+    db
+      .select()
+      .from(deliveryOrdersSchema)
+      .where(
+        and(
+          eq(deliveryOrdersSchema.organizationId, orgId),
+          eq(deliveryOrdersSchema.status, 'pending'),
+          isNull(deliveryOrdersSchema.courierId),
+        ),
+      )
+      // Oldest-waiting first — the natural triage order for a pool the courier
+      // works down (also matches the orphan-flag intent below).
+      .orderBy(asc(deliveryOrdersSchema.createdAt))
+      .limit(LIST_LIMIT),
+    db
+      .select()
+      .from(deliveryOrdersSchema)
+      .where(
+        and(
+          eq(deliveryOrdersSchema.organizationId, orgId),
+          eq(deliveryOrdersSchema.courierId, courierId),
+          inArray(deliveryOrdersSchema.status, MINE_STATUSES),
+        ),
+      )
+      .orderBy(desc(deliveryOrdersSchema.createdAt))
+      .limit(LIST_LIMIT),
+  ]);
+
+  return { pool, mine };
+}
+
 export async function getDeliveryKpis(): Promise<DeliveryKpis> {
   const { orgId } = await requirePanelModule('delivery');
 
