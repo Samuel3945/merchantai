@@ -8,7 +8,8 @@ import type {
 } from './actions';
 import type { CancelReasonKey } from './cancellation-reasons';
 import type { ActiveCourierShift, OpenCaja } from './shifts';
-import { Camera } from 'lucide-react';
+import { Bike, Camera, Settings } from 'lucide-react';
+import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
 import {
@@ -26,6 +27,7 @@ import {
   getDeliveryEvents,
   getDeliveryKpis,
   listDeliveries,
+  listDeliveriesForCourier,
   requestAddressClarification,
   transitionDelivery,
 } from './actions';
@@ -136,6 +138,36 @@ const FILTERS: { key: Scope; label: string }[] = [
   { key: 'all', label: 'Todos' },
 ];
 
+// Zeroed KPIs used only as the initial state for a courier viewer, who never
+// fetches money KPIs (no admin data is requested for them at all).
+const EMPTY_KPIS: DeliveryKpis = {
+  active: 0,
+  inTransit: 0,
+  deliveredToday: 0,
+  feesToday: '0',
+};
+
+// Display-only "orphan" flag: a pending order nobody has claimed yet, waiting
+// past a sensible default threshold. No new setting for this slice — just a
+// hardcoded minute count, purely cosmetic (never gates an action).
+const ORPHAN_THRESHOLD_MIN = 10;
+
+function orphanBadge(order: DeliveryOrder): string | null {
+  if (order.status !== 'pending' || order.courierId) {
+    return null;
+  }
+  const created
+    = typeof order.createdAt === 'string' ? new Date(order.createdAt) : order.createdAt;
+  if (!created) {
+    return null;
+  }
+  const minutes = Math.floor((Date.now() - created.getTime()) / 60000);
+  if (minutes < ORPHAN_THRESHOLD_MIN) {
+    return null;
+  }
+  return `🔴 hace ${minutes} min`;
+}
+
 function StatCard({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-xl border border-border bg-card p-4 shadow-xs">
@@ -150,9 +182,7 @@ function StatCard({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function DeliveryClient(props: {
-  initial: DeliveryOrder[];
-  kpis: DeliveryKpis;
+type DeliveryClientCommonProps = {
   initialShift: ActiveCourierShift | null;
   openCajas: OpenCaja[];
   // Org payment methods offered in the deliver dialog (P0-B).
@@ -162,25 +192,101 @@ export function DeliveryClient(props: {
   // The org's `delivery_require_photo` app_setting — gates the photo-evidence
   // block in the deliver dialog and disables its confirm button without one.
   requirePhoto: boolean;
-}) {
-  const [rows, setRows] = useState<DeliveryOrder[]>(props.initial);
-  const [kpis, setKpis] = useState<DeliveryKpis>(props.kpis);
+  // This org id + the viewer's own panel-user (pos_users) id. Needed to poll
+  // the courier board (listDeliveriesForCourier) and, for an admin in "Modo
+  // repartidor", to know which claimed orders are THEIRS. Null when the
+  // viewer has no linked employee row (e.g. an admin who never became one).
+  orgId: string;
+  viewerCourierId: string | null;
+};
+
+// Role-aware board (approved model): org:admin gets the CONTROL view (ALL
+// orders + KPIs, as before) with a "Modo repartidor" toggle into the courier
+// layout; a non-admin panel user holding the `delivery` grant only ever gets
+// the COURIER view (their own POOL + MIS PEDIDOS). page.tsx resolves which
+// role applies server-side — this component never re-derives it, only
+// branches rendering on `viewerRole`.
+type DeliveryClientProps = DeliveryClientCommonProps & (
+  | { viewerRole: 'admin'; initial: DeliveryOrder[]; kpis: DeliveryKpis }
+  | { viewerRole: 'courier'; pool: DeliveryOrder[]; mine: DeliveryOrder[] }
+);
+
+export function DeliveryClient(props: DeliveryClientProps) {
+  const isAdmin = props.viewerRole === 'admin';
+
+  // Admin control-view data (all-org orders + KPIs). Also the SOURCE for an
+  // admin's own "Modo repartidor" pool/mine (derived below via useMemo) — no
+  // separate query, since the admin already has every order in `rows`.
+  const [rows, setRows] = useState<DeliveryOrder[]>(
+    props.viewerRole === 'admin' ? props.initial : [],
+  );
+  const [kpis, setKpis] = useState<DeliveryKpis>(
+    props.viewerRole === 'admin' ? props.kpis : EMPTY_KPIS,
+  );
   const [scope, setScope] = useState<Scope>('active');
+
+  // A real (non-admin) courier's own pool + mine, fetched server-side and
+  // polled independently of the admin's `rows`.
+  const [pool, setPool] = useState<DeliveryOrder[]>(
+    props.viewerRole === 'courier' ? props.pool : [],
+  );
+  const [mine, setMine] = useState<DeliveryOrder[]>(
+    props.viewerRole === 'courier' ? props.mine : [],
+  );
+
+  // "Modo repartidor" (admin only): flips the admin into the courier layout so
+  // they can take/execute like a courier. Never a separate fetch — pool/mine
+  // are just a filter over the SAME all-org `rows` the admin already has.
+  const [repartidorMode, setRepartidorMode] = useState(false);
+
   const [error, setError] = useState<string | null>(null);
   const [shift, setShift] = useState<ActiveCourierShift | null>(props.initialShift);
   const [cajas, setCajas] = useState<OpenCaja[]>(props.openCajas);
   const [pending, startTransition] = useTransition();
-  const scopeRef = useRef<Scope>(scope);
-  scopeRef.current = scope;
 
-  const refetch = useCallback(async () => {
+  // Effective layout: an admin who hasn't flipped "Modo repartidor" sees the
+  // control view; everyone else (a real courier, or an admin who flipped it)
+  // sees the courier layout.
+  const showCourierLayout = !isAdmin || repartidorMode;
+
+  const adminPool = useMemo(
+    () => rows.filter(r => r.status === 'pending' && !r.courierId),
+    [rows],
+  );
+  const adminMine = useMemo(() => {
+    const myId = props.viewerCourierId;
+    if (!myId) {
+      return [];
+    }
+    return rows.filter(
+      r => r.courierId === myId && (r.status === 'assigned' || r.status === 'in_transit'),
+    );
+  }, [rows, props.viewerCourierId]);
+
+  const courierPool = isAdmin ? adminPool : pool;
+  const courierMine = isAdmin ? adminMine : mine;
+
+  const refetchAdmin = useCallback(async () => {
     const [data, freshKpis] = await Promise.all([
-      listDeliveries({ status: scopeRef.current }),
+      listDeliveries({ status: scope }),
       getDeliveryKpis(),
     ]);
     setRows(data);
     setKpis(freshKpis);
-  }, []);
+  }, [scope]);
+
+  const refetchCourier = useCallback(async () => {
+    const courierId = props.viewerCourierId;
+    if (!courierId) {
+      return;
+    }
+    const { pool: freshPool, mine: freshMine } = await listDeliveriesForCourier(
+      props.orgId,
+      courierId,
+    );
+    setPool(freshPool);
+    setMine(freshMine);
+  }, [props.orgId, props.viewerCourierId]);
 
   // Re-read the courier's shift + the open-caja choices after they start/end a
   // shift, so the board and the "Marcar entregado" gating update immediately.
@@ -193,9 +299,13 @@ export function DeliveryClient(props: {
     setCajas(freshCajas);
   }, []);
 
-  // Refetch on scope change + poll on an interval so cancellations drop off and
-  // new (agent-made) orders surface without a manual reload.
+  // Admin polling: refetch on scope change + on an interval, so cancellations
+  // drop off and new (agent-made) orders surface without a manual reload.
+  // Also feeds "Modo repartidor" (adminPool/adminMine derive from `rows`).
   useEffect(() => {
+    if (props.viewerRole !== 'admin') {
+      return;
+    }
     let cancelled = false;
     const run = () => {
       Promise.all([
@@ -216,7 +326,45 @@ export function DeliveryClient(props: {
       cancelled = true;
       clearInterval(id);
     };
-  }, [scope]);
+  }, [props.viewerRole, scope]);
+
+  // Courier polling: a real (non-admin) courier's own pool + mine.
+  useEffect(() => {
+    const courierId = props.viewerCourierId;
+    if (props.viewerRole !== 'courier' || !courierId) {
+      return;
+    }
+    let cancelled = false;
+    const run = () => {
+      listDeliveriesForCourier(props.orgId, courierId)
+        .then(({ pool: freshPool, mine: freshMine }) => {
+          if (!cancelled) {
+            setPool(freshPool);
+            setMine(freshMine);
+          }
+        })
+        .catch(() => {});
+    };
+    run();
+    const id = setInterval(run, POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [props.viewerRole, props.orgId, props.viewerCourierId]);
+
+  function toggleRepartidorMode() {
+    setRepartidorMode((v) => {
+      const next = !v;
+      // Force the underlying admin fetch to 'active' so pool/mine derive from
+      // the full pending+assigned+in_transit set, regardless of whichever
+      // status chip the admin had selected in the control view.
+      if (next) {
+        setScope('active');
+      }
+      return next;
+    });
+  }
 
   function act(
     order: DeliveryOrder,
@@ -227,7 +375,7 @@ export function DeliveryClient(props: {
     startTransition(async () => {
       try {
         await transitionDelivery(order.id, { status: to, ...extra });
-        await refetch();
+        await (isAdmin ? refetchAdmin() : refetchCourier());
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Error inesperado');
       }
@@ -236,18 +384,27 @@ export function DeliveryClient(props: {
 
   return (
     <div className="space-y-6">
-      <ShiftBar shift={shift} cajas={cajas} onChanged={refreshShift} />
+      {isAdmin && (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            variant={repartidorMode ? 'default' : 'outline'}
+            size="sm"
+            onClick={toggleRepartidorMode}
+          >
+            <Bike className="size-4" />
+            {repartidorMode ? 'Salir de modo repartidor' : 'Modo repartidor'}
+          </Button>
+          <Button asChild variant="outline" size="sm">
+            <Link href="/dashboard/settings">
+              <Settings className="size-4" />
+              Configuración
+            </Link>
+          </Button>
+        </div>
+      )}
 
-      <div className="
-        grid grid-cols-2 gap-3
-        lg:grid-cols-4
-      "
-      >
-        <StatCard label="Activos" value={String(kpis.active)} />
-        <StatCard label="En camino" value={String(kpis.inTransit)} />
-        <StatCard label="Entregados hoy" value={String(kpis.deliveredToday)} />
-        <StatCard label="Domicilios cobrados hoy" value={money(kpis.feesToday)} />
-      </div>
+      <ShiftBar shift={shift} cajas={cajas} onChanged={refreshShift} />
 
       {error && (
         <div className="
@@ -259,69 +416,201 @@ export function DeliveryClient(props: {
         </div>
       )}
 
-      <div className="flex flex-wrap items-center gap-2">
-        {FILTERS.map(f => (
-          <button
-            key={f.key}
-            type="button"
-            onClick={() => setScope(f.key)}
-            className={cn(
-              `
-                rounded-full border px-3 py-1 text-sm font-medium
-                transition-colors
-              `,
-              scope === f.key
-                ? 'border-brand bg-brand-soft text-brand'
-                : `
-                  border-border text-muted-foreground
-                  hover:text-foreground
-                `,
-            )}
-          >
-            {f.label}
-          </button>
-        ))}
-      </div>
-
-      {rows.length === 0
+      {showCourierLayout
         ? (
-            <div className="
-              flex flex-col items-center justify-center rounded-xl border
-              border-dashed border-border bg-card px-6 py-16 text-center
-            "
-            >
-              <div className="text-5xl">🛵</div>
-              <div className="mt-4 text-lg font-semibold">
-                No hay domicilios en esta vista
-              </div>
-              <p className="mt-1 max-w-sm text-sm text-muted-foreground">
-                Los pedidos que tome el asistente aparecerán aquí para el
-                domiciliario.
-              </p>
-            </div>
+            <CourierSections
+              pool={courierPool}
+              mine={courierMine}
+              pending={pending}
+              hasShift={shift !== null}
+              paymentMethods={props.paymentMethods}
+              einvoiceEnabled={props.einvoiceEnabled}
+              requirePhoto={props.requirePhoto}
+              onAct={act}
+            />
           )
         : (
-            <div className="
-              grid gap-3
-              lg:grid-cols-2
-            "
-            >
-              {rows.map(order => (
-                <DeliveryCard
-                  key={order.id}
-                  order={order}
-                  pending={pending}
-                  hasShift={shift !== null}
-                  paymentMethods={props.paymentMethods}
-                  einvoiceEnabled={props.einvoiceEnabled}
-                  requirePhoto={props.requirePhoto}
-                  onAct={act}
-                />
-              ))}
-            </div>
+            <>
+              <div className="
+                grid grid-cols-2 gap-3
+                lg:grid-cols-4
+              "
+              >
+                <StatCard label="Activos" value={String(kpis.active)} />
+                <StatCard label="En camino" value={String(kpis.inTransit)} />
+                <StatCard label="Entregados hoy" value={String(kpis.deliveredToday)} />
+                <StatCard label="Domicilios cobrados hoy" value={money(kpis.feesToday)} />
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {FILTERS.map(f => (
+                  <button
+                    key={f.key}
+                    type="button"
+                    onClick={() => setScope(f.key)}
+                    className={cn(
+                      `
+                        rounded-full border px-3 py-1 text-sm font-medium
+                        transition-colors
+                      `,
+                      scope === f.key
+                        ? 'border-brand bg-brand-soft text-brand'
+                        : `
+                          border-border text-muted-foreground
+                          hover:text-foreground
+                        `,
+                    )}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+
+              {rows.length === 0
+                ? (
+                    <div className="
+                      flex flex-col items-center justify-center rounded-xl
+                      border border-dashed border-border bg-card px-6 py-16
+                      text-center
+                    "
+                    >
+                      <div className="text-5xl">🛵</div>
+                      <div className="mt-4 text-lg font-semibold">
+                        No hay domicilios en esta vista
+                      </div>
+                      <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+                        Los pedidos que tome el asistente aparecerán aquí para el
+                        domiciliario.
+                      </p>
+                    </div>
+                  )
+                : (
+                    <div className="
+                      grid gap-3
+                      lg:grid-cols-2
+                    "
+                    >
+                      {rows.map(order => (
+                        <DeliveryCard
+                          key={order.id}
+                          order={order}
+                          pending={pending}
+                          hasShift={shift !== null}
+                          paymentMethods={props.paymentMethods}
+                          einvoiceEnabled={props.einvoiceEnabled}
+                          requirePhoto={props.requirePhoto}
+                          onAct={act}
+                        />
+                      ))}
+                    </div>
+                  )}
+            </>
           )}
 
       <Toaster />
+    </div>
+  );
+}
+
+// The courier layout (a real courier viewer, or an admin in "Modo
+// repartidor"): a POOL of unclaimed pending orders anyone can self-claim, and
+// MIS PEDIDOS — this viewer's own claimed, non-terminal orders. No money
+// KPIs, no status chips, no other couriers' orders. Reuses the same
+// DeliveryCard/dialogs as the admin view — pool cards just get a restricted
+// action set (variant="pool": only "Tomar", no WhatsApp/historial/cancelar).
+function CourierSections({
+  pool,
+  mine,
+  pending,
+  hasShift,
+  paymentMethods,
+  einvoiceEnabled,
+  requirePhoto,
+  onAct,
+}: {
+  pool: DeliveryOrder[];
+  mine: DeliveryOrder[];
+  pending: boolean;
+  hasShift: boolean;
+  paymentMethods: DeliverPaymentMethod[];
+  einvoiceEnabled: boolean;
+  requirePhoto: boolean;
+  onAct: (
+    order: DeliveryOrder,
+    to: DeliveryStatus,
+    extra?: TransitionExtra,
+  ) => void;
+}) {
+  return (
+    <div className="space-y-6">
+      <section className="space-y-3">
+        <h2 className="text-sm font-semibold text-muted-foreground">
+          {`📥 Sin tomar (${pool.length})`}
+        </h2>
+        {pool.length === 0
+          ? <EmptySection text="No hay pedidos esperando." />
+          : (
+              <div className="
+                grid gap-3
+                lg:grid-cols-2
+              "
+              >
+                {pool.map(order => (
+                  <DeliveryCard
+                    key={order.id}
+                    order={order}
+                    pending={pending}
+                    hasShift={hasShift}
+                    variant="pool"
+                    paymentMethods={paymentMethods}
+                    einvoiceEnabled={einvoiceEnabled}
+                    requirePhoto={requirePhoto}
+                    onAct={onAct}
+                  />
+                ))}
+              </div>
+            )}
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="text-sm font-semibold text-muted-foreground">
+          {`🛵 Mis pedidos (${mine.length})`}
+        </h2>
+        {mine.length === 0
+          ? <EmptySection text="Todavía no tomaste ningún pedido." />
+          : (
+              <div className="
+                grid gap-3
+                lg:grid-cols-2
+              "
+              >
+                {mine.map(order => (
+                  <DeliveryCard
+                    key={order.id}
+                    order={order}
+                    pending={pending}
+                    hasShift={hasShift}
+                    paymentMethods={paymentMethods}
+                    einvoiceEnabled={einvoiceEnabled}
+                    requirePhoto={requirePhoto}
+                    onAct={onAct}
+                  />
+                ))}
+              </div>
+            )}
+      </section>
+    </div>
+  );
+}
+
+function EmptySection({ text }: { text: string }) {
+  return (
+    <div className="
+      rounded-xl border border-dashed border-border bg-card px-6 py-10
+      text-center text-sm text-muted-foreground
+    "
+    >
+      {text}
     </div>
   );
 }
@@ -464,6 +753,11 @@ function DeliveryCard({
   order,
   pending,
   hasShift,
+  // 'full' (default): every control — WhatsApp, aclaración, historial,
+  // cancelar, next-action. 'pool': a POOL card (unclaimed pending order) —
+  // ONLY the next-action button ("Tomar"), nothing else. Reuses this same
+  // card shell rather than a separate component.
+  variant = 'full',
   paymentMethods,
   einvoiceEnabled,
   requirePhoto,
@@ -472,6 +766,7 @@ function DeliveryCard({
   order: DeliveryOrder;
   pending: boolean;
   hasShift: boolean;
+  variant?: 'full' | 'pool';
   paymentMethods: DeliverPaymentMethod[];
   einvoiceEnabled: boolean;
   requirePhoto: boolean;
@@ -488,8 +783,10 @@ function DeliveryCard({
   const meta = STATUS_META[order.status];
   const next = NEXT_ACTION[order.status];
   const items = Array.isArray(order.items) ? (order.items as DeliveryItem[]) : [];
-  const canCancel = order.status !== 'delivered' && order.status !== 'cancelled';
+  const isPool = variant === 'pool';
+  const canCancel = !isPool && order.status !== 'delivered' && order.status !== 'cancelled';
   const phoneDigits = order.customerPhone?.replace(/\D/g, '') ?? '';
+  const orphan = orphanBadge(order);
 
   // Courier tool: ask the customer for details to arrive, over the org's own
   // WhatsApp. Optimistic disable while sending; the toast reports the outcome.
@@ -532,6 +829,11 @@ function DeliveryCard({
           >
             {meta.label}
           </span>
+          {orphan && (
+            <span className="ml-2 text-xs font-medium text-destructive">
+              {orphan}
+            </span>
+          )}
           <p className="mt-2 font-medium">{order.customerName ?? 'Sin nombre'}</p>
           <p className="text-sm text-muted-foreground">{order.address}</p>
           {order.addressNotes && (
@@ -579,7 +881,7 @@ function DeliveryCard({
       )}
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
-        {phoneDigits && (
+        {!isPool && phoneDigits && (
           <a
             href={`https://wa.me/${phoneDigits}`}
             target="_blank"
@@ -593,7 +895,7 @@ function DeliveryCard({
             WhatsApp
           </a>
         )}
-        {canCancel && phoneDigits && (
+        {!isPool && canCancel && phoneDigits && (
           <button
             type="button"
             onClick={askClarification}
@@ -608,17 +910,19 @@ function DeliveryCard({
             {clarifying ? 'Enviando…' : 'Pedir aclaración de dirección'}
           </button>
         )}
-        <button
-          type="button"
-          onClick={() => setShowHistory(s => !s)}
-          className="
-            inline-flex h-8 items-center rounded-md px-2 text-sm font-medium
-            text-muted-foreground
-            hover:text-foreground
-          "
-        >
-          {showHistory ? 'Ocultar historial' : 'Historial'}
-        </button>
+        {!isPool && (
+          <button
+            type="button"
+            onClick={() => setShowHistory(s => !s)}
+            className="
+              inline-flex h-8 items-center rounded-md px-2 text-sm font-medium
+              text-muted-foreground
+              hover:text-foreground
+            "
+          >
+            {showHistory ? 'Ocultar historial' : 'Historial'}
+          </button>
+        )}
         <div className="ml-auto flex items-center gap-2">
           {canCancel && (
             <Button
