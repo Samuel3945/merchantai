@@ -1,4 +1,3 @@
-import type { AgentKind } from '@/actions/plans';
 import type { PosDeviceQuota } from '@/actions/pos-tokens';
 import type { SaturationReport } from '@/actions/sales';
 import { Banknote, Sparkles } from 'lucide-react';
@@ -8,13 +7,6 @@ import { currentPlan } from '@/actions/plans';
 import { getPosDeviceQuota } from '@/actions/pos-tokens';
 import { getCashierSaturation } from '@/actions/sales';
 import { cn } from '@/utils/Helpers';
-
-// Mirrors the labels used on the Plans screen so the two views stay in sync.
-const AGENT_LABELS: Record<AgentKind, string> = {
-  sales_manager: 'Créditos inteligentes',
-  customer_service: 'Customer Service',
-  einvoice: 'Facturación electrónica',
-};
 
 const numberFmt = new Intl.NumberFormat('es-CO');
 
@@ -133,17 +125,16 @@ function saturationNotice(
 }
 
 /**
- * Account counter for the Resumen: which plan you're on, your AI credits per
- * agent, your cajas (POS devices) and empleados (cashier seats) usage, plus two
+ * Account counter for the Resumen: which plan you're on, your shared AI-credit
+ * pool, your cajas (POS devices) and empleados (cashier seats) usage, plus two
  * proactive alerts — low AI credits, and a caja that's working at its limit.
  *
- * Tiendademo had a single credit pool; MerchantAI tracks credits per AI agent
- * (separate, non-interchangeable limits), so we show one bar per agent that the
- * plan includes — never a misleading sum.
+ * Every AI/e-invoicing action draws from the same org-wide pool (see
+ * migration 0082_unify_credit_pool), so a single bar covers all of them.
  */
 export async function PlanPanel({ aiEnabled }: { aiEnabled: boolean }) {
   const [
-    { subscription, counters },
+    { subscription, pool },
     posSettled,
     cashierSettled,
     saturationSettled,
@@ -158,12 +149,9 @@ export async function PlanPanel({ aiEnabled }: { aiEnabled: boolean }) {
   const cashierQuota = cashierSettled;
   const saturation = saturationSettled;
 
-  // Only agents the current plan actually grants credits for.
-  const activeAgents = counters.filter(c => c.monthlyLimit + c.toppedUp > 0);
-  const lowAny = activeAgents.some((c) => {
-    const cap = c.monthlyLimit + c.toppedUp;
-    return cap > 0 && c.remaining / cap <= 0.2;
-  });
+  const poolCap = pool.monthlyLimit + pool.toppedUp;
+  const poolPct = poolCap > 0 ? Math.min(100, (pool.used / poolCap) * 100) : 0;
+  const lowCredits = poolCap > 0 && pool.remaining / poolCap <= 0.2;
 
   const notice = saturation
     ? saturationNotice(saturation, posQuota)
@@ -260,7 +248,7 @@ export async function PlanPanel({ aiEnabled }: { aiEnabled: boolean }) {
         </Link>
       )}
 
-      {aiEnabled && lowAny && (
+      {aiEnabled && lowCredits && (
         <div className="
           mb-4 flex items-center justify-between gap-3 rounded-md border
           border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700
@@ -279,7 +267,7 @@ export async function PlanPanel({ aiEnabled }: { aiEnabled: boolean }) {
         </div>
       )}
 
-      {aiEnabled && (activeAgents.length === 0
+      {aiEnabled && (poolCap === 0
         ? (
             <div className="
               flex flex-wrap items-center justify-between gap-3 rounded-md
@@ -302,66 +290,48 @@ export async function PlanPanel({ aiEnabled }: { aiEnabled: boolean }) {
             </div>
           )
         : (
-            <div className={cn(
-              'grid grid-cols-1 gap-4',
-              activeAgents.length > 1 && 'sm:grid-cols-2',
-            )}
-            >
-              {activeAgents.map((c) => {
-                const cap = c.monthlyLimit + c.toppedUp;
-                const pct = cap > 0 ? Math.min(100, (c.used / cap) * 100) : 0;
-                return (
-                  <div key={c.agentKind}>
-                    <div className="
-                      flex items-center justify-between text-[10px] font-bold
-                      tracking-widest text-muted-foreground uppercase
-                    "
-                    >
-                      <span>{AGENT_LABELS[c.agentKind]}</span>
-                      {c.toppedUp > 0 && (
-                        <span className="text-primary">
-                          +
-                          {numberFmt.format(c.toppedUp)}
-                          {' '}
-                          extra
-                        </span>
-                      )}
-                    </div>
-                    <div className="
-                      mt-1 font-display text-2xl font-medium tabular-nums
-                    "
-                    >
-                      {numberFmt.format(c.remaining)}
-                      <span className="
-                        text-sm font-normal text-muted-foreground
-                      "
-                      >
-                        {' '}
-                        /
-                        {' '}
-                        {numberFmt.format(cap)}
-                      </span>
-                    </div>
-                    <div className="
-                      mt-2 h-1.5 overflow-hidden rounded-full bg-muted
-                    "
-                    >
-                      <div
-                        className={cn(
-                          'h-full',
-                          pct >= 80 ? 'bg-amber-500' : 'bg-primary',
-                        )}
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      {numberFmt.format(c.used)}
-                      {' '}
-                      usados este período
-                    </div>
-                  </div>
-                );
-              })}
+            <div>
+              <div className="
+                flex items-center justify-between text-[10px] font-bold
+                tracking-widest text-muted-foreground uppercase
+              "
+              >
+                <span>Consumo del periodo</span>
+                {pool.toppedUp > 0 && (
+                  <span className="text-primary">
+                    +
+                    {numberFmt.format(pool.toppedUp)}
+                    {' '}
+                    extra
+                  </span>
+                )}
+              </div>
+              <div className="
+                mt-1 font-display text-2xl font-medium tabular-nums
+              "
+              >
+                {numberFmt.format(pool.remaining)}
+                <span className="text-sm font-normal text-muted-foreground">
+                  {' '}
+                  /
+                  {' '}
+                  {numberFmt.format(poolCap)}
+                </span>
+              </div>
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+                <div
+                  className={cn(
+                    'h-full',
+                    poolPct >= 80 ? 'bg-amber-500' : 'bg-primary',
+                  )}
+                  style={{ width: `${poolPct}%` }}
+                />
+              </div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                {numberFmt.format(pool.used)}
+                {' '}
+                usados este período
+              </div>
             </div>
           ))}
     </div>

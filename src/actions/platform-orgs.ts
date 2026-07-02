@@ -6,7 +6,7 @@ import { and, asc, count, desc, eq, gte, max, sql, sum } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
-import { getPlanEntitlementsBySlug, limitOf } from '@/libs/entitlements';
+import { poolLimitForPlan } from '@/libs/entitlements';
 import {
   ONBOARDING_FORCED_KEY,
   PLATFORM_GLOBAL_ORG_ID,
@@ -39,8 +39,9 @@ import {
 const ORG_STATUSES = ['none', 'trial', 'vip', 'at_risk', 'churned'] as const;
 export type OrgStatus = (typeof ORG_STATUSES)[number];
 
-const AGENT_KINDS = ['sales_manager', 'customer_service'] as const;
-export type PlatformAgentKind = (typeof AGENT_KINDS)[number];
+// usage_counters is a single row per org (the shared credit pool); see
+// migration 0082_unify_credit_pool.
+const POOL_AGENT_KIND = 'pool';
 
 export type PlatformOrgRow = {
   organizationId: string;
@@ -84,12 +85,11 @@ export type PlatformOrgDetail = PlatformOrgRow & {
   notes: string | null;
   knownIssues: string | null;
   addons: { id: string; addon: string; qty: number; active: boolean }[];
-  counters: {
-    agentKind: string;
+  credits: {
     used: number;
     monthlyLimit: number;
     toppedUp: number;
-  }[];
+  };
   settings: { key: string; value: string }[];
   profile: OrgBusinessProfile | null;
   recentActivity: OrgActivityEntry[];
@@ -238,7 +238,7 @@ export async function getPlatformOrgDetail(
     return null;
   }
 
-  const [meta, addons, counters, settings, profileRows, activity]
+  const [meta, addons, creditsRows, settings, profileRows, activity]
     = await Promise.all([
       db
         .select()
@@ -257,13 +257,13 @@ export async function getPlatformOrgDetail(
         .orderBy(desc(planAddonsSchema.createdAt)),
       db
         .select({
-          agentKind: usageCountersSchema.agentKind,
           used: usageCountersSchema.used,
           monthlyLimit: usageCountersSchema.monthlyLimit,
           toppedUp: usageCountersSchema.toppedUp,
         })
         .from(usageCountersSchema)
-        .where(eq(usageCountersSchema.organizationId, orgId)),
+        .where(eq(usageCountersSchema.organizationId, orgId))
+        .limit(1),
       db
         .select({ key: appSettingsSchema.key, value: appSettingsSchema.value })
         .from(appSettingsSchema)
@@ -289,13 +289,18 @@ export async function getPlatformOrgDetail(
     ]);
 
   const profileRow = profileRows[0];
+  const creditsRow = creditsRows[0];
 
   return {
     ...base,
     notes: meta[0]?.notes ?? null,
     knownIssues: meta[0]?.knownIssues ?? null,
     addons,
-    counters,
+    credits: {
+      used: creditsRow?.used ?? 0,
+      monthlyLimit: creditsRow?.monthlyLimit ?? 0,
+      toppedUp: creditsRow?.toppedUp ?? 0,
+    },
     settings,
     profile: profileRow
       ? {
@@ -419,29 +424,21 @@ export async function assignPlanToOrg(
     });
   });
 
-  // Mirror upgradePlan(): counters reset to the new plan's AI limits.
-  const entitlements = await getPlanEntitlementsBySlug(planSlug);
-  for (const kind of AGENT_KINDS) {
-    const monthlyLimit = entitlements
-      ? limitOf(entitlements, `ai_credits_${kind}`)
-      : 0;
-    await db
-      .insert(usageCountersSchema)
-      .values({
-        organizationId: orgId,
-        agentKind: kind,
-        used: 0,
-        monthlyLimit,
-        toppedUp: 0,
-      })
-      .onConflictDoUpdate({
-        target: [
-          usageCountersSchema.organizationId,
-          usageCountersSchema.agentKind,
-        ],
-        set: { used: 0, monthlyLimit, toppedUp: 0 },
-      });
-  }
+  // Mirror upgradePlan(): the pool resets to the new plan's AI-credit limit.
+  const monthlyLimit = await poolLimitForPlan(planSlug);
+  await db
+    .insert(usageCountersSchema)
+    .values({
+      organizationId: orgId,
+      agentKind: POOL_AGENT_KIND,
+      used: 0,
+      monthlyLimit,
+      toppedUp: 0,
+    })
+    .onConflictDoUpdate({
+      target: [usageCountersSchema.organizationId],
+      set: { used: 0, monthlyLimit, toppedUp: 0 },
+    });
 
   await logAction({
     organizationId: orgId,
@@ -528,24 +525,19 @@ export async function setAddonActive(
 }
 
 // Courtesy credits: recorded as a zero-amount top-up so the existing top-up
-// history shows the grant, then applied to the live counter.
+// history shows the grant, then applied to the org's shared credit pool.
 export async function grantCredits(
   orgId: string,
-  agentKind: PlatformAgentKind,
   requests: number,
 ): Promise<ActionResult<{ requests: number }>> {
   const operator = await requirePlatformOperator();
 
-  if (!AGENT_KINDS.includes(agentKind)) {
-    return { ok: false, error: 'Agente desconocido' };
-  }
   if (!Number.isInteger(requests) || requests < 1) {
     return { ok: false, error: 'Las consultas deben ser un entero ≥ 1' };
   }
 
   await db.insert(topUpsSchema).values({
     organizationId: orgId,
-    agentKind,
     amountCop: '0.00',
     requestsAdded: requests,
   });
@@ -554,16 +546,13 @@ export async function grantCredits(
     .insert(usageCountersSchema)
     .values({
       organizationId: orgId,
-      agentKind,
+      agentKind: POOL_AGENT_KIND,
       used: 0,
       monthlyLimit: 0,
       toppedUp: requests,
     })
     .onConflictDoUpdate({
-      target: [
-        usageCountersSchema.organizationId,
-        usageCountersSchema.agentKind,
-      ],
+      target: [usageCountersSchema.organizationId],
       set: {
         toppedUp: sql`${usageCountersSchema.toppedUp} + ${requests}`,
       },
@@ -574,8 +563,8 @@ export async function grantCredits(
     actor: { type: 'user', id: operator.userId },
     action: 'platform.org.credits_granted',
     entityType: 'usage_counter',
-    entityId: `${orgId}:${agentKind}`,
-    after: { agentKind, requests },
+    entityId: orgId,
+    after: { requests },
   });
 
   revalidatePath('/platform/businesses');
@@ -584,35 +573,25 @@ export async function grantCredits(
 
 export async function resetUsage(
   orgId: string,
-  agentKind: PlatformAgentKind,
-): Promise<ActionResult<{ agentKind: string }>> {
+): Promise<ActionResult<{ organizationId: string }>> {
   const operator = await requirePlatformOperator();
-
-  if (!AGENT_KINDS.includes(agentKind)) {
-    return { ok: false, error: 'Agente desconocido' };
-  }
 
   await db
     .update(usageCountersSchema)
     .set({ used: 0 })
-    .where(
-      and(
-        eq(usageCountersSchema.organizationId, orgId),
-        eq(usageCountersSchema.agentKind, agentKind),
-      ),
-    );
+    .where(eq(usageCountersSchema.organizationId, orgId));
 
   await logAction({
     organizationId: orgId,
     actor: { type: 'user', id: operator.userId },
     action: 'platform.org.usage_reset',
     entityType: 'usage_counter',
-    entityId: `${orgId}:${agentKind}`,
-    after: { agentKind },
+    entityId: orgId,
+    after: {},
   });
 
   revalidatePath('/platform/businesses');
-  return { ok: true, data: { agentKind } };
+  return { ok: true, data: { organizationId: orgId } };
 }
 
 // Per-org feature override: writes the same app_settings the tenant features

@@ -4,7 +4,7 @@ import { resolveOrgOpenAiKey } from '@/libs/openai-key';
 
 // Resolves AI access for the importers (products, suppliers, …) with BYOK
 // precedence: the org's own OpenAI key bills their account (no credit spent);
-// otherwise the platform key is used and one `sales_manager` credit is consumed.
+// otherwise the platform key is used and one shared-pool credit is consumed.
 // `null` means no usable key — callers should surface a "configure your key"
 // notice instead of throwing, so the owner knows how to enable it.
 export async function resolveAiAccess(
@@ -18,7 +18,7 @@ export async function resolveAiAccess(
   if (byok) {
     return { apiKey, remaining: Number.POSITIVE_INFINITY };
   }
-  const credit = await consumeCredit('sales_manager');
+  const credit = await consumeCredit();
   if (!credit.success) {
     return null;
   }

@@ -4,13 +4,13 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Idempotency guarantee for applyApprovedTopUp (actions/plans.ts): the atomic
 // claim (`status: 'pending' -> 'approved'`, gated by a WHERE on the current
-// status) + usage_counters increment that runs once Wompi confirms an
+// status) + usage_counters pool increment that runs once Wompi confirms an
 // APPROVED transaction. Two calls for the same reference — e.g. the webhook
 // retrying, or the webhook racing the authoritative-query fallback — must
 // grant credits exactly ONCE. Exercised against real Postgres (PGlite),
 // mirroring the existing @/libs/DB mock pattern (see
 // transfer-reconciliation-novelty.test.ts) so the real exported function runs
-// unmodified against the in-memory database.
+// unmodified.
 
 const h = vi.hoisted(() => ({
   db: null as unknown as ReturnType<typeof drizzle>,
@@ -38,7 +38,7 @@ const DDL = `
   CREATE TABLE top_ups (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     organization_id text NOT NULL,
-    agent_kind text NOT NULL,
+    agent_kind text,
     amount_cop numeric(12, 2) DEFAULT '0' NOT NULL,
     requests_added integer DEFAULT 0 NOT NULL,
     status text DEFAULT 'pending' NOT NULL,
@@ -57,36 +57,34 @@ const DDL = `
     topped_up integer DEFAULT 0 NOT NULL,
     reset_at timestamp
   );
-  CREATE UNIQUE INDEX usage_counters_org_agent_unique_idx
-    ON usage_counters (organization_id, agent_kind);
+  CREATE UNIQUE INDEX usage_counters_org_unique_idx ON usage_counters (organization_id);
 `;
 
 const ORG = 'org-topup-test';
-const KIND = 'sales_manager';
 const REFERENCE = 'topup-test-ref-1';
 
 let pg: PGlite;
 
 async function seedTopUp(status = 'pending', requests = 100): Promise<void> {
   await pg.query(
-    `INSERT INTO top_ups (organization_id, agent_kind, amount_cop, requests_added, status, reference)
-     VALUES ($1, $2, '19000', $3, $4, $5)`,
-    [ORG, KIND, requests, status, REFERENCE],
+    `INSERT INTO top_ups (organization_id, amount_cop, requests_added, status, reference)
+     VALUES ($1, '19000', $2, $3, $4)`,
+    [ORG, requests, status, REFERENCE],
   );
 }
 
 async function seedCounter(toppedUp = 0): Promise<void> {
   await pg.query(
     `INSERT INTO usage_counters (organization_id, agent_kind, used, monthly_limit, topped_up)
-     VALUES ($1, $2, 0, 100, $3)`,
-    [ORG, KIND, toppedUp],
+     VALUES ($1, 'pool', 0, 100, $2)`,
+    [ORG, toppedUp],
   );
 }
 
 async function toppedUpOf(): Promise<number> {
   const row = await pg.query<{ topped_up: number }>(
-    `SELECT topped_up FROM usage_counters WHERE organization_id = $1 AND agent_kind = $2`,
-    [ORG, KIND],
+    `SELECT topped_up FROM usage_counters WHERE organization_id = $1`,
+    [ORG],
   );
   return Number(row.rows[0]?.topped_up ?? 0);
 }

@@ -311,7 +311,7 @@ export async function emitInvoiceForSale(
   // calling MATIAS so we never emit a DIAN document the tenant can't pay for. A
   // retry of an already-charged failed attempt does not consume again.
   if (!reusable) {
-    const credit = await consumeCreditForOrg(organizationId, 'einvoice');
+    const credit = await consumeCreditForOrg(organizationId);
     if (!credit.success) {
       return {
         ok: false,
@@ -474,7 +474,7 @@ export async function emitCreditNoteForSale(
   const totals = buildTotals(subtotal);
 
   // A credit note is its own billable document → consume 1 credit.
-  const credit = await consumeCreditForOrg(organizationId, 'einvoice');
+  const credit = await consumeCreditForOrg(organizationId);
   if (!credit.success) {
     return {
       ok: false,

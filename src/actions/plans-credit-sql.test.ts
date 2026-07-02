@@ -1,21 +1,59 @@
 import { PGlite } from '@electric-sql/pglite';
-import { and, eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { usageCountersSchema } from '@/models/Schema';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// Integration test for the consumeCredit guarantee (actions/plans.ts). The AI
-// credit decrement increments `used` only WHERE `used < monthly_limit +
-// topped_up`, in a single atomic statement — so repeated/concurrent consumption
-// can never push usage past the org's purchased credits, and never go negative.
-// The guarantee lives entirely in the SQL WHERE clause, so it is exercised here
-// against a real Postgres engine (PGlite), mirroring consumeCredit's exact query.
+// Integration test for the shared-pool consumeCreditForOrg guarantee
+// (actions/plans.ts): the AI credit decrement increments `used` only WHERE
+// `used < monthly_limit + topped_up` on the SINGLE pool row per org, in one
+// atomic statement — so repeated/concurrent consumption can never push usage
+// past the org's purchased credits, and never go negative. Exercised against
+// a real Postgres engine (PGlite) so the real exported function runs
+// unmodified, mirroring the @/libs/DB mock pattern used across this repo.
 
-type Db = ReturnType<typeof drizzle>;
-let pg: PGlite;
-let db: Db;
+const h = vi.hoisted(() => ({
+  db: null as unknown as ReturnType<typeof drizzle>,
+}));
 
+vi.mock('@/libs/DB', () => ({
+  get db() {
+    return h.db;
+  },
+}));
+
+vi.mock('@clerk/nextjs/server', () => ({
+  auth: vi.fn(async () => ({ userId: null, orgId: null, orgRole: null })),
+}));
+
+vi.mock('@/libs/audit-log', () => ({
+  logAction: vi.fn(async () => {}),
+}));
+
+vi.mock('next/cache', () => ({
+  revalidatePath: vi.fn(),
+}));
+
+// Minimal shape of `plans` / `subscriptions` — empty in these tests, but
+// ensureCountersForPlan() (called internally by consumeCreditForOrg) always
+// resolves the org's active plan and its pool limit before touching
+// usage_counters, so the tables must exist even when unused.
 const DDL = `
+  CREATE TABLE plans (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+    slug text NOT NULL,
+    name text NOT NULL,
+    is_default boolean DEFAULT false NOT NULL
+  );
+
+  CREATE TABLE subscriptions (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+    organization_id text NOT NULL,
+    plan text NOT NULL,
+    active boolean DEFAULT true NOT NULL,
+    period_start timestamp DEFAULT now() NOT NULL,
+    period_end timestamp,
+    created_at timestamp DEFAULT now() NOT NULL
+  );
+
   CREATE TABLE usage_counters (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     organization_id text NOT NULL,
@@ -25,91 +63,76 @@ const DDL = `
     topped_up integer DEFAULT 0 NOT NULL,
     reset_at timestamp
   );
+  CREATE UNIQUE INDEX usage_counters_org_unique_idx ON usage_counters (organization_id);
 `;
 
 const ORG = 'org-test';
-const KIND = 'sales_manager';
 
-// The exact conditional decrement consumeCredit runs. Returns true when a credit
-// was consumed (a row matched and was updated), false when none remained.
-async function consume(): Promise<boolean> {
-  const updated = await db
-    .update(usageCountersSchema)
-    .set({ used: sql`${usageCountersSchema.used} + 1` })
-    .where(
-      and(
-        eq(usageCountersSchema.organizationId, ORG),
-        eq(usageCountersSchema.agentKind, KIND),
-        sql`${usageCountersSchema.used} < ${usageCountersSchema.monthlyLimit} + ${usageCountersSchema.toppedUp}`,
-      ),
-    )
-    .returning({ used: usageCountersSchema.used });
-  return updated.length > 0;
+let pg: PGlite;
+
+async function seedPool(monthlyLimit: number, toppedUp: number, used = 0): Promise<void> {
+  await pg.query(
+    `INSERT INTO usage_counters (organization_id, agent_kind, used, monthly_limit, topped_up)
+     VALUES ($1, 'pool', $2, $3, $4)`,
+    [ORG, used, monthlyLimit, toppedUp],
+  );
+}
+
+async function usedOf(orgId = ORG): Promise<number> {
+  const row = await pg.query<{ used: number }>(
+    `SELECT used FROM usage_counters WHERE organization_id = $1`,
+    [orgId],
+  );
+  return Number(row.rows[0]?.used ?? 0);
 }
 
 beforeAll(async () => {
   pg = new PGlite();
-  db = drizzle(pg) as unknown as Db;
+  h.db = drizzle(pg);
   await pg.exec(DDL);
 });
 
 beforeEach(async () => {
-  await pg.exec('DELETE FROM usage_counters');
+  await pg.exec('DELETE FROM usage_counters; DELETE FROM subscriptions; DELETE FROM plans;');
 });
 
-describe('consumeCredit credit guarantee', () => {
+describe('consumeCreditForOrg pool guarantee', () => {
   it('allows exactly monthly_limit + topped_up consumptions, then refuses', async () => {
-    await db.insert(usageCountersSchema).values({
-      organizationId: ORG,
-      agentKind: KIND,
-      used: 0,
-      monthlyLimit: 2,
-      toppedUp: 1,
-    });
+    await seedPool(2, 1);
 
+    const { consumeCreditForOrg } = await import('./plans');
     const results: boolean[] = [];
     for (let i = 0; i < 5; i++) {
-      results.push(await consume());
+      results.push((await consumeCreditForOrg(ORG)).success);
     }
 
     // 3 credits available (2 monthly + 1 topped up); the 4th and 5th are refused.
     expect(results).toEqual([true, true, true, false, false]);
-
-    const [row] = await db.select().from(usageCountersSchema);
-
-    expect(row?.used).toBe(3);
+    expect(await usedOf()).toBe(3);
   });
 
   it('refuses immediately when already at the limit (never goes over)', async () => {
-    await db.insert(usageCountersSchema).values({
-      organizationId: ORG,
-      agentKind: KIND,
-      used: 5,
-      monthlyLimit: 5,
-      toppedUp: 0,
-    });
+    await seedPool(5, 0, 5);
 
-    expect(await consume()).toBe(false);
+    const { consumeCreditForOrg } = await import('./plans');
+    const result = await consumeCreditForOrg(ORG);
 
-    const [row] = await db.select().from(usageCountersSchema);
-
-    expect(row?.used).toBe(5);
+    expect(result.success).toBe(false);
+    expect(await usedOf()).toBe(5);
   });
 
   it('never consumes another org\'s credits', async () => {
-    await db.insert(usageCountersSchema).values({
-      organizationId: 'other-org',
-      agentKind: KIND,
-      used: 0,
-      monthlyLimit: 10,
-      toppedUp: 0,
-    });
+    await pg.query(
+      `INSERT INTO usage_counters (organization_id, agent_kind, used, monthly_limit, topped_up)
+       VALUES ('other-org', 'pool', 0, 10, 0)`,
+    );
 
-    // ORG has no counter row of its own, so nothing is consumed.
-    expect(await consume()).toBe(false);
+    // ORG has no pool row and no plan configured, so its freshly-created pool
+    // caps at 0 and the credit is refused — critically, 'other-org' is untouched.
+    const { consumeCreditForOrg } = await import('./plans');
+    const result = await consumeCreditForOrg(ORG);
 
-    const [row] = await db.select().from(usageCountersSchema);
-
-    expect(row?.used).toBe(0);
+    expect(result.success).toBe(false);
+    expect(await usedOf('other-org')).toBe(0);
   });
 });

@@ -17,7 +17,10 @@ import {
  *
  * Known keys (operators can add more from the platform console):
  *   max_cashiers, max_pos_devices,
- *   ai_credits_sales_manager, ai_credits_customer_service, ai_credits_einvoice,
+ *   ai_credits (shared pool for every AI/e-invoicing action),
+ *   ai_credits_sales_manager, ai_credits_customer_service, ai_credits_einvoice
+ *     (legacy per-agent keys, still summed as a fallback by poolLimitForPlan
+ *     for plans that haven't been migrated to `ai_credits`),
  *   feature_smart_stock (0/1)
  */
 
@@ -35,6 +38,7 @@ const FALLBACK_ENTITLEMENTS: OrgEntitlements = {
   limits: {
     max_cashiers: 1,
     max_pos_devices: 1,
+    ai_credits: 0,
     ai_credits_sales_manager: 0,
     ai_credits_customer_service: 0,
     ai_credits_einvoice: 0,
@@ -150,4 +154,22 @@ export function hasFeature(
   key: string,
 ): boolean {
   return (entitlements.limits[key] ?? 0) >= 1;
+}
+
+/**
+ * Whole-pool monthly AI-credit allowance for a plan slug. Every AI/
+ * e-invoicing action draws from this single shared pool. Prefers the unified
+ * `ai_credits` key; falls back to summing the three legacy per-agent keys so
+ * plans that haven't been migrated to `ai_credits` keep granting the same
+ * total they did before the pool unification.
+ */
+export async function poolLimitForPlan(planSlug: string): Promise<number> {
+  const entitlements = await getPlanEntitlementsBySlug(planSlug);
+  if (!entitlements) {
+    return 0;
+  }
+  const legacyFallback = limitOf(entitlements, 'ai_credits_sales_manager')
+    + limitOf(entitlements, 'ai_credits_customer_service')
+    + limitOf(entitlements, 'ai_credits_einvoice');
+  return limitOf(entitlements, 'ai_credits', legacyFallback);
 }

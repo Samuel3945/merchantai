@@ -2,7 +2,6 @@
 
 import type {
   OrgStatus,
-  PlatformAgentKind,
   PlatformOrgDetail,
 } from '@/actions/platform-orgs';
 import { useRouter } from 'next/navigation';
@@ -42,11 +41,6 @@ const STATUS_OPTIONS: { value: OrgStatus; label: string }[] = [
 const KNOWN_ADDONS = ['pos_device', 'pos_cashier'];
 const KNOWN_SETTING_KEYS = ['smartStockEnabled', 'modules.ai', 'modules.facturas'];
 
-const AGENT_LABELS: Record<PlatformAgentKind, string> = {
-  sales_manager: 'Sales Manager',
-  customer_service: 'Customer Service',
-};
-
 function Section(props: { title: string; children: React.ReactNode }) {
   return (
     <section className="rounded-xl border bg-card p-4">
@@ -74,8 +68,6 @@ export function BusinessCockpitClient(props: {
   const [selectedPlan, setSelectedPlan] = useState(org.planSlug);
   const [addonKey, setAddonKey] = useState('pos_device');
   const [addonQty, setAddonQty] = useState('1');
-  const [creditAgent, setCreditAgent]
-    = useState<PlatformAgentKind>('sales_manager');
   const [creditAmount, setCreditAmount] = useState('100');
   const [settingKey, setSettingKey] = useState('');
   const [settingValue, setSettingValue] = useState('');
@@ -251,61 +243,33 @@ export function BusinessCockpitClient(props: {
 
         <Section title="Créditos de IA">
           <div className="space-y-2">
-            {org.counters.length === 0 && (
-              <p className="text-sm text-muted-foreground">
-                Sin contadores todavía.
-              </p>
-            )}
-            {org.counters.map(c => (
-              <div
-                key={c.agentKind}
-                className="flex items-center justify-between text-sm"
-              >
-                <span>
-                  {AGENT_LABELS[c.agentKind as PlatformAgentKind]
-                    ?? c.agentKind}
-                </span>
-                <span className="text-muted-foreground">
-                  {c.used}
-                  {' '}
-                  /
-                  {' '}
-                  {c.monthlyLimit + c.toppedUp}
-                </span>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={pending}
-                  onClick={async () => {
-                    const ok = await confirm({
-                      title: '¿Reiniciar el consumo a 0?',
-                      confirmText: 'Reiniciar',
-                    });
-                    if (ok) {
-                      run(() =>
-                        resetUsage(
-                          org.organizationId,
-                          c.agentKind as PlatformAgentKind,
-                        ),
-                      );
-                    }
-                  }}
-                >
-                  Reiniciar uso
-                </Button>
-              </div>
-            ))}
-            <div className="flex items-center gap-2 border-t pt-2">
-              <select
-                className={inputClass}
-                value={creditAgent}
-                onChange={e =>
-                  setCreditAgent(e.target.value as PlatformAgentKind)}
+            <div className="flex items-center justify-between text-sm">
+              <span>Consumo del periodo</span>
+              <span className="text-muted-foreground">
+                {org.credits.used}
+                {' '}
+                /
+                {' '}
+                {org.credits.monthlyLimit + org.credits.toppedUp}
+              </span>
+              <Button
+                size="sm"
+                variant="ghost"
                 disabled={pending}
+                onClick={async () => {
+                  const ok = await confirm({
+                    title: '¿Reiniciar el consumo a 0?',
+                    confirmText: 'Reiniciar',
+                  });
+                  if (ok) {
+                    run(() => resetUsage(org.organizationId));
+                  }
+                }}
               >
-                <option value="sales_manager">Sales Manager</option>
-                <option value="customer_service">Customer Service</option>
-              </select>
+                Reiniciar uso
+              </Button>
+            </div>
+            <div className="flex items-center gap-2 border-t pt-2">
               <input
                 type="number"
                 min={1}
@@ -326,9 +290,7 @@ export function BusinessCockpitClient(props: {
                     toast.error('Cantidad inválida');
                     return;
                   }
-                  run(() =>
-                    grantCredits(org.organizationId, creditAgent, requests),
-                  );
+                  run(() => grantCredits(org.organizationId, requests));
                 }}
               >
                 Regalar créditos
