@@ -1,36 +1,23 @@
 'use client';
 
 import type { AbonoMethod, AbonoMethodType } from '@/libs/creditos-shared';
+import { Banknote, Check, CreditCard, Landmark, Wallet } from 'lucide-react';
 import { cn } from '@/utils/Helpers';
 
-// Per-type visual theme, mirroring the cashier POS (pos-merchatai methodTheme):
-// cash=green, transfer=teal/primary, card=blue, other=neutral. Selected classes
-// are spelled out in full so Tailwind's JIT keeps them (never build class names
-// by string interpolation).
-const THEME: Record<
+// Icon + accent per method type, mirroring the cashier POS (pos-merchatai):
+// clean line icons, never emoji. A selected row overrides everything to primary.
+const TYPE_META: Record<
   AbonoMethodType,
-  { selected: string; icon: string }
+  { Icon: typeof Banknote; color: string }
 > = {
-  cash: {
-    selected:
-      'border-emerald-500 bg-emerald-500/10 ring-2 ring-emerald-500/40 text-emerald-700 dark:text-emerald-300',
-    icon: '💵',
-  },
-  transfer: {
-    selected: 'border-primary bg-primary/10 ring-2 ring-primary/40 text-primary',
-    icon: '🏦',
-  },
-  card: {
-    selected:
-      'border-sky-500 bg-sky-500/10 ring-2 ring-sky-500/40 text-sky-700 dark:text-sky-300',
-    icon: '💳',
-  },
-  other: {
-    selected: 'border-foreground/40 bg-muted ring-2 ring-foreground/20 text-foreground',
-    icon: '💰',
-  },
+  cash: { Icon: Banknote, color: 'text-emerald-600 dark:text-emerald-400' },
+  transfer: { Icon: Landmark, color: 'text-teal-600 dark:text-teal-400' },
+  card: { Icon: CreditCard, color: 'text-sky-600 dark:text-sky-400' },
+  other: { Icon: Wallet, color: 'text-muted-foreground' },
 };
 
+// Stacked selectable rows: icon · name (+ account subtitle) · check when active.
+// A faithful port of pos-merchatai's CreditosCajero payment picker.
 export function AbonoMethodPicker({
   methods,
   value,
@@ -55,16 +42,9 @@ export function AbonoMethodPicker({
   }
 
   return (
-    <div
-      role="radiogroup"
-      aria-label="Método de pago"
-      className="
-        grid grid-cols-2 gap-2
-        sm:grid-cols-3
-      "
-    >
+    <div role="radiogroup" aria-label="Método de pago" className="space-y-2">
       {methods.map((m) => {
-        const theme = THEME[m.type];
+        const meta = TYPE_META[m.type];
         const active = m.value === value;
         return (
           <button
@@ -76,23 +56,35 @@ export function AbonoMethodPicker({
             onClick={() => onChange(m.value)}
             className={cn(
               `
-                flex h-16 flex-col items-center justify-center gap-0.5
-                rounded-lg border px-2 text-center transition
-                hover:border-foreground/30
+                flex w-full items-center gap-3 rounded-xl border px-4 py-2.5
+                text-left transition-all
                 disabled:cursor-not-allowed disabled:opacity-60
               `,
-              active ? theme.selected : 'border-input bg-card text-foreground',
+              active
+                ? 'border-primary bg-primary/10 text-primary'
+                : `
+                  border-input bg-card text-foreground
+                  hover:border-foreground/30
+                `,
             )}
           >
-            <span className="text-lg leading-none" aria-hidden>
-              {m.icon || theme.icon}
-            </span>
-            <span className="line-clamp-1 text-xs font-medium">{m.label}</span>
-            {m.subtitle && (
-              <span className="line-clamp-1 text-[10px] text-muted-foreground">
-                {m.subtitle}
+            <meta.Icon
+              className={cn(
+                'size-[18px] shrink-0',
+                active ? 'text-primary' : meta.color,
+              )}
+            />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-medium">
+                {m.label}
               </span>
-            )}
+              {m.subtitle && (
+                <span className="block truncate text-xs text-muted-foreground">
+                  {m.subtitle}
+                </span>
+              )}
+            </span>
+            {active && <Check className="size-4 shrink-0 text-primary" />}
           </button>
         );
       })}

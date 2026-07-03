@@ -3,7 +3,7 @@
 import type { ClientDebt, CreditosOverview } from '@/actions/creditos';
 import type { AbonoMethod, CreditoDueState } from '@/libs/creditos-shared';
 import type { RangeOption } from '@/utils/DateRange';
-import { Search, X } from 'lucide-react';
+import { CheckCircle2, Clock, Search, X } from 'lucide-react';
 import { useId, useMemo, useState, useTransition } from 'react';
 import {
   abonarCredito,
@@ -22,6 +22,7 @@ import {
 import { Link } from '@/libs/I18nNavigation';
 import { addDays, todayBogota } from '@/utils/DateRange';
 import { cn } from '@/utils/Helpers';
+import { AbonoAmountField } from './AbonoAmountField';
 import { AbonoMethodPicker } from './AbonoMethodPicker';
 import { DUE_STATE_META, formatDate, formatMoney, relativeTime } from './ui';
 
@@ -134,29 +135,13 @@ function AbonarForm({
 
   return (
     <div className="mt-3 space-y-2.5 rounded-lg border bg-muted/30 p-3">
-      <div>
-        <label
-          htmlFor={amountId}
-          className="text-xs font-medium text-muted-foreground"
-        >
-          Monto (saldo
-          {' '}
-          {formatMoney(client.balance)}
-          )
-        </label>
-        <input
-          id={amountId}
-          type="number"
-          inputMode="decimal"
-          min="0"
-          step="1"
-          value={amount}
-          onChange={e => setAmount(e.target.value)}
-          placeholder="0"
-          className={inputCls}
-          autoFocus
-        />
-      </div>
+      <AbonoAmountField
+        value={amount}
+        onChange={setAmount}
+        balance={client.balance}
+        id={amountId}
+        autoFocus
+      />
       <div>
         <div className="mb-1.5 text-xs font-medium text-muted-foreground">
           Método de pago
@@ -389,7 +374,7 @@ function ClientCard({
           dark:text-amber-400
         "
         >
-          <span aria-hidden>⏳</span>
+          <Clock className="size-3.5 shrink-0" aria-hidden />
           <span>
             Pendiente a confirmar en caja:
             {' '}
@@ -473,7 +458,7 @@ function ClientCard({
 function EmptyState() {
   return (
     <div className="rounded-xl border border-dashed bg-card p-12 text-center">
-      <div className="text-4xl">🎉</div>
+      <CheckCircle2 className="mx-auto size-10 text-emerald-500" aria-hidden />
       <div className="mt-3 text-lg font-semibold">Excelente</div>
       <p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">
         No tienes clientes con deudas pendientes. Cuando registres una venta
