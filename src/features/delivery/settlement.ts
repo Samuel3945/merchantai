@@ -2,10 +2,17 @@
 // (goods subtotal only). The delivery fee (delivery_orders.delivery_fee) is money
 // on TOP of the goods, and how it is handled depends on the org's fee mode:
 //
-//   'revenue'     — the fee is store income. When the courier collected it in
-//                   CASH (contraentrega efectivo), that physical cash lands in the
-//                   same caja session as the sale, so we book a `deposit`
-//                   cash_movement there to keep the arqueo exact (not short/over).
+//   'revenue'     — the fee is store income.
+//                     - CASH (contraentrega efectivo): that physical cash lands
+//                       in the same caja session as the sale, so we book a
+//                       `deposit` cash_movement there to keep the arqueo exact
+//                       (not short/over).
+//                     - CREDITO (fiado): the customer didn't pay anything up
+//                       front, so the fee is debt too — it bumps the credito's
+//                       originalAmount (see addDeliveryFeeToCredito). A split
+//                       payment reports paymentType 'Mixto', which is neither
+//                       cash nor credito here, so it falls through to the
+//                       arqueo-only default below (unchanged).
 //                   We deliberately do NOT touch the goods sale's line items.
 //   'courier_tip' — the fee belongs to the courier (paid a fixed wage). It is NOT
 //                   store revenue and never enters the drawer; we only record a
@@ -13,18 +20,26 @@
 //
 // Everything here is BEST-EFFORT and runs AFTER the status-flip transaction
 // commits: a failure must never roll back a delivery the courier already made.
-// A dropped fee deposit only understates the drawer (reconciled at close) — the
-// same acceptable failure model as recordCashMovement for the sale itself.
+// A dropped fee deposit/charge only understates the drawer/debt (reconciled at
+// close, or simply owed less than it should) — the same acceptable failure
+// model as recordCashMovement for the sale itself.
 
 import { and, desc, eq, isNull } from 'drizzle-orm';
 import { isCashMethod, toMoney } from '@/libs/cash-helpers';
+import { isCreditoMethod, round2 } from '@/libs/creditos-math';
 import { db } from '@/libs/DB';
 import {
   appSettingsSchema,
   cashMovementsSchema,
   cashSessionsSchema,
+  creditoMovementsSchema,
+  creditosSchema,
   deliveryEventsSchema,
 } from '@/models/Schema';
+
+// The credito ledger note for the fee charge. Also the idempotency sentinel:
+// a re-run (already-delivered idempotent path) never double-charges it.
+const FEE_NOTE = 'Envío domicilio';
 
 export const DELIVERY_FEE_MODE_KEY = 'delivery_fee_mode';
 
@@ -93,14 +108,93 @@ export async function settleDeliveryFee(
     return;
   }
 
-  // 'revenue': only physical cash affects the arqueo. A non-cash fee (transfer,
-  // etc.) is store income too, but it never entered the drawer, so there is
-  // nothing to reconcile here — it stays visible via the delivery KPIs.
+  // 'revenue': the fee is store income either way, but WHERE it lands depends
+  // on how it was collected. Pure credito (fiado): nothing was paid up front,
+  // so the fee is debt too — add it to the customer's balance. Note this only
+  // fires for a PURE credito payment; a split sale reports paymentType
+  // 'Mixto', which isCreditoMethod rejects, so it falls through to the
+  // cash/arqueo branch below (correct — the credito portion of a mixed sale
+  // is handled by the sale's own credito creation, not here).
+  if (isCreditoMethod(args.paymentType)) {
+    await addDeliveryFeeToCredito(args, fee);
+    return;
+  }
+
+  // Only physical cash affects the arqueo. A non-cash, non-credito fee
+  // (transfer, etc.) is store income too, but it never entered the drawer, so
+  // there is nothing to reconcile here — it stays visible via the delivery KPIs.
   if (!isCashMethod(args.paymentType)) {
     return;
   }
 
   await recordFeeCashDeposit(args, fee);
+}
+
+// Adds the delivery fee to the customer's credito debt: bumps the credito's
+// originalAmount (the balance is originalAmount - Σ(payment movements), see
+// libs/creditos.ts#recordAbonoTx, so a charge movement alone would NOT move
+// the balance) and records a `charge` movement for the ledger/audit trail.
+// Deduped on (creditoId, type='charge', note=FEE_NOTE) so a re-run of this
+// best-effort settlement never double-charges the fee.
+async function addDeliveryFeeToCredito(
+  args: SettleDeliveryFeeArgs,
+  fee: number,
+): Promise<void> {
+  const [credito] = await db
+    .select({ id: creditosSchema.id, originalAmount: creditosSchema.originalAmount })
+    .from(creditosSchema)
+    .where(
+      and(
+        eq(creditosSchema.organizationId, args.organizationId),
+        eq(creditosSchema.saleId, args.saleId),
+      ),
+    )
+    .limit(1);
+  if (!credito) {
+    // No credito for this sale — shouldn't happen for a credito delivery, but
+    // there is nothing to add the fee to. Leave it (same best-effort model).
+    return;
+  }
+
+  const [existing] = await db
+    .select({ id: creditoMovementsSchema.id })
+    .from(creditoMovementsSchema)
+    .where(
+      and(
+        eq(creditoMovementsSchema.creditoId, credito.id),
+        eq(creditoMovementsSchema.type, 'charge'),
+        eq(creditoMovementsSchema.note, FEE_NOTE),
+      ),
+    )
+    .limit(1);
+  if (existing) {
+    return;
+  }
+
+  const newOriginalAmount = round2(
+    Number.parseFloat(credito.originalAmount) + fee,
+  ).toFixed(2);
+
+  await db.transaction(async (tx) => {
+    await tx
+      .update(creditosSchema)
+      .set({ originalAmount: newOriginalAmount, updatedAt: new Date() })
+      .where(
+        and(
+          eq(creditosSchema.id, credito.id),
+          eq(creditosSchema.organizationId, args.organizationId),
+        ),
+      );
+
+    await tx.insert(creditoMovementsSchema).values({
+      creditoId: credito.id,
+      organizationId: args.organizationId,
+      type: 'charge',
+      amount: toMoney(fee),
+      note: FEE_NOTE,
+      createdBy: args.actorId,
+    });
+  });
 }
 
 // Books the cash fee as a `deposit` cash_movement into the sale's own caja
