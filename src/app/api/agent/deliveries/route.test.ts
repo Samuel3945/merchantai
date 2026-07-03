@@ -291,6 +291,26 @@ describe('POST /api/agent/deliveries', () => {
     expect((inputArg as { customerPhone?: string }).customerPhone).toBe('3001234567');
   });
 
+  it('recipientName (no customerId) → used as customerName so the panel is not "Sin nombre"', async () => {
+    const { POST } = await import('./route');
+    const res = await POST(
+      postRequest({
+        remoteJid: '573001234567@s.whatsapp.net',
+        phone: '3001234567',
+        recipientName: 'Samuel Alzate',
+        items: [{ productId: PRODUCT_ID, qty: 1 }],
+        address: 'Calle 99',
+      }),
+    );
+
+    expect(res.status).toBe(201);
+    expect(createDeliveryMock).toHaveBeenCalledOnce();
+
+    const [, inputArg] = createDeliveryMock.mock.calls[0]!;
+
+    expect((inputArg as { customerName?: string }).customerName).toBe('Samuel Alzate');
+  });
+
   it('item body carrying unknown key "price" → 400 (strict schema rejects it)', async () => {
     const { POST } = await import('./route');
     const res = await POST(
