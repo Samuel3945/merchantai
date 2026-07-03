@@ -48,6 +48,8 @@ import { wholesaleUnitPrice } from '@/libs/wholesale';
 import {
   creditoMovementsSchema,
   creditosSchema,
+  deliveryEventsSchema,
+  deliveryOrdersSchema,
   orgAddressesSchema,
   posReturnItemsSchema,
   posReturnsSchema,
@@ -920,6 +922,21 @@ export type SaleDetailReturn = {
   }[];
 };
 
+export type SaleDetailDeliveryEvent = {
+  type: string;
+  fromStatus: string | null;
+  toStatus: string | null;
+  note: string | null;
+  createdAt: Date;
+};
+
+export type SaleDetailDelivery = {
+  status: string;
+  address: string | null;
+  courierName: string | null;
+  events: SaleDetailDeliveryEvent[];
+};
+
 export type SaleDetail = {
   id: string;
   saleNumber: number | null;
@@ -938,6 +955,8 @@ export type SaleDetail = {
   items: SaleDetailItem[];
   payments: SaleDetailPayment[];
   returns: SaleDetailReturn[];
+  /** Delivery process (status timeline), present only for channel === 'delivery' sales. */
+  delivery: SaleDetailDelivery | null;
 };
 
 // Full audit view of one sale: who sold it, when, from which device, how it was
@@ -1029,6 +1048,59 @@ export async function getSaleDetail(saleId: string): Promise<SaleDetail | null> 
     sale.posTokenId ? [sale.posTokenId] : [],
   );
 
+  // Delivery process: only sales stamped channel = 'delivery' have a linked
+  // delivery order. Best-effort — if the order/events are missing for any
+  // reason, the sale detail still renders without the delivery section.
+  let delivery: SaleDetailDelivery | null = null;
+  if (sale.channel === 'delivery') {
+    const [order] = await db
+      .select()
+      .from(deliveryOrdersSchema)
+      .where(
+        and(
+          eq(deliveryOrdersSchema.saleId, sale.id),
+          eq(deliveryOrdersSchema.organizationId, orgId),
+        ),
+      )
+      .limit(1);
+
+    if (order) {
+      const events = await db
+        .select({
+          type: deliveryEventsSchema.type,
+          fromStatus: deliveryEventsSchema.fromStatus,
+          toStatus: deliveryEventsSchema.toStatus,
+          note: deliveryEventsSchema.note,
+          createdAt: deliveryEventsSchema.createdAt,
+        })
+        .from(deliveryEventsSchema)
+        .where(
+          and(
+            eq(deliveryEventsSchema.deliveryOrderId, order.id),
+            eq(deliveryEventsSchema.organizationId, orgId),
+          ),
+        )
+        .orderBy(deliveryEventsSchema.createdAt);
+
+      let courierName: string | null = null;
+      if (order.courierId) {
+        const [courier] = await db
+          .select({ name: posUsersSchema.name })
+          .from(posUsersSchema)
+          .where(eq(posUsersSchema.id, order.courierId))
+          .limit(1);
+        courierName = courier?.name ?? null;
+      }
+
+      delivery = {
+        status: order.status,
+        address: order.address,
+        courierName,
+        events,
+      };
+    }
+  }
+
   return {
     id: sale.id,
     saleNumber: sale.saleNumber,
@@ -1070,6 +1142,7 @@ export async function getSaleDetail(saleId: string): Promise<SaleDetail | null> 
           disposition: ri.disposition,
         })),
     })),
+    delivery,
   };
 }
 
