@@ -83,6 +83,8 @@ vi.mock('@/libs/treasury', () => ({
 const SETUP_SQL = `
   CREATE TYPE "transfer_reconciliation_status" AS ENUM('pending', 'confirmed', 'not_arrived', 'mismatch', 'resolved');
   CREATE TYPE "transfer_resolution_type" AS ENUM('receivable', 'loss', 'cashier_liability');
+  CREATE TYPE "credito_status" AS ENUM('pending', 'paid', 'written_off');
+  CREATE TYPE "credito_movement_type" AS ENUM('charge', 'payment', 'extension', 'writeoff', 'adjustment');
 
   CREATE TABLE transfer_reconciliations (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
@@ -114,6 +116,36 @@ const SETUP_SQL = `
   CREATE UNIQUE INDEX transfer_reconciliations_sale_payment_idx
     ON transfer_reconciliations (sale_payment_id)
     WHERE sale_payment_id IS NOT NULL;
+
+  CREATE TABLE creditos (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+    organization_id text NOT NULL,
+    customer_id uuid,
+    sale_id uuid,
+    original_amount numeric(12, 2) NOT NULL,
+    due_date date NOT NULL,
+    status "credito_status" DEFAULT 'pending' NOT NULL,
+    notes text,
+    created_by text,
+    created_at timestamp DEFAULT now() NOT NULL,
+    updated_at timestamp DEFAULT now() NOT NULL
+  );
+
+  CREATE TABLE credito_movements (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+    credito_id uuid NOT NULL REFERENCES creditos(id) ON DELETE CASCADE,
+    organization_id text NOT NULL,
+    type "credito_movement_type" NOT NULL,
+    amount numeric(12, 2) DEFAULT '0' NOT NULL,
+    method text,
+    cash_movement_id uuid,
+    transfer_reconciliation_id uuid REFERENCES transfer_reconciliations(id) ON DELETE SET NULL,
+    due_date_before date,
+    due_date_after date,
+    note text,
+    created_by text,
+    created_at timestamp DEFAULT now() NOT NULL
+  );
 
   CREATE TABLE app_settings (
     organization_id text NOT NULL,
@@ -182,7 +214,7 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
-  await pg.exec('DELETE FROM transfer_reconciliations; DELETE FROM app_settings;');
+  await pg.exec('DELETE FROM credito_movements; DELETE FROM creditos; DELETE FROM transfer_reconciliations; DELETE FROM app_settings;');
   counter = 0;
   h.depositCalls = [];
   h.orgRole = 'org:admin';
