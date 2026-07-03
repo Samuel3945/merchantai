@@ -382,6 +382,22 @@ function ClientCard({
         <ProgressBar pct={client.pct} state={client.dueState} />
       </div>
 
+      {!history && client.pendingConfirmation > 0 && (
+        <div className="
+          mt-2 flex items-center gap-1.5 rounded-md border border-amber-500/40
+          bg-amber-500/5 px-2.5 py-1.5 text-xs font-medium text-amber-600
+          dark:text-amber-400
+        "
+        >
+          <span aria-hidden>⏳</span>
+          <span>
+            Pendiente a confirmar en caja:
+            {' '}
+            {formatMoney(client.pendingConfirmation)}
+          </span>
+        </div>
+      )}
+
       <div className="
         mt-3 flex items-center justify-between text-xs text-muted-foreground
       "

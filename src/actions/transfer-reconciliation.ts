@@ -12,7 +12,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { ActionValidationError } from '@/libs/action-result';
 import { logAction } from '@/libs/audit-log';
-import { createCredito } from '@/libs/creditos';
+import { createCredito, settleCreditosForConfirmedTransfer } from '@/libs/creditos';
 import { findOrCreateCustomer } from '@/libs/customers';
 import { db } from '@/libs/DB';
 import { requirePanelModule } from '@/libs/panel-session';
@@ -203,14 +203,23 @@ export async function confirmTransfer(
   // stays confirmed and the deposit is idempotent, so it can be re-applied once
   // the cause is fixed. We still surface the deposit error so the money is not
   // silently lost from Tesorería.
-  const confirmed = await db.transaction(async tx =>
-    confirmReconciliation(tx, {
+  const confirmed = await db.transaction(async (tx) => {
+    const rec = await confirmReconciliation(tx, {
       id,
       organizationId: orgId,
       reconciledBy: actor,
       arrivedAmount,
-    }),
-  );
+    });
+    // The money has now landed: settle any credito this transfer abono covers.
+    // A credito paid by transfer stays pending until this confirmation.
+    if (rec) {
+      await settleCreditosForConfirmedTransfer(tx, {
+        organizationId: orgId,
+        reconciliationId: rec.id,
+      });
+    }
+    return rec;
+  });
   if (!confirmed) {
     return { ok: false, error: 'Transferencia no encontrada' };
   }

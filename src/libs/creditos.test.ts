@@ -8,6 +8,7 @@ import {
   extendCreditoTermTx,
   isCashMethod,
   recordAbonoTx,
+  settleCreditosForConfirmedTransfer,
 } from '@/libs/creditos';
 import {
   appSettingsSchema,
@@ -15,6 +16,7 @@ import {
   cashSessionsSchema,
   creditoMovementsSchema,
   creditosSchema,
+  transferReconciliationsSchema,
 } from '@/models/Schema';
 
 // ── PGlite-backed integration tests for the creditos core ────────────────────
@@ -448,11 +450,13 @@ describe('recordAbonoTx', () => {
       dueDate: '2026-07-01',
     });
 
+    // Cash so the settle happens immediately — this test is about FIFO
+    // distribution, not the transfer confirmation flow (covered separately).
     const result = await recordAbonoTx(db, {
       organizationId: ORG,
       clientKey: JUAN_KEY,
       amount: '250.00',
-      method: 'transferencia',
+      method: 'efectivo',
       createdBy: USER,
     });
 
@@ -476,6 +480,77 @@ describe('recordAbonoTx', () => {
       .execute();
 
     expect(newCredito!.status).toBe('pending');
+  });
+
+  it('transfer abono does NOT settle the credito until confirmed in caja', async () => {
+    const id = await seedCredito({ originalAmount: '100.00' });
+
+    const result = await recordAbonoTx(db, {
+      organizationId: ORG,
+      clientKey: JUAN_KEY,
+      amount: '100.00',
+      method: 'Nequi Samuel', // a real transfer account name → needs confirmation
+      createdBy: USER,
+    });
+
+    // Money applied, but the debt is NOT settled — it hasn't landed yet.
+    expect(result.applied).toBe(100);
+    expect(result.paidCreditoIds).not.toContain(id);
+
+    const [credito] = await db
+      .select()
+      .from(creditosSchema)
+      .where(eq(creditosSchema.id, id))
+      .execute();
+
+    expect(credito!.status).toBe('pending');
+
+    // A pending reconciliation was created for the abono.
+    const recs = await db
+      .select()
+      .from(transferReconciliationsSchema)
+      .where(eq(transferReconciliationsSchema.organizationId, ORG))
+      .execute();
+
+    expect(recs).toHaveLength(1);
+    expect(recs[0]!.status).toBe('pending');
+  });
+
+  it('settles the credito once the transfer is confirmed in caja', async () => {
+    const id = await seedCredito({ originalAmount: '100.00' });
+    await recordAbonoTx(db, {
+      organizationId: ORG,
+      clientKey: JUAN_KEY,
+      amount: '100.00',
+      method: 'Nequi Samuel',
+      createdBy: USER,
+    });
+
+    // Confirm the reconciliation (what the cashier does in caja), then settle.
+    const [rec] = await db
+      .select()
+      .from(transferReconciliationsSchema)
+      .where(eq(transferReconciliationsSchema.organizationId, ORG))
+      .execute();
+    await db
+      .update(transferReconciliationsSchema)
+      .set({ status: 'confirmed' })
+      .where(eq(transferReconciliationsSchema.id, rec!.id));
+
+    const settled = await settleCreditosForConfirmedTransfer(db, {
+      organizationId: ORG,
+      reconciliationId: rec!.id,
+    });
+
+    expect(settled).toContain(id);
+
+    const [credito] = await db
+      .select()
+      .from(creditosSchema)
+      .where(eq(creditosSchema.id, id))
+      .execute();
+
+    expect(credito!.status).toBe('paid');
   });
 
   it('digital method does NOT create a cash movement', async () => {
