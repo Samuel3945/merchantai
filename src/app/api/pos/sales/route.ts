@@ -578,7 +578,15 @@ export async function GET(req: Request): Promise<NextResponse> {
               'qty', ${saleItemsSchema.qty},
               'price', ${saleItemsSchema.price},
               'subtotal', ${saleItemsSchema.subtotal},
-              'unitType', COALESCE(${saleItemsSchema.unitType}, 'unit')
+              'unitType', COALESCE(${saleItemsSchema.unitType}, 'unit'),
+              -- Units already returned across all prior returns of this line, so
+              -- the cashier app shows the correct remaining/returnable qty and the
+              -- "parcial/devuelta" badges — parity with the admin sales list.
+              'returnedQty', COALESCE((
+                SELECT SUM(pri.qty)
+                FROM pos_return_items pri
+                WHERE pri.sale_item_id = ${saleItemsSchema.id}
+              ), 0)::int
             )
           ) FILTER (WHERE ${saleItemsSchema.id} IS NOT NULL),
           '[]'
