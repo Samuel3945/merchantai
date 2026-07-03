@@ -30,6 +30,10 @@ export const agentDeliveryCreateSchema = z
     customerId: z.string().uuid().optional(),
     // Fallback phone if no customerId (no customer row required).
     phone: z.string().trim().max(50).optional(),
+    // Name of who receives the order. Used as the delivery's customerName when
+    // there is no customerId (a phone-only walk-up customer) — without it the
+    // panel shows "Sin nombre". An explicit customerId still wins.
+    recipientName: z.string().trim().min(1).max(120).optional(),
     items: z.array(agentDeliveryItemSchema).min(1),
     address: z.string().trim().min(1).max(500),
     addressNotes: z.string().trim().max(500).optional(),

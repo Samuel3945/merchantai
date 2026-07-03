@@ -91,7 +91,9 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   // Step 5: verify customer belongs to org (if supplied).
-  let customerName: string | null = null;
+  // Default the delivery name to the recipient name the agent captured; an
+  // explicit customerId (below) overrides it with the stored customer name.
+  let customerName: string | null = body.recipientName ?? null;
   const customerPhone: string | null = body.phone ?? null;
 
   if (body.customerId) {
