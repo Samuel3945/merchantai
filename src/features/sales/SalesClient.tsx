@@ -724,7 +724,20 @@ export function SalesClient({
                           {dateFmt.format(new Date(s.createdAt))}
                         </td>
                         <td className="px-3 py-2 font-medium tabular-nums">
-                          {formatSaleNumber(s.saleNumber)}
+                          <div className="flex items-center gap-2">
+                            {formatSaleNumber(s.saleNumber)}
+                            {s.channel === 'delivery' && (
+                              <Badge
+                                variant="outline"
+                                className="
+                                  border-sky-500/30 bg-sky-500/10 text-sky-600
+                                  dark:text-sky-400
+                                "
+                              >
+                                🛵 Domicilio
+                              </Badge>
+                            )}
+                          </div>
                         </td>
                         <td className="px-3 py-2">{s.paymentType}</td>
                         <td className="px-3 py-2">

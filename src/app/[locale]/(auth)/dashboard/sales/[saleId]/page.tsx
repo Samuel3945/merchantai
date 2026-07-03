@@ -58,6 +58,34 @@ const RETURN_REASON_LABELS: Record<string, string> = {
   damaged: 'Producto dañado',
 };
 
+// Friendly Spanish labels for the delivery status machine, shared by the
+// order's current status and its status_change events.
+const DELIVERY_STATUS_LABELS: Record<string, string> = {
+  pending: 'Pedido tomado',
+  assigned: 'Tomado por el repartidor',
+  in_transit: 'En camino',
+  delivered: 'Entregado',
+  cancelled: 'Cancelado',
+};
+
+// Renders a single delivery event as a human label — mirrors describeEvent()
+// in features/delivery/DeliveryClient.tsx.
+function deliveryEventLabel(ev: { type: string; toStatus: string | null }): string {
+  if (ev.type === 'created') {
+    return 'Pedido creado';
+  }
+  if (ev.type === 'customer_notified') {
+    return 'Cliente notificado';
+  }
+  if (ev.type === 'note') {
+    return 'Nota';
+  }
+  if (ev.type === 'status_change' && ev.toStatus) {
+    return DELIVERY_STATUS_LABELS[ev.toStatus] ?? 'Actualización';
+  }
+  return 'Actualización';
+}
+
 const DISPOSITION_LABELS: Record<string, string> = {
   restock: 'Volvió al inventario',
   damaged: 'Merma (dañado)',
@@ -364,7 +392,11 @@ export default async function SaleDetailPage(props: {
           >
             <div className="text-sm font-semibold">Origen</div>
             <InfoRow label="Canal">
-              {detail.origin === 'pos' ? 'Punto de venta (POS)' : 'Panel web'}
+              {detail.delivery
+                ? 'Domicilio'
+                : detail.origin === 'pos'
+                  ? 'Punto de venta (POS)'
+                  : 'Panel web'}
             </InfoRow>
             {detail.deviceName && (
               <InfoRow label="Caja">{detail.deviceName}</InfoRow>
@@ -396,6 +428,69 @@ export default async function SaleDetailPage(props: {
           </div>
 
           <SaleTimeline events={timeline} />
+
+          {detail.delivery && (
+            <div className="
+              space-y-3 rounded-lg border bg-background p-4 shadow-xs
+            "
+            >
+              <div className="text-sm font-semibold">Proceso del domicilio</div>
+              <InfoRow label="Estado actual">
+                {DELIVERY_STATUS_LABELS[detail.delivery.status] ?? detail.delivery.status}
+              </InfoRow>
+              {detail.delivery.address && (
+                <InfoRow label="Dirección">{detail.delivery.address}</InfoRow>
+              )}
+              {detail.delivery.courierName && (
+                <InfoRow label="Repartidor">{detail.delivery.courierName}</InfoRow>
+              )}
+              {detail.delivery.events.length > 0 && (
+                <ol className="relative pt-1">
+                  {detail.delivery.events.map((e, i) => (
+                    <li
+                      key={`${e.type}-${e.createdAt.toISOString()}-${i}`}
+                      className="
+                        relative flex gap-3 pb-4
+                        last:pb-0
+                      "
+                    >
+                      {i < detail.delivery!.events.length - 1 && (
+                        <span
+                          className="
+                            absolute top-3 bottom-0 left-[5px] w-px bg-border
+                          "
+                          aria-hidden
+                        />
+                      )}
+                      <span
+                        className="
+                          relative z-10 mt-1 size-3 shrink-0 rounded-full
+                          border-2 border-emerald-500 bg-emerald-500
+                        "
+                        aria-hidden
+                      />
+                      <div className="min-w-0 flex-1">
+                        <span className="text-sm font-medium">
+                          {deliveryEventLabel(e)}
+                        </span>
+                        {e.note && (
+                          <div className="text-xs text-muted-foreground">
+                            {e.note}
+                          </div>
+                        )}
+                        <div className="
+                          mt-0.5 text-[11px] text-muted-foreground tabular-nums
+                        "
+                        >
+                          {shortDateFmt.format(e.createdAt)}
+                        </div>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+          )}
 
           <div className="
             space-y-3 rounded-lg border bg-background p-4 shadow-xs
