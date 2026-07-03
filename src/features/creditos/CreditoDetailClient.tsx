@@ -13,6 +13,7 @@ import {
 } from '@/libs/creditos-shared';
 import { Link, useRouter } from '@/libs/I18nNavigation';
 import { cn } from '@/utils/Helpers';
+import { AbonoAmountField } from './AbonoAmountField';
 import { AbonoMethodPicker } from './AbonoMethodPicker';
 import {
   DUE_STATE_META,
@@ -213,29 +214,11 @@ function AbonoPanel({
 
   return (
     <div className="space-y-2.5 rounded-lg border bg-muted/30 p-3">
-      <div className="
-        grid grid-cols-1 gap-2.5
-        sm:grid-cols-2
-      "
-      >
-        <input
-          type="number"
-          inputMode="decimal"
-          min="0"
-          step="1"
-          value={amount}
-          onChange={e => setAmount(e.target.value)}
-          placeholder={`Monto (saldo ${formatMoney(balance)})`}
-          className={inputCls}
-        />
-        <input
-          type="text"
-          value={note}
-          onChange={e => setNote(e.target.value)}
-          placeholder="Notas (opcional)"
-          className={inputCls}
-        />
-      </div>
+      <AbonoAmountField
+        value={amount}
+        onChange={setAmount}
+        balance={balance}
+      />
       <div>
         <div className="mb-1.5 text-xs font-medium text-muted-foreground">
           Método de pago
@@ -247,6 +230,13 @@ function AbonoPanel({
           disabled={pending}
         />
       </div>
+      <input
+        type="text"
+        value={note}
+        onChange={e => setNote(e.target.value)}
+        placeholder="Notas (opcional)"
+        className={inputCls}
+      />
       {error && <div className="text-xs text-destructive">{error}</div>}
       <div className="flex justify-end">
         <Button size="sm" onClick={submit} disabled={pending}>
