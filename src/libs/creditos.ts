@@ -24,6 +24,7 @@ import {
   cashSessionsSchema,
   creditoMovementsSchema,
   creditosSchema,
+  transferReconciliationsSchema,
 } from '@/models/Schema';
 
 export {
@@ -847,7 +848,13 @@ export type CreditoTimelineEntry = {
   dueDateAfter: string | null;
   note: string | null;
   createdBy: string | null;
+  // Cash abono that landed in the drawer (created a cash_movements row).
   hitCaja: boolean;
+  // A transfer/digital abono routes to the caja confirmation queue
+  // (transfer_reconciliations). pendingConfirmation = created, cashier hasn't
+  // verified the money arrived yet; confirmedInCaja = matched to a bank deposit.
+  pendingConfirmation: boolean;
+  confirmedInCaja: boolean;
   createdAt: string;
 };
 
@@ -907,6 +914,8 @@ export async function getClientDetail(
     .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
 
   const ids = mine.map(f => f.id);
+  // Left-join the reconciliation so a transfer abono can show its caja state
+  // (pending → confirmed), mirroring how a cash abono shows "En caja".
   const movements = await db
     .select({
       id: creditoMovementsSchema.id,
@@ -915,6 +924,8 @@ export async function getClientDetail(
       amount: creditoMovementsSchema.amount,
       method: creditoMovementsSchema.method,
       cashMovementId: creditoMovementsSchema.cashMovementId,
+      transferReconciliationId: creditoMovementsSchema.transferReconciliationId,
+      reconciliationStatus: transferReconciliationsSchema.status,
       dueDateBefore: creditoMovementsSchema.dueDateBefore,
       dueDateAfter: creditoMovementsSchema.dueDateAfter,
       note: creditoMovementsSchema.note,
@@ -922,6 +933,13 @@ export async function getClientDetail(
       createdAt: creditoMovementsSchema.createdAt,
     })
     .from(creditoMovementsSchema)
+    .leftJoin(
+      transferReconciliationsSchema,
+      eq(
+        creditoMovementsSchema.transferReconciliationId,
+        transferReconciliationsSchema.id,
+      ),
+    )
     .where(inArray(creditoMovementsSchema.creditoId, ids))
     .orderBy(asc(creditoMovementsSchema.createdAt));
 
@@ -936,6 +954,11 @@ export async function getClientDetail(
     note: m.note,
     createdBy: m.createdBy,
     hitCaja: m.cashMovementId != null,
+    pendingConfirmation:
+      m.transferReconciliationId != null && m.reconciliationStatus === 'pending',
+    confirmedInCaja:
+      m.transferReconciliationId != null
+      && m.reconciliationStatus === 'confirmed',
     createdAt: m.createdAt.toISOString(),
   }));
 
