@@ -218,6 +218,18 @@ export const saleStatusEnum = pgEnum('sale_status', [
   'returned',
 ]);
 
+// Where the sale originated, stored explicitly instead of inferred from
+// posTokenId/notes. pos = register/device sale (web POS or pos-merchatai);
+// panel = manual dashboard entry with no device; delivery = created from a
+// delivered domicilio (see features/delivery/actions.ts#createDeliverySale);
+// agent = a WhatsApp-bot order (see api/agent/orders/route.ts).
+export const saleChannelEnum = pgEnum('sale_channel', [
+  'pos',
+  'panel',
+  'delivery',
+  'agent',
+]);
+
 export const salesSchema = pgTable(
   'sales',
   {
@@ -233,6 +245,11 @@ export const salesSchema = pgTable(
     notes: text('notes'),
     cashierId: text('cashier_id'),
     posTokenId: uuid('pos_token_id'),
+    // Explicit sale origin — see saleChannelEnum above. Stamped at every
+    // creation path (createSaleForOrg, the dashboard-manual wrapper, delivery
+    // settlement, the agent order route, and the direct POS insert) so
+    // delivery-vs-POS KPIs don't have to infer it from posTokenId/notes.
+    channel: saleChannelEnum('channel').default('pos').notNull(),
     // DIAN e-invoicing intent + result, mirrored onto the sale for cheap reads.
     // Every sale starts 'pending' so it surfaces in the Facturas module; it
     // flips to 'emitted' (with cufe/number) or 'failed' once a provider runs.

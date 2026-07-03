@@ -329,6 +329,9 @@ export async function POST(req: Request): Promise<Response> {
       paymentType: paymentMethod,
       notes: body.notes ?? null,
       posTokenId: openSession.posTokenId ?? null,
+      // Explicit: posTokenId above would otherwise default channel to 'pos',
+      // but this order was placed by the WhatsApp bot, not the register.
+      channel: 'agent',
       idempotencyKey: body.idempotencyKey,
     });
   } catch (err) {

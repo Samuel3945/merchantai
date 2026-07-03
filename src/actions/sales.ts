@@ -101,6 +101,10 @@ export type CreateSaleForOrgInput = {
   // behavior. null = agent sale attributed to the admin/no-device cash
   // session. A uuid = agent sale attributed to that POS device's session.
   posTokenId?: string | null;
+  // Explicit sale origin (see saleChannelEnum in Schema.ts). Omitted =
+  // inferred from posTokenId, same as before this field existed: 'pos' when
+  // a device is attached, 'panel' otherwise.
+  channel?: 'pos' | 'panel' | 'delivery' | 'agent';
   // Sets sale_idempotency_key. Omitted = no dedupe (dashboard, unchanged).
   idempotencyKey?: string;
 };
@@ -244,6 +248,7 @@ export async function createSaleForOrg(input: CreateSaleForOrgInput) {
           notes: input.notes ?? null,
           cashierId: actorId,
           posTokenId: input.posTokenId ?? null,
+          channel: input.channel ?? (input.posTokenId ? 'pos' : 'panel'),
           saleIdempotencyKey: input.idempotencyKey ?? undefined,
         })
         .returning();
@@ -475,6 +480,9 @@ export async function createSale(input: CreateSaleInput) {
     payments: input.payments,
     notes: input.notes,
     dueDate: input.dueDate,
+    // Explicit even though omitting posTokenId already defaults to 'panel' —
+    // this IS the dashboard-manual creation path, so make it unambiguous.
+    channel: 'panel',
   });
 
   return result;

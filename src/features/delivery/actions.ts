@@ -426,6 +426,10 @@ async function createDeliverySale(
       ? payments!.map(p => ({ method: p.method, amount: p.amount }))
       : undefined,
     posTokenId: shift.posTokenId,
+    // Explicit: without this, the posTokenId above would default channel to
+    // 'pos' even though this sale is a delivered domicilio settling into the
+    // courier's caja, not a register sale.
+    channel: 'delivery',
     notes: creditoNotes,
     // The delivery order id (a UUID) IS the idempotency key. sale_idempotency_key
     // is a UUID column, so a "delivery:" prefix would break the insert; the raw
