@@ -71,6 +71,7 @@ const IDEMPOTENCY_KEY = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
 // ---------------------------------------------------------------------------
 const SCHEMA = `
   CREATE TYPE "sale_status" AS ENUM('completed','voided','returned');
+  CREATE TYPE "sale_channel" AS ENUM('pos','panel','delivery','agent');
 
   CREATE TABLE sales (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
@@ -82,6 +83,7 @@ const SCHEMA = `
     notes text,
     cashier_id text,
     pos_token_id uuid,
+    channel "sale_channel" DEFAULT 'pos' NOT NULL,
     einvoice_status text DEFAULT 'pending' NOT NULL,
     einvoice_cufe text,
     einvoice_number text,

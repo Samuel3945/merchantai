@@ -301,6 +301,8 @@ export async function POST(req: Request): Promise<NextResponse> {
           notes: body.notes ?? null,
           cashierId: ctx.cashierId,
           posTokenId: ctx.source === 'token' ? ctx.tokenId : null,
+          // This route is the register/device POS sale path itself.
+          channel: 'pos',
           occurredAt,
           saleIdempotencyKey: idempotencyKey ?? undefined,
         })

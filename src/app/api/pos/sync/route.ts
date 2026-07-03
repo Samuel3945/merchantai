@@ -267,6 +267,9 @@ export async function POST(req: Request): Promise<NextResponse> {
             notes: queuedSale.notes ?? null,
             cashierId,
             posTokenId: posToken.id,
+            // Offline mobile POS sync — a device/register sale like the
+            // online POS route, just replayed later.
+            channel: 'pos',
             saleIdempotencyKey: batchIdempotencyKey ?? undefined,
           })
           .returning({ id: salesSchema.id });
