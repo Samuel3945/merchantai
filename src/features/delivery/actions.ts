@@ -347,16 +347,10 @@ async function createDeliverySale(
   if (!shift) {
     throw new Error(NO_ACTIVE_SHIFT_MESSAGE);
   }
-  // Reject credito on either the single method or any split entry: a delivered
-  // contraentrega COLLECTS money into a caja, so a credit debt makes no sense.
-  if (
-    isCreditoMethod(paymentType)
-    || (payments?.some(p => isCreditoMethod(p.method)) ?? false)
-  ) {
-    throw new Error(
-      'No se puede entregar a crédito. Elegí un método de cobro (efectivo, transferencia, etc.).',
-    );
-  }
+  // Credito is allowed: a delivered order can be booked as a fiado debt (the
+  // customer pays later) instead of collecting cash. createSaleForOrg records
+  // the credit in the same transaction; the debt is attributed to the order's
+  // customer via the notes string built below (mirrors the POS convention).
 
   const [order] = await db
     .select()
@@ -411,6 +405,17 @@ async function createDeliverySale(
     ? (payments!.length === 1 ? payments![0]!.method : 'Mixto')
     : paymentType;
 
+  // When any part of the collection is credito, the sale is booked as a fiado
+  // debt. createSaleForOrg attributes the credit to the client it parses out of
+  // `notes` ("Cliente: NAME | Tel: PHONE"), so hand it the order's customer
+  // snapshot; without it the debt would be created unattributed.
+  const isCredito
+    = isCreditoMethod(paymentType)
+      || (payments?.some(p => isCreditoMethod(p.method)) ?? false);
+  const creditoNotes = isCredito
+    ? `Cliente: ${order.customerName ?? ''} | Tel: ${order.customerPhone ?? ''}`
+    : undefined;
+
   const sale = await createSaleForOrg({
     orgId,
     actorId: actor.id,
@@ -421,6 +426,7 @@ async function createDeliverySale(
       ? payments!.map(p => ({ method: p.method, amount: p.amount }))
       : undefined,
     posTokenId: shift.posTokenId,
+    notes: creditoNotes,
     // The delivery order id (a UUID) IS the idempotency key. sale_idempotency_key
     // is a UUID column, so a "delivery:" prefix would break the insert; the raw
     // UUID keeps the (org, key) unique index as the second double-sell guard.

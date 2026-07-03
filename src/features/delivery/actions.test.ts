@@ -113,6 +113,7 @@ const SCHEMA = `
     total numeric(12, 2) DEFAULT '0' NOT NULL,
     source text DEFAULT 'manual' NOT NULL,
     notes text,
+    delivery_photo_url text,
     assigned_at timestamp,
     in_transit_at timestamp,
     delivered_at timestamp,
@@ -391,20 +392,26 @@ describe('transitionDelivery — payment method at delivery (P0-B)', () => {
     );
   });
 
-  it('rejects a credito method — no sale, status unchanged', async () => {
+  it('credito method → books the sale as a fiado debt (no reject), attributing the client in notes', async () => {
     await seedShift(DEVICE_ID);
-    await seedOrder('assigned', [
-      { productId: PRODUCT_ID, qty: 1, name: 'Arroz', price: 1000 },
-    ]);
+    await seedOrder(
+      'assigned',
+      [{ productId: PRODUCT_ID, qty: 1, name: 'Arroz', price: 1000 }],
+      '573001112233',
+    );
 
     const { transitionDelivery } = await import('./actions');
+    await transitionDelivery(ORDER_ID, { status: 'delivered', paymentType: 'Crédito' });
 
-    await expect(
-      transitionDelivery(ORDER_ID, { status: 'delivered', paymentType: 'Crédito' }),
-    ).rejects.toThrow(/cr[ée]dito/i);
-
-    expect(h.createSale).not.toHaveBeenCalled();
-    expect((await orderRow()).status).toBe('assigned');
+    // createSaleForOrg books the credit; the client phone is threaded through
+    // `notes` so the debt attributes to this customer (POS convention).
+    expect(h.createSale).toHaveBeenCalledWith(
+      expect.objectContaining({
+        paymentType: 'Crédito',
+        notes: expect.stringContaining('Tel: 573001112233'),
+      }),
+    );
+    expect((await orderRow()).status).toBe('delivered');
   });
 });
 
@@ -459,27 +466,37 @@ describe('transitionDelivery — mixed (split) payment', () => {
     );
   });
 
-  it('rejects a credito entry inside a split — no sale, status unchanged', async () => {
+  it('credito entry inside a split → books the sale (cash + fiado), attributing the client', async () => {
     await seedShift(DEVICE_ID);
-    await seedOrder('assigned', [
-      { productId: PRODUCT_ID, qty: 1, name: 'Arroz', price: 1000 },
-    ]);
+    await seedOrder(
+      'assigned',
+      [{ productId: PRODUCT_ID, qty: 1, name: 'Arroz', price: 1000 }],
+      '573001112233',
+    );
 
     const { transitionDelivery } = await import('./actions');
+    await transitionDelivery(ORDER_ID, {
+      status: 'delivered',
+      paymentType: 'Mixto',
+      payments: [
+        { method: 'Efectivo', amount: 500 },
+        { method: 'Crédito', amount: 500 },
+      ],
+    });
 
-    await expect(
-      transitionDelivery(ORDER_ID, {
-        status: 'delivered',
+    // The cash half books into the caja; the credito half becomes a fiado debt
+    // attributed to the order's customer (threaded via notes).
+    expect(h.createSale).toHaveBeenCalledWith(
+      expect.objectContaining({
         paymentType: 'Mixto',
         payments: [
           { method: 'Efectivo', amount: 500 },
           { method: 'Crédito', amount: 500 },
         ],
+        notes: expect.stringContaining('Tel: 573001112233'),
       }),
-    ).rejects.toThrow(/cr[ée]dito/i);
-
-    expect(h.createSale).not.toHaveBeenCalled();
-    expect((await orderRow()).status).toBe('assigned');
+    );
+    expect((await orderRow()).status).toBe('delivered');
   });
 });
 
