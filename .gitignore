@@ -3,6 +3,9 @@
 # local uploads (logos, etc.) — persisted to a volume in production
 /.uploads
 
+# Claude Code local tooling (agent worktrees, session data) — never committed
+/.claude
+
 # dependencies
 /node_modules
 /.pnp

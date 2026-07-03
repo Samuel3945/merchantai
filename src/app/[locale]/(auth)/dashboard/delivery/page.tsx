@@ -92,11 +92,11 @@ export default async function DashboardDeliveryPage(props: {
   const einvoiceEnabled
     = einvoiceR.status === 'fulfilled' ? einvoiceR.value.configured : false;
 
-  // The deliver dialog (P0-B) offers the org's real, active payment methods —
-  // minus credito: a delivered contraentrega COLLECTS money into a caja, so a
-  // credit debt makes no sense there (createDeliverySale rejects it too).
+  // The deliver dialog (P0-B) offers the org's real, active payment methods,
+  // INCLUDING credito ("después me pagás"): a delivered order can be booked as a
+  // fiado debt, mirroring the POS. createDeliverySale attributes the debt to the
+  // order's customer.
   const deliverPaymentMethods = paymentMethods
-    .filter(m => m.type !== 'credit')
     .map(m => ({ name: m.name, type: m.type }));
 
   return (
