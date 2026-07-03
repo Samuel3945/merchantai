@@ -36,6 +36,17 @@ export type CashFlowStats = {
   net: number;
 };
 
+export type ChannelStats = { count: number; revenue: number };
+
+// Completed sales split by origin — see saleChannelEnum in models/Schema.ts.
+// Zero-filled for channels with no rows so callers never guard for `undefined`.
+export type SalesByChannel = {
+  pos: ChannelStats;
+  panel: ChannelStats;
+  delivery: ChannelStats;
+  agent: ChannelStats;
+};
+
 export type DashboardMetrics = {
   range: { start: string; end: string };
   compareRange: { start: string; end: string } | null;
@@ -50,6 +61,8 @@ export type DashboardMetrics = {
   topProducts: TopProductRow[];
   // New credit extended per day — feeds the "Por cobrar" chart series.
   creditoByDay: CreditoByDayRow[];
+  // Completed sales split by channel over the range — feeds "Ventas por canal".
+  salesByChannel: SalesByChannel;
 };
 
 // New credito credit summed by the day it was created.
@@ -132,6 +145,46 @@ async function periodStats(
     profit: toNum(row.profit),
     margin: toNum(row.margin),
   };
+}
+
+// Completed sales grouped by origin channel (pos/panel/delivery/agent) over the
+// range — the headline "Domicilio vs POS" split, plus panel/agent for the
+// compact breakdown. Zero-filled so DashboardClient never guards for a missing
+// channel key.
+async function salesByChannel(
+  orgId: string,
+  start: string,
+  end: string,
+): Promise<SalesByChannel> {
+  const result = await db.execute(sql`
+    SELECT
+      channel,
+      COUNT(*)::int AS count,
+      COALESCE(SUM(total), 0)::numeric AS revenue
+    FROM sales
+    WHERE organization_id = ${orgId}
+      AND status = 'completed'
+      AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Bogota')::date
+          BETWEEN ${start}::date AND ${end}::date
+    GROUP BY channel
+  `);
+
+  const stats: SalesByChannel = {
+    pos: { count: 0, revenue: 0 },
+    panel: { count: 0, revenue: 0 },
+    delivery: { count: 0, revenue: 0 },
+    agent: { count: 0, revenue: 0 },
+  };
+
+  for (const r of result.rows ?? []) {
+    const row = r as Record<string, unknown>;
+    const channel = String(row.channel ?? '');
+    if (channel === 'pos' || channel === 'panel' || channel === 'delivery' || channel === 'agent') {
+      stats[channel] = { count: toInt(row.count), revenue: toNum(row.revenue) };
+    }
+  }
+
+  return stats;
 }
 
 async function inventoryStats(orgId: string): Promise<InventoryStats> {
@@ -322,6 +375,7 @@ export async function getMetrics(
     cashFlow,
     topProducts,
     creditoDaily,
+    byChannel,
   ] = await Promise.all([
     periodStats(orgId, s, e),
     inventoryStats(orgId),
@@ -332,6 +386,7 @@ export async function getMetrics(
     cashFlowStats(orgId, s, e),
     getTopProducts(s, e),
     creditoByDay(orgId, s, e),
+    salesByChannel(orgId, s, e),
   ]);
 
   return {
@@ -346,6 +401,7 @@ export async function getMetrics(
     salesByDay: byDay,
     topProducts: topProducts.slice(0, 5),
     creditoByDay: creditoDaily,
+    salesByChannel: byChannel,
   };
 }
 
