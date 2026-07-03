@@ -1,14 +1,19 @@
 'use client';
 
 import type { ClientDetail, CreditoTimelineEntry } from '@/actions/creditos';
+import type { AbonoMethod } from '@/libs/creditos-shared';
 import { useState, useTransition } from 'react';
 import { abonarCredito, extenderPlazo } from '@/actions/creditos';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Select } from '@/components/ui/select';
-import { CREDITO_PAYMENT_METHODS, dueStateLabel } from '@/libs/creditos-shared';
+import {
+  CREDITO_PAYMENT_METHODS,
+  defaultAbonoMethod,
+  dueStateLabel,
+} from '@/libs/creditos-shared';
 import { Link, useRouter } from '@/libs/I18nNavigation';
 import { cn } from '@/utils/Helpers';
+import { AbonoMethodPicker } from './AbonoMethodPicker';
 import {
   DUE_STATE_META,
   formatDate,
@@ -109,12 +114,24 @@ function Timeline({ entries }: { entries: CreditoTimelineEntry[] }) {
               <div className="min-w-0">
                 <div className="text-sm font-medium">
                   {c.title}
-                  {m.type === 'payment' && m.hitCaja && (
+                  {m.type === 'payment' && (m.hitCaja || m.confirmedInCaja) && (
                     <Badge
                       variant="outline"
                       className="ml-2 align-middle text-[10px]"
                     >
                       En caja
+                    </Badge>
+                  )}
+                  {m.type === 'payment' && m.pendingConfirmation && (
+                    <Badge
+                      variant="outline"
+                      className="
+                        ml-2 border-amber-500/40 align-middle text-[10px]
+                        text-amber-600
+                        dark:text-amber-400
+                      "
+                    >
+                      Pendiente en caja
                     </Badge>
                   )}
                 </div>
@@ -158,14 +175,16 @@ function Timeline({ entries }: { entries: CreditoTimelineEntry[] }) {
 function AbonoPanel({
   clientKey,
   balance,
+  methods,
   onDone,
 }: {
   clientKey: string;
   balance: number;
+  methods: AbonoMethod[];
   onDone: () => void;
 }) {
   const [amount, setAmount] = useState('');
-  const [method, setMethod] = useState('efectivo');
+  const [method, setMethod] = useState(() => defaultAbonoMethod(methods));
   const [note, setNote] = useState('');
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -196,7 +215,7 @@ function AbonoPanel({
     <div className="space-y-2.5 rounded-lg border bg-muted/30 p-3">
       <div className="
         grid grid-cols-1 gap-2.5
-        sm:grid-cols-3
+        sm:grid-cols-2
       "
       >
         <input
@@ -209,20 +228,23 @@ function AbonoPanel({
           placeholder={`Monto (saldo ${formatMoney(balance)})`}
           className={inputCls}
         />
-        <Select
-          value={method}
-          onValueChange={setMethod}
-          options={CREDITO_PAYMENT_METHODS.map(m => ({
-            value: m.value,
-            label: m.label,
-          }))}
-        />
         <input
           type="text"
           value={note}
           onChange={e => setNote(e.target.value)}
           placeholder="Notas (opcional)"
           className={inputCls}
+        />
+      </div>
+      <div>
+        <div className="mb-1.5 text-xs font-medium text-muted-foreground">
+          Método de pago
+        </div>
+        <AbonoMethodPicker
+          methods={methods}
+          value={method}
+          onChange={setMethod}
+          disabled={pending}
         />
       </div>
       {error && <div className="text-xs text-destructive">{error}</div>}
@@ -293,7 +315,13 @@ function ExtenderPanel({
 
 // ── Root ─────────────────────────────────────────────────────────────────────
 
-export function CreditoDetailClient({ detail }: { detail: ClientDetail }) {
+export function CreditoDetailClient({
+  detail,
+  paymentMethods,
+}: {
+  detail: ClientDetail;
+  paymentMethods: AbonoMethod[];
+}) {
   const router = useRouter();
   const [panel, setPanel] = useState<null | 'abono' | 'extender'>(null);
   const { client, creditos, timeline } = detail;
@@ -406,7 +434,12 @@ export function CreditoDetailClient({ detail }: { detail: ClientDetail }) {
           </div>
 
           {panel === 'abono' && (
-            <AbonoPanel clientKey={client.clientKey} balance={client.balance} onDone={done} />
+            <AbonoPanel
+              clientKey={client.clientKey}
+              balance={client.balance}
+              methods={paymentMethods}
+              onDone={done}
+            />
           )}
           {panel === 'extender' && urgentCreditoId && (
             <ExtenderPanel creditoId={urgentCreditoId} onDone={done} />

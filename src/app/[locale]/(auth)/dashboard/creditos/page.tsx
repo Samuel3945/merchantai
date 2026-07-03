@@ -1,7 +1,9 @@
 import { setRequestLocale } from 'next-intl/server';
 import { fetchCreditosOverview } from '@/actions/creditos';
+import { listPaymentMethods } from '@/actions/payment-methods';
 import { CreditosClient } from '@/features/creditos/CreditosClient';
 import { TitleBar } from '@/features/dashboard/TitleBar';
+import { toAbonoMethods } from '@/libs/creditos-shared';
 
 export default async function DashboardCreditosPage(props: {
   params: Promise<{ locale: string }>;
@@ -9,7 +11,11 @@ export default async function DashboardCreditosPage(props: {
   const { locale } = await props.params;
   setRequestLocale(locale);
 
-  const initial = await fetchCreditosOverview();
+  const [initial, methodRows] = await Promise.all([
+    fetchCreditosOverview(),
+    listPaymentMethods({ activeOnly: true }),
+  ]);
+  const paymentMethods = toAbonoMethods(methodRows);
 
   return (
     <>
@@ -17,7 +23,7 @@ export default async function DashboardCreditosPage(props: {
         title="Clientes que deben"
         description="Quién te debe, cuánto y cuándo paga. Cobra abonos y extiende plazos."
       />
-      <CreditosClient initial={initial} />
+      <CreditosClient initial={initial} paymentMethods={paymentMethods} />
     </>
   );
 }

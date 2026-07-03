@@ -1,7 +1,7 @@
 'use client';
 
 import type { ClientDebt, CreditosOverview } from '@/actions/creditos';
-import type { CreditoDueState } from '@/libs/creditos-shared';
+import type { AbonoMethod, CreditoDueState } from '@/libs/creditos-shared';
 import type { RangeOption } from '@/utils/DateRange';
 import { Search, X } from 'lucide-react';
 import { useId, useMemo, useState, useTransition } from 'react';
@@ -16,12 +16,13 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
 import {
-  CREDITO_PAYMENT_METHODS,
+  defaultAbonoMethod,
   dueStateLabel,
 } from '@/libs/creditos-shared';
 import { Link } from '@/libs/I18nNavigation';
 import { addDays, todayBogota } from '@/utils/DateRange';
 import { cn } from '@/utils/Helpers';
+import { AbonoMethodPicker } from './AbonoMethodPicker';
 import { DUE_STATE_META, formatDate, formatMoney, relativeTime } from './ui';
 
 const inputCls
@@ -74,19 +75,20 @@ function ProgressBar({ pct, state }: { pct: number; state: CreditoDueState }) {
 
 function AbonarForm({
   client,
+  methods,
   onDone,
   onCancel,
 }: {
   client: ClientDebt;
+  methods: AbonoMethod[];
   onDone: () => void;
   onCancel: () => void;
 }) {
   const formId = useId();
   const amountId = `${formId}-amount`;
-  const methodId = `${formId}-method`;
   const noteId = `${formId}-note`;
   const [amount, setAmount] = useState('');
-  const [method, setMethod] = useState('efectivo');
+  const [method, setMethod] = useState(() => defaultAbonoMethod(methods));
   const [note, setNote] = useState('');
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -100,6 +102,7 @@ function AbonarForm({
     }
     setError(null);
     setNotice(null);
+    const selected = methods.find(m => m.value === method);
     startTransition(async () => {
       try {
         const result = await abonarCredito({
@@ -108,9 +111,16 @@ function AbonarForm({
           method,
           note: note.trim() || null,
         });
-        if (method === 'efectivo' && !result.hitCaja) {
+        if (selected?.type === 'cash' && !result.hitCaja) {
           setNotice(
             'Abono registrado. La caja está cerrada, así que no se reflejó en el efectivo; ábrela para cuadrarlo.',
+          );
+          setTimeout(onDone, 1800);
+          return;
+        }
+        if (selected?.type === 'transfer') {
+          setNotice(
+            'Abono registrado. Queda pendiente de confirmar en caja cuando verifiques que la plata entró a la cuenta.',
           );
           setTimeout(onDone, 1800);
           return;
@@ -124,51 +134,39 @@ function AbonarForm({
 
   return (
     <div className="mt-3 space-y-2.5 rounded-lg border bg-muted/30 p-3">
-      <div className="
-        grid grid-cols-1 gap-2.5
-        sm:grid-cols-2
-      "
-      >
-        <div>
-          <label
-            htmlFor={amountId}
-            className="text-xs font-medium text-muted-foreground"
-          >
-            Monto (saldo
-            {' '}
-            {formatMoney(client.balance)}
-            )
-          </label>
-          <input
-            id={amountId}
-            type="number"
-            inputMode="decimal"
-            min="0"
-            step="1"
-            value={amount}
-            onChange={e => setAmount(e.target.value)}
-            placeholder="0"
-            className={inputCls}
-            autoFocus
-          />
+      <div>
+        <label
+          htmlFor={amountId}
+          className="text-xs font-medium text-muted-foreground"
+        >
+          Monto (saldo
+          {' '}
+          {formatMoney(client.balance)}
+          )
+        </label>
+        <input
+          id={amountId}
+          type="number"
+          inputMode="decimal"
+          min="0"
+          step="1"
+          value={amount}
+          onChange={e => setAmount(e.target.value)}
+          placeholder="0"
+          className={inputCls}
+          autoFocus
+        />
+      </div>
+      <div>
+        <div className="mb-1.5 text-xs font-medium text-muted-foreground">
+          Método de pago
         </div>
-        <div>
-          <label
-            htmlFor={methodId}
-            className="text-xs font-medium text-muted-foreground"
-          >
-            Método
-          </label>
-          <Select
-            id={methodId}
-            value={method}
-            onValueChange={setMethod}
-            options={CREDITO_PAYMENT_METHODS.map(m => ({
-              value: m.value,
-              label: m.label,
-            }))}
-          />
-        </div>
+        <AbonoMethodPicker
+          methods={methods}
+          value={method}
+          onChange={setMethod}
+          disabled={pending}
+        />
       </div>
       <div>
         <label
@@ -302,10 +300,12 @@ function ExtenderForm({
 
 function ClientCard({
   client,
+  methods,
   onChange,
   history = false,
 }: {
   client: ClientDebt;
+  methods: AbonoMethod[];
   onChange: () => void;
   history?: boolean;
 }) {
@@ -430,6 +430,7 @@ function ClientCard({
       {open === 'abono' && (
         <AbonarForm
           client={client}
+          methods={methods}
           onDone={() => {
             setOpen(null);
             onChange();
@@ -549,7 +550,13 @@ function filterAndSortClients(
   });
 }
 
-export function CreditosClient({ initial }: { initial: CreditosOverview }) {
+export function CreditosClient({
+  initial,
+  paymentMethods,
+}: {
+  initial: CreditosOverview;
+  paymentMethods: AbonoMethod[];
+}) {
   const [data, setData] = useState<CreditosOverview>(initial);
   const [history, setHistory] = useState<ClientDebt[] | null>(null);
   const [tab, setTab] = useState<Tab>('pending');
@@ -693,6 +700,7 @@ export function CreditosClient({ initial }: { initial: CreditosOverview }) {
           <ClientCard
             key={c.clientKey}
             client={c}
+            methods={paymentMethods}
             onChange={reload}
             history={isHistory}
           />

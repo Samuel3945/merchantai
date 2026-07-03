@@ -9,6 +9,9 @@ export type CreditoDueState = 'overdue' | 'due_soon' | 'on_track' | 'paid';
 // "Próximo a vencer": due today or within this many days.
 export const DUE_SOON_DAYS = 3;
 
+// Legacy generic tokens. The abono picker no longer uses these — it sources the
+// merchant's REAL methods (see AbonoMethod below). Kept only as a label fallback
+// for old ledger rows that were recorded with these generic values.
 export const CREDITO_PAYMENT_METHODS = [
   { value: 'efectivo', label: 'Efectivo' },
   { value: 'nequi', label: 'Nequi' },
@@ -16,6 +19,67 @@ export const CREDITO_PAYMENT_METHODS = [
   { value: 'transferencia', label: 'Transferencia' },
   { value: 'otro', label: 'Otro' },
 ] as const;
+
+// ── Abono payment methods (real, org-configured) ─────────────────────────────
+
+export type AbonoMethodType = 'cash' | 'transfer' | 'card' | 'other';
+
+// A payment method as shown in the abono picker. Sourced from the real
+// payment_methods table (actions/payment-methods.ts), NOT the hardcoded list
+// above. `value` is the method's unique name and is sent to the ledger verbatim:
+// a transfer abono attributes to the right bank account because
+// treasury.resolveBancoForMethod matches on payment_methods.name.
+export type AbonoMethod = {
+  value: string;
+  label: string;
+  type: AbonoMethodType;
+  icon: string | null;
+  subtitle: string | null;
+};
+
+// Structural shape of a payment_methods row — declared locally so this
+// client-safe module never imports the server data layer.
+type PaymentMethodLike = {
+  name: string;
+  type: string;
+  icon?: string | null;
+  details?: unknown;
+};
+
+// Maps active payment methods to abono options. Credit is dropped (you can't pay
+// a credit with credit); order is preserved so cash (seeded first) stays first,
+// then the merchant's own accounts in their configured order. Each transfer
+// account is its own option — the cashier POS does the same, so the abono
+// records WHICH account received the money.
+export function toAbonoMethods(rows: PaymentMethodLike[]): AbonoMethod[] {
+  return rows
+    .filter(r => r.type !== 'credit')
+    .map((r) => {
+      const type: AbonoMethodType
+        = r.type === 'cash' || r.type === 'transfer' || r.type === 'card'
+          ? r.type
+          : 'other';
+      const account
+        = type === 'transfer'
+          ? (r.details as { account_number?: string } | null)?.account_number
+          ?? null
+          : null;
+      return {
+        value: r.name,
+        label: r.name,
+        type,
+        icon: r.icon ?? null,
+        subtitle: account,
+      };
+    });
+}
+
+// The picker defaults to cash (the usual counter payment), falling back to the
+// first available method if cash is somehow absent.
+export function defaultAbonoMethod(methods: AbonoMethod[]): string {
+  const cash = methods.find(m => m.type === 'cash');
+  return cash?.value ?? methods[0]?.value ?? '';
+}
 
 // Whole-day signed difference to the due date. Negative = overdue, 0 = due
 // today, positive = days remaining. Uses local midnight so "Vence mañana" is
