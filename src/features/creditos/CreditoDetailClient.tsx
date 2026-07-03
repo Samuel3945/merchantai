@@ -390,6 +390,24 @@ export function CreditoDetailClient({
                 <span className="text-muted-foreground">Abonado</span>
                 <span className="tabular-nums">{formatMoney(client.paid)}</span>
               </div>
+              {client.pendingConfirmation > 0 && (
+                <div className="flex justify-between">
+                  <span className="
+                    text-amber-600
+                    dark:text-amber-400
+                  "
+                  >
+                    Pendiente a confirmar
+                  </span>
+                  <span className="
+                    text-amber-600 tabular-nums
+                    dark:text-amber-400
+                  "
+                  >
+                    {formatMoney(client.pendingConfirmation)}
+                  </span>
+                </div>
+              )}
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Monto original</span>
                 <span className="tabular-nums">{formatMoney(client.original)}</span>

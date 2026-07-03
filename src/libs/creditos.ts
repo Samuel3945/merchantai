@@ -356,7 +356,11 @@ export async function recordAbonoTx(
         createdBy: args.createdBy,
       });
     }
-    if (p.settle) {
+    // A pending transfer abono does NOT settle the debt: the money hasn't landed
+    // until the cashier confirms it in caja. Those creditos settle later, in
+    // settleCreditosForConfirmedTransfer (called on confirmation). Cash — and any
+    // method that created no pending reconciliation — settles immediately.
+    if (p.settle && transferReconciliationId == null) {
       await executor
         .update(creditosSchema)
         .set({ status: 'paid' })
@@ -372,6 +376,77 @@ export async function recordAbonoTx(
     cashMovementId,
     hitCaja: cashMovementId != null,
   };
+}
+
+// Settles the creditos covered by a transfer reconciliation once it is confirmed
+// in caja. Until confirmation the abono is recorded but does NOT count toward the
+// balance (see fetchEnrichedCreditos) nor mark the credito paid (see the settle
+// gate in recordAbonoTx). Now that the money has landed, any covered credito that
+// reaches a zero balance flips to 'paid'. Runs inside the confirmTransfer
+// transaction; idempotent, so re-confirming only re-checks and never over-settles.
+export async function settleCreditosForConfirmedTransfer(
+  executor: Executor,
+  args: { organizationId: string; reconciliationId: string },
+): Promise<string[]> {
+  const movements = await executor
+    .select({ creditoId: creditoMovementsSchema.creditoId })
+    .from(creditoMovementsSchema)
+    .where(
+      and(
+        eq(creditoMovementsSchema.organizationId, args.organizationId),
+        eq(
+          creditoMovementsSchema.transferReconciliationId,
+          args.reconciliationId,
+        ),
+        eq(creditoMovementsSchema.type, 'payment'),
+      ),
+    );
+  const creditoIds = [...new Set(movements.map(m => m.creditoId))];
+  if (creditoIds.length === 0) {
+    return [];
+  }
+
+  const creditos = await executor
+    .select({
+      id: creditosSchema.id,
+      originalAmount: creditosSchema.originalAmount,
+    })
+    .from(creditosSchema)
+    .where(
+      and(
+        inArray(creditosSchema.id, creditoIds),
+        eq(creditosSchema.status, 'pending'),
+      ),
+    );
+
+  const settled: string[] = [];
+  for (const c of creditos) {
+    // Confirmed money only — same rule as fetchEnrichedCreditos. The
+    // reconciliation we just confirmed now counts; any still-pending one does not.
+    const [row] = await executor
+      .select({
+        paid: sql<string>`COALESCE(SUM(${creditoMovementsSchema.amount}) FILTER (WHERE ${creditoMovementsSchema.type} = 'payment' AND (${creditoMovementsSchema.transferReconciliationId} IS NULL OR ${transferReconciliationsSchema.status} = 'confirmed')), 0)::text`,
+      })
+      .from(creditoMovementsSchema)
+      .leftJoin(
+        transferReconciliationsSchema,
+        eq(
+          creditoMovementsSchema.transferReconciliationId,
+          transferReconciliationsSchema.id,
+        ),
+      )
+      .where(eq(creditoMovementsSchema.creditoId, c.id));
+    const paid = Number.parseFloat(row?.paid ?? '0') || 0;
+    const balance = round2((Number.parseFloat(c.originalAmount) || 0) - paid);
+    if (balance <= 0) {
+      await executor
+        .update(creditosSchema)
+        .set({ status: 'paid' })
+        .where(eq(creditosSchema.id, c.id));
+      settled.push(c.id);
+    }
+  }
+  return settled;
 }
 
 // ── Write: extend the due date (audited) ─────────────────────────────────────
@@ -449,6 +524,9 @@ type EnrichedCredito = {
   createdAt: Date;
   paid: number;
   balance: number;
+  // Money abonado via a transfer whose arrival the cashier hasn't confirmed in
+  // caja yet. It does NOT count toward `paid`/`balance` until confirmed.
+  pendingConfirmation: number;
   lastMovementAt: Date | null;
 };
 
@@ -480,13 +558,25 @@ async function fetchEnrichedCreditos(
   }
 
   const ids = rows.map(r => r.id);
+  // `paid` counts only money that has actually landed: cash (no reconciliation)
+  // or a CONFIRMED transfer. A transfer abono pending confirmation in caja is
+  // money not yet arrived — it is tracked separately in `pendingConfirmation`
+  // and must not reduce the balance nor settle the debt until confirmed.
   const agg = await db
     .select({
       creditoId: creditoMovementsSchema.creditoId,
-      paid: sql<string>`COALESCE(SUM(${creditoMovementsSchema.amount}) FILTER (WHERE ${creditoMovementsSchema.type} = 'payment'), 0)::text`,
+      paid: sql<string>`COALESCE(SUM(${creditoMovementsSchema.amount}) FILTER (WHERE ${creditoMovementsSchema.type} = 'payment' AND (${creditoMovementsSchema.transferReconciliationId} IS NULL OR ${transferReconciliationsSchema.status} = 'confirmed')), 0)::text`,
+      pendingConfirmation: sql<string>`COALESCE(SUM(${creditoMovementsSchema.amount}) FILTER (WHERE ${creditoMovementsSchema.type} = 'payment' AND ${creditoMovementsSchema.transferReconciliationId} IS NOT NULL AND ${transferReconciliationsSchema.status} = 'pending'), 0)::text`,
       last: sql<Date>`MAX(${creditoMovementsSchema.createdAt})`,
     })
     .from(creditoMovementsSchema)
+    .leftJoin(
+      transferReconciliationsSchema,
+      eq(
+        creditoMovementsSchema.transferReconciliationId,
+        transferReconciliationsSchema.id,
+      ),
+    )
     .where(inArray(creditoMovementsSchema.creditoId, ids))
     .groupBy(creditoMovementsSchema.creditoId);
   const aggById = new Map(agg.map(a => [a.creditoId, a]));
@@ -495,11 +585,15 @@ async function fetchEnrichedCreditos(
     const a = aggById.get(r.id);
     const original = Number.parseFloat(r.originalAmount) || 0;
     const paid = a ? Number.parseFloat(a.paid) || 0 : 0;
+    const pendingConfirmation = a
+      ? Number.parseFloat(a.pendingConfirmation) || 0
+      : 0;
     return {
       ...r,
       originalAmount: original,
       paid,
       balance: round2(Math.max(0, original - paid)),
+      pendingConfirmation: round2(pendingConfirmation),
       lastMovementAt: a?.last ? new Date(a.last) : r.createdAt,
     };
   });
@@ -520,6 +614,8 @@ export type ClientDebt = {
   lastMovementAt: string | null;
   creditoCount: number;
   creditoIds: string[];
+  // Total abonado by transfer that is still awaiting caja confirmation.
+  pendingConfirmation: number;
 };
 
 function groupByClient(
@@ -542,6 +638,9 @@ function groupByClient(
     const original = round2(list.reduce((a, f) => a + f.originalAmount, 0));
     const paid = round2(list.reduce((a, f) => a + f.paid, 0));
     const balance = round2(list.reduce((a, f) => a + f.balance, 0));
+    const pendingConfirmation = round2(
+      list.reduce((a, f) => a + f.pendingConfirmation, 0),
+    );
     const { name, phone } = parseClient(list[0]?.notes ?? null);
     const allPaid = list.every(f => f.status !== 'pending');
     // Headline due date = the most urgent (earliest) still-pending due date.
@@ -571,6 +670,7 @@ function groupByClient(
       lastMovementAt: lastMovementAt ? lastMovementAt.toISOString() : null,
       creditoCount: list.length,
       creditoIds: list.map(f => f.id),
+      pendingConfirmation,
     });
   }
 
@@ -600,11 +700,21 @@ export async function getCreditosOverview(
     (a, b) => a.dueDays - b.dueDays,
   );
 
+  // Recovered = money that actually landed this month: cash plus CONFIRMED
+  // transfers. A transfer abono still awaiting caja confirmation is NOT counted,
+  // so the metric never reports money that hasn't arrived.
   const [recovered] = await db
     .select({
-      sum: sql<string>`COALESCE(SUM(${creditoMovementsSchema.amount}) FILTER (WHERE ${creditoMovementsSchema.type} = 'payment'), 0)::text`,
+      sum: sql<string>`COALESCE(SUM(${creditoMovementsSchema.amount}) FILTER (WHERE ${creditoMovementsSchema.type} = 'payment' AND (${creditoMovementsSchema.transferReconciliationId} IS NULL OR ${transferReconciliationsSchema.status} = 'confirmed')), 0)::text`,
     })
     .from(creditoMovementsSchema)
+    .leftJoin(
+      transferReconciliationsSchema,
+      eq(
+        creditoMovementsSchema.transferReconciliationId,
+        transferReconciliationsSchema.id,
+      ),
+    )
     .where(
       and(
         eq(creditoMovementsSchema.organizationId, organizationId),
