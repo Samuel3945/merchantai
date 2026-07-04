@@ -9,8 +9,7 @@ import type {
 } from './actions';
 import type { CancelReasonKey } from './cancellation-reasons';
 import type { ActiveCourierShift, OpenCaja } from './shifts';
-import { Bike, Camera, MessageCircle, Phone, Settings } from 'lucide-react';
-import Link from 'next/link';
+import { Bike, Camera, MessageCircle, Phone } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
 import {
@@ -407,12 +406,6 @@ export function DeliveryClient(props: DeliveryClientProps) {
           >
             <Bike className="size-4" />
             {repartidorMode ? 'Salir de modo repartidor' : 'Modo repartidor'}
-          </Button>
-          <Button asChild variant="outline" size="sm">
-            <Link href="/dashboard/settings">
-              <Settings className="size-4" />
-              Configuración
-            </Link>
           </Button>
         </div>
       )}
