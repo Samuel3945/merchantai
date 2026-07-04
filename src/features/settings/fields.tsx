@@ -127,12 +127,23 @@ export function SelectField<T extends string>({
   hint?: string;
   onCommit: (value: T) => void;
 }) {
+  // Local state seeded from `initial` (and resynced if the persisted value
+  // changes upstream) so the trigger reflects the picked option immediately.
+  // Without it the Select is bound straight to the `initial` prop, which never
+  // changes on selection, so Radix (fully controlled) snaps the display back to
+  // the old value — the "combobox doesn't update" bug.
+  const [value, setValue] = useState<T>(initial);
+  useEffect(() => setValue(initial), [initial]);
+
   return (
     <FieldShell label={label} htmlFor={id} hint={hint}>
       <Select
         id={id}
-        value={initial}
-        onValueChange={v => onCommit(v as T)}
+        value={value}
+        onValueChange={(v) => {
+          setValue(v as T);
+          onCommit(v as T);
+        }}
         options={options.map(opt => ({ value: opt.value, label: opt.label }))}
       />
     </FieldShell>
