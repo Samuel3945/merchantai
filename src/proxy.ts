@@ -34,6 +34,10 @@ const POS_AUTH_FREE_PATHS = new Set([
 const POS_DEVICE_FREE_PATHS = new Set([
   '/api/pos/login',
   '/api/pos/connect',
+  // Per-employee PIN activation (Option B): the cashier opens this from the
+  // WhatsApp link BEFORE any login — no token/session yet. Gated solely by the
+  // one-time activation token in the body; the handler validates it.
+  '/api/pos/cashiers/activate',
 ]);
 
 // Orígenes del POS de cajero autorizados a llamar /api/pos/* cross-origin.

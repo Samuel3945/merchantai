@@ -27,8 +27,8 @@ import {
   listEmployees,
   listPendingInvitations,
   resendInvitation,
-  resetCashierPin,
   revokeInvitation,
+  sendCashierActivation,
   setEmployeeActive,
   updateEmployee,
 } from '@/actions/employees';
@@ -60,6 +60,58 @@ const dateFmt = new Intl.DateTimeFormat('es-CO', {
 
 function formatDate(date: Date | string) {
   return dateFmt.format(new Date(date));
+}
+
+type PinStatus = 'active' | 'pending' | 'locked';
+
+// A cashier's PIN state drives both the status chip and the button label. Locked
+// wins over active: a locked cashier still has a PIN but can't be picked until
+// the lock expires (or the admin resends the link, which clears it).
+function pinStatusOf(emp: {
+  hasPin: boolean;
+  pinLockedUntil: Date | string | null;
+}): PinStatus {
+  const locked
+    = emp.pinLockedUntil != null
+      && new Date(emp.pinLockedUntil).getTime() > Date.now();
+  if (locked) {
+    return 'locked';
+  }
+  return emp.hasPin ? 'active' : 'pending';
+}
+
+function PinStatusChip({ status }: { status: PinStatus }) {
+  if (status === 'locked') {
+    return (
+      <span className="
+        inline-flex items-center rounded-full bg-destructive/10 px-2 py-0.5
+        font-medium text-destructive
+      "
+      >
+        Bloqueado
+      </span>
+    );
+  }
+  if (status === 'active') {
+    return (
+      <span className="
+        inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5
+        font-medium text-emerald-700
+      "
+      >
+        PIN activo
+      </span>
+    );
+  }
+  return (
+    <span className="
+      inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 font-medium
+      text-amber-800
+    "
+    >
+      Pendiente de activar
+    </span>
+  );
 }
 
 type LimitErrorPayload = {
@@ -325,6 +377,9 @@ export function EmployeesClient({
   const [editing, setEditing] = useState<EmployeeRow | null>(null);
   const [lastInviteUrl, setLastInviteUrl] = useState<string | null>(null);
   const [lastEmailSent, setLastEmailSent] = useState<boolean | null>(null);
+  const [activation, setActivation] = useState<
+    { name: string; link: string; whatsappSent: boolean } | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
   const [limitError, setLimitError] = useState<LimitErrorPayload | null>(null);
   const [pending, startTransition] = useTransition();
@@ -373,25 +428,22 @@ export function EmployeesClient({
     });
   };
 
-  const handleResetPin = async (id: string, name: string) => {
-    const ok = await confirm({
-      title: `¿Resetear el PIN de ${name}?`,
-      description: 'Quedará sin PIN y podrá configurar uno nuevo desde la caja.',
-      confirmText: 'Resetear PIN',
-    });
-    if (!ok) {
-      return;
-    }
+  const handleSendActivation = (emp: EmployeeRow) => {
     startTransition(async () => {
       try {
-        const result = await resetCashierPin(id);
+        const result = await sendCashierActivation(emp.id);
         if (!result.ok) {
           setError(result.error);
           return;
         }
+        setActivation({
+          name: emp.name,
+          link: result.data.link,
+          whatsappSent: result.data.whatsappSent,
+        });
         refresh();
       } catch {
-        setError('No se pudo resetear el PIN');
+        setError('No se pudo enviar el enlace de activación');
       }
     });
   };
@@ -527,6 +579,44 @@ export function EmployeesClient({
         </div>
       )}
 
+      {activation && (
+        <div className="
+          rounded-md border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm
+          text-emerald-900
+        "
+        >
+          <div className="font-semibold">
+            {activation.whatsappSent
+              ? `Enlace de activación enviado por WhatsApp a ${activation.name}`
+              : `Enlace de activación de ${activation.name}`}
+          </div>
+          <div className="mt-1 text-xs">
+            {activation.whatsappSent
+              ? 'Le llegó por WhatsApp para que cree su propio PIN. Si no le llega, pasale este enlace:'
+              : 'No pudimos enviarlo por WhatsApp (número faltante o canal no conectado). Copiá este enlace y pasáselo para que cree su propio PIN:'}
+          </div>
+          <div className="mt-1 font-mono text-xs break-all">
+            {activation.link}
+          </div>
+          <button
+            type="button"
+            className="mt-2 underline"
+            onClick={() => {
+              navigator.clipboard.writeText(activation.link);
+            }}
+          >
+            Copiar
+          </button>
+          <button
+            type="button"
+            className="mt-2 ml-3 underline"
+            onClick={() => setActivation(null)}
+          >
+            Descartar
+          </button>
+        </div>
+      )}
+
       <div className="flex items-center justify-between">
         <div className="text-lg font-semibold">Usuarios del negocio</div>
         <Button
@@ -578,9 +668,7 @@ export function EmployeesClient({
                   {(emp.enabledModules ?? []).join(', ') || '—'}
                 </td>
                 <td className="px-3 py-2 text-xs">
-                  {emp.hasPin
-                    ? <span className="text-emerald-700">Configurado</span>
-                    : <span className="text-muted-foreground">Sin PIN</span>}
+                  <PinStatusChip status={pinStatusOf(emp)} />
                 </td>
                 <td className="px-3 py-2 text-xs">
                   {formatDate(emp.createdAt)}
@@ -602,15 +690,26 @@ export function EmployeesClient({
                   >
                     {emp.active ? 'Desactivar' : 'Activar'}
                   </Button>
-                  {emp.hasPin && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => handleSendActivation(emp)}
+                    disabled={pending}
+                    title="Le envía por WhatsApp un enlace para que cree/reactive su propio PIN"
+                  >
+                    {pinStatusOf(emp) === 'pending'
+                      ? 'Enviar enlace'
+                      : 'Reenviar enlace'}
+                  </Button>
+                  {pinStatusOf(emp) === 'locked' && (
                     <Button
                       size="sm"
                       variant="ghost"
-                      onClick={() => handleResetPin(emp.id, emp.name)}
+                      onClick={() => handleSendActivation(emp)}
                       disabled={pending}
-                      title="Deja al usuario sin PIN para que configure uno nuevo"
+                      title="Desbloquea al cajero y le reenvía el enlace de activación"
                     >
-                      Resetear PIN
+                      Restablecer PIN
                     </Button>
                   )}
                 </td>

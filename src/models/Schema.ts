@@ -802,6 +802,25 @@ export const posUsersSchema = pgTable(
     // `off: true` means rest day; start/end are ignored when off is true.
     // Omitted keys inherit a default schedule defined at the org level.
     workSchedule: jsonb('work_schedule').default({}).notNull(),
+    // Per-person PIN activation (Option B — see migration 0087). The admin never
+    // sets the PIN; they send a WhatsApp activation link and the employee sets
+    // their OWN PIN via /api/pos/cashiers/activate. `activationToken` stores a
+    // SHA-256 HASH of the raw one-time token (never the raw token, which lives
+    // only inside the link) so a DB leak can't be replayed; `activationExpiresAt`
+    // bounds the link to 72h. Cleared on successful activation (single-use).
+    activationToken: text('activation_token'),
+    activationExpiresAt: timestamp('activation_expires_at', {
+      withTimezone: true,
+      mode: 'date',
+    }),
+    // Wrong-PIN lockout on the shared-caja profile gate (verify-pin). After 5
+    // consecutive wrong tries the account locks for 5 minutes; a correct PIN or a
+    // fresh activation resets both.
+    pinFailedAttempts: integer('pin_failed_attempts').default(0).notNull(),
+    pinLockedUntil: timestamp('pin_locked_until', {
+      withTimezone: true,
+      mode: 'date',
+    }),
     createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { mode: 'date' })
       .defaultNow()

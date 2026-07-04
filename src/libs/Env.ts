@@ -33,6 +33,11 @@ export const Env = createEnv({
     // the Evolution instance name in X-Agent-Channel. Must be a strong random
     // string; if unset the service path is completely disabled.
     N8N_SERVICE_SECRET: z.string().optional(),
+    // Base URL of the cashier POS web app (pos-merchatai / TiendaCajero). Used to
+    // build the per-employee PIN activation link `${POS_WEB_URL}/activar?token=…`
+    // that the admin sends over WhatsApp. Optional: falls back to the primary
+    // production POS origin when unset (see POS_ALLOWED_ORIGINS in proxy.ts).
+    POS_WEB_URL: z.string().optional(),
     // MATIAS electronic invoicing — app-level "Casa de Software" account (ONE
     // account for all tenants). Base URL is locked to the DIAN sandbox; production
     // is intentionally not wired here. Email/password optional: when absent,
@@ -86,6 +91,7 @@ export const Env = createEnv({
     WHATSAPP_DEFAULT_ORG_ID: process.env.WHATSAPP_DEFAULT_ORG_ID,
     WHATSAPP_N8N_WEBHOOK_URL: process.env.WHATSAPP_N8N_WEBHOOK_URL,
     N8N_SERVICE_SECRET: process.env.N8N_SERVICE_SECRET,
+    POS_WEB_URL: process.env.POS_WEB_URL,
     MATIAS_API_BASE_URL: process.env.MATIAS_API_BASE_URL,
     MATIAS_ACCOUNT_EMAIL: process.env.MATIAS_ACCOUNT_EMAIL,
     MATIAS_ACCOUNT_PASSWORD: process.env.MATIAS_ACCOUNT_PASSWORD,
