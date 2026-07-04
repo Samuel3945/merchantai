@@ -10,9 +10,12 @@ export const dynamic = 'force-dynamic';
 
 type Body = { cashierId?: string; currentPin?: string; newPin?: string };
 
-// Un empleado setea/cambia/quita su propio PIN desde la caja.
-// - Si ya tiene PIN, exige el PIN actual.
-// - newPin vacío → quita la protección (vuelve a acceso directo).
+// Un empleado CAMBIA su propio PIN desde la caja (siempre exige el PIN actual).
+// El primer PIN NO se fija aquí: se activa con el enlace de un solo uso que envía
+// el admin (POST /api/pos/cashiers/activate). Si el empleado no tiene PIN, esta
+// ruta responde `not_activated` — así nadie puede "reclamar" a un cajero sin PIN
+// desde la caja compartida (esa era la brecha de suplantación). Tampoco se puede
+// quitar el PIN: el PIN por persona es obligatorio.
 // - newPin debe ser 4 a 8 dígitos.
 export async function POST(req: Request): Promise<NextResponse> {
   const { ctx, errorResponse } = await requirePosAuth(req);
@@ -36,7 +39,8 @@ export async function POST(req: Request): Promise<NextResponse> {
       { status: 400 },
     );
   }
-  if (newPin && !/^\d{4,8}$/.test(newPin)) {
+  // Un PIN por persona es obligatorio: newPin no puede quedar vacío.
+  if (!/^\d{4,8}$/.test(newPin)) {
     return NextResponse.json(
       { error: 'El PIN debe tener entre 4 y 8 dígitos' },
       { status: 400 },
@@ -62,22 +66,36 @@ export async function POST(req: Request): Promise<NextResponse> {
     );
   }
 
-  // Si ya tiene PIN, exigir el actual para cambiarlo/quitarlo.
-  if (emp.pin) {
-    const valid = await bcrypt.compare(currentPin, emp.pin);
-    if (!valid) {
-      return NextResponse.json(
-        { error: 'El PIN actual es incorrecto' },
-        { status: 401 },
-      );
-    }
+  // Sin PIN → aún no activado. No se permite fijar el primer PIN desde la caja
+  // (eso lo hace el empleado con el enlace de activación); si no, cualquiera
+  // podría reclamar a un cajero sin PIN. 403, no 401 (401 lo lee el POS como
+  // sesión de caja expirada).
+  if (!emp.pin) {
+    return NextResponse.json(
+      {
+        ok: false,
+        code: 'not_activated',
+        error:
+          'Este cajero aún no ha activado su PIN. Debe activarlo con el enlace que le envió el admin por WhatsApp.',
+      },
+      { status: 403 },
+    );
   }
 
-  const pinHash = newPin ? await bcrypt.hash(newPin, 10) : '';
+  // Cambiar el PIN exige el actual.
+  const valid = await bcrypt.compare(currentPin, emp.pin);
+  if (!valid) {
+    return NextResponse.json(
+      { ok: false, code: 'pin_incorrect', error: 'El PIN actual es incorrecto' },
+      { status: 403 },
+    );
+  }
+
+  const pinHash = await bcrypt.hash(newPin, 10);
   await db
     .update(posUsersSchema)
     .set({ pin: pinHash })
     .where(eq(posUsersSchema.id, emp.id));
 
-  return NextResponse.json({ ok: true, hasPin: pinHash !== '' });
+  return NextResponse.json({ ok: true, hasPin: true });
 }

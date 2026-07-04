@@ -33,6 +33,7 @@ const RAW_DB_ALLOWLIST = new Set<string>([
   // Pre-auth flows — gated by an unguessable token; org derived from the row.
   'invitations/accept/route.ts',
   'invitations/validate/route.ts',
+  'pos/cashiers/activate/route.ts',
   'pos/connect/route.ts',
   'pos/login/route.ts',
   // Clerk-auth — scope by auth() orgId.
