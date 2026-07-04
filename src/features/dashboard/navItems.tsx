@@ -94,10 +94,8 @@ export const navGroups: NavGroup[] = [
 
 export type NavModuleFlags = {
   credito: boolean;
-  employees: boolean;
   delivery: boolean;
   facturas: boolean;
-  suppliers: boolean;
   // AI preview. Unlike the others this defaults OFF and is flipped per-org by
   // the operator from /platform, gating the AI agent (and delivery, its phase-2
   // use case) so customers never see half-built AI until it's ready.
@@ -105,13 +103,12 @@ export type NavModuleFlags = {
 };
 
 // Maps a nav href to the module flag that controls its visibility. Items not
-// listed here are always visible (core modules).
+// listed here are always visible (core modules). Empleados y Proveedores son
+// core: todo negocio los tiene, así que no se pueden ocultar.
 const GATED_HREF: Record<string, keyof NavModuleFlags> = {
   '/dashboard/creditos': 'credito',
-  '/dashboard/employees': 'employees',
   '/dashboard/delivery': 'delivery',
   '/dashboard/facturas': 'facturas',
-  '/dashboard/suppliers': 'suppliers',
   '/dashboard/ai-agent': 'ai',
   '/dashboard/conversaciones': 'ai',
 };

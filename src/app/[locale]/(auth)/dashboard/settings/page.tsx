@@ -27,16 +27,15 @@ const KEYS = [
   'features.wholesale',
   'features.perishable',
   'features.digital',
-  // Modules (all default ON)
-  'modules.employees',
-  'modules.delivery',
-  'modules.suppliers',
+  // Modules
   'modules.facturas',
   'credito-enabled',
   // AI preview gate (default OFF, flipped per-org by the operator in /platform).
-  // Domicilios rides with it, so its module toggle is hidden until AI is on.
+  // Domicilios rides with it, so its tab is hidden until AI is on.
   'modules.ai',
-  // Delivery configuration (own "Domicilios" tab, gated by modules.ai)
+  // Delivery configuration (own "Domicilios" tab, gated by modules.ai). The
+  // "¿Trabaja con domicilio?" master toggle persists to modules.delivery.
+  'modules.delivery',
   DELIVERY_FEE_TYPE_KEY,
   DELIVERY_FEE_VALUE_KEY,
   DELIVERY_FREE_ABOVE_KEY,
@@ -108,20 +107,16 @@ export default async function DashboardSettingsPage(props: {
           'features.perishable': asBool(map['features.perishable']),
           'features.digital': asBool(map['features.digital']),
         }}
-        modules={{
-          'modules.employees': asBool(map['modules.employees'], true),
-          'modules.delivery': asBool(map['modules.delivery'], true),
-          'modules.suppliers': asBool(map['modules.suppliers'], true),
-        }}
         domicilios={{
-          delivery_fee_type: deliveryFeeType,
-          delivery_fee_value: map[DELIVERY_FEE_VALUE_KEY],
-          delivery_free_above: map[DELIVERY_FREE_ABOVE_KEY],
-          delivery_fee_mode:
+          'modules.delivery': asBool(map['modules.delivery'], true),
+          'delivery_fee_type': deliveryFeeType,
+          'delivery_fee_value': map[DELIVERY_FEE_VALUE_KEY],
+          'delivery_free_above': map[DELIVERY_FREE_ABOVE_KEY],
+          'delivery_fee_mode':
             map[DELIVERY_FEE_MODE_KEY] === 'courier_tip'
               ? 'courier_tip'
               : 'revenue',
-          delivery_require_photo: asBool(map.delivery_require_photo, false),
+          'delivery_require_photo': asBool(map.delivery_require_photo, false),
         }}
         aiPreviewEnabled={asBool(map['modules.ai'], false)}
         facturasEnabled={asBool(map['modules.facturas'], false)}
