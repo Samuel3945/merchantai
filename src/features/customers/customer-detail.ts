@@ -1,5 +1,5 @@
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
-import { getClientDetail } from '@/libs/creditos';
+import { getCustomerCreditSummary } from '@/libs/creditos';
 import { db } from '@/libs/DB';
 import {
   customersSchema,
@@ -8,11 +8,14 @@ import {
 } from '@/models/Schema';
 
 // Single-customer profile core (no auth): identity, headline KPIs, and a
-// per-source history (linked sales, fiado abonos, deliveries). ONE org-scoped
+// per-source history (linked sales, credit abonos, deliveries). ONE org-scoped
 // shape so the dashboard profile page (Clerk auth) and the POS side panel
 // (cashier auth) read exactly the same contract. Sales are linked via
 // sales.customer_id (stamped at the sale paths + backfilled); credit balance and
-// abonos reuse the creditos lib keyed by the customer FK (clientKey `c:<id>`).
+// abonos are resolved by IDENTITY via getCustomerCreditSummary — NOT by the
+// customer FK alone, because most POS creditos have customer_id = NULL and group
+// under `n:<name||phone>`, so an FK-only lookup would show 0 while the créditos
+// wall shows the debt.
 
 const UUID_RE
   = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -124,7 +127,7 @@ export async function loadCustomerDetail(
     inArray(salesSchema.status, linkedStatuses),
   );
 
-  const [agg, recentSales, deliveries, clientDetail] = await Promise.all([
+  const [agg, recentSales, deliveries, creditSummary] = await Promise.all([
     db
       .select({
         count: sql<number>`count(*)::int`,
@@ -172,23 +175,26 @@ export async function loadCustomerDetail(
       )
       .orderBy(desc(deliveryOrdersSchema.createdAt))
       .limit(RECENT_DELIVERIES_LIMIT),
-    // Reuse the creditos lib: a customer-linked debt groups under clientKey
-    // `c:<id>`. Returns null when the customer has no creditos → balance 0.
-    getClientDetail(organizationId, `c:${customerId}`),
+    // Resolve credit by identity (FK OR whatsapp OR name), reusing the créditos
+    // wall's own grouping — so NULL-FK POS creditos still count. Empty summary
+    // (balance 0, no abonos) when nothing matches this customer.
+    getCustomerCreditSummary(organizationId, {
+      id: profile.id,
+      name: profile.name,
+      whatsapp: profile.whatsapp,
+    }),
   ]);
 
   const purchaseCount = agg[0]?.count ?? 0;
   const salesSum = agg[0]?.sum ?? 0;
-  const creditBalance = clientDetail?.client.balance ?? 0;
-  const recentAbonos: CustomerDetailAbono[] = (clientDetail?.timeline ?? [])
-    .filter(t => t.type === 'payment')
-    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+  const creditBalance = creditSummary.balance;
+  const recentAbonos: CustomerDetailAbono[] = creditSummary.abonos
     .slice(0, RECENT_ABONOS_LIMIT)
-    .map(t => ({
-      id: t.id,
-      date: new Date(t.createdAt),
-      amount: t.amount,
-      method: t.method,
+    .map(a => ({
+      id: a.id,
+      date: new Date(a.createdAt),
+      amount: a.amount,
+      method: a.method,
     }));
 
   return {

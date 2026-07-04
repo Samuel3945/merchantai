@@ -1,6 +1,5 @@
 'use client';
 
-import type { OrgAddress } from '@/actions/org-addresses';
 import type { PosDeviceQuota } from '@/actions/pos-tokens';
 import type { ActionResult } from '@/libs/action-result';
 import {
@@ -9,7 +8,6 @@ import {
   CheckCircle2,
   ExternalLink,
   Lock,
-  MapPin,
   Monitor,
   MoreVertical,
   PackageX,
@@ -31,7 +29,6 @@ import {
   regeneratePosToken,
   renamePosToken,
   setAdminAsCashier,
-  setPosTokenAddress,
   setPosTokenAllowOversell,
   setPosTokenSweepDestination,
   unblockPosToken,
@@ -46,7 +43,6 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Link } from '@/libs/I18nNavigation';
 import { POS_DEVICES_LIMIT_REACHED } from '@/libs/plan-limits';
-import { AddressPicker } from './AddressPicker';
 
 /**
  * App de cajero en producción (repo `pos-merchatai`, dominio propio).
@@ -127,23 +123,19 @@ function limitPayload(failure: ActionFailure): LimitErrorPayload | null {
 export function PosCajerosClient({
   initialTokens,
   initialQuota,
-  initialAddresses,
   initialCofres,
 }: {
   initialTokens: TokenRow[];
   initialQuota: PosDeviceQuota;
-  initialAddresses: OrgAddress[];
   initialCofres: CofreOption[];
 }) {
   const confirm = useConfirm();
   const [tokens, setTokens] = useState(initialTokens);
   const [quota, setQuota] = useState(initialQuota);
-  const [addresses, setAddresses] = useState(initialAddresses);
   const [cofres] = useState(initialCofres);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [activeToken, setActiveToken] = useState<TokenRow | null>(null);
   const [renameTarget, setRenameTarget] = useState<TokenRow | null>(null);
-  const [addressTarget, setAddressTarget] = useState<TokenRow | null>(null);
   const [sweepTarget, setSweepTarget] = useState<TokenRow | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [limitError, setLimitError] = useState<LimitErrorPayload | null>(null);
@@ -379,17 +371,6 @@ export function PosCajerosClient({
                     <Monitor className="size-4 text-muted-foreground" />
                     {t.deviceName}
                   </div>
-                  {t.address && (
-                    <div className="
-                      mt-1 flex items-center gap-1 text-xs text-muted-foreground
-                    "
-                    >
-                      <MapPin className="size-3" />
-                      {[t.addressName, t.address, t.addressCity]
-                        .filter(Boolean)
-                        .join(' · ')}
-                    </div>
-                  )}
                 </td>
                 <td className="px-3 py-2">
                   {t.currentCashierName
@@ -488,10 +469,6 @@ export function PosCajerosClient({
                           <Pencil className="size-4" />
                           Cambiar nombre
                         </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setAddressTarget(t)}>
-                          <MapPin className="size-4" />
-                          Dirección / sucursal
-                        </DropdownMenuItem>
                         {cofres.length > 0 && (
                           <DropdownMenuItem onClick={() => setSweepTarget(t)}>
                             <Vault className="size-4" />
@@ -542,8 +519,6 @@ export function PosCajerosClient({
 
       {showCreateModal && (
         <CreateTokenModal
-          addresses={addresses}
-          onAddressesChange={setAddresses}
           onClose={() => setShowCreateModal(false)}
           onSuccess={(created) => {
             setShowCreateModal(false);
@@ -558,9 +533,9 @@ export function PosCajerosClient({
               currentCashierName: null,
               currentCashierAt: created.currentCashierAt,
               addressId: created.addressId,
-              addressName: addresses.find(a => a.id === created.addressId)?.name ?? null,
-              address: addresses.find(a => a.id === created.addressId)?.address ?? null,
-              addressCity: addresses.find(a => a.id === created.addressId)?.city ?? null,
+              addressName: null,
+              address: null,
+              addressCity: null,
               active: created.active,
               allowOversell: created.allowOversell,
               createdAt: created.createdAt,
@@ -590,20 +565,6 @@ export function PosCajerosClient({
           onClose={() => setRenameTarget(null)}
           onSaved={() => {
             setRenameTarget(null);
-            refresh();
-          }}
-          onError={msg => setError(msg)}
-        />
-      )}
-
-      {addressTarget && (
-        <AddressModal
-          token={addressTarget}
-          addresses={addresses}
-          onAddressesChange={setAddresses}
-          onClose={() => setAddressTarget(null)}
-          onSaved={() => {
-            setAddressTarget(null);
             refresh();
           }}
           onError={msg => setError(msg)}
@@ -695,20 +656,15 @@ function LimitBanner({
 }
 
 function CreateTokenModal({
-  addresses,
-  onAddressesChange,
   onClose,
   onSuccess,
   onFailure,
 }: {
-  addresses: OrgAddress[];
-  onAddressesChange: (next: OrgAddress[]) => void;
   onClose: () => void;
   onSuccess: (token: CreatedToken) => void;
   onFailure: (failure: ActionFailure) => void;
 }) {
   const [deviceName, setDeviceName] = useState('');
-  const [addressId, setAddressId] = useState<string | null>(null);
   const [adminPin, setAdminPin] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -718,7 +674,6 @@ function CreateTokenModal({
     try {
       const result = await createPosToken({
         deviceName,
-        addressId,
         adminPin: adminPin.trim() || null,
       });
       if (!result.ok) {
@@ -785,17 +740,6 @@ function CreateTokenModal({
               className={inputCls}
             />
           </div>
-          <div>
-            <span className={labelCls}>Dirección / sucursal (opcional)</span>
-            <div className="mt-1">
-              <AddressPicker
-                addresses={addresses}
-                selectedId={addressId}
-                onSelect={setAddressId}
-                onAddressesChange={onAddressesChange}
-              />
-            </div>
-          </div>
           <p className="
             rounded-md border border-input bg-muted/30 px-3 py-2 text-xs
             text-muted-foreground
@@ -820,96 +764,6 @@ function CreateTokenModal({
             </Button>
           </div>
         </form>
-      </div>
-    </div>
-  );
-}
-
-function AddressModal({
-  token,
-  addresses,
-  onAddressesChange,
-  onClose,
-  onSaved,
-  onError,
-}: {
-  token: TokenRow;
-  addresses: OrgAddress[];
-  onAddressesChange: (next: OrgAddress[]) => void;
-  onClose: () => void;
-  onSaved: () => void;
-  onError: (msg: string) => void;
-}) {
-  const [selectedId, setSelectedId] = useState<string | null>(token.addressId);
-  const [submitting, setSubmitting] = useState(false);
-
-  const handleSave = async () => {
-    setSubmitting(true);
-    try {
-      const result = await setPosTokenAddress(token.id, selectedId);
-      if (!result.ok) {
-        onError(result.error);
-        return;
-      }
-      onSaved();
-    } catch {
-      onError('No se pudo asignar la dirección');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <div className="
-      fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4
-    "
-    >
-      <div className="w-full max-w-md rounded-lg bg-background p-6 shadow-lg">
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="flex items-center gap-2 text-lg font-semibold">
-            <MapPin className="size-5" />
-            Dirección de
-            {' '}
-            {token.deviceName}
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="
-              text-muted-foreground
-              hover:text-foreground
-            "
-          >
-            ✕
-          </button>
-        </div>
-
-        <p className="mb-3 text-sm text-muted-foreground">
-          La sucursal de esta caja. Es la dirección que sale en el ticket. Podés
-          elegir una existente, crear una nueva o editar la seleccionada.
-        </p>
-
-        <AddressPicker
-          addresses={addresses}
-          selectedId={selectedId}
-          onSelect={setSelectedId}
-          onAddressesChange={onAddressesChange}
-          allowEdit
-        />
-
-        <div className="flex justify-end gap-2 pt-4">
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={onClose}
-            disabled={submitting}
-          >
-            Cancelar
-          </Button>
-          <Button type="button" onClick={handleSave} disabled={submitting}>
-            {submitting ? 'Guardando…' : 'Asignar a la caja'}
-          </Button>
-        </div>
       </div>
     </div>
   );

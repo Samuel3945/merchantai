@@ -1,5 +1,4 @@
 import { setRequestLocale } from 'next-intl/server';
-import { listOrgAddresses } from '@/actions/org-addresses';
 import { getPosDeviceQuota, listPosTokens } from '@/actions/pos-tokens';
 import { listTreasuryAccounts } from '@/actions/treasury';
 import { TitleBar } from '@/features/dashboard/TitleBar';
@@ -11,10 +10,9 @@ export default async function DashboardPosCajerosPage(props: {
   const { locale } = await props.params;
   setRequestLocale(locale);
 
-  const [tokens, quota, addresses, allAccounts] = await Promise.all([
+  const [tokens, quota, allAccounts] = await Promise.all([
     listPosTokens(),
     getPosDeviceQuota(),
-    listOrgAddresses(),
     listTreasuryAccounts().catch(() => []),
   ]);
 
@@ -27,12 +25,11 @@ export default async function DashboardPosCajerosPage(props: {
     <>
       <TitleBar
         title="Cajas POS"
-        description="Administra las cajas (dispositivos POS) de tu negocio: genera su acceso, asigna su sucursal y controla cuántas tienes activas según tu plan."
+        description="Administra las cajas (dispositivos POS) de tu negocio: genera su acceso y controla cuántas tienes activas según tu plan."
       />
       <PosCajerosClient
         initialTokens={tokens}
         initialQuota={quota}
-        initialAddresses={addresses}
         initialCofres={cofres}
       />
     </>
