@@ -250,6 +250,18 @@ export const salesSchema = pgTable(
     // settlement, the agent order route, and the direct POS insert) so
     // delivery-vs-POS KPIs don't have to infer it from posTokenId/notes.
     channel: saleChannelEnum('channel').default('pos').notNull(),
+    // Optional link to the customer the sale is attributed to (invoice-tagged
+    // sale, fiado with a known client, or a settled delivery order). Nullable:
+    // a plain anonymous POS sale keeps this NULL. SET NULL (not cascade) so
+    // archiving a customer never deletes their sales — it just unlinks them.
+    // Stamped inside the sale transaction at every path that knows the customer;
+    // historical rows are backfilled from creditos/delivery_orders.
+    // customersSchema is declared later in this file; the reference is a lazy
+    // thunk (evaluated at runtime, after the module loads) so this is safe.
+    // eslint-disable-next-line ts/no-use-before-define
+    customerId: uuid('customer_id').references(() => customersSchema.id, {
+      onDelete: 'set null',
+    }),
     // DIAN e-invoicing intent + result, mirrored onto the sale for cheap reads.
     // Every sale starts 'pending' so it surfaces in the Facturas module; it
     // flips to 'emitted' (with cufe/number) or 'failed' once a provider runs.
@@ -292,6 +304,11 @@ export const salesSchema = pgTable(
     uniqueIndex('sales_org_number_unique_idx').on(
       table.organizationId,
       table.saleNumber,
+    ),
+    // Customer detail (ficha de cliente) scans a customer's sales by org + FK.
+    index('sales_org_customer_idx').on(
+      table.organizationId,
+      table.customerId,
     ),
     // Partial UNIQUE index for exactly-once mobile sync. NULL rows (web POS,
     // pos-merchatai) are excluded so many NULLs coexist without violating

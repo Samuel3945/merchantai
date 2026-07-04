@@ -1,6 +1,7 @@
 'use client';
 
 import type { CustomerListItem } from './actions';
+import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
 import { useConfirm } from '@/components/ui/confirm';
@@ -262,7 +263,14 @@ export function CustomersClient({ initial }: { initial: CustomerListItem[] }) {
               : (
                   rows.map(c => (
                     <tr key={c.id} className="border-t">
-                      <td className="px-3 py-2 font-medium">{c.name}</td>
+                      <td className="px-3 py-2 font-medium">
+                        <Link
+                          href={`/dashboard/customers/${c.id}`}
+                          className="hover:text-primary hover:underline"
+                        >
+                          {c.name}
+                        </Link>
+                      </td>
                       <td className="px-3 py-2 font-mono text-xs">
                         {c.documentId ?? '—'}
                       </td>

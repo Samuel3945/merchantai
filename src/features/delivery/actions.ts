@@ -430,6 +430,8 @@ async function createDeliverySale(
     // 'pos' even though this sale is a delivered domicilio settling into the
     // courier's caja, not a register sale.
     channel: 'delivery',
+    // Link the settled sale to the delivery order's customer (ficha de cliente).
+    customerId: order.customerId ?? null,
     notes: creditoNotes,
     // The delivery order id (a UUID) IS the idempotency key. sale_idempotency_key
     // is a UUID column, so a "delivery:" prefix would break the insert; the raw
