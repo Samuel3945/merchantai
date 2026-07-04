@@ -91,30 +91,25 @@ export default async function DashboardLayout(props: DashboardLayoutProps) {
   // client nav components filter locally via buildNavGroups.
   const [
     creditoSetting,
-    employeesSetting,
     deliverySetting,
     facturasSetting,
-    suppliersSetting,
     aiSetting,
   ] = await Promise.all([
     getAppSetting('credito-enabled'),
-    getAppSetting('modules.employees'),
     getAppSetting('modules.delivery'),
     getAppSetting('modules.facturas'),
-    getAppSetting('modules.suppliers'),
     getAppSetting('modules.ai'),
   ]);
-  // Most modules default to ENABLED; the owner opts out in Ajustes → Módulos.
-  // AI preview and e-invoicing (Facturas) are the exceptions: both default OFF
-  // and are enabled per-org by the operator from /platform. Domicilios rides with
-  // the AI preview, so it stays hidden until AI preview is on AND its toggle is.
+  // Empleados y Proveedores son core: todo negocio los tiene, siempre visibles.
+  // Creditos defaults ENABLED (owner opts out in Ajustes). AI preview and
+  // e-invoicing (Facturas) default OFF and are enabled per-org by the operator
+  // from /platform. Domicilios (¿Trabaja con domicilio?) rides with the AI
+  // preview, so it stays hidden until AI preview is on AND its toggle is.
   const aiEnabled = aiSetting.value === 'true';
   const navFlags: NavModuleFlags = {
     credito: creditoSetting.value !== 'false',
-    employees: employeesSetting.value !== 'false',
     delivery: aiEnabled && deliverySetting.value !== 'false',
     facturas: facturasSetting.value === 'true',
-    suppliers: suppliersSetting.value !== 'false',
     ai: aiEnabled,
   };
 

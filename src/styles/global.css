@@ -166,3 +166,16 @@
     background-color: color-mix(in oklab, var(--muted-foreground) 60%, transparent);
   }
 }
+
+/*
+ * Fully hides the scrollbar while keeping the element scrollable (drag/trackpad
+ * still work). Used on horizontal nav strips where an `overflow-x-auto` would
+ * otherwise leak a spurious vertical scrollbar (per CSS spec, setting one axis
+ * to auto computes the other to auto too).
+ */
+@utility scrollbar-hide {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}

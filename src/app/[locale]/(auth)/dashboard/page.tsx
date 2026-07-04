@@ -50,20 +50,33 @@ export default async function DashboardIndexPage(props: {
 
   // Range metrics drive the chart/KPIs/top-sellers; the credito + low-stock lists
   // are current state, fetched once here (not in the client's range re-fetch).
-  const [metrics, credito, lowStock, stockByCategory, whatsappChannels, aiSetting]
-    = await Promise.all([
-      getMetrics(start, end, prevStart, prevEnd),
-      fetchCreditosOverview(),
-      getLowStockItems(),
-      getStockByCategory(),
-      listWhatsAppChannels(),
-      getAppSetting('modules.ai'),
-    ]);
+  const [
+    metrics,
+    credito,
+    lowStock,
+    stockByCategory,
+    whatsappChannels,
+    aiSetting,
+    deliverySetting,
+  ] = await Promise.all([
+    getMetrics(start, end, prevStart, prevEnd),
+    fetchCreditosOverview(),
+    getLowStockItems(),
+    getStockByCategory(),
+    listWhatsAppChannels(),
+    getAppSetting('modules.ai'),
+    getAppSetting('modules.delivery'),
+  ]);
 
   // AI preview is OFF by default and flipped per-org by the operator. When off,
   // every AI surface on the Resumen (the WhatsApp agent CTA and the AI-credit
   // sections of the plan panel) is hidden.
   const aiEnabled = aiSetting.value === 'true';
+
+  // "Ventas por canal → Domicilio" only makes sense when the org works with
+  // domicilios. Mirrors the nav gate: delivery rides with the AI preview, so it
+  // needs AI on AND the "¿Trabaja con domicilio?" toggle (modules.delivery) on.
+  const deliveryEnabled = aiEnabled && deliverySetting.value !== 'false';
 
   return (
     <>
@@ -74,6 +87,7 @@ export default async function DashboardIndexPage(props: {
         stockByCategory={stockByCategory}
         hasWhatsAppAgent={whatsappChannels.length > 0}
         aiEnabled={aiEnabled}
+        deliveryEnabled={deliveryEnabled}
       />
       <div className="mt-6">
         <PlanPanel aiEnabled={aiEnabled} />

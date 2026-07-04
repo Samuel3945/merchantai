@@ -481,6 +481,7 @@ export function DashboardClient({
   stockByCategory,
   hasWhatsAppAgent,
   aiEnabled,
+  deliveryEnabled,
 }: {
   initial: DashboardMetrics;
   credito: CreditosOverview;
@@ -488,6 +489,9 @@ export function DashboardClient({
   stockByCategory: StockCategoryRow[];
   hasWhatsAppAgent: boolean;
   aiEnabled: boolean;
+  // When the org does not work with domicilios the "Domicilio" channel card is
+  // hidden and the "Ventas por canal" grid collapses to a single POS column.
+  deliveryEnabled: boolean;
 }) {
   const [data, setData] = useState<DashboardMetrics>(initial);
   const [start, setStart] = useState(initial.range.start);
@@ -674,17 +678,19 @@ export function DashboardClient({
         >
           Ventas por canal
         </div>
-        <div className="
-          grid grid-cols-1 gap-3
-          sm:grid-cols-2
-        "
+        <div className={cn(
+          'grid grid-cols-1 gap-3',
+          deliveryEnabled && 'sm:grid-cols-2',
+        )}
         >
-          <ChannelCard
-            title="Domicilio"
-            icon={<Bike className="size-4" />}
-            stats={data.salesByChannel.delivery}
-            color="#0EA5E9"
-          />
+          {deliveryEnabled && (
+            <ChannelCard
+              title="Domicilio"
+              icon={<Bike className="size-4" />}
+              stats={data.salesByChannel.delivery}
+              color="#0EA5E9"
+            />
+          )}
           <ChannelCard
             title="POS"
             icon={<Store className="size-4" />}
