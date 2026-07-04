@@ -67,6 +67,14 @@ export type ApplySaleReturnParams = {
    * "requiere autorización de administrador" rule; POS cashiers pass false.
    */
   authorizedByAdmin?: boolean;
+  /**
+   * Only meaningful when `reason === 'damaged'`. 'replace' (default) is an
+   * exchange: the customer gets a working unit, no money leaves the register,
+   * and the damaged unit is booked as a merma. 'refund' gives the money back
+   * (always cash) and writes the damaged unit off — it is neither restocked nor
+   * exchanged. Ignored for every other reason.
+   */
+  damagedResolution?: 'replace' | 'refund';
 };
 
 export type ApplySaleReturnResult = {
@@ -192,6 +200,7 @@ export async function applySaleReturn(
     items,
     notes,
     partial,
+    damagedResolution = 'replace',
   } = params;
 
   const refundMethod = rawRefundMethod?.trim();
@@ -294,23 +303,25 @@ export async function applySaleReturn(
       );
     }
 
-    // `reason` is the return-level intent: a damaged return means every line is
-    // a damaged exchange, no matter what the client sent per item — so neither
-    // the POS nor a stale client can accidentally restock or refund it. For any
-    // other reason the per-item disposition wins; older POS clients that only
-    // sent `restock: false` are mapped to 'discard' (goods did not return).
+    // `reason` is the return-level intent. A damaged return splits by
+    // `damagedResolution`: 'replace' is an exchange (disposition 'damaged' → the
+    // unit leaves as a merma below); 'refund' writes the unit off with money back
+    // (disposition 'discard' → not restocked, no extra exit). For any other
+    // reason the per-item disposition wins; older POS clients that only sent
+    // `restock: false` are mapped to 'discard' (goods did not return).
     const disposition: ReturnDisposition
       = reason === 'damaged'
-        ? 'damaged'
+        ? (damagedResolution === 'refund' ? 'discard' : 'damaged')
         : (it.disposition ?? (it.restock === false ? 'discard' : 'restock'));
     const restock = disposition === 'restock';
 
-    // A damaged unit is an exchange, not a money-back return: the customer gets
-    // a replacement, so no cash leaves the register. The only economic loss is
-    // the unit cost, booked as a 'damaged' exit (merma) below. Force the refund
-    // to 0 server-side so neither the POS nor the dashboard can refund a damaged
-    // line by mistake.
-    const refund = disposition === 'damaged' ? 0 : amountNum;
+    // Money leaves only when the customer actually gets cash back. A damaged
+    // *replacement* is an exchange (no cash out), so force the refund to 0
+    // server-side; every other case — including a damaged *refund* — pays the
+    // amount sent. Damaged refunds are always in cash (the clients offer no
+    // method picker).
+    const refund
+      = reason === 'damaged' && damagedResolution === 'replace' ? 0 : amountNum;
 
     totalRefund += refund;
     resolved.push({
@@ -474,11 +485,13 @@ export async function applySaleReturn(
     // discard: recorded on pos_return_items.disposition only.
   }
 
-  // A change-of-mind return voids the sale (goods back, money back → net zero),
-  // so a full one flips it to 'returned'. A damaged exchange does NOT: the
-  // customer walks out with a working replacement and the sale's revenue stands,
-  // so the sale stays 'completed' and only the merma is recorded.
-  if (!partial && reason !== 'damaged') {
+  // A full return flips the sale to 'returned' only when it reverses the sale:
+  // a change-of-mind return (goods back, money back) and a damaged *refund*
+  // (money back, unit written off) both do. A damaged *replacement* does NOT —
+  // the customer walks out with a working unit and the revenue stands, so the
+  // sale stays 'completed' and only the merma is recorded.
+  const reversesSale = reason !== 'damaged' || damagedResolution === 'refund';
+  if (!partial && reversesSale) {
     await tx
       .update(salesSchema)
       .set({ status: 'returned' })

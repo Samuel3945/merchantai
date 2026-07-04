@@ -17,6 +17,7 @@ export const dynamic = 'force-dynamic';
 type ReturnBody = {
   reason?: string;
   refundMethod?: string;
+  damagedResolution?: 'replace' | 'refund';
   items?: ReturnItemInput[];
   notes?: string | null;
   partial?: boolean;
@@ -89,6 +90,7 @@ export async function POST(
         actorName: ctx.cashierName,
         reason,
         refundMethod,
+        damagedResolution: body.damagedResolution,
         items,
         notes: body.notes ?? null,
         partial: !!body.partial,

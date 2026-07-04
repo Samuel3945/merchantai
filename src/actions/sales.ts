@@ -1225,6 +1225,7 @@ export async function getSaleForReturn(
 export type ProcessReturnInput = {
   reason: ReturnReason;
   refundMethod: string;
+  damagedResolution?: 'replace' | 'refund';
   items: {
     saleItemId: string;
     qty: number;
@@ -1274,6 +1275,7 @@ export async function processReturn(saleId: string, input: ProcessReturnInput) {
       authorizedByAdmin: orgRole === 'org:admin',
       reason: input.reason,
       refundMethod: input.refundMethod,
+      damagedResolution: input.damagedResolution,
       items: input.items,
       notes: input.notes ?? null,
       partial: input.partial,
