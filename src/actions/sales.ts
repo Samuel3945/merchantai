@@ -107,6 +107,10 @@ export type CreateSaleForOrgInput = {
   // inferred from posTokenId, same as before this field existed: 'pos' when
   // a device is attached, 'panel' otherwise.
   channel?: 'pos' | 'panel' | 'delivery' | 'agent';
+  // Links the sale (and, for a fiado, its credito) to a known customer. Omitted
+  // = anonymous sale, customer_id stays NULL. Threaded from the delivery order's
+  // customerId at settlement; invoice-tagged sales stamp it post-commit instead.
+  customerId?: string | null;
   // Sets sale_idempotency_key. Omitted = no dedupe (dashboard, unchanged).
   idempotencyKey?: string;
 };
@@ -251,6 +255,7 @@ export async function createSaleForOrg(input: CreateSaleForOrgInput) {
           cashierId: actorId,
           posTokenId: input.posTokenId ?? null,
           channel: input.channel ?? (input.posTokenId ? 'pos' : 'panel'),
+          customerId: input.customerId ?? null,
           saleIdempotencyKey: input.idempotencyKey ?? undefined,
         })
         .returning();
@@ -355,6 +360,7 @@ export async function createSaleForOrg(input: CreateSaleForOrgInput) {
           saleId: sale.id,
           originalAmount: creditoAmount,
           dueDate: input.dueDate ?? null,
+          customerId: input.customerId ?? null,
           createdBy: actorId,
           notes: input.notes ?? null,
         });

@@ -1,5 +1,5 @@
 import type { AuditActor } from '@/libs/audit-log';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { applyInvoiceCustomerUpsert } from '@/features/customers/post-sale-hook';
 import { logAction } from '@/libs/audit-log';
 import { recordCashMovement } from '@/libs/cash-helpers';
@@ -152,13 +152,30 @@ export async function applyPostSaleSideEffects(
         createIfMissing: !args.isConvergenceRetry,
       });
 
-      await applyInvoiceCustomerUpsert({
+      // Invoice-tagged sales resolve/create their customer here (the upsert
+      // returns the matched customer id). Thread it back onto the sale so the
+      // customer detail (ficha de cliente) can list this purchase. Runs in the
+      // same convergence lock as the upsert; only fills a NULL to stay
+      // idempotent across retries. Anonymous sales get no customer → no-op.
+      const upsertedCustomer = await applyInvoiceCustomerUpsert({
         organizationId: args.organizationId,
         notes: args.notes,
         total: args.total,
         createdBy: args.createdBy,
         executor: tx,
       });
+
+      if (upsertedCustomer?.id) {
+        await tx
+          .update(salesSchema)
+          .set({ customerId: upsertedCustomer.id })
+          .where(
+            and(
+              eq(salesSchema.id, args.saleId),
+              isNull(salesSchema.customerId),
+            ),
+          );
+      }
 
       await recordSaleTransferReconciliations(args.saleId, tx);
 

@@ -1,5 +1,6 @@
 'use server';
 
+import type { CustomerDetail } from './customer-detail';
 import type { CustomerCreateInput, CustomerUpdateInput } from './validation';
 import { auth } from '@clerk/nextjs/server';
 import { and, asc, eq, ilike, or } from 'drizzle-orm';
@@ -7,12 +8,15 @@ import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
 import { customersSchema } from '@/models/Schema';
+import { loadCustomerDetail } from './customer-detail';
 import {
 
   customerCreateSchema,
   customerUpdateSchema,
   isConsumidorFinal,
 } from './validation';
+
+export type { CustomerDetail } from './customer-detail';
 
 async function requireOrgId() {
   const { userId, orgId } = await auth();
@@ -203,4 +207,15 @@ export async function softDeleteCustomer(id: string) {
 
   revalidatePath('/dashboard/customers');
   return { id: row.id };
+}
+
+// ── Customer detail (ficha de cliente) ───────────────────────────────────────
+// Clerk-auth, org-scoped wrapper over the shared core (customer-detail.ts). The
+// POS route reuses the same core under cashier auth so both surfaces read ONE
+// contract.
+export async function getCustomerDetail(
+  customerId: string,
+): Promise<CustomerDetail | null> {
+  const { orgId } = await requireOrgId();
+  return loadCustomerDetail(orgId, customerId);
 }
