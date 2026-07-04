@@ -205,7 +205,12 @@ export function SalesClient({
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [qtys, setQtys] = useState<Record<string, number>>({});
   const [reason, setReason] = useState<ReturnReason>('customer_request');
-  const [refundMethod, setRefundMethod] = useState('Efectivo');
+  // Damaged returns ask whether the customer wants a replacement ('replace') or
+  // their money back ('refund'). Refunds are always in cash — there is no method
+  // picker anymore.
+  const [damagedResolution, setDamagedResolution]
+    = useState<'replace' | 'refund'>('replace');
+  const refundMethod = 'Efectivo';
   const [activeMethods, setActiveMethods] = useState<PaymentMethodRow[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
@@ -241,18 +246,6 @@ export function SalesClient({
     ],
     [activeMethods],
   );
-
-  // Refunds can't be issued back to cash-only or credit methods; Efectivo is
-  // always offered as the fallback.
-  const refundMethods = useMemo(() => {
-    const opts = [
-      'Efectivo',
-      ...activeMethods
-        .filter(m => m.type !== 'cash' && m.type !== 'credit')
-        .map(m => m.name),
-    ];
-    return [...new Set(opts)];
-  }, [activeMethods]);
 
   async function fetchSales() {
     // The list and the KPI band answer to one filter set; the summary just drops
@@ -345,10 +338,10 @@ export function SalesClient({
     setSubmitError('');
     setSubmitSuccess('');
     setReason('customer_request');
+    setDamagedResolution('replace');
     setDetailLoading(true);
     try {
       const detail = await getSaleForReturn(saleId);
-      setRefundMethod('Efectivo');
 
       const initSelected = new Set<string>();
       const initQtys: Record<string, number> = {};
@@ -391,10 +384,17 @@ export function SalesClient({
     setSubmitting(true);
     setSubmitError('');
     try {
-      // Destination is baked into the reason: a change of mind restocks; a
-      // defective product is written off as damaged.
+      // Destination follows the intent: a change of mind restocks; a damaged
+      // replacement is written off as damaged (merma, no money); a damaged
+      // refund discards the unit and pays the money back. The server re-derives
+      // this from reason + damagedResolution, so this only keeps the client copy
+      // truthful.
+      const damagedRefund = reason === 'damaged' && damagedResolution === 'refund';
       const disposition: ReturnDisposition
-        = reason === 'damaged' ? 'damaged' : 'restock';
+        = reason === 'damaged'
+          ? (damagedRefund ? 'discard' : 'damaged')
+          : 'restock';
+      const noMoneyBack = reason === 'damaged' && damagedResolution === 'replace';
       const chosen = returnSale.items.filter(it => selected.has(it.id));
       const items = chosen.map((it) => {
         const remaining = remainingOf(it);
@@ -402,7 +402,7 @@ export function SalesClient({
         return {
           saleItemId: it.id,
           qty,
-          refundAmount: reason === 'damaged' ? 0 : lineRefund(it, qty),
+          refundAmount: noMoneyBack ? 0 : lineRefund(it, qty),
           disposition,
         };
       });
@@ -418,6 +418,7 @@ export function SalesClient({
       await processReturn(returnSale.id, {
         reason,
         refundMethod,
+        damagedResolution: reason === 'damaged' ? damagedResolution : undefined,
         notes: null,
         partial,
         items,
@@ -438,16 +439,16 @@ export function SalesClient({
     }
   }
 
-  const refundIsCash = ['efectivo', 'cash'].includes(refundMethod.toLowerCase());
   const selectedCount = selected.size;
   const reasonMeta = RETURN_REASONS.find(r => r.value === reason);
   const isDamaged = reason === 'damaged';
+  // The only case with no money back is a damaged *replacement* (exchange).
+  const noMoneyBack = isDamaged && damagedResolution === 'replace';
 
   const chosenItems = returnSale
     ? returnSale.items.filter(it => selected.has(it.id))
     : [];
-  // A damaged exchange returns no cash, so there is nothing to refund.
-  const totalRefund = isDamaged
+  const totalRefund = noMoneyBack
     ? 0
     : chosenItems.reduce((acc, it) => {
         const remaining = remainingOf(it);
@@ -1028,63 +1029,79 @@ export function SalesClient({
                           </button>
                         ))}
                       </div>
-                      {reasonMeta && (
+                      {reasonMeta && !isDamaged && (
                         <p className="text-xs text-muted-foreground">
                           {reasonMeta.effect}
                         </p>
                       )}
                     </div>
 
-                    {/* A damaged exchange returns no cash, so we replace the
-                        refund method + total with the merma note. */}
-                    {isDamaged
+                    {/* Damaged: ask replacement vs money-back. */}
+                    {isDamaged && (
+                      <div className="space-y-2">
+                        <p className={labelCls}>¿Qué quiere el cliente?</p>
+                        <div className="
+                          grid grid-cols-1 gap-2
+                          sm:grid-cols-2
+                        "
+                        >
+                          {([
+                            { value: 'replace', label: 'Un producto nuevo' },
+                            { value: 'refund', label: 'Reembolso en efectivo' },
+                          ] as const).map(opt => (
+                            <button
+                              key={opt.value}
+                              type="button"
+                              onClick={() => setDamagedResolution(opt.value)}
+                              className={cn(
+                                `
+                                  rounded-md border px-3 py-2 text-left text-sm
+                                  font-medium transition-colors
+                                `,
+                                damagedResolution === opt.value
+                                  ? `
+                                    border-primary/50 bg-primary/5
+                                    text-foreground
+                                  `
+                                  : `
+                                    text-muted-foreground
+                                    hover:bg-accent
+                                  `,
+                              )}
+                            >
+                              {opt.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Dynamic effect note — changes with the reason + choice. */}
+                    {noMoneyBack
                       ? (
                           <div className="
                             rounded-md border border-amber-500/40
                             bg-amber-500/10 px-3 py-2 text-xs text-amber-700
                           "
                           >
-                            No se devuelve dinero: se entrega un reemplazo y el
+                            Se entrega un reemplazo: no se devuelve dinero. El
                             producto dañado se registra como merma al costo.
                           </div>
                         )
                       : (
                           <>
-                            {/* Refund — quick buttons for the configured methods */}
-                            <div className="space-y-2">
-                              <p className={labelCls}>Reembolso en</p>
-                              <div className="flex flex-wrap gap-2">
-                                {refundMethods.map(m => (
-                                  <button
-                                    key={m}
-                                    type="button"
-                                    onClick={() => setRefundMethod(m)}
-                                    className={cn(
-                                      `
-                                        rounded-md border px-3 py-1.5 text-sm
-                                        font-medium transition-colors
-                                      `,
-                                      refundMethod === m
-                                        ? `
-                                          border-primary/50 bg-primary/5
-                                          text-foreground
-                                        `
-                                        : `
-                                          text-muted-foreground
-                                          hover:bg-accent
-                                        `,
-                                    )}
-                                  >
-                                    {m}
-                                  </button>
-                                ))}
-                              </div>
-                              {refundIsCash && (
-                                <p className="text-xs text-muted-foreground">
-                                  Se registra la salida de efectivo en la caja
-                                  abierta.
-                                </p>
-                              )}
+                            <div className="
+                              rounded-md border border-amber-500/40
+                              bg-amber-500/10 px-3 py-2 text-xs text-amber-700
+                            "
+                            >
+                              {isDamaged
+                                ? `Se devuelve el dinero en efectivo (salida de la
+                                   caja abierta); el producto dañado no vuelve al
+                                   inventario.`
+                                : `La mercancía vuelve al inventario y se devuelve
+                                   el dinero en efectivo (salida de la caja
+                                   abierta).`}
                             </div>
 
                             <div className="
