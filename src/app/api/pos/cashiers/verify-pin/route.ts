@@ -12,8 +12,14 @@ export const dynamic = 'force-dynamic';
 
 type Body = { cashierId?: string; pin?: string };
 
+// Wrong-PIN lockout: after MAX_ATTEMPTS consecutive failures the cashier is
+// locked for LOCK_MINUTES. A correct PIN or a fresh activation clears both.
+const MAX_ATTEMPTS = 5;
+const LOCK_MINUTES = 5;
+
 // Verifica el PIN de un empleado al cambiar de perfil en la caja compartida.
-// Si el empleado no tiene PIN configurado, el acceso es directo.
+// Cada empleado DEBE tener su propio PIN (Option B): sin PIN configurado no se
+// puede entrar — el empleado activa su PIN con el enlace que le envía el admin.
 export async function POST(req: Request): Promise<NextResponse> {
   const { ctx, errorResponse } = await requirePosAuth(req);
   if (errorResponse) {
@@ -42,6 +48,8 @@ export async function POST(req: Request): Promise<NextResponse> {
       name: posUsersSchema.name,
       role: posUsersSchema.role,
       pin: posUsersSchema.pin,
+      pinFailedAttempts: posUsersSchema.pinFailedAttempts,
+      pinLockedUntil: posUsersSchema.pinLockedUntil,
     })
     .from(posUsersSchema)
     .where(
@@ -63,8 +71,7 @@ export async function POST(req: Request): Promise<NextResponse> {
   const cashier = { id: emp.id, name: emp.name, role: emp.role };
 
   // Stamp who is now operating this caja so the admin panel shows the live
-  // operator. Runs for BOTH PIN and no-PIN employees (this endpoint is the
-  // profile-change gate). Best-effort — never block the login on this write.
+  // operator. Best-effort — never block the login on this write.
   const markOperating = async () => {
     if (!ctx.tokenId) {
       return;
@@ -79,14 +86,57 @@ export async function POST(req: Request): Promise<NextResponse> {
     }
   };
 
-  // Sin PIN configurado → acceso directo.
+  // Sin PIN configurado → el empleado aún no activó su PIN. NO se entra: sería la
+  // brecha de suplantación (cualquiera entraría como él). 403, no 401 (401 lo
+  // interpreta el POS como sesión de caja expirada y cerraría la caja entera).
   if (!emp.pin) {
-    await markOperating();
-    return NextResponse.json({ ok: true, cashier });
+    return NextResponse.json(
+      {
+        ok: false,
+        code: 'not_activated',
+        error:
+          'Este cajero aún no ha activado su PIN. Revisa tu WhatsApp o pide al admin que reenvíe el enlace.',
+      },
+      { status: 403 },
+    );
+  }
+
+  // Lockout activo → rechazar sin siquiera comparar.
+  if (emp.pinLockedUntil && emp.pinLockedUntil.getTime() > Date.now()) {
+    const mins = Math.max(
+      1,
+      Math.ceil((emp.pinLockedUntil.getTime() - Date.now()) / 60000),
+    );
+    return NextResponse.json(
+      {
+        ok: false,
+        code: 'locked',
+        error: `Demasiados intentos. Bloqueado, intenta en ${mins} minuto${mins === 1 ? '' : 's'} o pide al admin que reenvíe tu enlace.`,
+      },
+      { status: 403 },
+    );
   }
 
   const valid = await bcrypt.compare(pin, emp.pin);
   if (!valid) {
+    const nextAttempts = (emp.pinFailedAttempts ?? 0) + 1;
+    const shouldLock = nextAttempts >= MAX_ATTEMPTS;
+    const lockedUntil = shouldLock
+      ? new Date(Date.now() + LOCK_MINUTES * 60000)
+      : null;
+
+    // Reaching the cap locks the account and resets the counter; otherwise just
+    // bump the counter. Best-effort persist — a failed write must not turn a
+    // wrong PIN into a 500.
+    await db
+      .update(posUsersSchema)
+      .set({
+        pinFailedAttempts: shouldLock ? 0 : nextAttempts,
+        pinLockedUntil: lockedUntil,
+      })
+      .where(eq(posUsersSchema.id, emp.id))
+      .catch(() => null);
+
     const deviceRow = ctx.tokenId
       ? await db
           .select({ deviceName: posTokensSchema.deviceName })
@@ -103,21 +153,49 @@ export async function POST(req: Request): Promise<NextResponse> {
       action: 'employee.pin_failed',
       entityType: 'pos_user',
       entityId: emp.id,
-      metadata: { employeeName: emp.name, deviceName, tokenId: ctx.tokenId },
+      metadata: {
+        employeeName: emp.name,
+        deviceName,
+        tokenId: ctx.tokenId,
+        attempts: nextAttempts,
+        locked: shouldLock,
+      },
     }).catch(() => null);
     createNotification({
       organizationId: ctx.organizationId,
       kind: 'sale_alert',
       severity: 'high',
-      title: 'Intento de PIN incorrecto',
-      message: `PIN incorrecto para el empleado "${emp.name}" en la caja "${deviceName}".`,
+      title: shouldLock ? 'Cajero bloqueado por PIN' : 'Intento de PIN incorrecto',
+      message: shouldLock
+        ? `El empleado "${emp.name}" fue bloqueado tras ${MAX_ATTEMPTS} intentos de PIN en la caja "${deviceName}".`
+        : `PIN incorrecto para el empleado "${emp.name}" en la caja "${deviceName}".`,
       payload: { employeeId: emp.id, employeeName: emp.name, tokenId: ctx.tokenId },
     }).catch(() => null);
 
+    if (shouldLock) {
+      return NextResponse.json(
+        {
+          ok: false,
+          code: 'locked',
+          error: `Demasiados intentos. Bloqueado, intenta en ${LOCK_MINUTES} minutos o pide al admin que reenvíe tu enlace.`,
+        },
+        { status: 403 },
+      );
+    }
+
     return NextResponse.json(
-      { ok: false, error: 'PIN incorrecto' },
-      { status: 401 },
+      { ok: false, code: 'pin_incorrect', error: 'PIN incorrecto' },
+      { status: 403 },
     );
+  }
+
+  // PIN correcto → limpiar el contador/lockout y marcar operando.
+  if ((emp.pinFailedAttempts ?? 0) !== 0 || emp.pinLockedUntil) {
+    await db
+      .update(posUsersSchema)
+      .set({ pinFailedAttempts: 0, pinLockedUntil: null })
+      .where(eq(posUsersSchema.id, emp.id))
+      .catch(() => null);
   }
 
   await markOperating();

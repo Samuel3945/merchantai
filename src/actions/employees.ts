@@ -8,6 +8,7 @@ import { and, count, desc, eq, isNull, ne, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
 import { db } from '@/libs/DB';
+import { sendWhatsAppTextForOrg } from '@/libs/delivery-whatsapp';
 import { sendInvitationEmail } from '@/libs/email';
 import { getOrgEntitlements, limitOf } from '@/libs/entitlements';
 import { Env } from '@/libs/Env';
@@ -17,6 +18,12 @@ import {
   cleanEnabledModules,
 } from '@/libs/permissions';
 import { CASHIERS_LIMIT_REACHED } from '@/libs/plan-limits';
+import {
+  ACTIVATION_TTL_MS,
+  buildActivationUrl,
+  generateActivationToken,
+  hashActivationToken,
+} from '@/libs/pos-pin-activation';
 import {
   employeeInvitationsSchema,
   planAddonsSchema,
@@ -407,6 +414,9 @@ export async function listEmployees() {
       permissions: posUsersSchema.permissions,
       canConfirmTransfers: posUsersSchema.canConfirmTransfers,
       hasPin: sql<boolean>`(${posUsersSchema.pin} <> '')`,
+      // Drives the PIN status chip in the admin screen: "PIN activo" / "Pendiente
+      // de activar" (no pin) / "Bloqueado" (pinLockedUntil in the future).
+      pinLockedUntil: posUsersSchema.pinLockedUntil,
       salary: posUsersSchema.salary,
       phone: posUsersSchema.phone,
       workSchedule: posUsersSchema.workSchedule,
@@ -565,6 +575,97 @@ export async function resetCashierPin(
 
   revalidatePath('/dashboard/employees');
   return { ok: true, data: updated };
+}
+
+export type SendActivationResult = {
+  // The raw activation link — always returned so the admin can copy it if
+  // WhatsApp delivery fails.
+  link: string;
+  /** true only when the WhatsApp message actually left through the org channel. */
+  whatsappSent: boolean;
+  /** The employee's WhatsApp number the link was sent to (null when unset). */
+  phone: string | null;
+};
+
+// Envía (o reenvía) el enlace de activación de PIN a un empleado (Option B). El
+// admin NUNCA ve ni fija el PIN: genera un token de un solo uso, guarda su HASH +
+// vencimiento (72h) y le manda el enlace por WhatsApp. El PIN actual (si lo hay)
+// se MANTIENE hasta que el empleado reactive — así un empleado que "olvidó el
+// PIN" recibe un enlace nuevo sin quedar bloqueado mientras tanto; y de paso
+// limpiamos cualquier lockout para que el admin pueda rescatar a un bloqueado.
+// Siempre devuelve el enlace copiable aunque WhatsApp falle.
+export async function sendCashierActivation(
+  cashierId: string,
+): Promise<ActionResult<SendActivationResult>> {
+  const { orgId, userId } = await requireAdminContext();
+
+  const [emp] = await db
+    .select({
+      id: posUsersSchema.id,
+      name: posUsersSchema.name,
+      phone: posUsersSchema.phone,
+    })
+    .from(posUsersSchema)
+    .where(
+      and(
+        eq(posUsersSchema.id, cashierId),
+        eq(posUsersSchema.organizationId, orgId),
+      ),
+    )
+    .limit(1);
+
+  if (!emp) {
+    return { ok: false, error: 'Empleado no encontrado' };
+  }
+
+  const rawToken = generateActivationToken();
+  const tokenHash = hashActivationToken(rawToken);
+  const expiresAt = new Date(Date.now() + ACTIVATION_TTL_MS);
+
+  await db
+    .update(posUsersSchema)
+    .set({
+      activationToken: tokenHash,
+      activationExpiresAt: expiresAt,
+      // Admin rescue: clear any lockout so a locked-out employee can re-activate.
+      // The current PIN is intentionally NOT wiped (see the doc note above).
+      pinFailedAttempts: 0,
+      pinLockedUntil: null,
+    })
+    .where(eq(posUsersSchema.id, emp.id));
+
+  const link = buildActivationUrl(rawToken);
+
+  const orgName = await resolveOrgName(orgId);
+  const message
+    = `Hola ${emp.name} 👋\n`
+      + `Activa tu PIN de cajero${orgName ? ` en ${orgName}` : ''}.\n`
+      + `Abre este enlace y crea tu PIN personal (no lo compartas con nadie):\n`
+      + `${link}\n`
+      + `El enlace vence en 72 horas.`;
+
+  const result = await sendWhatsAppTextForOrg(orgId, emp.phone, message);
+
+  await logAction({
+    organizationId: orgId,
+    actor: { type: 'user', id: userId },
+    action: 'employee.activation_sent',
+    entityType: 'pos_user',
+    entityId: emp.id,
+    metadata: {
+      employeeName: emp.name,
+      phone: emp.phone,
+      whatsappSent: result.sent,
+      whatsappReason: result.sent ? null : ('reason' in result ? result.reason : result.error),
+    },
+  }).catch(() => null);
+
+  revalidatePath('/dashboard/employees');
+
+  return {
+    ok: true,
+    data: { link, whatsappSent: result.sent, phone: emp.phone },
+  };
 }
 
 export type WorkDaySchedule = {

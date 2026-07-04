@@ -610,6 +610,13 @@
       "when": 1782900006004,
       "tag": "0086_sale_customer_link",
       "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1782900007004,
+      "tag": "0087_pos_pin_activation",
+      "breakpoints": true
     }
   ]
 }
