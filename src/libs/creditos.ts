@@ -1,5 +1,6 @@
 import type { CreditoDueState } from '@/libs/creditos-shared';
-import { and, asc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { normalizeWhatsapp } from '@/features/customers/validation';
 import { findOpenSession } from '@/libs/cash-helpers';
 import {
   clientKeyOf,
@@ -1073,4 +1074,94 @@ export async function getClientDetail(
   }));
 
   return { client, creditos, timeline };
+}
+
+// ── Read: a customer's credit, resolved by IDENTITY (not just the FK) ─────────
+//
+// The customer ficha needs THIS customer's outstanding credit + abonos. It must
+// NOT look creditos up by `c:<id>` alone: most POS creditos are created with
+// customer_id = NULL and group under `n:<base64(name||phone)>` (parsed from the
+// notes), so a FK-only lookup finds nothing and the ficha shows 0 even though the
+// créditos wall shows the debt. Instead we reuse the wall's OWN grouping
+// (groupByClient) and claim every group that belongs to this customer by any of:
+//   • the real FK (group.customerId === customer.id),
+//   • matching whatsapp (normalizeWhatsapp on BOTH sides, so formatting differs
+//     harmlessly), or
+//   • a case-insensitive, trimmed name match (last resort; never matches the
+//     "Sin nombre" placeholder).
+// Then it sums their balances and merges their abonos — so the ficha shows exactly
+// what the wall shows. Null-safe: a customer with no whatsapp and no matching
+// group yields balance 0 and no abonos.
+export type CustomerCreditSummary = {
+  balance: number;
+  abonos: {
+    id: string;
+    amount: number;
+    method: string | null;
+    createdAt: string;
+  }[];
+};
+
+export async function getCustomerCreditSummary(
+  organizationId: string,
+  customer: { id: string; name: string | null; whatsapp: string | null },
+): Promise<CustomerCreditSummary> {
+  const all = await fetchEnrichedCreditos(organizationId);
+  if (all.length === 0) {
+    return { balance: 0, abonos: [] };
+  }
+
+  const groups = groupByClient(all);
+  const wantWa = normalizeWhatsapp(customer.whatsapp);
+  const wantName = customer.name?.trim().toLowerCase() ?? '';
+
+  const mine = groups.filter((g) => {
+    if (g.customerId && g.customerId === customer.id) {
+      return true;
+    }
+    if (wantWa && normalizeWhatsapp(g.phone) === wantWa) {
+      return true;
+    }
+    const gName = g.name.trim().toLowerCase();
+    if (wantName && gName === wantName && gName !== 'sin nombre') {
+      return true;
+    }
+    return false;
+  });
+
+  if (mine.length === 0) {
+    return { balance: 0, abonos: [] };
+  }
+
+  const balance = round2(mine.reduce((a, g) => a + g.balance, 0));
+  const creditoIds = mine.flatMap(g => g.creditoIds);
+  if (creditoIds.length === 0) {
+    return { balance, abonos: [] };
+  }
+
+  const movements = await db
+    .select({
+      id: creditoMovementsSchema.id,
+      amount: creditoMovementsSchema.amount,
+      method: creditoMovementsSchema.method,
+      createdAt: creditoMovementsSchema.createdAt,
+    })
+    .from(creditoMovementsSchema)
+    .where(
+      and(
+        inArray(creditoMovementsSchema.creditoId, creditoIds),
+        eq(creditoMovementsSchema.type, 'payment'),
+      ),
+    )
+    .orderBy(desc(creditoMovementsSchema.createdAt));
+
+  return {
+    balance,
+    abonos: movements.map(m => ({
+      id: m.id,
+      amount: Number.parseFloat(m.amount) || 0,
+      method: m.method,
+      createdAt: m.createdAt.toISOString(),
+    })),
+  };
 }

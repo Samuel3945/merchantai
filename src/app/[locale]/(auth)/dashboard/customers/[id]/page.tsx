@@ -83,7 +83,7 @@ function buildTimeline(detail: CustomerDetail): TimelineEntry[] {
       key: `abono-${a.id}`,
       date: a.date,
       title: `Abono a crédito${a.method ? ` — ${a.method}` : ''}`,
-      subtitle: 'Pago de fiado',
+      subtitle: 'Pago de crédito',
       amount: a.amount,
       tone: 'abono',
     });

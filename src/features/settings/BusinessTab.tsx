@@ -28,6 +28,7 @@ const TIMEZONE_OPTIONS = [
 export type BusinessTabValues = {
   'business_name': string;
   'business_phone': string;
+  'business_address': string;
   'business_logo': string;
   'business_currency': string;
   'business_timezone': string;
@@ -130,6 +131,14 @@ export function BusinessTab({ initial }: { initial: BusinessTabValues }) {
           initial={initial.business_phone}
           placeholder="3001234567"
           onCommit={v => save('business_phone', v.trim())}
+        />
+        <TextField
+          id="business_address"
+          label="Dirección del negocio"
+          initial={initial.business_address}
+          placeholder="Cra 1 # 2-3, Bogotá"
+          hint="Dirección única del negocio. Aparece en los tickets del POS."
+          onCommit={v => save('business_address', v.trim())}
         />
         <SelectField
           id="business_currency"
