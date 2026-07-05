@@ -2,6 +2,7 @@ import { and, eq, isNull, sql } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import {
   getCourierBalance,
+  listActiveCourierWalletBalances,
   recordCourierCashMovement,
 } from '@/libs/courier-wallet';
 import { db } from '@/libs/DB';
@@ -63,17 +64,24 @@ export async function GET(req: Request): Promise<NextResponse> {
     return errorResponse;
   }
 
-  const url = new URL(req.url);
-  const courierId = url.searchParams.get('courierId') ?? ctx.cashierId;
-  if (!courierId) {
-    return NextResponse.json(
-      { error: 'No hay domiciliario para consultar' },
-      { status: 400 },
-    );
-  }
+  // Devuelve el bolsillo del operador activo (si es domiciliario) + la lista de
+  // domiciliarios activos con su saldo (para el selector "¿a quién le prestas?").
+  const couriers = await listActiveCourierWalletBalances(ctx.organizationId);
+  const activeId = ctx.cashierId;
+  const meWallet = activeId
+    ? couriers.find(c => c.courierId === activeId) ?? null
+    : null;
 
-  const balance = await getCourierBalance(ctx.organizationId, courierId);
-  return NextResponse.json({ courierId, balance });
+  return NextResponse.json({
+    me: activeId
+      ? {
+          courierId: activeId,
+          isCourier: meWallet != null,
+          balance: meWallet?.balance ?? 0,
+        }
+      : null,
+    couriers,
+  });
 }
 
 type MovementBody = {
