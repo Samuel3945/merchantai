@@ -617,6 +617,13 @@
       "when": 1782900007004,
       "tag": "0087_pos_pin_activation",
       "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1782900008004,
+      "tag": "0088_courier_wallet",
+      "breakpoints": true
     }
   ]
 }

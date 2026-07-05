@@ -361,6 +361,9 @@ export async function listPosTokens() {
       addressCity: orgAddressesSchema.city,
       active: posTokensSchema.active,
       allowOversell: posTokensSchema.allowOversell,
+      // Modo del cajón: 'shared' (compartida) | 'divided' (dividida). Ver
+      // docs/caja-domiciliario/ESPECIFICACION.md §7.
+      cashMode: posTokensSchema.cashMode,
       createdAt: posTokensSchema.createdAt,
       defaultSweepDestinationAccountId: posTokensSchema.defaultSweepDestinationAccountId,
     })
@@ -627,6 +630,50 @@ export async function setPosTokenAllowOversell(
 
   revalidatePath('/dashboard/pos-cajeros');
   return { ok: true, data: updated };
+}
+
+// Modo del cajón: compartida (varias manos, responsabilidad colectiva, se puede
+// compartir con otras cajas y domiciliarios) vs dividida (un solo responsable).
+// Regla de cascada acordada (ESPECIFICACION §7): el pozo compartido es del
+// negocio, no de una caja suelta — así que compartir/dividir es una decisión de
+// TODAS las cajas a la vez. Poner una en dividida rompe el pozo para todas; poner
+// una en compartida las mete a todas al mismo pozo. Esto mantiene coherente el
+// "con cuáles POS comparte" (siempre son todas las demás activas).
+export async function setPosTokenCashMode(
+  id: string,
+  mode: 'shared' | 'divided',
+): Promise<ActionResult<{ id: string; cashMode: 'shared' | 'divided' }>> {
+  const { userId, orgId } = await requireAdminContext();
+
+  const [current] = await db
+    .select({ cashMode: posTokensSchema.cashMode })
+    .from(posTokensSchema)
+    .where(
+      and(eq(posTokensSchema.id, id), eq(posTokensSchema.organizationId, orgId)),
+    )
+    .limit(1);
+  if (!current) {
+    return { ok: false, error: 'Caja no encontrada' };
+  }
+
+  // Cascada: todas las cajas de la org toman el mismo modo.
+  await db
+    .update(posTokensSchema)
+    .set({ cashMode: mode })
+    .where(eq(posTokensSchema.organizationId, orgId));
+
+  await logAction({
+    organizationId: orgId,
+    actor: { type: 'user', id: userId },
+    action: 'pos_token.cash_mode_changed',
+    entityType: 'pos_token',
+    entityId: id,
+    before: { cashMode: current.cashMode, scope: 'all_org_cajas' },
+    after: { cashMode: mode, scope: 'all_org_cajas' },
+  });
+
+  revalidatePath('/dashboard/pos-cajeros');
+  return { ok: true, data: { id, cashMode: mode } };
 }
 
 // Genera un token nuevo para la caja (invalida el anterior). El dispositivo que

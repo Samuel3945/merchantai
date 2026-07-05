@@ -911,6 +911,12 @@ export const whatsappChannelsSchema = pgTable(
   ],
 );
 
+// Modo de caja (cajón): 'shared' = compartida (varias manos, responsabilidad
+// colectiva, se puede compartir con otras cajas y domiciliarios); 'divided' =
+// dividida (un solo responsable → un culpable claro si descuadra). Ver
+// docs/caja-domiciliario/ESPECIFICACION.md §7.
+export const posCashModeEnum = pgEnum('pos_cash_mode', ['shared', 'divided']);
+
 export const posTokensSchema = pgTable(
   'pos_tokens',
   {
@@ -943,6 +949,10 @@ export const posTokensSchema = pgTable(
     // routes let a sale through even if stock is 0 (stock clamps at 0, FIFO
     // values uncovered units at fallback cost). Default false => stock enforced.
     allowOversell: boolean('allow_oversell').default(false).notNull(),
+    // Modo del cajón: compartida (varias manos) vs dividida (un responsable).
+    // Default 'divided' => cada caja es independiente salvo que el dueño la marque
+    // compartida en el panel (dashboard/pos-cajeros). Ver ESPECIFICACION §7.
+    cashMode: posCashModeEnum('cash_mode').default('divided').notNull(),
     // PIN de acceso de la caja (bcrypt). Se exige en /api/pos/login junto con el
     // token. '' => caja sin PIN (acceso directo con solo el token/QR).
     pin: text('pin').default('').notNull(),
@@ -2257,6 +2267,95 @@ export const courierShiftsRelations = relations(
     }),
     posToken: one(posTokensSchema, {
       fields: [courierShiftsSchema.posTokenId],
+      references: [posTokensSchema.id],
+    }),
+  }),
+);
+
+// ── Bolsillo del domiciliario (courier wallet) ─────────────────────────────
+// Ledger APPEND-ONLY del efectivo que el domiciliario lleva encima. El saldo se
+// DERIVA de estas filas (nunca se guarda un valor absoluto — misma regla que el
+// FIFO de stock). Un domiciliario es un pos_user con el módulo 'delivery'. Ver
+// docs/caja-domiciliario/ESPECIFICACION.md §3.
+//
+//   base_from_caja    la caja le presta base para dar vuelto (cajón −$, domi +$)
+//   sale_collected    venta a domicilio en efectivo cobrada  (domi +$, NO al cajón)
+//   handover_to_caja  entrega billetes a la caja              (domi −$, cajón +$)
+//
+// Saldo del domiciliario = Σ(base_from_caja + sale_collected) − Σ(handover_to_caja).
+export const courierCashDirectionEnum = pgEnum('courier_cash_direction', [
+  'base_from_caja',
+  'sale_collected',
+  'handover_to_caja',
+]);
+
+export const courierCashMovementsSchema = pgTable(
+  'courier_cash_movements',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: text('organization_id').notNull(),
+    // El turno en curso (courier_shifts). SET NULL para no perder el rastro de
+    // dinero si un turno se borrara; los turnos no se borran en la práctica.
+    shiftId: uuid('shift_id').references(() => courierShiftsSchema.id, {
+      onDelete: 'set null',
+    }),
+    // El domiciliario dueño del bolsillo. RESTRICT: un empleado con rastro de
+    // dinero no se borra físicamente (se desactiva con pos_users.active).
+    courierId: uuid('courier_id')
+      .notNull()
+      .references(() => posUsersSchema.id, { onDelete: 'restrict' }),
+    // La caja contraparte del movimiento (de dónde salió la base / a dónde entró
+    // la entrega). NULL para sale_collected (no toca cajón). SET NULL al retirar
+    // el dispositivo para no borrar el historial.
+    posTokenId: uuid('pos_token_id').references(() => posTokensSchema.id, {
+      onDelete: 'set null',
+    }),
+    direction: courierCashDirectionEnum('direction').notNull(),
+    amount: numeric('amount', { precision: 12, scale: 2 }).notNull(),
+    // Solo para sale_collected: la venta a domicilio cuyo efectivo se cobró.
+    saleId: uuid('sale_id').references(() => salesSchema.id, {
+      onDelete: 'set null',
+    }),
+    note: text('note'),
+    // pos_user id (o actor) que registró el movimiento. Una sola firma: no hay
+    // confirmación de la contraparte (ver ESPECIFICACION §4).
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+    // UUID generado en el dispositivo → idempotencia offline (mismo patrón que
+    // sale_idempotency_key). La cola offline puede reintentar sin duplicar.
+    clientMovementId: uuid('client_movement_id'),
+  },
+  table => [
+    // Idempotencia offline: una fila por (org, client_movement_id). Parcial para
+    // que las filas escritas desde el panel (sin client id) sigan válidas.
+    uniqueIndex('courier_cash_movements_org_client_idx')
+      .on(table.organizationId, table.clientMovementId)
+      .where(sql`${table.clientMovementId} IS NOT NULL`),
+    // Saldo del domiciliario: escanea org + courier.
+    index('courier_cash_movements_org_courier_idx').on(
+      table.organizationId,
+      table.courierId,
+    ),
+    index('courier_cash_movements_org_shift_idx').on(
+      table.organizationId,
+      table.shiftId,
+    ),
+  ],
+);
+
+export const courierCashMovementsRelations = relations(
+  courierCashMovementsSchema,
+  ({ one }) => ({
+    courier: one(posUsersSchema, {
+      fields: [courierCashMovementsSchema.courierId],
+      references: [posUsersSchema.id],
+    }),
+    shift: one(courierShiftsSchema, {
+      fields: [courierCashMovementsSchema.shiftId],
+      references: [courierShiftsSchema.id],
+    }),
+    posToken: one(posTokensSchema, {
+      fields: [courierCashMovementsSchema.posTokenId],
       references: [posTokensSchema.id],
     }),
   }),

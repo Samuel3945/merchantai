@@ -1,9 +1,11 @@
 import { setRequestLocale } from 'next-intl/server';
+import { getCourierWalletsAction } from '@/actions/courier-wallet';
 import { getTimeline, getTreasury, listGastosAction, listTreasuryAccounts } from '@/actions/treasury';
 import {
   getHandoverStatusForSessionsAction,
   listPendingHandoversAction,
 } from '@/actions/treasury-placement';
+import { CourierPocketsCard } from '@/features/treasury/CourierPocketsCard';
 import { GastosHistory } from '@/features/treasury/GastosHistory';
 import { TreasuryHero } from '@/features/treasury/TreasuryHero';
 import { TreasuryHistory } from '@/features/treasury/TreasuryHistory';
@@ -63,6 +65,9 @@ export default async function TesoreriaPage(props: {
   const bankRows = treasuryAccountRows.filter(r => r.type === 'banco');
   const cajaFuerteRows = treasuryAccountRows.filter(r => r.type === 'caja_fuerte');
 
+  // Bolsillo de domiciliarios: solo aparece si hay domiciliarios activos.
+  const courierWallets = await getCourierWalletsAction().catch(() => []);
+
   return (
     <div className="flex flex-col gap-[22px]">
       {/* 1. Hero: title + big total + 3 buckets */}
@@ -84,6 +89,11 @@ export default async function TesoreriaPage(props: {
         sinUbicar={sinUbicar}
         pendingCount={pendingCount}
       />
+
+      {/* Bolsillo de domiciliarios — dinero en la calle (solo si hay activos) */}
+      {courierWallets.length > 0 && (
+        <CourierPocketsCard wallets={courierWallets} />
+      )}
 
       {/* 5. Historial de tesorería */}
       <TreasuryHistory entries={timelineEntries} />
