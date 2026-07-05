@@ -12,13 +12,20 @@
 // cajón cuadre solo, sin enseñarle nada nuevo. `sale_collected` NO toca el
 // cajón (la plata la lleva el domiciliario, no entra al registro).
 
-import { and, eq, sql } from 'drizzle-orm';
-import { findOpenSession, toMoney } from '@/libs/cash-helpers';
+import { and, desc, eq, isNull, sql } from 'drizzle-orm';
+import {
+  computeExpectedAmount,
+  findOpenSession,
+  toMoney,
+} from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
 import {
   cashMovementsSchema,
+  cashSessionsSchema,
   courierCashMovementsSchema,
+  courierShiftsSchema,
   posUsersSchema,
+  salePaymentsSchema,
 } from '@/models/Schema';
 
 type Executor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -186,14 +193,31 @@ export async function recordCourierCashMovement(
       input.direction === 'base_from_caja'
       || input.direction === 'handover_to_caja'
     ) {
-      const session = await findOpenSession(
-        tx,
-        input.orgId,
-        input.posTokenId ?? null,
-      );
+      const token = input.posTokenId ?? null;
+      // Sesión destino: la abierta del token; si ya no hay (el cajero cerró la
+      // caja antes de que sincronizara este movimiento offline), la más reciente
+      // de ese token. Ver ESPECIFICACION §5: cerrar es offline con excedente y se
+      // reconcilia a exacto cuando el movimiento sube.
+      let session = await findOpenSession(tx, input.orgId, token);
+      if (!session) {
+        const [recent] = await tx
+          .select()
+          .from(cashSessionsSchema)
+          .where(
+            and(
+              eq(cashSessionsSchema.organizationId, input.orgId),
+              token === null
+                ? isNull(cashSessionsSchema.posTokenId)
+                : eq(cashSessionsSchema.posTokenId, token),
+            ),
+          )
+          .orderBy(desc(cashSessionsSchema.openedAt))
+          .limit(1);
+        session = recent;
+      }
       if (!session) {
         throw new Error(
-          'La caja debe estar abierta para registrar este movimiento.',
+          'No hay caja para registrar este movimiento. Abre la caja primero.',
         );
       }
       const isBase = input.direction === 'base_from_caja';
@@ -208,6 +232,21 @@ export async function recordCourierCashMovement(
           || (isBase ? 'Base a domiciliario' : 'Entrega de domiciliario'),
         createdBy: input.createdBy ?? 'system',
       });
+
+      // Reconciliación offline: si la sesión ya estaba CERRADA, su arqueo quedó
+      // congelado con excedente/faltante. Recalculamos expected y difference
+      // (counted no cambia) para que quede exacto tras subir el movimiento.
+      if (session.status === 'closed' && session.countedAmount != null) {
+        const expected = await computeExpectedAmount(tx, session);
+        const counted = Number.parseFloat(session.countedAmount) || 0;
+        await tx
+          .update(cashSessionsSchema)
+          .set({
+            expectedAmount: toMoney(expected),
+            difference: toMoney(round2(counted - expected)),
+          })
+          .where(eq(cashSessionsSchema.id, session.id));
+      }
     }
 
     const [row] = await tx
@@ -230,4 +269,113 @@ export async function recordCourierCashMovement(
   };
 
   return input.executor ? run(input.executor) : db.transaction(run);
+}
+
+/**
+ * Desvía el efectivo cobrado en una venta a domicilio al bolsillo del
+ * domiciliario, en vez de dejarlo en el cajón (la plata la lleva él, ver
+ * ESPECIFICACION §3). Best-effort, post-commit del sale + status flip.
+ *
+ * Modelo: createSaleForOrg ya contabilizó la venta en la caja del turno (un
+ * cash_movement type='sale'). Aquí compensamos ese ingreso con un `withdrawal`
+ * en la MISMA sesión (net cajón = 0) y acreditamos el efectivo al bolsillo del
+ * domiciliario (sale_collected). Idempotente por saleId: si ya se desvió, no
+ * duplica. Solo desvía la porción EN EFECTIVO (mixto/digital no aplica).
+ */
+export async function recordDeliveryCashCollected(args: {
+  orgId: string;
+  saleId: string;
+  courierId: string;
+  posTokenId?: string | null;
+  executor?: Executor;
+}): Promise<CourierCashMovement | null> {
+  const run = async (tx: Executor): Promise<CourierCashMovement | null> => {
+    // Idempotencia: una venta se desvía UNA sola vez (reintentos / re-delivery).
+    const [already] = await tx
+      .select()
+      .from(courierCashMovementsSchema)
+      .where(
+        and(
+          eq(courierCashMovementsSchema.saleId, args.saleId),
+          eq(courierCashMovementsSchema.direction, 'sale_collected'),
+        ),
+      )
+      .limit(1);
+    if (already) {
+      return already;
+    }
+
+    // Porción en efectivo de la venta (mixto: solo la parte efectivo).
+    const [cashRow] = await tx
+      .select({
+        sum: sql<string>`COALESCE(SUM(${salePaymentsSchema.amount}), 0)::text`,
+      })
+      .from(salePaymentsSchema)
+      .where(
+        and(
+          eq(salePaymentsSchema.saleId, args.saleId),
+          sql`LOWER(${salePaymentsSchema.method}) IN ('efectivo', 'cash')`,
+        ),
+      );
+    const cash = Number.parseFloat(cashRow?.sum ?? '0') || 0;
+    if (cash <= 0) {
+      return null;
+    }
+    const amount = toMoney(cash);
+
+    // Compensa el ingreso de la venta en la MISMA sesión donde cayó (net = 0),
+    // así el cajón deja de "esperar" un efectivo que físicamente lleva el domi.
+    const [saleMov] = await tx
+      .select({ sessionId: cashMovementsSchema.sessionId })
+      .from(cashMovementsSchema)
+      .where(
+        and(
+          eq(cashMovementsSchema.saleId, args.saleId),
+          eq(cashMovementsSchema.type, 'sale'),
+        ),
+      )
+      .limit(1);
+    if (saleMov) {
+      await tx.insert(cashMovementsSchema).values({
+        sessionId: saleMov.sessionId,
+        organizationId: args.orgId,
+        type: 'withdrawal',
+        amount,
+        reason: 'Efectivo del domicilio lo lleva el domiciliario',
+        saleId: args.saleId,
+        createdBy: 'system',
+      });
+    }
+
+    // Turno activo del domiciliario (para atar el movimiento al turno).
+    const [shift] = await tx
+      .select({ id: courierShiftsSchema.id })
+      .from(courierShiftsSchema)
+      .where(
+        and(
+          eq(courierShiftsSchema.organizationId, args.orgId),
+          eq(courierShiftsSchema.courierId, args.courierId),
+          isNull(courierShiftsSchema.endedAt),
+        ),
+      )
+      .limit(1);
+
+    const [row] = await tx
+      .insert(courierCashMovementsSchema)
+      .values({
+        organizationId: args.orgId,
+        shiftId: shift?.id ?? null,
+        courierId: args.courierId,
+        posTokenId: args.posTokenId ?? null,
+        direction: 'sale_collected',
+        amount,
+        saleId: args.saleId,
+        createdBy: 'system',
+      })
+      .returning();
+
+    return row ?? null;
+  };
+
+  return args.executor ? run(args.executor) : db.transaction(run);
 }

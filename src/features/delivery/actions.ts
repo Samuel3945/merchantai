@@ -7,6 +7,7 @@ import { revalidatePath } from 'next/cache';
 import { createSaleForOrg } from '@/actions/sales';
 import { logAction } from '@/libs/audit-log';
 import { isCashMethod } from '@/libs/cash-helpers';
+import { recordDeliveryCashCollected } from '@/libs/courier-wallet';
 import { isCreditoMethod } from '@/libs/creditos-math';
 import { db } from '@/libs/DB';
 import { sendWhatsAppTextForOrg } from '@/libs/delivery-whatsapp';
@@ -626,6 +627,18 @@ export async function transitionDelivery(
       feeAmount: updated.deliveryFee,
       actorId: actor?.id ?? userId,
     }).catch(() => null);
+
+    // Caja ↔ domiciliario: el efectivo cobrado NO se queda en el cajón — lo lleva
+    // el domiciliario. Se desvía a su bolsillo (sale_collected) y se compensa el
+    // ingreso de la venta en la misma sesión. Best-effort e idempotente por sale.
+    if (actor) {
+      await recordDeliveryCashCollected({
+        orgId,
+        saleId: deliveredSaleId,
+        courierId: actor.id,
+        posTokenId: deliverySale.shiftPosTokenId,
+      }).catch(() => null);
+    }
 
     // P2-A: the courier asked for an electronic invoice — emit it on demand
     // (only when the org's e-invoicing is actually configured).
