@@ -2,13 +2,13 @@
  * transitionDelivery — the 'delivered' → cash-sale bridge (delivery money core).
  *
  * Covers the money-critical rules:
- *   - delivered with an active shift → createSaleForOrg is called with the
- *     courier's caja (posTokenId), efectivo, items [{productId, qty}] and the
- *     delivery order id as the idempotency key; the order flips to delivered
- *     with saleId set and a status_change event recorded.
- *   - delivered WITHOUT a shift → rejected, no sale, status unchanged.
+ *   - delivered → createSaleForOrg is called with the admin caja (posTokenId
+ *     null), efectivo, items [{productId, qty}] and the delivery order id as the
+ *     idempotency key; the order flips to delivered with saleId set and a
+ *     status_change event recorded. No shift/caja declaration is required — the
+ *     delivery cash is diverted to the courier's wallet.
  *   - delivered with a legacy line missing productId → rejected, no sale.
- *   - a non-delivered transition (in_transit) needs no shift and no sale.
+ *   - a non-delivered transition (in_transit) creates no sale.
  *
  * createSaleForOrg is mocked (its FIFO/stock/cash core is tested elsewhere); this
  * suite verifies transitionDelivery's orchestration. In-memory PGlite backs the
@@ -23,7 +23,6 @@ import { CANCEL_REASON_MESSAGES } from './cancellation-reasons';
 const ORG = 'org_deliver_test';
 const CLERK_ID = 'user_courier_clerk';
 const COURIER_ID = 'bbbbbbbb-0001-4001-8001-000000000001';
-const DEVICE_ID = 'bbbbbbbb-0002-4002-8002-000000000002';
 const ORDER_ID = 'bbbbbbbb-0003-4003-8003-000000000003';
 const PRODUCT_ID = 'bbbbbbbb-0004-4004-8004-000000000004';
 const SALE_ID = 'bbbbbbbb-0005-4005-8005-000000000005';
@@ -196,14 +195,6 @@ beforeEach(async () => {
   );
 });
 
-async function seedShift(posTokenId: string | null): Promise<void> {
-  await pg.query(
-    `INSERT INTO courier_shifts (organization_id, courier_id, pos_token_id)
-     VALUES ($1, $2, $3)`,
-    [ORG, COURIER_ID, posTokenId],
-  );
-}
-
 async function seedOpenSession(posTokenId: string | null): Promise<void> {
   await pg.query(
     `INSERT INTO cash_sessions (organization_id, pos_token_id, status)
@@ -279,8 +270,7 @@ async function orderRow(): Promise<{
 }
 
 describe('transitionDelivery — delivered → cash sale', () => {
-  it('delivered with an active shift creates the sale in the caja and sets saleId', async () => {
-    await seedShift(DEVICE_ID);
+  it('delivered creates the sale in the admin caja (posTokenId null) and sets saleId', async () => {
     await seedOrder('assigned', [
       { productId: PRODUCT_ID, qty: 2, name: 'Arroz', price: 1000 },
     ]);
@@ -295,7 +285,9 @@ describe('transitionDelivery — delivered → cash sale', () => {
         actorId: COURIER_ID,
         actorType: 'api',
         paymentType: 'efectivo',
-        posTokenId: DEVICE_ID,
+        // Ya no se declara una caja: la venta a domicilio se contabiliza en la
+        // caja admin (null) y su efectivo se desvía al bolsillo del domiciliario.
+        posTokenId: null,
         idempotencyKey: ORDER_ID,
         items: [{ productId: PRODUCT_ID, qty: 2 }],
       }),
@@ -317,24 +309,20 @@ describe('transitionDelivery — delivered → cash sale', () => {
     expect(events.some(e => e.to_status === 'delivered')).toBe(true);
   });
 
-  it('delivered WITHOUT an active shift is rejected — no sale, status unchanged', async () => {
-    // No shift seeded.
+  it('a delivered order does not require a shift anymore — it just sells', async () => {
+    // No shift, no declared caja: delivering works and books the sale.
     await seedOrder('assigned', [
       { productId: PRODUCT_ID, qty: 1, name: 'Arroz', price: 1000 },
     ]);
 
     const { transitionDelivery } = await import('./actions');
+    await transitionDelivery(ORDER_ID, { status: 'delivered' });
 
-    await expect(
-      transitionDelivery(ORDER_ID, { status: 'delivered' }),
-    ).rejects.toThrow(/Iniciá tu jornada/i);
-
-    expect(h.createSale).not.toHaveBeenCalled();
-    expect((await orderRow()).status).toBe('assigned');
+    expect(h.createSale).toHaveBeenCalledOnce();
+    expect((await orderRow()).status).toBe('delivered');
   });
 
   it('delivered with a legacy line missing productId is rejected — no sale', async () => {
-    await seedShift(DEVICE_ID);
     await seedOrder('assigned', [
       { qty: 1, name: 'Producto libre sin id', price: 1000 },
     ]);
@@ -364,7 +352,6 @@ describe('transitionDelivery — delivered → cash sale', () => {
 
 describe('transitionDelivery — payment method at delivery (P0-B)', () => {
   it('threads the chosen paymentType into createSaleForOrg', async () => {
-    await seedShift(DEVICE_ID);
     await seedOrder('assigned', [
       { productId: PRODUCT_ID, qty: 2, name: 'Arroz', price: 1000 },
     ]);
@@ -379,7 +366,6 @@ describe('transitionDelivery — payment method at delivery (P0-B)', () => {
   });
 
   it('defaults to efectivo when the deliver dialog sends no method', async () => {
-    await seedShift(DEVICE_ID);
     await seedOrder('assigned', [
       { productId: PRODUCT_ID, qty: 1, name: 'Arroz', price: 1000 },
     ]);
@@ -393,7 +379,6 @@ describe('transitionDelivery — payment method at delivery (P0-B)', () => {
   });
 
   it('credito method → books the sale as a fiado debt (no reject), attributing the client in notes', async () => {
-    await seedShift(DEVICE_ID);
     await seedOrder(
       'assigned',
       [{ productId: PRODUCT_ID, qty: 1, name: 'Arroz', price: 1000 }],
@@ -417,7 +402,6 @@ describe('transitionDelivery — payment method at delivery (P0-B)', () => {
 
 describe('transitionDelivery — mixed (split) payment', () => {
   it('threads a split as payments[] into createSaleForOrg with a Mixto summary', async () => {
-    await seedShift(DEVICE_ID);
     await seedOrder('assigned', [
       { productId: PRODUCT_ID, qty: 2, name: 'Arroz', price: 1000 },
     ]);
@@ -446,7 +430,6 @@ describe('transitionDelivery — mixed (split) payment', () => {
   });
 
   it('a single-entry split uses that method name as the summary, not Mixto', async () => {
-    await seedShift(DEVICE_ID);
     await seedOrder('assigned', [
       { productId: PRODUCT_ID, qty: 2, name: 'Arroz', price: 1000 },
     ]);
@@ -467,7 +450,6 @@ describe('transitionDelivery — mixed (split) payment', () => {
   });
 
   it('credito entry inside a split → books the sale (cash + fiado), attributing the client', async () => {
-    await seedShift(DEVICE_ID);
     await seedOrder(
       'assigned',
       [{ productId: PRODUCT_ID, qty: 1, name: 'Arroz', price: 1000 }],
@@ -541,8 +523,7 @@ describe('transitionDelivery — cancellation reasons (P1)', () => {
 
 describe('transitionDelivery — delivery fee settlement (P2-B)', () => {
   it('revenue mode + cash: books the fee as a deposit into the sale caja', async () => {
-    await seedShift(DEVICE_ID);
-    await seedOpenSession(DEVICE_ID);
+    await seedOpenSession(null);
     await seedOrder('assigned', [
       { productId: PRODUCT_ID, qty: 2, name: 'Arroz', price: 1000 },
     ]);
@@ -562,8 +543,7 @@ describe('transitionDelivery — delivery fee settlement (P2-B)', () => {
   });
 
   it('revenue mode + non-cash (transfer): no caja deposit', async () => {
-    await seedShift(DEVICE_ID);
-    await seedOpenSession(DEVICE_ID);
+    await seedOpenSession(null);
     await seedOrder('assigned', [
       { productId: PRODUCT_ID, qty: 1, name: 'Arroz', price: 1000 },
     ]);
@@ -575,8 +555,7 @@ describe('transitionDelivery — delivery fee settlement (P2-B)', () => {
   });
 
   it('revenue mode + mixed with a digital method: no deposit (fee left for arqueo)', async () => {
-    await seedShift(DEVICE_ID);
-    await seedOpenSession(DEVICE_ID);
+    await seedOpenSession(null);
     await seedOrder('assigned', [
       { productId: PRODUCT_ID, qty: 2, name: 'Arroz', price: 1000 },
     ]);
@@ -597,8 +576,7 @@ describe('transitionDelivery — delivery fee settlement (P2-B)', () => {
   });
 
   it('revenue mode + all-cash split: books exactly one fee deposit', async () => {
-    await seedShift(DEVICE_ID);
-    await seedOpenSession(DEVICE_ID);
+    await seedOpenSession(null);
     await seedOrder('assigned', [
       { productId: PRODUCT_ID, qty: 2, name: 'Arroz', price: 1000 },
     ]);
@@ -624,8 +602,7 @@ describe('transitionDelivery — delivery fee settlement (P2-B)', () => {
 
   it('courier_tip mode: records a tip note, never a caja deposit', async () => {
     await setSetting('delivery_fee_mode', 'courier_tip');
-    await seedShift(DEVICE_ID);
-    await seedOpenSession(DEVICE_ID);
+    await seedOpenSession(null);
     await seedOrder('assigned', [
       { productId: PRODUCT_ID, qty: 1, name: 'Arroz', price: 1000 },
     ]);
@@ -641,8 +618,7 @@ describe('transitionDelivery — delivery fee settlement (P2-B)', () => {
   });
 
   it('revenue mode + cash: the deposit is idempotent across a re-run', async () => {
-    await seedShift(DEVICE_ID);
-    await seedOpenSession(DEVICE_ID);
+    await seedOpenSession(null);
     await seedOrder('assigned', [
       { productId: PRODUCT_ID, qty: 1, name: 'Arroz', price: 1000 },
     ]);

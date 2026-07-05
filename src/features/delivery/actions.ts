@@ -16,7 +16,6 @@ import { emitInvoiceForSale } from '@/libs/einvoice/emit';
 import { getCurrentPanelUser, requirePanelModule } from '@/libs/panel-session';
 import {
   appSettingsSchema,
-  courierShiftsSchema,
   deliveryEventsSchema,
   deliveryOrdersSchema,
 } from '@/models/Schema';
@@ -230,34 +229,11 @@ export async function getDeliveryEvents(
     .orderBy(asc(deliveryEventsSchema.createdAt));
 }
 
-// Shown when the courier tries to deliver without having started their shift
-// (declared a caja). The delivered → cash-sale bridge has nowhere to book the
-// money until they do.
-const NO_ACTIVE_SHIFT_MESSAGE
-  = 'Iniciá tu jornada y elegí una caja antes de entregar.';
-
-// The courier's active shift (endedAt IS NULL) or null — just the fields
-// transitionDelivery needs to route the delivered order's cash sale.
-async function findActiveShift(
-  orgId: string,
-  courierId: string,
-): Promise<{ id: string; posTokenId: string | null } | null> {
-  const [shift] = await db
-    .select({
-      id: courierShiftsSchema.id,
-      posTokenId: courierShiftsSchema.posTokenId,
-    })
-    .from(courierShiftsSchema)
-    .where(
-      and(
-        eq(courierShiftsSchema.organizationId, orgId),
-        eq(courierShiftsSchema.courierId, courierId),
-        isNull(courierShiftsSchema.endedAt),
-      ),
-    )
-    .limit(1);
-  return shift ?? null;
-}
+// Shown when someone without a linked employee profile tries to deliver. A
+// delivered order becomes a cash sale attributed to a real pos_user (the courier),
+// so an unlinked actor (e.g. the owner with no cashier row) cannot deliver.
+const NO_COURIER_PROFILE_MESSAGE
+  = 'Solo un empleado con perfil puede marcar entregas.';
 
 // Reads the org's photo-evidence requirement directly from app_settings
 // (mirrors settlement.ts#loadDeliveryFeeMode) — server-side enforcement must
@@ -313,7 +289,11 @@ function buildDeliverySaleItems(
 // settlement (P2-B) needs the same session to keep the arqueo exact.
 type DeliverySaleResult = {
   saleId: string | null;
-  shiftPosTokenId: string | null;
+  // La caja (device) donde se contabilizó la venta. Con el bolsillo del
+  // domiciliario, la venta a domicilio ya no se declara a una caja: se
+  // contabiliza en la caja admin (posTokenId null) y su efectivo se desvía al
+  // bolsillo del domiciliario. Se mantiene por si el fee necesita la sesión.
+  posTokenId: string | null;
 };
 
 // One entry of a mixed (split) contraentrega payment: a method NAME plus the
@@ -340,13 +320,12 @@ async function createDeliverySale(
   payments?: DeliveryPayment[],
   deliveryPhotoUrl?: string | null,
 ): Promise<DeliverySaleResult> {
-  // Only a linked courier (pos_users row) with an active shift may deliver.
+  // Solo un empleado con perfil (pos_users) puede entregar — la venta y el
+  // bolsillo se atribuyen a ese domiciliario. Ya no se exige "jornada iniciada":
+  // el efectivo del domicilio va al bolsillo del domiciliario, no a una caja
+  // declarada. La venta se contabiliza en la caja admin (posTokenId null).
   if (!actor) {
-    throw new Error(NO_ACTIVE_SHIFT_MESSAGE);
-  }
-  const shift = await findActiveShift(orgId, actor.id);
-  if (!shift) {
-    throw new Error(NO_ACTIVE_SHIFT_MESSAGE);
+    throw new Error(NO_COURIER_PROFILE_MESSAGE);
   }
   // Credito is allowed: a delivered order can be booked as a fiado debt (the
   // customer pays later) instead of collecting cash. createSaleForOrg records
@@ -369,7 +348,7 @@ async function createDeliverySale(
   }
   // Already delivered → idempotent: keep the existing sale, create nothing.
   if (order.status === 'delivered') {
-    return { saleId: order.saleId ?? null, shiftPosTokenId: shift.posTokenId };
+    return { saleId: order.saleId ?? null, posTokenId: null };
   }
   // Guard the state machine here too, so we never spend a createSaleForOrg on an
   // illegal transition (the status-flip tx re-checks it as defense in depth).
@@ -426,10 +405,10 @@ async function createDeliverySale(
     payments: hasSplit
       ? payments!.map(p => ({ method: p.method, amount: p.amount }))
       : undefined,
-    posTokenId: shift.posTokenId,
-    // Explicit: without this, the posTokenId above would default channel to
-    // 'pos' even though this sale is a delivered domicilio settling into the
-    // courier's caja, not a register sale.
+    // Caja admin (null): la venta a domicilio ya no se declara a un device; su
+    // efectivo se desvía al bolsillo del domiciliario (recordDeliveryCashCollected).
+    posTokenId: null,
+    // Explicit: sin esto el sale marcaría channel 'pos'; es un domicilio.
     channel: 'delivery',
     // Link the settled sale to the delivery order's customer (ficha de cliente).
     customerId: order.customerId ?? null,
@@ -440,7 +419,7 @@ async function createDeliverySale(
     idempotencyKey: deliveryOrderId,
   });
 
-  return { saleId: sale.id, shiftPosTokenId: shift.posTokenId };
+  return { saleId: sale.id, posTokenId: null };
 }
 
 // Moves an order along the state machine, writing a status_change event to the
@@ -622,7 +601,7 @@ export async function transitionDelivery(
       organizationId: orgId,
       deliveryOrderId: updated.id,
       saleId: deliveredSaleId,
-      posTokenId: deliverySale.shiftPosTokenId,
+      posTokenId: deliverySale.posTokenId,
       paymentType: feePaymentType,
       feeAmount: updated.deliveryFee,
       actorId: actor?.id ?? userId,
@@ -636,7 +615,7 @@ export async function transitionDelivery(
         orgId,
         saleId: deliveredSaleId,
         courierId: actor.id,
-        posTokenId: deliverySale.shiftPosTokenId,
+        posTokenId: deliverySale.posTokenId,
       }).catch(() => null);
     }
 

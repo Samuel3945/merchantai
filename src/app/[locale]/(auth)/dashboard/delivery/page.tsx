@@ -11,10 +11,6 @@ import {
 } from '@/features/delivery/actions';
 import { DELIVERY_REQUIRE_PHOTO_KEY } from '@/features/delivery/constants';
 import { DeliveryClient } from '@/features/delivery/DeliveryClient';
-import {
-  getActiveCourierShift,
-  listOpenCajas,
-} from '@/features/delivery/shifts';
 import { loadEInvoiceConfig } from '@/libs/einvoice/config';
 import { getCurrentPanelUser } from '@/libs/panel-session';
 
@@ -76,18 +72,13 @@ export default async function DashboardDeliveryPage(props: {
         return { viewerRole: 'courier' as const, pool, mine };
       })();
 
-  // Settlement lookups degrade gracefully. A failure in ANY one of them — e.g. a
-  // not-yet-applied migration (courier_shifts) or e-invoicing not set up — must
-  // NOT white-screen the whole Domicilios page; it just disables that one
-  // affordance until the underlying cause is fixed.
-  const [shiftR, cajasR, methodsR, einvoiceR] = await Promise.allSettled([
-    getActiveCourierShift(),
-    listOpenCajas(),
+  // Settlement lookups degrade gracefully. A failure in ANY one of them — e.g.
+  // e-invoicing not set up — must NOT white-screen the whole Domicilios page; it
+  // just disables that one affordance until the underlying cause is fixed.
+  const [methodsR, einvoiceR] = await Promise.allSettled([
     listPaymentMethods({ activeOnly: true }),
     loadEInvoiceConfig(orgId),
   ]);
-  const activeShift = shiftR.status === 'fulfilled' ? shiftR.value : null;
-  const openCajas = cajasR.status === 'fulfilled' ? cajasR.value : [];
   const paymentMethods = methodsR.status === 'fulfilled' ? methodsR.value : [];
   const einvoiceEnabled
     = einvoiceR.status === 'fulfilled' ? einvoiceR.value.configured : false;
@@ -109,8 +100,6 @@ export default async function DashboardDeliveryPage(props: {
         {...roleData}
         orgId={orgId}
         viewerCourierId={viewerCourierId}
-        initialShift={activeShift}
-        openCajas={openCajas}
         paymentMethods={deliverPaymentMethods}
         einvoiceEnabled={einvoiceEnabled}
         requirePhoto={requirePhoto}
