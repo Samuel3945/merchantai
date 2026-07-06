@@ -39,6 +39,9 @@ export async function GET(
         payableId: inv.payableId,
         outstanding: inv.outstanding,
         status: inv.status,
+        // Etiqueta para que el cajero reconozca la factura (número + fecha).
+        invoiceNumber: inv.invoiceNumber,
+        purchasedAt: inv.purchasedAt,
       })),
     });
   } catch (err) {
