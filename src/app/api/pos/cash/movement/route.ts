@@ -589,13 +589,16 @@ export async function POST(req: Request): Promise<NextResponse> {
       };
     });
 
-    // Response contract: a loan repayment returns its own outcome shape.
+    // Response contract: a loan repayment reuses the supplier "settled" shape so
+    // the POS confirmation banner (outcome/appliedTotal/settledPayables) renders
+    // it the same way it renders a supplier settle. settledPayables carries the
+    // count of loans that reached 'paid'.
     if (result.kind === 'loan_repaid') {
       return NextResponse.json(
         {
-          outcome: 'loan_repaid',
+          outcome: 'settled',
           appliedTotal: result.appliedTotal,
-          settledLoans: result.settledLoans,
+          settledPayables: result.settledLoans.length,
         },
         { status: 201 },
       );
