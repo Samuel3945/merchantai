@@ -3,6 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { logAction, resolvePosActor } from '@/libs/audit-log';
 import {
+  computeExpectedAmount,
   EXPENSE_MOVEMENT_TYPES,
   findOpenSession,
   INCOME_MOVEMENT_TYPES,
@@ -286,6 +287,26 @@ export async function POST(req: Request): Promise<NextResponse> {
       const open = await findOpenSession(tx, ctx.organizationId, ctx.tokenId);
       if (!open) {
         throw new Error('No hay caja abierta. Abre la caja primero.');
+      }
+
+      // GUARDRAIL: no se puede sacar más efectivo del que hay en el cajón. Aplica
+      // a TODA salida de efectivo (gasto, retiro, vale/advance, salario, compra,
+      // pago a proveedor). El saldo se recalcula DENTRO de la tx para que dos
+      // salidas concurrentes no dejen la caja en negativo. Las entradas (deposit,
+      // credito_payment, abono de préstamo) no pasan por aquí.
+      if (EXPENSE_MOVEMENT_TYPES.includes(type)) {
+        const available = await computeExpectedAmount(tx, open);
+        const plannedOutflow
+          = settleViaSelections && selections
+            ? selections.reduce((sum, s) => sum + s.amount, 0)
+            : Number.parseFloat(amount);
+        if (plannedOutflow > available + 0.005) {
+          const err = new Error(
+            `No puedes sacar más de lo que hay en la caja. Disponible: $${toMoney(available)}.`,
+          );
+          (err as Error & { statusCode?: number }).statusCode = 400;
+          throw err;
+        }
       }
 
       // EMPLOYEE-LOAN REPAYMENT — an entrada that pays down existing loans. The

@@ -251,9 +251,12 @@ async function seedOpenSession(): Promise<void> {
      VALUES ($1, $2, 'Caja 1')`,
     [TOKEN, ORG],
   );
+  // Opening float grande a propósito: estas pruebas ejercen gastos/salidas para
+  // P&L, y el endpoint ahora bloquea sacar más efectivo del que hay en la caja.
+  // Con la caja fondeada, las salidas de prueba pasan el guardado.
   await pg.query(
     `INSERT INTO cash_sessions (id, organization_id, pos_token_id, opened_by, opening_amount, status)
-     VALUES ($1, $2, $3, 'Cajero', '0', 'open')`,
+     VALUES ($1, $2, $3, 'Cajero', '1000000', 'open')`,
     [SESSION_ID, ORG, TOKEN],
   );
 }
@@ -675,5 +678,32 @@ describe('(k) POS expense bridge — P&L net-profit includes bridged POS gasto e
 
     expect(stats.expenses).toBe(200);
     expect(stats.net).toBe(-200);
+  });
+});
+
+describe('(l) Guardado de caja — no se puede sacar más efectivo del que hay', () => {
+  it('rechaza una salida que excede el efectivo disponible (400)', async () => {
+    // La sesión abre con 1.000.000. Un retiro de 2.000.000 supera el disponible.
+    const res = await POST(
+      movementRequest({ type: 'withdrawal', amount: 2_000_000, reason: 'retiro' }),
+    );
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/no puedes sacar más de lo que hay/i);
+
+    // No se escribió ningún movimiento.
+    const { rows } = await pg.query<{ n: string }>(
+      `SELECT COUNT(*)::text AS n FROM cash_movements WHERE type = 'withdrawal'`,
+    );
+
+    expect(rows[0]!.n).toBe('0');
+  });
+
+  it('permite una salida dentro del efectivo disponible (200/201)', async () => {
+    const res = await POST(
+      movementRequest({ type: 'withdrawal', amount: 500, reason: 'retiro chico' }),
+    );
+
+    expect([200, 201]).toContain(res.status);
   });
 });
