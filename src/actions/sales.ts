@@ -511,6 +511,8 @@ export type SaleListRow = Sale & {
   cashierName: string | null;
   cashierImageUrl: string | null;
   deviceName: string | null;
+  // Nombre del domiciliario (solo ventas de canal 'delivery'). Null en las demás.
+  courierName: string | null;
 };
 
 const UUID_RE
@@ -579,6 +581,35 @@ async function resolveDeviceNames(ids: string[]): Promise<Map<string, string>> {
     .where(inArray(posTokensSchema.id, unique));
   for (const r of rows) {
     map.set(r.id, r.deviceName);
+  }
+  return map;
+}
+
+// Resuelve el nombre del domiciliario por venta (canal delivery) en un lote:
+// delivery_orders(sale_id) → courier_id → pos_users.name. Result: Map<saleId, name>.
+async function resolveCourierNames(
+  saleIds: string[],
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  const unique = [...new Set(saleIds.filter(Boolean))];
+  if (unique.length === 0) {
+    return map;
+  }
+  const rows = await db
+    .select({
+      saleId: deliveryOrdersSchema.saleId,
+      name: posUsersSchema.name,
+    })
+    .from(deliveryOrdersSchema)
+    .innerJoin(
+      posUsersSchema,
+      eq(deliveryOrdersSchema.courierId, posUsersSchema.id),
+    )
+    .where(inArray(deliveryOrdersSchema.saleId, unique));
+  for (const r of rows) {
+    if (r.saleId) {
+      map.set(r.saleId, r.name);
+    }
   }
   return map;
 }
@@ -874,6 +905,10 @@ export async function listSales(
       .filter((id): id is string => id != null && id !== ''),
   );
 
+  const courierMap = await resolveCourierNames(
+    items.filter(it => it.channel === 'delivery').map(it => it.id),
+  );
+
   const enriched: SaleListRow[] = items.map(it => ({
     ...it,
     cashierName: it.cashierId
@@ -883,6 +918,8 @@ export async function listSales(
       ? (cashierMap.get(it.cashierId)?.imageUrl ?? null)
       : null,
     deviceName: it.posTokenId ? (deviceMap.get(it.posTokenId) ?? null) : null,
+    courierName:
+      it.channel === 'delivery' ? (courierMap.get(it.id) ?? null) : null,
   }));
 
   return {
