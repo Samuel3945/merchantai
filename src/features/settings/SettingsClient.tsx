@@ -22,15 +22,10 @@ type Tab = {
   label: string;
 };
 
-// The Vales tab is always visible (like Devoluciones); the toggle inside it
-// controls whether the POS lets a cashier hand a vale to an employee.
-const EMPLOYEE_LOANS_TAB = { key: 'employee-loans', label: 'Vales' };
-
 const BASE_TABS: ReadonlyArray<Tab> = [
   { key: 'business', label: 'Negocio' },
   { key: 'payment-methods', label: 'Métodos de pago' },
   { key: 'returns', label: 'Devoluciones' },
-  EMPLOYEE_LOANS_TAB,
 ];
 
 // The Facturación tab only exists when the operator enabled e-invoicing for the
@@ -43,7 +38,9 @@ const FISCAL_TAB: Tab = { key: 'fiscal', label: 'Facturación' };
 // only appears when the AI preview is on for the org.
 const DOMICILIOS_TAB: Tab = { key: 'domicilios', label: 'Domicilios' };
 
-const TRANSFER_SECURITY_TAB: Tab = { key: 'transfer-security', label: 'Transferencias' };
+// Admin-only POS tab bundling the Vales (employee loans) and Transferencias
+// (transfer security) settings, which both govern POS cashier behavior.
+const POS_TAB: Tab = { key: 'pos', label: 'POS' };
 const AUDIT_TAB: Tab = { key: 'audit', label: 'Auditoría' };
 
 export type SettingsClientProps = {
@@ -89,7 +86,7 @@ export function SettingsClient({
     baseTabs.splice(at, 0, FISCAL_TAB);
   }
   const tabs = isAdmin
-    ? [...baseTabs, TRANSFER_SECURITY_TAB, AUDIT_TAB]
+    ? [...baseTabs, POS_TAB, AUDIT_TAB]
     : baseTabs;
   const [activeTab, setActiveTab] = useState<string>(tabs[0]!.key);
 
@@ -130,11 +127,11 @@ export function SettingsClient({
         {activeTab === 'domicilios' && <DomiciliosTab initial={domicilios} />}
         {activeTab === 'fiscal' && <FiscalTab initial={fiscal} />}
         {activeTab === 'returns' && <ReturnsTab initial={returnsValues} />}
-        {activeTab === 'employee-loans' && (
-          <EmployeeLoansTab initialEnabled={employeeLoansEnabled} />
-        )}
-        {activeTab === 'transfer-security' && isAdmin && (
-          <TransferSecurityTab initial={transferSecurity} />
+        {activeTab === 'pos' && isAdmin && (
+          <div className="space-y-8">
+            <EmployeeLoansTab initialEnabled={employeeLoansEnabled} />
+            <TransferSecurityTab initial={transferSecurity} />
+          </div>
         )}
         {activeTab === 'audit' && isAdmin && <AuditTab />}
       </div>
