@@ -12,7 +12,8 @@ vi.mock('@/libs/DB', () => ({
   },
 }));
 
-const { ensureCajaForDevice, nextRegisterCajaName } = await import('./cajas');
+const { ensureCajaForDevice } = await import('./cajas');
+const { nextRegisterCajaName } = await import('@/libs/caja-naming');
 
 type Executor = Parameters<typeof nextRegisterCajaName>[0];
 const asExecutor = () => h.db as unknown as Executor;

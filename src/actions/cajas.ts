@@ -5,6 +5,7 @@ import { auth } from '@clerk/nextjs/server';
 import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
+import { nextRegisterCajaName } from '@/libs/caja-naming';
 import { getCourierBalance } from '@/libs/courier-wallet';
 import { db } from '@/libs/DB';
 import { cajasSchema, posTokensSchema, posUsersSchema } from '@/models/Schema';
@@ -25,26 +26,9 @@ async function requireAdmin() {
   return { userId, orgId };
 }
 
-type Executor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
-
-// Nombre secuencial "Caja N" para una nueva caja de tipo 'register'. N = cantidad
-// de cajas 'register' de la org (INCLUYENDO las archivadas) + 1, así el número no
-// se reutiliza y la historia ("Caja 2, de … a …") queda estable aunque se archive.
-export async function nextRegisterCajaName(
-  executor: Executor,
-  orgId: string,
-): Promise<string> {
-  const [row] = await executor
-    .select({ count: sql<number>`COUNT(*)::int` })
-    .from(cajasSchema)
-    .where(
-      and(
-        eq(cajasSchema.organizationId, orgId),
-        eq(cajasSchema.type, 'register'),
-      ),
-    );
-  return `Caja ${Number(row?.count ?? 0) + 1}`;
-}
+// `nextRegisterCajaName` vive en `@/libs/caja-naming` (módulo normal): recibe un
+// Executor no serializable, así que NO puede exportarse desde este archivo
+// 'use server' (sería un Server Action y reventaría al pasarle `db`).
 
 export type CajaDevice = { id: string; deviceName: string };
 
