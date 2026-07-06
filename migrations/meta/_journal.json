@@ -624,6 +624,13 @@
       "when": 1782900008004,
       "tag": "0088_courier_wallet",
       "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1782900009004,
+      "tag": "0089_cajas",
+      "breakpoints": true
     }
   ]
 }

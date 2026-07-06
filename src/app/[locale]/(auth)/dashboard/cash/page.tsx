@@ -2,6 +2,7 @@ import type { TransferCuadreOverview } from '@/actions/transfer-reconciliation';
 import type { TransferReconciliation } from '@/libs/transfer-reconciliation';
 import { auth } from '@clerk/nextjs/server';
 import { setRequestLocale } from 'next-intl/server';
+import { listCajas as listCajasConfig } from '@/actions/cajas';
 import {
   getFraudAlerts,
   getTodayCollectionsByMethod,
@@ -14,6 +15,7 @@ import {
   getTransferStatusCounts,
   listTransferReconciliations,
 } from '@/actions/transfer-reconciliation';
+import { CajasManager } from '@/features/cash/CajasManager';
 import { CajasSupervision } from '@/features/cash/CajasSupervision';
 import { CashClient } from '@/features/cash/CashClient';
 import { TransferReconciliationPanel } from '@/features/cash/TransferReconciliationPanel';
@@ -28,11 +30,14 @@ export default async function DashboardCashPage(props: {
   const { orgRole } = await auth();
   const isAdmin = orgRole === 'org:admin';
 
-  const [collections, alerts, cajas, methods] = await Promise.all([
+  const [collections, alerts, cajas, methods, cajasConfig] = await Promise.all([
     getTodayCollectionsByMethod(),
     getFraudAlerts(14).catch(() => []),
     listCajas().catch(() => []),
     listPaymentMethods({ activeOnly: true }).catch(() => []),
+    isAdmin
+      ? listCajasConfig().catch(() => ({ cajas: [], couriersWithoutCaja: [] }))
+      : Promise.resolve({ cajas: [], couriersWithoutCaja: [] }),
   ]);
 
   // No transfer payment methods → the org doesn't deal with transfers at all, so
@@ -103,6 +108,7 @@ export default async function DashboardCashPage(props: {
         description="Supervisión de los puntos de cobro: tocá una caja para ver su detalle, movimientos y cierres."
       />
       <div className="space-y-8">
+        {isAdmin && <CajasManager initial={cajasConfig} />}
         <CajasSupervision
           cajas={cajas}
           notArrivedCount={transferCounts.notArrived}

@@ -5,7 +5,6 @@ import type { ActionResult } from '@/libs/action-result';
 import {
   ArrowUpRight,
   Ban,
-  Bike,
   CheckCircle2,
   ExternalLink,
   Lock,
@@ -16,10 +15,8 @@ import {
   Plus,
   QrCode,
   RefreshCw,
-  Split,
   Unlock,
   UserCog,
-  Users,
   Vault,
 } from 'lucide-react';
 import { useCallback, useState, useTransition } from 'react';
@@ -33,7 +30,6 @@ import {
   renamePosToken,
   setAdminAsCashier,
   setPosTokenAllowOversell,
-  setPosTokenCashMode,
   setPosTokenSweepDestination,
   unblockPosToken,
 } from '@/actions/pos-tokens';
@@ -221,27 +217,6 @@ export function PosCajerosClient({
     });
   };
 
-  // Modo del cajón para TODO el negocio (compartida/dividida). El cambio
-  // cascada: todas las cajas toman el mismo modo (ver setPosTokenCashMode).
-  const handleSetCashMode = (mode: 'shared' | 'divided') => {
-    const anchor = tokens[0];
-    if (!anchor) {
-      return;
-    }
-    startTransition(async () => {
-      try {
-        const result = await setPosTokenCashMode(anchor.id, mode);
-        if (!result.ok) {
-          setError(result.error);
-          return;
-        }
-        refresh();
-      } catch {
-        setError('No se pudo cambiar el modo de las cajas');
-      }
-    });
-  };
-
   // Toggle "el admin hace de cajero" for this caja: ON (cashier_id set) → the
   // admin is the default responsable; OFF (null) → each cashier employee
   // identifies themselves. Turning it OFF is rejected by the server when no
@@ -366,22 +341,12 @@ export function PosCajerosClient({
         </div>
       </div>
 
-      {tokens.length > 0 && (
-        <CashModeCard
-          shared={tokens.some(t => t.cashMode === 'shared')}
-          cajaNames={tokens.filter(t => t.active).map(t => t.deviceName)}
-          pending={pending}
-          onChange={handleSetCashMode}
-        />
-      )}
-
       <div className="overflow-x-auto rounded-md border bg-background">
         <table className="w-full text-sm">
           <thead className="bg-muted/50 text-left text-xs uppercase">
             <tr>
               <th className="px-3 py-2">Caja / dispositivo</th>
               <th className="px-3 py-2">Cajero</th>
-              <th className="px-3 py-2">Modo</th>
               <th className="px-3 py-2">Estado</th>
               <th className="px-3 py-2">Creada</th>
               <th className="px-3 py-2">Acciones</th>
@@ -392,7 +357,7 @@ export function PosCajerosClient({
               <tr>
                 <td
                   className="px-3 py-8 text-center text-muted-foreground"
-                  colSpan={6}
+                  colSpan={5}
                 >
                   Aún no tienes cajas. Agrega una para registrar tu primer
                   dispositivo POS.
@@ -423,30 +388,6 @@ export function PosCajerosClient({
                       )
                     : (
                         <span className="text-muted-foreground">—</span>
-                      )}
-                </td>
-                <td className="px-3 py-2">
-                  {t.cashMode === 'shared'
-                    ? (
-                        <span className="
-                          inline-flex items-center gap-1 rounded-full bg-sky-50
-                          px-2 py-0.5 text-xs font-medium text-sky-700
-                        "
-                        >
-                          <Users className="size-3" />
-                          Compartida
-                        </span>
-                      )
-                    : (
-                        <span className="
-                          inline-flex items-center gap-1 rounded-full
-                          bg-violet-50 px-2 py-0.5 text-xs font-medium
-                          text-violet-700
-                        "
-                        >
-                          <Split className="size-3" />
-                          Dividida
-                        </span>
                       )}
                 </td>
                 <td className="px-3 py-2">
@@ -643,149 +584,6 @@ export function PosCajerosClient({
           onError={msg => setError(msg)}
         />
       )}
-    </div>
-  );
-}
-
-// Control visual del modo del cajón para todo el negocio. Compartida = un solo
-// pozo entre cajas y domiciliarios (responsabilidad colectiva); Dividida = cada
-// caja con su propio responsable. Ver docs/caja-domiciliario/ESPECIFICACION.md §7.
-function CashModeCard({
-  shared,
-  cajaNames,
-  pending,
-  onChange,
-}: {
-  shared: boolean;
-  cajaNames: string[];
-  pending: boolean;
-  onChange: (mode: 'shared' | 'divided') => void;
-}) {
-  return (
-    <div className="
-      rounded-xl border bg-background p-4
-      sm:p-5
-    "
-    >
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="text-base font-semibold">
-            Manejo del efectivo entre cajas
-          </div>
-          <p className="mt-0.5 max-w-xl text-sm text-muted-foreground">
-            Define cómo se maneja la plata cuando varias personas atienden: en un
-            solo pozo compartido o cada caja con su propio dueño.
-          </p>
-        </div>
-        {/* Segmented control */}
-        <div className="inline-flex rounded-lg border bg-muted/40 p-1">
-          <button
-            type="button"
-            disabled={pending}
-            onClick={() => onChange('shared')}
-            aria-pressed={shared}
-            className={`
-              inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm
-              font-medium transition
-              ${
-    shared
-      ? 'bg-background text-sky-700 shadow-sm'
-      : `
-        text-muted-foreground
-        hover:text-foreground
-      `
-    }
-            `}
-          >
-            <Users className="size-4" />
-            Compartida
-          </button>
-          <button
-            type="button"
-            disabled={pending}
-            onClick={() => onChange('divided')}
-            aria-pressed={!shared}
-            className={`
-              inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm
-              font-medium transition
-              ${
-    shared
-      ? `
-        text-muted-foreground
-        hover:text-foreground
-      `
-      : 'bg-background text-violet-700 shadow-sm'
-    }
-            `}
-          >
-            <Split className="size-4" />
-            Dividida
-          </button>
-        </div>
-      </div>
-
-      {/* Explicación del modo activo */}
-      <div className="mt-4 rounded-lg bg-muted/40 p-3 text-sm">
-        {shared
-          ? (
-              <div className="flex gap-2.5">
-                <Users className="mt-0.5 size-4 shrink-0 text-sky-600" />
-                <div>
-                  <p className="font-medium text-sky-800">
-                    Un solo pozo, responsabilidad colectiva
-                  </p>
-                  <p className="mt-0.5 text-muted-foreground">
-                    Las cajas y los domiciliarios comparten la plata. Se prestan
-                    dinero libremente. Si al final descuadra, no hay un culpable
-                    único — es la comodidad de compartir.
-                  </p>
-                  {cajaNames.length > 0 && (
-                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                      <span className="text-xs text-muted-foreground">
-                        Comparten:
-                      </span>
-                      {cajaNames.map(n => (
-                        <span
-                          key={n}
-                          className="
-                            inline-flex items-center gap-1 rounded-full border
-                            bg-background px-2 py-0.5 text-xs
-                          "
-                        >
-                          <Monitor className="size-3 text-muted-foreground" />
-                          {n}
-                        </span>
-                      ))}
-                      <span className="
-                        inline-flex items-center gap-1 rounded-full border
-                        border-sky-200 bg-sky-50 px-2 py-0.5 text-xs
-                        text-sky-700
-                      "
-                      >
-                        <Bike className="size-3" />
-                        Domiciliarios
-                      </span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )
-          : (
-              <div className="flex gap-2.5">
-                <Split className="mt-0.5 size-4 shrink-0 text-violet-600" />
-                <div>
-                  <p className="font-medium text-violet-800">
-                    Cada caja con su propio dueño
-                  </p>
-                  <p className="mt-0.5 text-muted-foreground">
-                    Cada caja responde por su propia plata. Si una descuadra, hay
-                    un responsable claro. Los domiciliarios siguen llevando su
-                    propio saldo y pueden prestarse con las cajas.
-                  </p>
-                </div>
-              </div>
-            )}
-      </div>
     </div>
   );
 }

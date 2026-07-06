@@ -915,7 +915,47 @@ export const whatsappChannelsSchema = pgTable(
 // colectiva, se puede compartir con otras cajas y domiciliarios); 'divided' =
 // dividida (un solo responsable → un culpable claro si descuadra). Ver
 // docs/caja-domiciliario/ESPECIFICACION.md §7.
+// LEGACY: reemplazado por el modelo de `cajas` (migración 0089) — compartida se
+// deriva de cuántos dispositivos comparten una caja. La columna se conserva por
+// compatibilidad pero ya no se usa.
 export const posCashModeEnum = pgEnum('pos_cash_mode', ['shared', 'divided']);
+
+// "Caja" = bolsa de dinero LÓGICA, separada del dispositivo. Un pos_token apunta
+// a UNA caja; una caja con 1 dispositivo es individual, con 2+ es compartida
+// (misma bolsa, varias pantallas). type 'courier' = caja de un domiciliario (su
+// saldo se deriva del ledger courier_cash_movements). Migración 0089.
+export const cajaTypeEnum = pgEnum('caja_type', ['register', 'courier']);
+
+export const cajasSchema = pgTable(
+  'cajas',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: text('organization_id').notNull(),
+    name: text('name').notNull(),
+    type: cajaTypeEnum('type').default('register').notNull(),
+    // Solo para type 'courier': el domiciliario dueño de la caja.
+    courierId: uuid('courier_id').references(() => posUsersSchema.id, {
+      onDelete: 'set null',
+    }),
+    archived: boolean('archived').default(false).notNull(),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+  },
+  table => [
+    index('cajas_org_idx').on(table.organizationId),
+    // Una sola caja activa por domiciliario.
+    uniqueIndex('cajas_one_active_per_courier_idx')
+      .on(table.organizationId, table.courierId)
+      .where(sql`${table.courierId} IS NOT NULL AND ${table.archived} = false`),
+  ],
+);
+
+export const cajasRelations = relations(cajasSchema, ({ one }) => ({
+  courier: one(posUsersSchema, {
+    fields: [cajasSchema.courierId],
+    references: [posUsersSchema.id],
+  }),
+}));
 
 export const posTokensSchema = pgTable(
   'pos_tokens',
@@ -949,10 +989,15 @@ export const posTokensSchema = pgTable(
     // routes let a sale through even if stock is 0 (stock clamps at 0, FIFO
     // values uncovered units at fallback cost). Default false => stock enforced.
     allowOversell: boolean('allow_oversell').default(false).notNull(),
-    // Modo del cajón: compartida (varias manos) vs dividida (un responsable).
-    // Default 'divided' => cada caja es independiente salvo que el dueño la marque
-    // compartida en el panel (dashboard/pos-cajeros). Ver ESPECIFICACION §7.
+    // Modo del cajón (LEGACY, reemplazado por `caja_id` + modelo de cajas).
     cashMode: posCashModeEnum('cash_mode').default('divided').notNull(),
+    // La caja (bolsa de dinero lógica) a la que pertenece este dispositivo.
+    // Varios dispositivos con el mismo caja_id = caja compartida. Ver migración
+    // 0089. FK definida en la migración (cajasSchema se declara arriba, así que
+    // aquí sí se puede referenciar directamente).
+    cajaId: uuid('caja_id').references(() => cajasSchema.id, {
+      onDelete: 'set null',
+    }),
     // PIN de acceso de la caja (bcrypt). Se exige en /api/pos/login junto con el
     // token. '' => caja sin PIN (acceso directo con solo el token/QR).
     pin: text('pin').default('').notNull(),
