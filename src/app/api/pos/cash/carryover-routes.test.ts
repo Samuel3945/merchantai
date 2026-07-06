@@ -40,7 +40,8 @@ const SCHEMA = `
     organization_id text NOT NULL,
     device_name text NOT NULL,
     allow_oversell boolean DEFAULT false NOT NULL,
-    default_sweep_destination_account_id uuid
+    default_sweep_destination_account_id uuid,
+    caja_id uuid
   );
   CREATE TABLE cash_sessions (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
@@ -61,7 +62,8 @@ const SCHEMA = `
     opening_expected numeric(12, 2),
     opening_difference numeric(12, 2),
     opening_explanation text,
-    client_session_id uuid
+    client_session_id uuid,
+    caja_id uuid
   );
   -- treasury-sweep-model slice 1: treasury_accounts needed for getOrCreatePendingAccount
   -- (the open-time sweep lazy-seeds the transito account on first shortfall).

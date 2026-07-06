@@ -475,12 +475,21 @@ export const cashSessionsSchema = pgTable(
     // into them changes on rename). See actions/cash.ts#getCajaDetail.
     openedByActorId: text('opened_by_actor_id'),
     closedByActorId: text('closed_by_actor_id'),
+    // La CAJA (bolsa de dinero) dueña de esta sesión. Los dispositivos que
+    // comparten caja comparten UNA sesión → uno abre, uno cierra, y las ventas de
+    // todos caen en el mismo arqueo. NULL = sesión admin/legacy. Migración 0090.
+    // Sin .references() aquí: cajasSchema se define más abajo (evita la referencia
+    // adelantada). La FK cash_sessions_caja_id_cajas_id_fk vive en la migración
+    // 0090, igual que defaultSweepDestinationAccountId en pos_tokens.
+    cajaId: uuid('caja_id'),
   },
   table => [
-    // One open session per POS device (caja). Each register operates its own till.
-    uniqueIndex('cash_sessions_one_open_per_token_idx')
-      .on(table.organizationId, table.posTokenId)
-      .where(sql`${table.status} = 'open' AND ${table.posTokenId} IS NOT NULL`),
+    // Una sola sesión abierta por CAJA (bolsa). Para cajas individuales (1
+    // dispositivo) equivale al viejo "una por dispositivo"; para compartidas
+    // evita dos arqueos del mismo cajón.
+    uniqueIndex('cash_sessions_one_open_per_caja_idx')
+      .on(table.organizationId, table.cajaId)
+      .where(sql`${table.status} = 'open' AND ${table.cajaId} IS NOT NULL`),
     // One open admin/legacy session per org (sessions with no device token, e.g.
     // opened from the owner dashboard).
     uniqueIndex('cash_sessions_one_open_admin_idx')

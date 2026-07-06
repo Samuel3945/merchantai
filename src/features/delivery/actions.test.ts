@@ -149,7 +149,8 @@ const SCHEMA = `
     organization_id text NOT NULL,
     pos_token_id uuid,
     status text DEFAULT 'open' NOT NULL,
-    opened_at timestamp DEFAULT now() NOT NULL
+    opened_at timestamp DEFAULT now() NOT NULL,
+    caja_id uuid
   );
 
   CREATE TABLE cash_movements (

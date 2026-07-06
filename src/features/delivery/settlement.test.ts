@@ -90,7 +90,8 @@ const SETUP_SQL = `
     closed_at timestamp,
     closed_by text,
     status "cash_session_status" DEFAULT 'open' NOT NULL,
-    notes text
+    notes text,
+    caja_id uuid
   );
 
   CREATE TABLE cash_movements (

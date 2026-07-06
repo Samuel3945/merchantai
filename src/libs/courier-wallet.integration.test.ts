@@ -45,6 +45,12 @@ const SETUP_SQL = `
     organization_id text NOT NULL
   );
 
+  CREATE TABLE pos_tokens (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+    organization_id text NOT NULL,
+    caja_id uuid
+  );
+
   CREATE TABLE sale_payments (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     sale_id uuid NOT NULL,
@@ -71,7 +77,8 @@ const SETUP_SQL = `
     opening_explanation text,
     client_session_id uuid,
     opened_by_actor_id text,
-    closed_by_actor_id text
+    closed_by_actor_id text,
+    caja_id uuid
   );
 
   CREATE TABLE cash_movements (

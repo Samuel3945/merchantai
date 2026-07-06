@@ -98,7 +98,8 @@ const SCHEMA = `
     last_sync_at timestamp,
     expires_at timestamp,
     created_at timestamp DEFAULT now() NOT NULL,
-    default_sweep_destination_account_id uuid
+    default_sweep_destination_account_id uuid,
+    caja_id uuid
   );
 
   CREATE TABLE conversations (

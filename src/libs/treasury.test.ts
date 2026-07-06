@@ -67,7 +67,8 @@ const DDL = `
     device_name text NOT NULL,
     active boolean DEFAULT true NOT NULL,
     allow_oversell boolean DEFAULT false NOT NULL,
-    default_sweep_destination_account_id uuid
+    default_sweep_destination_account_id uuid,
+    caja_id uuid
   );
 
   CREATE TABLE cash_sessions (
@@ -89,7 +90,8 @@ const DDL = `
     opening_expected numeric(12, 2),
     opening_difference numeric(12, 2),
     opening_explanation text,
-    client_session_id uuid
+    client_session_id uuid,
+    caja_id uuid
   );
 
   CREATE TABLE cash_movements (

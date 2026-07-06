@@ -47,6 +47,12 @@ const SCHEMA = `
   CREATE TYPE "transfer_reconciliation_status" AS ENUM('pending','confirmed','not_arrived','mismatch','resolved');
   CREATE TYPE "transfer_resolution_type" AS ENUM('receivable','loss','cashier_liability');
 
+  CREATE TABLE pos_tokens (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+    organization_id text NOT NULL,
+    caja_id uuid
+  );
+
   CREATE TABLE cash_sessions (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     organization_id text NOT NULL,
@@ -66,7 +72,8 @@ const SCHEMA = `
     opening_expected numeric(12, 2),
     opening_difference numeric(12, 2),
     opening_explanation text,
-    client_session_id uuid
+    client_session_id uuid,
+    caja_id uuid
   );
 
   CREATE TABLE sales (

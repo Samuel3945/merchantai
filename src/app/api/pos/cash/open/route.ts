@@ -4,6 +4,7 @@ import { logAction, resolvePosActor } from '@/libs/audit-log';
 import {
   findOpenSession,
   getOpeningExpected,
+  resolveDeviceCajaId,
   toMoney,
   toPosCashSession,
   validateOpenCarryover,
@@ -143,11 +144,18 @@ export async function POST(req: Request): Promise<NextResponse> {
 
       const { difference } = validation;
 
+      // La sesión cuelga de la CAJA del dispositivo (compartida entre sus
+      // pantallas). Migración 0090.
+      const cajaId = ctx.tokenId
+        ? await resolveDeviceCajaId(tx, ctx.organizationId, ctx.tokenId)
+        : null;
+
       const [created] = await tx
         .insert(cashSessionsSchema)
         .values({
           organizationId: ctx.organizationId,
           posTokenId: ctx.tokenId,
+          cajaId,
           openingAmount: toMoney(counted),
           openedBy: attribution,
           // Stable identity for live name resolution (see close route). NULL =

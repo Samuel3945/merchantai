@@ -70,7 +70,8 @@ const DDL = `
     opening_expected numeric(12, 2),
     opening_difference numeric(12, 2),
     opening_explanation text,
-    client_session_id uuid
+    client_session_id uuid,
+    caja_id uuid
   );
 
   CREATE TABLE cash_movements (

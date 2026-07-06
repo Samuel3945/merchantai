@@ -218,7 +218,8 @@ const SCHEMA = `
     opening_explanation text,
     opened_at timestamp DEFAULT now() NOT NULL,
     closed_at timestamp,
-    client_session_id uuid
+    client_session_id uuid,
+    caja_id uuid
   );
 
   CREATE TABLE cash_movements (

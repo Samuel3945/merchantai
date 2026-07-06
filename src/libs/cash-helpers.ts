@@ -7,6 +7,7 @@ import {
   cashMovementsSchema,
   cashSessionsSchema,
   creditoMovementsSchema,
+  posTokensSchema,
   salePaymentsSchema,
   salesSchema,
   treasuryMovementsSchema,
@@ -65,13 +66,19 @@ export async function getOpeningExpected(
   organizationId: string,
   posTokenId: string,
 ): Promise<{ expected: number; priorCloseExists: boolean; lastClosedSessionId: string | null }> {
+  // Carryover por CAJA (compartida entre dispositivos): el arrastre viene del
+  // último cierre de la caja, no de un dispositivo puntual. Fallback a dispositivo
+  // para legacy sin caja.
+  const cajaId = await resolveDeviceCajaId(executor, organizationId, posTokenId);
   const [last] = await executor
     .select({ id: cashSessionsSchema.id, counted: cashSessionsSchema.countedAmount })
     .from(cashSessionsSchema)
     .where(
       and(
         eq(cashSessionsSchema.organizationId, organizationId),
-        eq(cashSessionsSchema.posTokenId, posTokenId),
+        cajaId
+          ? eq(cashSessionsSchema.cajaId, cajaId)
+          : eq(cashSessionsSchema.posTokenId, posTokenId),
         eq(cashSessionsSchema.status, 'closed'),
       ),
     )
@@ -208,8 +215,32 @@ export function toMoney(value: number | string): string {
   return n.toFixed(2);
 }
 
-// `posTokenId` scopes the lookup to a single POS device (caja):
-//   - a UUID  → that device's own open session
+// La caja (bolsa de dinero) a la que pertenece un dispositivo. Los dispositivos
+// que comparten caja comparten UNA sesión → la sesión se resuelve por caja, no
+// por dispositivo. NULL si el dispositivo no tiene caja (legacy antes de la
+// migración 0089/0090) → se cae al comportamiento viejo por dispositivo.
+export async function resolveDeviceCajaId(
+  executor: Executor,
+  organizationId: string,
+  posTokenId: string,
+): Promise<string | null> {
+  const [tok] = await executor
+    .select({ cajaId: posTokensSchema.cajaId })
+    .from(posTokensSchema)
+    .where(
+      and(
+        eq(posTokensSchema.id, posTokenId),
+        eq(posTokensSchema.organizationId, organizationId),
+      ),
+    )
+    .limit(1);
+  return tok?.cajaId ?? null;
+}
+
+// `posTokenId` scopes the lookup:
+//   - a UUID  → the open session of that device's CAJA (shared across the caja's
+//               devices). Falls back to per-device match for legacy devices with
+//               no caja assigned.
 //   - null    → the admin/legacy session (no device token)
 //   - omitted → any open session for the org (legacy/admin callers, unchanged)
 export async function findOpenSession(
@@ -222,11 +253,22 @@ export async function findOpenSession(
     eq(cashSessionsSchema.status, 'open'),
   ];
   if (posTokenId !== undefined) {
-    conds.push(
-      posTokenId === null
-        ? isNull(cashSessionsSchema.posTokenId)
-        : eq(cashSessionsSchema.posTokenId, posTokenId),
-    );
+    if (posTokenId === null) {
+      conds.push(isNull(cashSessionsSchema.posTokenId));
+    } else {
+      // Resolver por CAJA: si el dispositivo tiene caja, la sesión es la de la
+      // caja (compartida entre sus dispositivos). Si no (legacy), por dispositivo.
+      const cajaId = await resolveDeviceCajaId(
+        executor,
+        organizationId,
+        posTokenId,
+      );
+      conds.push(
+        cajaId
+          ? eq(cashSessionsSchema.cajaId, cajaId)
+          : eq(cashSessionsSchema.posTokenId, posTokenId),
+      );
+    }
   }
   const [session] = await executor
     .select()
@@ -306,11 +348,16 @@ export async function findOrCreateOpenSession(
   if (existing) {
     return existing;
   }
+  // La sesión cuelga de la CAJA del dispositivo (compartida entre sus pantallas).
+  const cajaId = args.posTokenId
+    ? await resolveDeviceCajaId(executor, args.organizationId, args.posTokenId)
+    : null;
   const [created] = await executor
     .insert(cashSessionsSchema)
     .values({
       organizationId: args.organizationId,
       posTokenId: args.posTokenId ?? null,
+      cajaId,
       openedBy: args.openedBy,
       openedByActorId: args.openedByActorId ?? null,
       openingAmount: '0',
