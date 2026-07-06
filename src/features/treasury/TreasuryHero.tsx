@@ -1,7 +1,7 @@
 'use client';
 
 import type { TreasuryAccount } from '@/libs/treasury';
-import { AlertTriangle, Check, Coins, Landmark } from 'lucide-react';
+import { AlertTriangle, Bike, Check, Coins, Landmark } from 'lucide-react';
 import { money } from '@/features/cash/cash-ui';
 import { sumBancos, sumEfectivo, sumTransito } from './utils';
 
@@ -74,13 +74,22 @@ type TreasuryHeroProps = {
   accounts: TreasuryAccount[];
   total: number;
   pendingCount: number;
+  // Efectivo "en la calle" en manos de los domiciliarios (ya incluido en `total`).
+  enLaCalle?: number;
+  courierCount?: number;
 };
 
 /**
  * Hero section: page title + big total card + 3 bucket cards (Efectivo / Bancos / Sin ubicar).
  * Matches View B design — large font-display total with a divider, side-by-side buckets.
  */
-export function TreasuryHero({ accounts, total, pendingCount }: TreasuryHeroProps) {
+export function TreasuryHero({
+  accounts,
+  total,
+  pendingCount,
+  enLaCalle = 0,
+  courierCount = 0,
+}: TreasuryHeroProps) {
   const efectivo = sumEfectivo(accounts);
   const bancos = sumBancos(accounts);
   const sinUbicar = sumTransito(accounts);
@@ -139,6 +148,16 @@ export function TreasuryHero({ accounts, total, pendingCount }: TreasuryHeroProp
             toneIcon="text-chart-5"
             toneBg="bg-chart-5/10"
           />
+          {courierCount > 0 && (
+            <Bucket
+              icon={<Bike className="size-4" />}
+              label="En la calle"
+              amount={enLaCalle}
+              sub={`${courierCount} ${courierCount === 1 ? 'domiciliario' : 'domiciliarios'}`}
+              toneIcon="text-amber-600"
+              toneBg="bg-amber-500/10"
+            />
+          )}
           {pendingCount > 0
             ? (
                 <Bucket

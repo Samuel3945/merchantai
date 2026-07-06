@@ -67,14 +67,20 @@ export default async function TesoreriaPage(props: {
 
   // Bolsillo de domiciliarios: solo aparece si hay domiciliarios activos.
   const courierWallets = await getCourierWalletsAction().catch(() => []);
+  // "En la calle" = efectivo de la empresa en manos de los domiciliarios. Es
+  // plata real, solo que fuera del local → se SUMA al total de empresa.
+  const enLaCalle = courierWallets.reduce((acc, w) => acc + w.balance, 0);
+  const totalConCalle = totalEmpresa + enLaCalle;
 
   return (
     <div className="flex flex-col gap-[22px]">
-      {/* 1. Hero: title + big total + 3 buckets */}
+      {/* 1. Hero: title + big total + buckets */}
       <TreasuryHero
         accounts={treasury}
-        total={totalEmpresa}
+        total={totalConCalle}
         pendingCount={pendingCount}
+        enLaCalle={enLaCalle}
+        courierCount={courierWallets.length}
       />
 
       {/* 2-4. Interactive sections: PorUbicar + MoneyFlow + TreasuryActions */}
