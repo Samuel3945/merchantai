@@ -2,7 +2,7 @@
 
 import type { ActionResult } from '@/libs/action-result';
 import { auth } from '@clerk/nextjs/server';
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { logAction } from '@/libs/audit-log';
 import { getCourierBalance } from '@/libs/courier-wallet';
@@ -23,6 +23,27 @@ async function requireAdmin() {
     throw new Error('Solo el administrador puede gestionar las cajas');
   }
   return { userId, orgId };
+}
+
+type Executor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+// Nombre secuencial "Caja N" para una nueva caja de tipo 'register'. N = cantidad
+// de cajas 'register' de la org (INCLUYENDO las archivadas) + 1, así el número no
+// se reutiliza y la historia ("Caja 2, de … a …") queda estable aunque se archive.
+export async function nextRegisterCajaName(
+  executor: Executor,
+  orgId: string,
+): Promise<string> {
+  const [row] = await executor
+    .select({ count: sql<number>`COUNT(*)::int` })
+    .from(cajasSchema)
+    .where(
+      and(
+        eq(cajasSchema.organizationId, orgId),
+        eq(cajasSchema.type, 'register'),
+      ),
+    );
+  return `Caja ${Number(row?.count ?? 0) + 1}`;
 }
 
 export type CajaDevice = { id: string; deviceName: string };
@@ -128,6 +149,33 @@ export async function listCajas(): Promise<CajasOverview> {
   return { cajas, couriersWithoutCaja };
 }
 
+export type ArchivedCaja = {
+  id: string;
+  name: string;
+  type: 'register' | 'courier';
+  createdAt: Date;
+  archivedAt: Date | null;
+};
+
+// Historial de cajas archivadas (quedaron vacías o el domiciliario se dio de
+// baja). Da el "de {createdAt} a {archivedAt}" que se muestra en pos-cajeros.
+export async function listArchivedCajas(): Promise<ArchivedCaja[]> {
+  const { orgId } = await requireAdmin();
+  return db
+    .select({
+      id: cajasSchema.id,
+      name: cajasSchema.name,
+      type: cajasSchema.type,
+      createdAt: cajasSchema.createdAt,
+      archivedAt: cajasSchema.archivedAt,
+    })
+    .from(cajasSchema)
+    .where(
+      and(eq(cajasSchema.organizationId, orgId), eq(cajasSchema.archived, true)),
+    )
+    .orderBy(desc(cajasSchema.archivedAt));
+}
+
 // Une un dispositivo a una caja existente (compartir) o lo mueve de caja. Si su
 // caja anterior queda sin dispositivos, se archiva (border case acordado).
 export async function assignDeviceToCaja(
@@ -187,7 +235,7 @@ export async function assignDeviceToCaja(
     if (Number(remaining?.count ?? 0) === 0) {
       await db
         .update(cajasSchema)
-        .set({ archived: true })
+        .set({ archived: true, archivedAt: new Date() })
         .where(eq(cajasSchema.id, previousCajaId));
     }
   }
@@ -215,7 +263,6 @@ export async function splitDeviceToOwnCaja(
   const [device] = await db
     .select({
       id: posTokensSchema.id,
-      deviceName: posTokensSchema.deviceName,
       cajaId: posTokensSchema.cajaId,
     })
     .from(posTokensSchema)
@@ -234,7 +281,7 @@ export async function splitDeviceToOwnCaja(
     .insert(cajasSchema)
     .values({
       organizationId: orgId,
-      name: device.deviceName,
+      name: await nextRegisterCajaName(db, orgId),
       type: 'register',
       createdBy: userId,
     })
@@ -262,7 +309,7 @@ export async function splitDeviceToOwnCaja(
     if (Number(remaining?.count ?? 0) === 0) {
       await db
         .update(cajasSchema)
-        .set({ archived: true })
+        .set({ archived: true, archivedAt: new Date() })
         .where(eq(cajasSchema.id, previousCajaId));
     }
   }
@@ -396,7 +443,7 @@ export async function archiveCourierCaja(
   }
   await db
     .update(cajasSchema)
-    .set({ archived: true })
+    .set({ archived: true, archivedAt: new Date() })
     .where(eq(cajasSchema.id, id));
   await logAction({
     organizationId: orgId,
@@ -415,7 +462,6 @@ export async function archiveCourierCaja(
 export async function ensureCajaForDevice(
   orgId: string,
   deviceId: string,
-  deviceName: string,
   createdBy: string,
 ): Promise<void> {
   const [device] = await db
@@ -430,7 +476,7 @@ export async function ensureCajaForDevice(
     .insert(cajasSchema)
     .values({
       organizationId: orgId,
-      name: deviceName,
+      name: await nextRegisterCajaName(db, orgId),
       type: 'register',
       createdBy,
     })

@@ -1,5 +1,6 @@
 'use client';
 
+import type { ArchivedCaja, CajaConfig } from '@/actions/cajas';
 import type { PosDeviceQuota } from '@/actions/pos-tokens';
 import type { ActionResult } from '@/libs/action-result';
 import {
@@ -15,11 +16,20 @@ import {
   Plus,
   QrCode,
   RefreshCw,
+  Split,
   Unlock,
   UserCog,
+  Users,
   Vault,
+  Wallet,
 } from 'lucide-react';
 import { useCallback, useState, useTransition } from 'react';
+import {
+  assignDeviceToCaja,
+  listArchivedCajas,
+  listCajas,
+  splitDeviceToOwnCaja,
+} from '@/actions/cajas';
 import {
   blockPosToken,
   createPosToken,
@@ -83,6 +93,18 @@ function formatDate(date: Date | string | null | undefined) {
   return dateFmt.format(new Date(date));
 }
 
+const dayFmt = new Intl.DateTimeFormat('es-CO', {
+  dateStyle: 'medium',
+  timeZone: 'America/Bogota',
+});
+
+function formatDay(date: Date | string | null | undefined) {
+  if (!date) {
+    return '—';
+  }
+  return dayFmt.format(new Date(date));
+}
+
 function qrUrl(text: string, size = 220) {
   return `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(text)}`;
 }
@@ -124,30 +146,54 @@ export function PosCajerosClient({
   initialTokens,
   initialQuota,
   initialCofres,
+  initialCajas,
+  initialArchivedCajas,
 }: {
   initialTokens: TokenRow[];
   initialQuota: PosDeviceQuota;
   initialCofres: CofreOption[];
+  initialCajas: CajaConfig[];
+  initialArchivedCajas: ArchivedCaja[];
 }) {
   const confirm = useConfirm();
   const [tokens, setTokens] = useState(initialTokens);
   const [quota, setQuota] = useState(initialQuota);
   const [cofres] = useState(initialCofres);
+  const [cajas, setCajas] = useState(initialCajas);
+  const [archivedCajas, setArchivedCajas] = useState(initialArchivedCajas);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [activeToken, setActiveToken] = useState<TokenRow | null>(null);
   const [renameTarget, setRenameTarget] = useState<TokenRow | null>(null);
   const [sweepTarget, setSweepTarget] = useState<TokenRow | null>(null);
+  const [cajaTarget, setCajaTarget] = useState<TokenRow | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [limitError, setLimitError] = useState<LimitErrorPayload | null>(null);
   const [pending, startTransition] = useTransition();
 
   const atLimit = quota.used >= quota.limit;
 
+  // Solo las cajas 'register' (bolsas de POS) participan del compartir/separar.
+  const registerCajas = cajas.filter(c => c.type === 'register');
+  // deviceId → caja a la que pertenece, para pintar la bolsa de cada dispositivo.
+  const cajaByDevice = new Map<string, CajaConfig>();
+  for (const caja of registerCajas) {
+    for (const d of caja.devices) {
+      cajaByDevice.set(d.id, caja);
+    }
+  }
+
   const refresh = useCallback(() => {
     startTransition(async () => {
-      const [rows, q] = await Promise.all([listPosTokens(), getPosDeviceQuota()]);
+      const [rows, q, overview, archived] = await Promise.all([
+        listPosTokens(),
+        getPosDeviceQuota(),
+        listCajas().catch(() => ({ cajas: [], couriersWithoutCaja: [] })),
+        listArchivedCajas().catch(() => []),
+      ]);
       setTokens(rows);
       setQuota(q);
+      setCajas(overview.cajas);
+      setArchivedCajas(archived);
     });
   }, []);
 
@@ -346,6 +392,7 @@ export function PosCajerosClient({
           <thead className="bg-muted/50 text-left text-xs uppercase">
             <tr>
               <th className="px-3 py-2">Caja / dispositivo</th>
+              <th className="px-3 py-2">Bolsa de dinero</th>
               <th className="px-3 py-2">Cajero</th>
               <th className="px-3 py-2">Estado</th>
               <th className="px-3 py-2">Creada</th>
@@ -357,7 +404,7 @@ export function PosCajerosClient({
               <tr>
                 <td
                   className="px-3 py-8 text-center text-muted-foreground"
-                  colSpan={5}
+                  colSpan={6}
                 >
                   Aún no tienes cajas. Agrega una para registrar tu primer
                   dispositivo POS.
@@ -371,6 +418,9 @@ export function PosCajerosClient({
                     <Monitor className="size-4 text-muted-foreground" />
                     {t.deviceName}
                   </div>
+                </td>
+                <td className="px-3 py-2">
+                  <CajaBadge caja={cajaByDevice.get(t.id) ?? null} />
                 </td>
                 <td className="px-3 py-2">
                   {t.currentCashierName
@@ -469,6 +519,10 @@ export function PosCajerosClient({
                           <Pencil className="size-4" />
                           Cambiar nombre
                         </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setCajaTarget(t)}>
+                          <Wallet className="size-4" />
+                          Bolsa de dinero
+                        </DropdownMenuItem>
                         {cofres.length > 0 && (
                           <DropdownMenuItem onClick={() => setSweepTarget(t)}>
                             <Vault className="size-4" />
@@ -519,6 +573,7 @@ export function PosCajerosClient({
 
       {showCreateModal && (
         <CreateTokenModal
+          registerCajas={registerCajas}
           onClose={() => setShowCreateModal(false)}
           onSuccess={(created) => {
             setShowCreateModal(false);
@@ -584,7 +639,130 @@ export function PosCajerosClient({
           onError={msg => setError(msg)}
         />
       )}
+
+      {cajaTarget && (
+        <CajaManageModal
+          token={cajaTarget}
+          caja={cajaByDevice.get(cajaTarget.id) ?? null}
+          otherCajas={registerCajas.filter(
+            c => c.id !== cajaByDevice.get(cajaTarget.id)?.id,
+          )}
+          pending={pending}
+          onClose={() => setCajaTarget(null)}
+          onShare={cajaId =>
+            startTransition(async () => {
+              try {
+                const r = await assignDeviceToCaja(cajaTarget.id, cajaId);
+                if (!r.ok) {
+                  setError(r.error);
+                  return;
+                }
+                setCajaTarget(null);
+                refresh();
+              } catch {
+                setError('No se pudo compartir la bolsa de dinero');
+              }
+            })}
+          onSplit={() =>
+            startTransition(async () => {
+              try {
+                const r = await splitDeviceToOwnCaja(cajaTarget.id);
+                if (!r.ok) {
+                  setError(r.error);
+                  return;
+                }
+                setCajaTarget(null);
+                refresh();
+              } catch {
+                setError('No se pudo separar la bolsa de dinero');
+              }
+            })}
+        />
+      )}
+
+      <ArchivedCajasSection cajas={archivedCajas} />
     </div>
+  );
+}
+
+// Etiqueta de la bolsa de dinero (caja) de un dispositivo: compartida (2+
+// pantallas) o individual. Sin caja = estado transitorio recién creado.
+function CajaBadge({ caja }: { caja: CajaConfig | null }) {
+  if (!caja) {
+    return <span className="text-xs text-muted-foreground">—</span>;
+  }
+  const shared = caja.isShared;
+  return (
+    <div className="flex flex-col items-start gap-0.5">
+      <span className="text-sm">{caja.name}</span>
+      <span className={`
+        inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs
+        font-medium
+        ${shared ? 'bg-sky-50 text-sky-700' : 'bg-violet-50 text-violet-700'}
+      `}
+      >
+        {shared
+          ? (
+              <>
+                <Users className="size-3" />
+                Compartida ·
+                {' '}
+                {caja.devices.length}
+                {' '}
+                pantallas
+              </>
+            )
+          : (
+              <>
+                <Monitor className="size-3" />
+                Individual
+              </>
+            )}
+      </span>
+    </div>
+  );
+}
+
+// Historial de cajas archivadas: cada una con su ventana "del {creación} al
+// {archivado}". Colapsable para no robar espacio; oculto si no hay ninguna.
+function ArchivedCajasSection({ cajas }: { cajas: ArchivedCaja[] }) {
+  if (cajas.length === 0) {
+    return null;
+  }
+  return (
+    <details className="rounded-md border bg-background">
+      <summary className="
+        cursor-pointer px-4 py-2 text-sm font-medium text-muted-foreground
+        select-none
+      "
+      >
+        Cajas archivadas (
+        {cajas.length}
+        )
+      </summary>
+      <ul className="divide-y border-t text-sm">
+        {cajas.map(c => (
+          <li
+            key={c.id}
+            className="flex items-center justify-between gap-2 px-4 py-2"
+          >
+            <span className="flex items-center gap-2">
+              <Wallet className="size-4 text-muted-foreground" />
+              {c.name}
+            </span>
+            <span className="text-xs text-muted-foreground tabular-nums">
+              del
+              {' '}
+              {formatDay(c.createdAt)}
+              {' '}
+              al
+              {' '}
+              {formatDay(c.archivedAt)}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }
 
@@ -657,10 +835,12 @@ function LimitBanner({
 }
 
 function CreateTokenModal({
+  registerCajas,
   onClose,
   onSuccess,
   onFailure,
 }: {
+  registerCajas: CajaConfig[];
   onClose: () => void;
   onSuccess: (token: CreatedToken) => void;
   onFailure: (failure: ActionFailure) => void;
@@ -668,14 +848,27 @@ function CreateTokenModal({
   const [deviceName, setDeviceName] = useState('');
   const [adminPin, setAdminPin] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  // Solo el 2º+ dispositivo elige bolsa de dinero. Con 0 cajas existentes es el
+  // primero: estrena "Caja 1" sin preguntar (la elección se ignora en el server).
+  const isFirstDevice = registerCajas.length === 0;
+  const [shareMode, setShareMode] = useState(false);
+  const [shareCajaId, setShareCajaId] = useState(
+    registerCajas[0]?.id ?? '',
+  );
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
     try {
+      const cajaChoice = isFirstDevice
+        ? undefined
+        : shareMode && shareCajaId
+          ? ({ mode: 'shared', shareWithCajaId: shareCajaId } as const)
+          : ({ mode: 'exclusive' } as const);
       const result = await createPosToken({
         deviceName,
         adminPin: adminPin.trim() || null,
+        cajaChoice,
       });
       if (!result.ok) {
         onFailure(result);
@@ -741,6 +934,76 @@ function CreateTokenModal({
               className={inputCls}
             />
           </div>
+
+          {isFirstDevice
+            ? (
+                <p className="
+                  flex items-center gap-2 rounded-md border border-input
+                  bg-muted/30 px-3 py-2 text-xs text-muted-foreground
+                "
+                >
+                  <Wallet className="size-4 shrink-0" />
+                  Se creará
+                  {' '}
+                  <span className="font-medium text-foreground">Caja 1</span>
+                  {' '}
+                  como su bolsa de dinero.
+                </p>
+              )
+            : (
+                <div className="space-y-2 rounded-md border border-input p-3">
+                  <div className="text-xs font-medium text-muted-foreground">
+                    Bolsa de dinero (dónde se guarda el efectivo)
+                  </div>
+                  <label className="flex items-start gap-2 text-sm">
+                    <input
+                      type="radio"
+                      name="caja-choice"
+                      checked={!shareMode}
+                      onChange={() => setShareMode(false)}
+                      className="mt-0.5"
+                    />
+                    <span>
+                      Caja exclusiva para este dispositivo
+                      <span className="block text-xs text-muted-foreground">
+                        Se crea una bolsa nueva («Caja N») solo para este POS.
+                      </span>
+                    </span>
+                  </label>
+                  <label className="flex items-start gap-2 text-sm">
+                    <input
+                      type="radio"
+                      name="caja-choice"
+                      checked={shareMode}
+                      onChange={() => setShareMode(true)}
+                      className="mt-0.5"
+                    />
+                    <span>
+                      Compartir el lugar del dinero con otro POS
+                      <span className="block text-xs text-muted-foreground">
+                        Ambos dispositivos usan la misma bolsa (caja compartida).
+                      </span>
+                    </span>
+                  </label>
+                  {shareMode && (
+                    <select
+                      value={shareCajaId}
+                      onChange={e => setShareCajaId(e.target.value)}
+                      className={`
+                        ${inputCls}
+                        cursor-pointer
+                      `}
+                    >
+                      {registerCajas.map(c => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              )}
+
           <p className="
             rounded-md border border-input bg-muted/30 px-3 py-2 text-xs
             text-muted-foreground
@@ -1068,6 +1331,142 @@ function SweepDestinationModal({
           </Button>
           <Button type="button" onClick={handleSave} disabled={submitting}>
             {submitting ? 'Guardando…' : 'Guardar'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Cambiar la bolsa de dinero (caja) de un dispositivo, reemplaza al viejo
+// CajasManager: compartir la bolsa de otro POS (assignDeviceToCaja) o sacarlo a
+// su propia caja (splitDeviceToOwnCaja). Al vaciar una caja, el server la archiva.
+function CajaManageModal({
+  token,
+  caja,
+  otherCajas,
+  pending,
+  onClose,
+  onShare,
+  onSplit,
+}: {
+  token: TokenRow;
+  caja: CajaConfig | null;
+  otherCajas: CajaConfig[];
+  pending: boolean;
+  onClose: () => void;
+  onShare: (cajaId: string) => void;
+  onSplit: () => void;
+}) {
+  const [shareCajaId, setShareCajaId] = useState(otherCajas[0]?.id ?? '');
+
+  return (
+    <div className="
+      fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4
+    "
+    >
+      <div className="w-full max-w-md rounded-lg bg-background p-6 shadow-lg">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="flex items-center gap-2 text-lg font-semibold">
+            <Wallet className="size-5" />
+            Bolsa de dinero
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="
+              text-muted-foreground
+              hover:text-foreground
+            "
+          >
+            ✕
+          </button>
+        </div>
+
+        <p className="mb-3 text-sm text-muted-foreground">
+          {token.deviceName}
+          {' '}
+          usa la bolsa
+          {' '}
+          <span className="font-medium text-foreground">
+            {caja?.name ?? '—'}
+          </span>
+          {caja?.isShared && (
+            <>
+              {' '}
+              (compartida con
+              {' '}
+              {caja.devices.length - 1}
+              {' '}
+              POS más)
+            </>
+          )}
+          .
+        </p>
+
+        <div className="space-y-4">
+          {caja?.isShared && (
+            <div className="rounded-md border p-3">
+              <div className="text-sm font-medium">Sacar a caja propia</div>
+              <p className="mb-2 text-xs text-muted-foreground">
+                Este POS deja de compartir y estrena su propia bolsa («Caja N»).
+              </p>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={pending}
+                onClick={onSplit}
+              >
+                <Split className="size-4" />
+                Separar a caja propia
+              </Button>
+            </div>
+          )}
+
+          {otherCajas.length > 0 && (
+            <div className="rounded-md border p-3">
+              <div className="text-sm font-medium">Compartir con otro POS</div>
+              <p className="mb-2 text-xs text-muted-foreground">
+                Este POS pasa a usar la misma bolsa de la caja elegida. Si su
+                caja actual queda vacía, se archiva con su fecha.
+              </p>
+              <div className="flex items-center gap-2">
+                <select
+                  value={shareCajaId}
+                  onChange={e => setShareCajaId(e.target.value)}
+                  className={`
+                    ${inputCls}
+                    cursor-pointer
+                  `}
+                >
+                  {otherCajas.map(c => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  size="sm"
+                  disabled={pending || !shareCajaId}
+                  onClick={() => onShare(shareCajaId)}
+                >
+                  <Users className="size-4" />
+                  Compartir
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {!caja?.isShared && otherCajas.length === 0 && (
+            <p className="text-sm text-muted-foreground">
+              No hay otras cajas con las que compartir todavía.
+            </p>
+          )}
+        </div>
+
+        <div className="flex justify-end pt-4">
+          <Button type="button" variant="secondary" onClick={onClose}>
+            Cerrar
           </Button>
         </div>
       </div>

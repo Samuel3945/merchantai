@@ -12,6 +12,7 @@ import { getOrgEntitlements, limitOf } from '@/libs/entitlements';
 import { ensureOwnerCashier } from '@/libs/owner-cashier';
 import { POS_DEVICES_LIMIT_REACHED } from '@/libs/plan-limits';
 import {
+  cajasSchema,
   orgAddressesSchema,
   planAddonsSchema,
   posTokensSchema,
@@ -182,6 +183,13 @@ async function requireAdminContext() {
   return { userId, orgId };
 }
 
+// Qué bolsa de dinero (caja) recibe el nuevo dispositivo. Solo aplica al 2º+
+// dispositivo; el 1º siempre estrena "Caja 1". 'shared' = comparte la bolsa de
+// otro POS; 'exclusive' = su propia "Caja N". Omitido ⇒ exclusive (compat.).
+export type CajaChoice
+  = | { mode: 'exclusive' }
+    | { mode: 'shared'; shareWithCajaId: string };
+
 export type CreatePosTokenInput = {
   deviceName: string;
   /** Branch address for this caja (org_addresses.id). */
@@ -191,6 +199,8 @@ export type CreatePosTokenInput = {
    * an operator (when their operator profile still has no PIN); ignored after.
    */
   adminPin?: string | null;
+  /** Money-bag decision for the 2nd+ device. Ignored for the 1st device. */
+  cajaChoice?: CajaChoice;
 };
 
 // Register names must be unique per org (case-insensitive): audit trails and
@@ -289,9 +299,41 @@ export async function createPosToken(
     return { row: created, operatorId: operator.id };
   });
 
-  // Todo dispositivo necesita una caja (bolsa de dinero) para vender. Al crearlo
-  // le damos su caja individual; el dueño luego puede compartirla con otro POS.
-  await ensureCajaForDevice(orgId, row.id, row.deviceName, userId);
+  // Todo dispositivo necesita una caja (bolsa de dinero) para vender.
+  //  - 1er dispositivo (used === 0 antes de este insert): estrena "Caja 1", sin
+  //    preguntar. Cualquier cajaChoice se ignora.
+  //  - 2º+: honra la elección del dueño. 'shared' engancha la bolsa de otro POS;
+  //    'exclusive' (o sin elección, por compat.) crea una nueva "Caja N".
+  const sharedCajaId
+    = used > 0 && input.cajaChoice?.mode === 'shared'
+      ? input.cajaChoice.shareWithCajaId
+      : null;
+  if (sharedCajaId) {
+    // La caja destino debe ser 'register', activa y de la misma org. Si no lo es,
+    // cae a caja exclusiva para no dejar el dispositivo sin bolsa de dinero.
+    const [target] = await db
+      .select({ id: cajasSchema.id })
+      .from(cajasSchema)
+      .where(
+        and(
+          eq(cajasSchema.id, sharedCajaId),
+          eq(cajasSchema.organizationId, orgId),
+          eq(cajasSchema.type, 'register'),
+          eq(cajasSchema.archived, false),
+        ),
+      )
+      .limit(1);
+    if (target) {
+      await db
+        .update(posTokensSchema)
+        .set({ cajaId: target.id })
+        .where(eq(posTokensSchema.id, row.id));
+    } else {
+      await ensureCajaForDevice(orgId, row.id, userId);
+    }
+  } else {
+    await ensureCajaForDevice(orgId, row.id, userId);
+  }
 
   await logAction({
     organizationId: orgId,

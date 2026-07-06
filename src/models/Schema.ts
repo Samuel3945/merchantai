@@ -947,6 +947,10 @@ export const cajasSchema = pgTable(
       onDelete: 'set null',
     }),
     archived: boolean('archived').default(false).notNull(),
+    // Fecha en que la caja se archivó (quedó sin dispositivos, o domiciliario
+    // dado de baja). Null mientras está activa. Da el "hasta" de su historia:
+    // "Caja 2, de {createdAt} a {archivedAt}". Migración 0093.
+    archivedAt: timestamp('archived_at', { mode: 'date' }),
     createdBy: text('created_by'),
     createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
   },
