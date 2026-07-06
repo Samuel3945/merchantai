@@ -57,15 +57,31 @@ type TimelineEntry = {
   badge?: { label: string; cls: string };
 };
 
+// "Arroz ×2 · Leche ×1" — qué pidió el cliente. Trunca a 4 productos.
+function itemsSummary(
+  items: CustomerDetail['recentSales'][number]['items'],
+): string {
+  if (!items || items.length === 0) {
+    return '';
+  }
+  const shown = items
+    .slice(0, 4)
+    .map(it => `${it.productName} ${it.unitType === 'weight' ? `${it.qty} kg` : `×${it.qty}`}`)
+    .join(' · ');
+  return items.length > 4 ? `${shown} +${items.length - 4}` : shown;
+}
+
 function buildTimeline(detail: CustomerDetail): TimelineEntry[] {
   const entries: TimelineEntry[] = [];
 
   for (const s of detail.recentSales) {
+    const productos = itemsSummary(s.items);
     entries.push({
       key: `sale-${s.id}`,
       date: s.date,
       title: `Compra ${formatSaleNumber(s.saleNumber)}`,
-      subtitle: s.paymentType,
+      // Qué pidió + método de pago.
+      subtitle: productos ? `${productos} — ${s.paymentType}` : s.paymentType,
       amount: s.total,
       tone: 'sale',
       href: `/dashboard/sales/${s.id}`,

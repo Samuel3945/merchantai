@@ -45,6 +45,12 @@ export type CustomerDetailKpis = {
   creditBalance: number;
 };
 
+export type CustomerDetailSaleItem = {
+  productName: string;
+  qty: number;
+  unitType: string;
+};
+
 export type CustomerDetailSale = {
   id: string;
   saleNumber: number | null;
@@ -54,6 +60,8 @@ export type CustomerDetailSale = {
   status: string;
   /** Every sold unit returned (by quantity), same rule as the sales listing. */
   fullyReturned: boolean;
+  /** Qué pidió el cliente en esta venta (para la ficha). */
+  items: CustomerDetailSaleItem[];
 };
 
 export type CustomerDetailAbono = {
@@ -154,6 +162,15 @@ export async function loadCustomerDetail(
             SELECT SUM(si2.qty) FROM sale_items si2 WHERE si2.sale_id = sales.id
           ), 0)
         )`,
+        // Qué pidió: productos de la venta (nombre + cantidad) para la ficha.
+        items: sql<CustomerDetailSaleItem[]>`COALESCE((
+          SELECT json_agg(json_build_object(
+            'productName', si.product_name,
+            'qty', si.qty,
+            'unitType', COALESCE(si.unit_type, 'unit')
+          ) ORDER BY si.id)
+          FROM sale_items si WHERE si.sale_id = sales.id
+        ), '[]'::json)`,
       })
       .from(salesSchema)
       .where(saleWhere)
