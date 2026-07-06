@@ -570,6 +570,9 @@ export async function GET(req: Request): Promise<NextResponse> {
         status: salesSchema.status,
         notes: salesSchema.notes,
         cashierId: salesSchema.cashierId,
+        // Canal de la venta: 'delivery' = domicilio. La app de caja lo marca para
+        // identificar la venta si alguien pide devolución en persona.
+        channel: salesSchema.channel,
         createdAt: salesSchema.createdAt,
         items: sql<unknown>`COALESCE(
           json_agg(
