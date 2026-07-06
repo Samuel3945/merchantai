@@ -435,6 +435,7 @@ export function SalesClient({
 
   // Badge on the "Más filtros" toggle so hidden-but-active filters stay visible.
   const advancedCount = [
+    posTokenId,
     productId,
     payment !== 'all' ? payment : '',
     channel !== 'all' ? channel : '',
@@ -442,7 +443,7 @@ export function SalesClient({
   ].filter(Boolean).length;
 
   const hasActiveFilters
-    = Boolean(start || end || search || cashierId || cajaId || posTokenId)
+    = Boolean(start || end || search || cashierId || cajaId)
       || advancedCount > 0;
 
   return (
@@ -503,23 +504,6 @@ export function SalesClient({
             />
           </div>
           <div className="flex flex-col gap-1">
-            <span className={labelCls}>Dispositivo</span>
-            <Select
-              value={posTokenId}
-              onValueChange={(v) => {
-                setPosTokenId(v);
-                resetToFirstPage();
-              }}
-              options={[
-                { value: '', label: 'Todos los dispositivos' },
-                ...filterOptions.devices.map(d => ({
-                  value: d.id,
-                  label: d.name,
-                })),
-              ]}
-            />
-          </div>
-          <div className="flex flex-col gap-1">
             <span className={labelCls}>Empleado</span>
             <Select
               value={cashierId}
@@ -558,6 +542,23 @@ export function SalesClient({
             lg:grid-cols-4
           "
           >
+            <div className="flex flex-col gap-1">
+              <span className={labelCls}>Dispositivo</span>
+              <Select
+                value={posTokenId}
+                onValueChange={(v) => {
+                  setPosTokenId(v);
+                  resetToFirstPage();
+                }}
+                options={[
+                  { value: '', label: 'Todos los dispositivos' },
+                  ...filterOptions.devices.map(d => ({
+                    value: d.id,
+                    label: d.name,
+                  })),
+                ]}
+              />
+            </div>
             <div className="flex flex-col gap-1">
               <span className={labelCls}>Producto</span>
               <Combobox
