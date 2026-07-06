@@ -1,6 +1,6 @@
 'use client';
 
-import type { ArchivedCaja, CajaConfig } from '@/actions/cajas';
+import type { CajaConfig } from '@/actions/cajas';
 import type { PosDeviceQuota } from '@/actions/pos-tokens';
 import type { ActionResult } from '@/libs/action-result';
 import {
@@ -26,7 +26,6 @@ import {
 import { useCallback, useState, useTransition } from 'react';
 import {
   assignDeviceToCaja,
-  listArchivedCajas,
   listCajas,
   splitDeviceToOwnCaja,
 } from '@/actions/cajas';
@@ -93,18 +92,6 @@ function formatDate(date: Date | string | null | undefined) {
   return dateFmt.format(new Date(date));
 }
 
-const dayFmt = new Intl.DateTimeFormat('es-CO', {
-  dateStyle: 'medium',
-  timeZone: 'America/Bogota',
-});
-
-function formatDay(date: Date | string | null | undefined) {
-  if (!date) {
-    return '—';
-  }
-  return dayFmt.format(new Date(date));
-}
-
 function qrUrl(text: string, size = 220) {
   return `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(text)}`;
 }
@@ -147,20 +134,17 @@ export function PosCajerosClient({
   initialQuota,
   initialCofres,
   initialCajas,
-  initialArchivedCajas,
 }: {
   initialTokens: TokenRow[];
   initialQuota: PosDeviceQuota;
   initialCofres: CofreOption[];
   initialCajas: CajaConfig[];
-  initialArchivedCajas: ArchivedCaja[];
 }) {
   const confirm = useConfirm();
   const [tokens, setTokens] = useState(initialTokens);
   const [quota, setQuota] = useState(initialQuota);
   const [cofres] = useState(initialCofres);
   const [cajas, setCajas] = useState(initialCajas);
-  const [archivedCajas, setArchivedCajas] = useState(initialArchivedCajas);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [activeToken, setActiveToken] = useState<TokenRow | null>(null);
   const [renameTarget, setRenameTarget] = useState<TokenRow | null>(null);
@@ -184,16 +168,14 @@ export function PosCajerosClient({
 
   const refresh = useCallback(() => {
     startTransition(async () => {
-      const [rows, q, overview, archived] = await Promise.all([
+      const [rows, q, overview] = await Promise.all([
         listPosTokens(),
         getPosDeviceQuota(),
         listCajas().catch(() => ({ cajas: [], couriersWithoutCaja: [] })),
-        listArchivedCajas().catch(() => []),
       ]);
       setTokens(rows);
       setQuota(q);
       setCajas(overview.cajas);
-      setArchivedCajas(archived);
     });
   }, []);
 
@@ -679,8 +661,6 @@ export function PosCajerosClient({
             })}
         />
       )}
-
-      <ArchivedCajasSection cajas={archivedCajas} />
     </div>
   );
 }
@@ -720,49 +700,6 @@ function CajaBadge({ caja }: { caja: CajaConfig | null }) {
             )}
       </span>
     </div>
-  );
-}
-
-// Historial de cajas archivadas: cada una con su ventana "del {creación} al
-// {archivado}". Colapsable para no robar espacio; oculto si no hay ninguna.
-function ArchivedCajasSection({ cajas }: { cajas: ArchivedCaja[] }) {
-  if (cajas.length === 0) {
-    return null;
-  }
-  return (
-    <details className="rounded-md border bg-background">
-      <summary className="
-        cursor-pointer px-4 py-2 text-sm font-medium text-muted-foreground
-        select-none
-      "
-      >
-        Cajas archivadas (
-        {cajas.length}
-        )
-      </summary>
-      <ul className="divide-y border-t text-sm">
-        {cajas.map(c => (
-          <li
-            key={c.id}
-            className="flex items-center justify-between gap-2 px-4 py-2"
-          >
-            <span className="flex items-center gap-2">
-              <Wallet className="size-4 text-muted-foreground" />
-              {c.name}
-            </span>
-            <span className="text-xs text-muted-foreground tabular-nums">
-              del
-              {' '}
-              {formatDay(c.createdAt)}
-              {' '}
-              al
-              {' '}
-              {formatDay(c.archivedAt)}
-            </span>
-          </li>
-        ))}
-      </ul>
-    </details>
   );
 }
 

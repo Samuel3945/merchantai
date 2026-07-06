@@ -1,5 +1,6 @@
+import type { ArchivedCaja } from '@/actions/cajas';
 import type { CajaSummary } from '@/actions/cash';
-import { AlertTriangle, ChevronRight, Lock, User } from 'lucide-react';
+import { AlertTriangle, Archive, ChevronRight, Lock, Monitor, User } from 'lucide-react';
 import Link from 'next/link';
 import { cn } from '@/utils/Helpers';
 import { money, relativeTime, stamp } from './cash-ui';
@@ -123,6 +124,31 @@ function Verdict({ issues }: { issues: string[] }) {
   );
 }
 
+// The devices working in this bolsa — a chip row under the caja title. The caja
+// NAME ("Caja N") is the title; the device names live here, never as the title.
+function DeviceChips({ devices }: { devices: CajaSummary['devices'] }) {
+  if (devices.length === 0) {
+    return null;
+  }
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+      <span className="text-xs text-muted-foreground">Dispositivos:</span>
+      {devices.map(d => (
+        <span
+          key={d.id}
+          className="
+            inline-flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5
+            text-xs font-medium text-foreground
+          "
+        >
+          <Monitor className="size-3" />
+          {d.deviceName || 'Sin nombre'}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function CajaCardShell(props: {
   caja: CajaSummary;
   status: CajaStatus;
@@ -131,7 +157,7 @@ function CajaCardShell(props: {
   const { caja, status, children } = props;
   return (
     <Link
-      href={`/dashboard/cash/${caja.posTokenId}`}
+      href={`/dashboard/cash/${caja.cajaId}`}
       className="
         group flex flex-col overflow-hidden rounded-xl border border-border
         bg-card shadow-xs transition-colors
@@ -140,22 +166,27 @@ function CajaCardShell(props: {
     >
       <div className={cn('h-1.5', BAR[status])} />
       <div className="flex flex-1 flex-col gap-4 p-5">
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <div className="font-display text-lg font-semibold">
-              {caja.deviceName || 'Caja sin nombre'}
+        <div>
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <div className="font-display text-lg font-semibold">
+                {caja.name || 'Caja sin nombre'}
+              </div>
+              <div className="
+                mt-0.5 flex items-center gap-1.5 text-sm text-muted-foreground
+              "
+              >
+                <User className="size-3.5" />
+                {status === 'closed' ? 'Último a cargo' : 'A cargo de'}
+                {' '}
+                <span className="text-foreground">
+                  {caja.responsable ?? '—'}
+                </span>
+              </div>
             </div>
-            <div className="
-              mt-0.5 flex items-center gap-1.5 text-sm text-muted-foreground
-            "
-            >
-              <User className="size-3.5" />
-              {status === 'closed' ? 'Último a cargo' : 'A cargo de'}
-              {' '}
-              <span className="text-foreground">{caja.responsable ?? '—'}</span>
-            </div>
+            <StatusPill status={status} />
           </div>
-          <StatusPill status={status} />
+          <DeviceChips devices={caja.devices} />
         </div>
 
         {children}
@@ -283,14 +314,66 @@ function CajaCard({ caja }: { caja: CajaSummary }) {
   return <OpenCajaCard caja={caja} status={status} />;
 }
 
+// Historial de cajas archivadas (quedaron sin dispositivos). Se archiva la caja,
+// no el dispositivo POS. Cada una con su ventana "del {creación} al {archivado}".
+// Vive aquí (vista de Caja), no en pos-cajeros. Oculto si no hay ninguna.
+const archivedDayFmt = new Intl.DateTimeFormat('es-CO', {
+  dateStyle: 'medium',
+  timeZone: 'America/Bogota',
+});
+
+function formatArchivedDay(date: Date | string | null | undefined): string {
+  return date ? archivedDayFmt.format(new Date(date)) : '—';
+}
+
+function ArchivedCajasSection({ cajas }: { cajas: ArchivedCaja[] }) {
+  if (cajas.length === 0) {
+    return null;
+  }
+  return (
+    <section className="space-y-3">
+      <div>
+        <h2 className="font-display text-lg font-semibold">Cajas archivadas</h2>
+        <p className="text-sm text-muted-foreground">
+          Cajas que quedaron sin dispositivos. Se archiva la caja, no el
+          dispositivo POS.
+        </p>
+      </div>
+      <ul className="divide-y rounded-xl border border-border bg-card text-sm">
+        {cajas.map(c => (
+          <li
+            key={c.id}
+            className="flex items-center justify-between gap-2 px-4 py-3"
+          >
+            <span className="flex items-center gap-2">
+              <Archive className="size-4 text-muted-foreground" />
+              <span className="font-medium">{c.name}</span>
+            </span>
+            <span className="text-xs text-muted-foreground tabular-nums">
+              del
+              {' '}
+              {formatArchivedDay(c.createdAt)}
+              {' '}
+              al
+              {' '}
+              {formatArchivedDay(c.archivedAt)}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 export function CajasSupervision(props: {
   cajas: CajaSummary[];
+  archivedCajas: ArchivedCaja[];
   notArrivedCount: number;
 }) {
   const issues: string[] = [];
   for (const caja of props.cajas) {
     if (cajaStatus(caja) === 'review') {
-      issues.push(`${caja.deviceName || 'Una caja'} lleva más de un día abierta`);
+      issues.push(`${caja.name || 'Una caja'} lleva más de un día abierta`);
     }
   }
   if (props.notArrivedCount > 0) {
@@ -310,41 +393,45 @@ export function CajasSupervision(props: {
   });
 
   return (
-    <section className="space-y-5">
-      <Verdict issues={issues} />
+    <div className="space-y-8">
+      <section className="space-y-5">
+        <Verdict issues={issues} />
 
-      <div>
-        <h2 className="font-display text-lg font-semibold">
-          ¿Cómo van tus cajas?
-        </h2>
-        <p className="text-sm text-muted-foreground">
-          Una caja = un punto donde cobran. Tocá una para ver todo lo que pasó
-          adentro, esté abierta o cerrada.
-        </p>
-      </div>
+        <div>
+          <h2 className="font-display text-lg font-semibold">
+            ¿Cómo van tus cajas?
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            Una caja = una bolsa de dinero. Tocá una para ver todo lo que pasó
+            adentro, esté abierta o cerrada.
+          </p>
+        </div>
 
-      {cajas.length === 0
-        ? (
-            <div className="
-              rounded-xl border border-dashed border-border p-8 text-center
-              text-sm text-muted-foreground
-            "
-            >
-              No hay cajas registradas todavía.
-            </div>
-          )
-        : (
-            <div className="
-              grid grid-cols-1 gap-4
-              sm:grid-cols-2
-              lg:grid-cols-3
-            "
-            >
-              {cajas.map(caja => (
-                <CajaCard key={caja.id} caja={caja} />
-              ))}
-            </div>
-          )}
-    </section>
+        {cajas.length === 0
+          ? (
+              <div className="
+                rounded-xl border border-dashed border-border p-8 text-center
+                text-sm text-muted-foreground
+              "
+              >
+                No hay cajas registradas todavía.
+              </div>
+            )
+          : (
+              <div className="
+                grid grid-cols-1 gap-4
+                sm:grid-cols-2
+                lg:grid-cols-3
+              "
+              >
+                {cajas.map(caja => (
+                  <CajaCard key={caja.cajaId} caja={caja} />
+                ))}
+              </div>
+            )}
+      </section>
+
+      <ArchivedCajasSection cajas={props.archivedCajas} />
+    </div>
   );
 }

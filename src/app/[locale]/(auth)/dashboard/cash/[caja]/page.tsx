@@ -56,9 +56,20 @@ export default async function CajaDetailPage(props: {
       "
       >
         <div className="flex items-center justify-between gap-2">
-          <h1 className="font-display text-2xl font-semibold">
-            {detail.deviceName || 'Caja sin nombre'}
-          </h1>
+          <div className="min-w-0">
+            <h1 className="font-display text-2xl font-semibold">
+              {detail.name || 'Caja sin nombre'}
+            </h1>
+            {detail.devices.length > 0 && (
+              <p className="mt-1 text-sm text-muted-foreground">
+                Dispositivos:
+                {' '}
+                {detail.devices
+                  .map(d => d.deviceName || 'Sin nombre')
+                  .join(', ')}
+              </p>
+            )}
+          </div>
           <span
             className={
               detail.status === 'open'

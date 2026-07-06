@@ -4,7 +4,7 @@ import type { ActionResult } from '@/libs/action-result';
 import type { CashBreakdown, CashMovement, CashMovementType, CashSession, CollectionsByMethod } from '@/libs/cash-helpers';
 import type { CashRiskLevel } from '@/libs/cash-security-policy';
 import { auth, currentUser } from '@clerk/nextjs/server';
-import { and, asc, desc, eq, getTableColumns, gte, isNotNull, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, gte, inArray, isNotNull, lt, or, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { ActionValidationError } from '@/libs/action-result';
 import { logAction, resolveActorNames } from '@/libs/audit-log';
@@ -35,6 +35,7 @@ import {
 // treasury-sweep-model: at-close handover retired (slice 1). Flag/toggle retired (slice 2).
 import {
   auditLogsSchema,
+  cajasSchema,
   cashMovementsSchema,
   cashSecurityThresholdCacheSchema,
   cashSessionsSchema,
@@ -491,12 +492,19 @@ export async function getCurrentCash(): Promise<GetCurrentCashResult> {
   };
 }
 
+// A device (posToken) working in a caja — its name is listed on the caja card,
+// but it is NEVER the caja's title (the caja name "Caja N" is).
+export type CajaSummaryDevice = { id: string; deviceName: string | null };
+
 export type CajaSummary = {
-  // Device (posToken) id — also the React key and the link target. A caja IS the
-  // device, not the session, so it stays stable across open/close cycles.
-  id: string;
-  posTokenId: string;
-  deviceName: string | null;
+  // Logical caja (bolsa de dinero) id — the React key and the link target. The
+  // supervision card is one-per-BOLSA, not one-per-device: two devices sharing a
+  // caja show as ONE card, and the session is read by caja_id.
+  cajaId: string;
+  // The caja name ("Caja N"), shown as the card title.
+  name: string;
+  // Devices working in this bolsa — listed on the card (e.g. "Tablet 1, Tablet 2").
+  devices: CajaSummaryDevice[];
   status: 'open' | 'closed';
   // Open: who is operating it now. Closed: who closed (or opened) the last turn.
   responsable: string | null;
@@ -514,20 +522,41 @@ export type CajaSummary = {
 };
 
 /**
- * Every POS-device caja (active devices), open OR closed, for the supervision
- * overview. A caja never disappears when its turn closes: the owner must be able
- * to click into a closed caja to review everything that happened in it. Open
+ * Every register CAJA (bolsa de dinero) that has ≥1 active device, open OR
+ * closed, for the supervision overview — ONE card per bolsa, not per device. Two
+ * devices sharing a caja collapse into a single summary that lists both devices
+ * and reads the ONE session by `caja_id` (shared arqueo). A caja never disappears
+ * when its turn closes: the owner can still drill in to review its history. Open
  * cajas carry their live expected balance and activity; closed cajas carry their
- * last responsable and close time. The implicit dashboard/admin session
- * (posTokenId = null) is never a device, so it is naturally excluded.
+ * last responsable and close time. Courier cajas are not part of this supervision
+ * view. The implicit dashboard/admin session (caja_id = null) is naturally
+ * excluded.
  */
 export async function listCajas(): Promise<CajaSummary[]> {
   const { orgId } = await requireOrg();
+
+  // Logical register cajas (bolsas), active (not archived), oldest first so the
+  // "Caja N" ordering matches their creation order.
+  const cajaRows = await db
+    .select({
+      id: cajasSchema.id,
+      name: cajasSchema.name,
+    })
+    .from(cajasSchema)
+    .where(
+      and(
+        eq(cajasSchema.organizationId, orgId),
+        eq(cajasSchema.type, 'register'),
+        eq(cajasSchema.archived, false),
+      ),
+    )
+    .orderBy(asc(cajasSchema.createdAt));
 
   const devices = await db
     .select({
       id: posTokensSchema.id,
       deviceName: posTokensSchema.deviceName,
+      cajaId: posTokensSchema.cajaId,
     })
     .from(posTokensSchema)
     .where(
@@ -538,26 +567,43 @@ export async function listCajas(): Promise<CajaSummary[]> {
     )
     .orderBy(desc(posTokensSchema.createdAt));
 
+  const devicesByCaja = new Map<string, CajaSummaryDevice[]>();
+  for (const d of devices) {
+    if (!d.cajaId) {
+      continue;
+    }
+    const list = devicesByCaja.get(d.cajaId) ?? [];
+    list.push({ id: d.id, deviceName: d.deviceName });
+    devicesByCaja.set(d.cajaId, list);
+  }
+
+  // Only cajas that currently have at least one active device are supervised.
+  const activeCajas = cajaRows.filter(
+    c => (devicesByCaja.get(c.id)?.length ?? 0) > 0,
+  );
+
   return Promise.all(
-    devices.map(async (device): Promise<CajaSummary> => {
-      // Latest session for this caja, regardless of state. Open if the current
-      // turn is live; otherwise the most recent closure.
+    activeCajas.map(async (caja): Promise<CajaSummary> => {
+      const cajaDevices = devicesByCaja.get(caja.id) ?? [];
+
+      // The ONE open/last session for this bolsa, read by caja_id so a shared
+      // caja shows a single combined turn regardless of which device opened it.
       const [session] = await db
         .select()
         .from(cashSessionsSchema)
         .where(
           and(
             eq(cashSessionsSchema.organizationId, orgId),
-            eq(cashSessionsSchema.posTokenId, device.id),
+            eq(cashSessionsSchema.cajaId, caja.id),
           ),
         )
         .orderBy(desc(cashSessionsSchema.openedAt))
         .limit(1);
 
       const base = {
-        id: device.id,
-        posTokenId: device.id,
-        deviceName: device.deviceName,
+        cajaId: caja.id,
+        name: caja.name,
+        devices: cajaDevices,
       };
 
       // A registered caja that nobody has ever opened.
@@ -652,8 +698,11 @@ export type CajaMovementRow = CashMovement & {
 };
 
 export type CajaDetail = {
-  posTokenId: string;
-  deviceName: string | null;
+  cajaId: string;
+  // Caja name ("Caja N") — the drill-down title.
+  name: string;
+  // Devices working in this bolsa.
+  devices: CajaSummaryDevice[];
   status: 'open' | 'closed';
   responsable: string | null;
   openedAt: string | null;
@@ -665,17 +714,37 @@ export type CajaDetail = {
 };
 
 /**
- * Per-caja (POS device) detail for the supervision drill-down. Returns the
- * device's current open session header plus its FULL ledger — every movement and
- * every past closure for that device, filtered to this caja only. Returns null
- * when the device does not belong to the caller's org.
+ * Per-CAJA (bolsa de dinero) detail for the supervision drill-down, keyed by
+ * cajaId. Returns the caja's current open session header plus its FULL ledger —
+ * every movement and every past closure for that bolsa, read by `caja_id` so a
+ * shared caja shows the combined history of all its devices. Returns null when
+ * the caja does not belong to the caller's org.
  */
 export async function getCajaDetail(
-  posTokenId: string,
+  cajaId: string,
 ): Promise<CajaDetail | null> {
   const { orgId } = await requireOrg();
 
-  const [device] = await db
+  const [caja] = await db
+    .select({
+      id: cajasSchema.id,
+      name: cajasSchema.name,
+    })
+    .from(cajasSchema)
+    .where(
+      and(
+        eq(cajasSchema.id, cajaId),
+        eq(cajasSchema.organizationId, orgId),
+      ),
+    )
+    .limit(1);
+  if (!caja) {
+    return null;
+  }
+
+  // Devices currently working in this bolsa (used for the header list AND to
+  // gather their pos_token audit trail below).
+  const devices = await db
     .select({
       id: posTokensSchema.id,
       deviceName: posTokensSchema.deviceName,
@@ -683,14 +752,34 @@ export async function getCajaDetail(
     .from(posTokensSchema)
     .where(
       and(
-        eq(posTokensSchema.id, posTokenId),
         eq(posTokensSchema.organizationId, orgId),
+        eq(posTokensSchema.cajaId, cajaId),
       ),
     )
-    .limit(1);
-  if (!device) {
-    return null;
-  }
+    .orderBy(desc(posTokensSchema.createdAt));
+  const deviceIds = devices.map(d => d.id);
+
+  // Admin/management actions on this bolsa: the caja entity itself (rename,
+  // device assigned/split, archive) plus every pos_token action on its devices
+  // (rename, block, access regenerated, …), combined into one auditable trail.
+  const auditWhere = and(
+    eq(auditLogsSchema.organizationId, orgId),
+    deviceIds.length > 0
+      ? or(
+          and(
+            eq(auditLogsSchema.entityType, 'caja'),
+            eq(auditLogsSchema.entityId, cajaId),
+          ),
+          and(
+            eq(auditLogsSchema.entityType, 'pos_token'),
+            inArray(auditLogsSchema.entityId, deviceIds),
+          ),
+        )
+      : and(
+          eq(auditLogsSchema.entityType, 'caja'),
+          eq(auditLogsSchema.entityId, cajaId),
+        ),
+  );
 
   const [openSession, movements, closures, auditRows] = await Promise.all([
     db
@@ -699,13 +788,13 @@ export async function getCajaDetail(
       .where(
         and(
           eq(cashSessionsSchema.organizationId, orgId),
-          eq(cashSessionsSchema.posTokenId, posTokenId),
+          eq(cashSessionsSchema.cajaId, cajaId),
           eq(cashSessionsSchema.status, 'open'),
         ),
       )
       .orderBy(desc(cashSessionsSchema.openedAt))
       .limit(1),
-    // Full movement ledger for this caja, across all its sessions.
+    // Full movement ledger for this bolsa, across all its sessions (by caja_id).
     db
       .select(getTableColumns(cashMovementsSchema))
       .from(cashMovementsSchema)
@@ -716,35 +805,28 @@ export async function getCajaDetail(
       .where(
         and(
           eq(cashSessionsSchema.organizationId, orgId),
-          eq(cashSessionsSchema.posTokenId, posTokenId),
+          eq(cashSessionsSchema.cajaId, cajaId),
         ),
       )
       .orderBy(desc(cashMovementsSchema.createdAt))
       .limit(1000),
-    // Past closures (arqueos) of this caja.
+    // Past closures (arqueos) of this bolsa.
     db
       .select()
       .from(cashSessionsSchema)
       .where(
         and(
           eq(cashSessionsSchema.organizationId, orgId),
-          eq(cashSessionsSchema.posTokenId, posTokenId),
+          eq(cashSessionsSchema.cajaId, cajaId),
           eq(cashSessionsSchema.status, 'closed'),
         ),
       )
       .orderBy(desc(cashSessionsSchema.openedAt))
       .limit(200),
-    // Admin/management actions on this caja (rename, block, access change, …).
     db
       .select()
       .from(auditLogsSchema)
-      .where(
-        and(
-          eq(auditLogsSchema.organizationId, orgId),
-          eq(auditLogsSchema.entityType, 'pos_token'),
-          eq(auditLogsSchema.entityId, posTokenId),
-        ),
-      )
+      .where(auditWhere)
       .orderBy(desc(auditLogsSchema.createdAt))
       .limit(200),
   ]);
@@ -777,15 +859,18 @@ export async function getCajaDetail(
 
   // ── Responsable resolution (stable id → live person name) ──────────────────
   // opened_by/closed_by (and movement createdBy) are a frozen LABEL; for a legacy
-  // device-only turn they held the caja's deviceName at that moment. Resolve from
-  // the STABLE actor id instead. Legacy rows whose label is one of the caja's own
-  // past/present names have no identified person, so they collapse onto a single
-  // "Sin identificar" responsable (never the caja name) with NO backfill — past
-  // names come from the pos_token rename audit trail below. New cajas always have
-  // an assigned operator (libs/owner-cashier.ts), so this is only a legacy path.
+  // device-only turn they held a caja/device name at that moment. Resolve from
+  // the STABLE actor id instead. Legacy rows whose label is the caja's own name
+  // or one of its devices' past/present names have no identified person, so they
+  // collapse onto a single "Sin identificar" responsable (never a caja/device
+  // name). New cajas always have an assigned operator (libs/owner-cashier.ts), so
+  // this is only a legacy path.
   const cajaNames = new Set<string>();
-  if (device.deviceName) {
-    cajaNames.add(device.deviceName);
+  cajaNames.add(caja.name);
+  for (const d of devices) {
+    if (d.deviceName) {
+      cajaNames.add(d.deviceName);
+    }
   }
   for (const r of auditRows) {
     for (const snap of [r.before, r.after]) {
@@ -831,8 +916,9 @@ export async function getCajaDetail(
   });
 
   return {
-    posTokenId,
-    deviceName: device.deviceName,
+    cajaId: caja.id,
+    name: caja.name,
+    devices,
     status: session ? 'open' : 'closed',
     responsable: session
       ? resolveSessionResponsable({

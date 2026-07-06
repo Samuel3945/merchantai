@@ -2,6 +2,7 @@ import type { TransferCuadreOverview } from '@/actions/transfer-reconciliation';
 import type { TransferReconciliation } from '@/libs/transfer-reconciliation';
 import { auth } from '@clerk/nextjs/server';
 import { setRequestLocale } from 'next-intl/server';
+import { listArchivedCajas } from '@/actions/cajas';
 import {
   getFraudAlerts,
   getTodayCollectionsByMethod,
@@ -28,10 +29,11 @@ export default async function DashboardCashPage(props: {
   const { orgRole } = await auth();
   const isAdmin = orgRole === 'org:admin';
 
-  const [collections, alerts, cajas, methods] = await Promise.all([
+  const [collections, alerts, cajas, archivedCajas, methods] = await Promise.all([
     getTodayCollectionsByMethod(),
     getFraudAlerts(14).catch(() => []),
     listCajas().catch(() => []),
+    listArchivedCajas().catch(() => []),
     listPaymentMethods({ activeOnly: true }).catch(() => []),
   ]);
 
@@ -105,6 +107,7 @@ export default async function DashboardCashPage(props: {
       <div className="space-y-8">
         <CajasSupervision
           cajas={cajas}
+          archivedCajas={archivedCajas}
           notArrivedCount={transferCounts.notArrived}
         />
         <CashClient collections={collections} alerts={alerts} />

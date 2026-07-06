@@ -659,6 +659,13 @@
       "when": 1782900013004,
       "tag": "0093_caja_archived_at",
       "breakpoints": true
+    },
+    {
+      "idx": 94,
+      "version": "7",
+      "when": 1782900014004,
+      "tag": "0094_rename_register_cajas",
+      "breakpoints": true
     }
   ]
 }
