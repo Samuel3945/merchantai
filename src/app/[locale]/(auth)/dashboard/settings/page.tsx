@@ -30,6 +30,7 @@ const KEYS = [
   'features.digital',
   // Modules
   'modules.facturas',
+  'modules.employee_loans',
   'credito-enabled',
   // AI preview gate (default OFF, flipped per-org by the operator in /platform).
   // Domicilios rides with it, so its tab is hidden until AI is on.
@@ -122,6 +123,7 @@ export default async function DashboardSettingsPage(props: {
         }}
         aiPreviewEnabled={asBool(map['modules.ai'], false)}
         facturasEnabled={asBool(map['modules.facturas'], false)}
+        employeeLoansEnabled={asBool(map['modules.employee_loans'], false)}
         fiscal={{
           fiscal_nit: map.fiscal_nit,
           fiscal_dian_resolution: map.fiscal_dian_resolution,

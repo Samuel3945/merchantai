@@ -10,6 +10,7 @@ import { useState } from 'react';
 import { AuditTab } from './AuditTab';
 import { BusinessTab } from './BusinessTab';
 import { DomiciliosTab } from './DomiciliosTab';
+import { EmployeeLoansTab } from './EmployeeLoansTab';
 import { FiscalTab } from './FiscalTab';
 import { PaymentMethodsClient } from './PaymentMethodsClient';
 import { ReturnsTab } from './ReturnsTab';
@@ -21,10 +22,15 @@ type Tab = {
   label: string;
 };
 
+// The Vales tab is always visible (like Devoluciones); the toggle inside it
+// controls whether the POS lets a cashier hand a vale to an employee.
+const EMPLOYEE_LOANS_TAB = { key: 'employee-loans', label: 'Vales' };
+
 const BASE_TABS: ReadonlyArray<Tab> = [
   { key: 'business', label: 'Negocio' },
   { key: 'payment-methods', label: 'Métodos de pago' },
   { key: 'returns', label: 'Devoluciones' },
+  EMPLOYEE_LOANS_TAB,
 ];
 
 // The Facturación tab only exists when the operator enabled e-invoicing for the
@@ -54,6 +60,8 @@ export type SettingsClientProps = {
   aiPreviewEnabled: boolean;
   // E-invoicing is operator-gated: the Facturación tab is hidden until enabled.
   facturasEnabled: boolean;
+  // Master toggle for employee loans (vales), edited in the Vales tab.
+  employeeLoansEnabled: boolean;
 };
 
 export function SettingsClient({
@@ -67,6 +75,7 @@ export function SettingsClient({
   isAdmin,
   aiPreviewEnabled,
   facturasEnabled,
+  employeeLoansEnabled,
 }: SettingsClientProps) {
   const baseTabs: Tab[] = [...BASE_TABS];
   let insertAfterKey = 'payment-methods';
@@ -121,6 +130,9 @@ export function SettingsClient({
         {activeTab === 'domicilios' && <DomiciliosTab initial={domicilios} />}
         {activeTab === 'fiscal' && <FiscalTab initial={fiscal} />}
         {activeTab === 'returns' && <ReturnsTab initial={returnsValues} />}
+        {activeTab === 'employee-loans' && (
+          <EmployeeLoansTab initialEnabled={employeeLoansEnabled} />
+        )}
         {activeTab === 'transfer-security' && isAdmin && (
           <TransferSecurityTab initial={transferSecurity} />
         )}

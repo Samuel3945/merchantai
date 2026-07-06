@@ -258,6 +258,8 @@ export async function GET(req: Request): Promise<NextResponse> {
     businessPhone,
     creditoEnabledRaw,
     facturasRaw,
+    deliveryRaw,
+    employeeLoansRaw,
     creditoTermDays,
     paymentMethods,
     cashiers,
@@ -267,6 +269,8 @@ export async function GET(req: Request): Promise<NextResponse> {
     getSetting(orgId, 'business_phone'),
     getSetting(orgId, 'credito-enabled'),
     getSetting(orgId, 'modules.facturas'),
+    getSetting(orgId, 'modules.delivery'),
+    getSetting(orgId, 'modules.employee_loans'),
     getDefaultTermDays(db, orgId),
     listActivePaymentMethods(orgId),
     listCashiers(orgId),
@@ -347,6 +351,12 @@ export async function GET(req: Request): Promise<NextResponse> {
       // Operator-gated DIAN e-invoicing (modules.facturas, default OFF). The POS
       // APK hides all invoice UI unless this is true.
       einvoiceEnabled: facturasRaw === 'true',
+      // Domicilios (modules.delivery). Defaults ON when never saved — mirrors the
+      // web/settings default (asBool(map['modules.delivery'], true)).
+      deliveryEnabled: deliveryRaw !== 'false',
+      // Vales / préstamos a empleados (modules.employee_loans). Defaults OFF: only
+      // an explicit 'true' enables loan CREATION from Caja → Salida.
+      employeeLoansEnabled: employeeLoansRaw === 'true',
     },
     paymentMethods: visiblePaymentMethods,
     cashiers,

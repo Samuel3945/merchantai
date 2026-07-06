@@ -9,6 +9,10 @@ import {
   toMoney,
 } from '@/libs/cash-helpers';
 import { db } from '@/libs/DB';
+import {
+  insertEmployeeLoan,
+  recordEmployeeLoanRepaymentCaja,
+} from '@/libs/employee-loans';
 import { requirePosAuth } from '@/libs/pos-auth';
 import { recordPosGastoBridge } from '@/libs/pos-gasto-bridge';
 import {
@@ -17,7 +21,12 @@ import {
   recordSupplierPayment,
 } from '@/libs/supplier-invoice-payment';
 import { recordInflowSourceDebit } from '@/libs/treasury';
-import { cashMovementsSchema, suppliersSchema } from '@/models/Schema';
+import {
+  appSettingsSchema,
+  cashMovementsSchema,
+  posUsersSchema,
+  suppliersSchema,
+} from '@/models/Schema';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -51,7 +60,18 @@ type MovementBody = {
   // Optional (slice 3): origin discriminator for entrada movements.
   // Legacy devices that omit this field keep working unchanged (backward-compat).
   origin?: InternalOrigin | ExternalOrigin | null;
+  // Employee loans (vale / préstamo). On a salida type='advance' with
+  // loanKind='employee_loan', creates a loan for `employeeId` funded by the
+  // advance. Requires the modules.employee_loans toggle to be ON.
+  employeeId?: string | null;
+  loanKind?: 'employee_loan' | null;
+  // On an entrada type='deposit', settles EXACTLY these loans (abonos). Always
+  // allowed, even when the toggle is OFF, so outstanding loans can be repaid.
+  loanSelections?: { loanId?: string; amount?: number | string }[] | null;
 };
+
+const UUID_RE
+  = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const ALLOWED_TYPES: CashMovementType[] = [
   ...INCOME_MOVEMENT_TYPES,
@@ -113,13 +133,46 @@ export async function POST(req: Request): Promise<NextResponse> {
     selections = parsed;
   }
 
+  // Parse optional device-chosen loan selections (abonos). Same shape/validation
+  // as payableSelections: each entry needs a loanId and a positive amount.
+  let loanSelections: { loanId: string; amount: number }[] | null = null;
+  if (body.loanSelections != null) {
+    if (!Array.isArray(body.loanSelections) || body.loanSelections.length === 0) {
+      return NextResponse.json(
+        { error: 'loanSelections debe ser una lista no vacía' },
+        { status: 400 },
+      );
+    }
+    const parsed: { loanId: string; amount: number }[] = [];
+    for (const s of body.loanSelections) {
+      const lid = typeof s?.loanId === 'string' ? s.loanId.trim() : '';
+      const amt = Number.parseFloat(toMoney(s?.amount ?? 0));
+      if (!lid || !(amt > 0)) {
+        return NextResponse.json(
+          { error: 'Cada préstamo seleccionado necesita un id y un monto mayor a 0' },
+          { status: 400 },
+        );
+      }
+      parsed.push({ loanId: lid, amount: amt });
+    }
+    loanSelections = parsed;
+  }
+
   // A selection-driven supplier settle defines its own total (sum of the chosen
   // lines), so `amount` is optional there. Every other movement still needs amount.
   const settleViaSelections
     = selections != null && type === 'expense' && !!body.supplierId;
 
+  // A loan repayment defines its own total (sum of the chosen abonos), so `amount`
+  // is optional there too.
+  const repayViaLoanSelections = loanSelections != null && type === 'deposit';
+
   const amount = toMoney(body.amount ?? 0);
-  if (!settleViaSelections && Number.parseFloat(amount) <= 0) {
+  if (
+    !settleViaSelections
+    && !repayViaLoanSelections
+    && Number.parseFloat(amount) <= 0
+  ) {
     return NextResponse.json(
       { error: 'amount debe ser > 0' },
       { status: 400 },
@@ -175,11 +228,101 @@ export async function POST(req: Request): Promise<NextResponse> {
     }
   }
 
+  // Employee-loan CREATION guardrails (checked before opening the tx):
+  //   1. the org must have the modules.employee_loans toggle ON;
+  //   2. employeeId must be a real, active pos_user of this org.
+  // The borrower name is snapshotted at creation.
+  const isLoanCreation = type === 'advance' && body.loanKind === 'employee_loan';
+  let loanEmployeeId = '';
+  let loanBorrowerName: string | null = null;
+  if (isLoanCreation) {
+    const [setting] = await db
+      .select({ value: appSettingsSchema.value })
+      .from(appSettingsSchema)
+      .where(
+        and(
+          eq(appSettingsSchema.organizationId, ctx.organizationId),
+          eq(appSettingsSchema.key, 'modules.employee_loans'),
+        ),
+      )
+      .limit(1);
+    if (setting?.value !== 'true') {
+      return NextResponse.json(
+        { error: 'Los vales/préstamos a empleados están desactivados' },
+        { status: 403 },
+      );
+    }
+
+    loanEmployeeId
+      = typeof body.employeeId === 'string' ? body.employeeId.trim() : '';
+    if (!loanEmployeeId || !UUID_RE.test(loanEmployeeId)) {
+      return NextResponse.json(
+        { error: 'Seleccioná un empleado válido para el vale' },
+        { status: 400 },
+      );
+    }
+    const [emp] = await db
+      .select({ id: posUsersSchema.id, name: posUsersSchema.name })
+      .from(posUsersSchema)
+      .where(
+        and(
+          eq(posUsersSchema.id, loanEmployeeId),
+          eq(posUsersSchema.organizationId, ctx.organizationId),
+          eq(posUsersSchema.active, true),
+        ),
+      )
+      .limit(1);
+    if (!emp) {
+      return NextResponse.json(
+        { error: 'El empleado seleccionado no existe o está inactivo' },
+        { status: 400 },
+      );
+    }
+    loanBorrowerName = emp.name;
+  }
+
   try {
     const result = await db.transaction(async (tx) => {
       const open = await findOpenSession(tx, ctx.organizationId, ctx.tokenId);
       if (!open) {
         throw new Error('No hay caja abierta. Abre la caja primero.');
+      }
+
+      // EMPLOYEE-LOAN REPAYMENT — an entrada that pays down existing loans. The
+      // lib inserts its own deposit cash_movements rows, so we do NOT also insert
+      // a generic deposit here. Always allowed (even when the toggle is OFF).
+      if (repayViaLoanSelections && loanSelections) {
+        const repay = await recordEmployeeLoanRepaymentCaja(tx, {
+          organizationId: ctx.organizationId,
+          sessionId: open.id,
+          createdBy: ctx.cashierName || 'Cajero',
+          selections: loanSelections,
+        });
+
+        await logAction({
+          organizationId: ctx.organizationId,
+          actor: resolvePosActor(ctx),
+          action: 'pos.employee_loan.repaid',
+          entityType: 'employee_loan_payment',
+          entityId: loanSelections[0]!.loanId,
+          after: {
+            appliedTotal: repay.appliedTotal,
+            settledLoans: repay.settledLoans,
+            loanCount: loanSelections.length,
+          },
+          metadata: { cashierName: ctx.cashierName, sessionId: open.id },
+          ip:
+            req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+            || req.headers.get('x-real-ip')
+            || null,
+          userAgent: req.headers.get('user-agent'),
+        });
+
+        return {
+          kind: 'loan_repaid' as const,
+          appliedTotal: repay.appliedTotal,
+          settledLoans: repay.settledLoans,
+        };
       }
 
       // For INTERNAL-origin entradas: record a treasury salida from the source
@@ -208,6 +351,8 @@ export async function POST(req: Request): Promise<NextResponse> {
       let created: typeof cashMovementsSchema.$inferSelect | undefined;
       // Extra settle metadata returned in response (undefined for non-settle paths).
       let settleOutcome: { outcome: 'settled'; appliedTotal: number; settledPayables: number } | undefined;
+      // Extra loan-creation metadata (undefined unless a vale was created).
+      let loanOutcome: { outcome: 'loan_created'; loanId: string } | undefined;
 
       if (type === 'expense' && supplierId) {
         // Check whether this supplier has outstanding payables inside the tx.
@@ -366,6 +511,54 @@ export async function POST(req: Request): Promise<NextResponse> {
             || null,
           userAgent: req.headers.get('user-agent'),
         });
+      } else if (isLoanCreation) {
+        // EMPLOYEE-LOAN CREATION — the advance salida funds a new loan. Both the
+        // advance movement and the loan header are written in this one tx.
+        const [row] = await tx
+          .insert(cashMovementsSchema)
+          .values({
+            sessionId: open.id,
+            organizationId: ctx.organizationId,
+            type,
+            amount,
+            reason,
+            createdBy: ctx.cashierName || 'Cajero',
+          })
+          .returning();
+        created = row;
+        if (!created) {
+          throw new Error('No se pudo registrar el vale');
+        }
+
+        const loan = await insertEmployeeLoan(tx, {
+          organizationId: ctx.organizationId,
+          employeeId: loanEmployeeId,
+          borrowerName: loanBorrowerName,
+          totalAmount: Number.parseFloat(amount),
+          cashMovementId: created.id,
+          createdBy: ctx.cashierName || 'Cajero',
+          notes: reason,
+        });
+        loanOutcome = { outcome: 'loan_created', loanId: loan.id };
+
+        await logAction({
+          organizationId: ctx.organizationId,
+          actor: resolvePosActor(ctx),
+          action: 'pos.employee_loan.created',
+          entityType: 'employee_loan',
+          entityId: loan.id,
+          after: {
+            loanId: loan.id,
+            employeeId: loanEmployeeId,
+            amount,
+          },
+          metadata: { cashierName: ctx.cashierName, sessionId: open.id },
+          ip:
+            req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+            || req.headers.get('x-real-ip')
+            || null,
+          userAgent: req.headers.get('user-agent'),
+        });
       } else {
         const [row] = await tx
           .insert(cashMovementsSchema)
@@ -388,13 +581,36 @@ export async function POST(req: Request): Promise<NextResponse> {
       if (!created) {
         throw new Error('No se pudo registrar el movimiento');
       }
-      return { movement: created, settle: settleOutcome };
+      return {
+        kind: 'movement' as const,
+        movement: created,
+        settle: settleOutcome,
+        loan: loanOutcome,
+      };
     });
 
-    // Response contract: includes settle metadata when outcome='settled'.
+    // Response contract: a loan repayment returns its own outcome shape.
+    if (result.kind === 'loan_repaid') {
+      return NextResponse.json(
+        {
+          outcome: 'loan_repaid',
+          appliedTotal: result.appliedTotal,
+          settledLoans: result.settledLoans,
+        },
+        { status: 201 },
+      );
+    }
+    // Includes settle metadata when outcome='settled'.
     if (result.settle) {
       return NextResponse.json(
         { ...result.movement, ...result.settle },
+        { status: 201 },
+      );
+    }
+    // Includes loan metadata when a vale was created.
+    if (result.loan) {
+      return NextResponse.json(
+        { ...result.movement, ...result.loan },
         { status: 201 },
       );
     }

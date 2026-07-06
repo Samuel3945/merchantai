@@ -638,6 +638,13 @@
       "when": 1782900010004,
       "tag": "0090_cash_session_caja",
       "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "7",
+      "when": 1782900011004,
+      "tag": "0091_employee_loans",
+      "breakpoints": true
     }
   ]
 }
