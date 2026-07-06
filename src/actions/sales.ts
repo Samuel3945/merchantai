@@ -18,8 +18,7 @@ import {
   getTableColumns,
   ilike,
   inArray,
-  isNotNull,
-  isNull,
+  ne,
   or,
   sql,
 } from 'drizzle-orm';
@@ -46,6 +45,7 @@ import { applySaleReturn } from '@/libs/sale-returns';
 import { recordSaleTransferReconciliations } from '@/libs/transfer-reconciliation';
 import { wholesaleUnitPrice } from '@/libs/wholesale';
 import {
+  cajasSchema,
   creditoMovementsSchema,
   creditosSchema,
   deliveryEventsSchema,
@@ -622,14 +622,19 @@ export type ListSalesFilters = {
   payment?: string | null;
   search?: string | null;
   cashierId?: string | null;
-  /** Filter by the POS register (pos_tokens.id) the sale was made on. */
+  /** Filter by the exact POS device (pos_tokens.id) the sale was made on. */
   posTokenId?: string | null;
+  /** Filter by the logical caja (bolsa): every device whose pos_tokens.caja_id matches. */
+  cajaId?: string | null;
   /** Filter sales containing a specific product. */
   productId?: string | null;
-  /** Where the sale was made: a POS device or the web panel. */
-  origin?: 'all' | 'pos' | 'panel' | null;
-  /** Return state, by quantity (same rule as the listing badges). */
-  returnState?: 'all' | 'clean' | 'partial' | 'returned' | null;
+  /** Channel bucket: 'delivery' = home delivery, 'pos' = everything else. */
+  channel?: 'all' | 'pos' | 'delivery' | null;
+  /**
+   * Return state, by quantity (same rule as the listing badges). 'any' matches
+   * every sale that has at least one return (partial OR total).
+   */
+  returnState?: 'all' | 'clean' | 'partial' | 'returned' | 'any' | null;
 };
 
 // Quantity-based return predicates shared by the WHERE filters and the listing
@@ -729,10 +734,28 @@ function buildSalesConds(
     );
   }
 
-  if (filters.origin === 'pos') {
-    conds.push(isNotNull(salesSchema.posTokenId));
-  } else if (filters.origin === 'panel') {
-    conds.push(isNull(salesSchema.posTokenId));
+  // Caja (bolsa): match sales made on any device that belongs to the caja.
+  if (filters.cajaId && filters.cajaId.trim() !== '') {
+    conds.push(
+      exists(
+        db
+          .select({ one: sql`1` })
+          .from(posTokensSchema)
+          .where(
+            and(
+              eq(posTokensSchema.id, salesSchema.posTokenId),
+              eq(posTokensSchema.cajaId, filters.cajaId.trim()),
+            ),
+          ),
+      ),
+    );
+  }
+
+  // Channel: home delivery vs everything else (pos/panel/agent).
+  if (filters.channel === 'delivery') {
+    conds.push(eq(salesSchema.channel, 'delivery'));
+  } else if (filters.channel === 'pos') {
+    conds.push(ne(salesSchema.channel, 'delivery'));
   }
 
   if (filters.returnState === 'clean') {
@@ -741,6 +764,9 @@ function buildSalesConds(
     conds.push(sql.raw(`(${HAS_RETURN_SQL} AND NOT ${FULLY_RETURNED_SQL})`));
   } else if (filters.returnState === 'returned') {
     conds.push(sql.raw(FULLY_RETURNED_SQL));
+  } else if (filters.returnState === 'any') {
+    // Any sale with at least one return, partial or total.
+    conds.push(sql.raw(HAS_RETURN_SQL));
   }
 
   const search = filters.search?.trim();
@@ -772,7 +798,10 @@ function buildSalesConds(
 // Lightweight, org-scoped option lists for the sales filter bar: every POS
 // register, every active employee, and the product catalog. One round trip.
 export type SalesFilterOptions = {
-  registers: { id: string; name: string }[];
+  /** Logical cajas (bolsas) of type 'register', not archived. */
+  cajas: { id: string; name: string }[];
+  /** Physical POS devices (pos_tokens), by device name. */
+  devices: { id: string; name: string }[];
   employees: { id: string; name: string }[];
   products: { id: string; name: string }[];
   /** Return rules so the listing can disable "Devolver" up front. */
@@ -800,7 +829,18 @@ export async function getSalesFilterOptions(): Promise<SalesFilterOptions> {
     employeeConds.push(eq(posUsersSchema.clerkUserId, userId));
   }
 
-  const [registers, employees, products] = await Promise.all([
+  const [cajas, devices, employees, products] = await Promise.all([
+    db
+      .select({ id: cajasSchema.id, name: cajasSchema.name })
+      .from(cajasSchema)
+      .where(
+        and(
+          eq(cajasSchema.organizationId, orgId),
+          eq(cajasSchema.type, 'register'),
+          eq(cajasSchema.archived, false),
+        ),
+      )
+      .orderBy(cajasSchema.name),
     db
       .select({ id: posTokensSchema.id, name: posTokensSchema.deviceName })
       .from(posTokensSchema)
@@ -818,7 +858,7 @@ export async function getSalesFilterOptions(): Promise<SalesFilterOptions> {
       .orderBy(productsSchema.name),
   ]);
 
-  return { registers, employees, products, returnPolicy };
+  return { cajas, devices, employees, products, returnPolicy };
 }
 
 export type ListSalesResult = {

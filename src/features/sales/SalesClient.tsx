@@ -80,53 +80,22 @@ function remainingOf(item: ReturnableItem) {
   return Math.max(0, item.qty - item.returnedQty);
 }
 
-// Up to two initials for the avatar fallback when a cashier has no photo.
-function initials(name: string | null): string {
-  if (!name) {
-    return '—';
-  }
-  const parts = name.trim().split(/\s+/).slice(0, 2);
-  return parts.map(p => p[0]?.toUpperCase() ?? '').join('') || '—';
-}
-
-// Cashier identity for the table: real photo when Clerk provides one, otherwise
-// a tidy initials chip. Always a human name, never a raw user id.
-// When deviceName is provided, shows it as a secondary line beneath the name.
-function CashierCell({
-  name,
-  imageUrl,
-  deviceName,
-}: {
-  name: string | null;
-  imageUrl: string | null;
-  deviceName?: string | null;
-}) {
-  const displayName = name ?? (deviceName ?? null);
+// Channel identity for the table: the sale's channel is the primary label
+// ("Domicilio" for a delivery, "POS" for everything else), and the person behind
+// it — the courier for a delivery, the cashier otherwise — is the muted second
+// line, the same two-line shape the old cashier cell used for the device name.
+function ChannelCell({ row }: { row: SaleListRow }) {
+  const isDelivery = row.channel === 'delivery';
+  const primary = isDelivery ? 'Domicilio' : 'POS';
+  const secondary = isDelivery ? row.courierName : row.cashierName;
   return (
-    <div className="flex items-center gap-2">
-      {imageUrl
-        ? (
-            <img
-              src={imageUrl}
-              alt=""
-              className="size-6 shrink-0 rounded-full object-cover"
-            />
-          )
-        : (
-            <span className="
-              flex size-6 shrink-0 items-center justify-center rounded-full
-              bg-muted text-[10px] font-semibold text-muted-foreground
-            "
-            >
-              {initials(displayName)}
-            </span>
-          )}
-      <div className="flex min-w-0 flex-col">
-        <span className="truncate">{displayName ?? '—'}</span>
-        {name && deviceName && (
-          <span className="truncate text-[10px] text-muted-foreground">{deviceName}</span>
-        )}
-      </div>
+    <div className="flex min-w-0 flex-col">
+      <span className="truncate font-medium">{primary}</span>
+      {secondary && (
+        <span className="truncate text-[10px] text-muted-foreground">
+          {secondary}
+        </span>
+      )}
     </div>
   );
 }
@@ -182,14 +151,16 @@ export function SalesClient({
   const [payment, setPayment] = useState('all');
   const [search, setSearch] = useState('');
   const [cashierId, setCashierId] = useState('');
+  const [cajaId, setCajaId] = useState('');
   const [posTokenId, setPosTokenId] = useState('');
   const [productId, setProductId] = useState('');
-  const [origin, setOrigin] = useState<'all' | 'pos' | 'panel'>('all');
+  const [channel, setChannel] = useState<'all' | 'pos' | 'delivery'>('all');
   const [returnState, setReturnState]
-    = useState<'all' | 'clean' | 'partial' | 'returned'>('all');
+    = useState<'all' | 'clean' | 'partial' | 'returned' | 'any'>('all');
   const [showMore, setShowMore] = useState(false);
   const [filterOptions, setFilterOptions] = useState<SalesFilterOptions>({
-    registers: [],
+    cajas: [],
+    devices: [],
     employees: [],
     products: [],
     returnPolicy: { enabled: true, maxDays: 7, requireAdmin: false },
@@ -256,9 +227,10 @@ export function SalesClient({
       payment,
       search: search || null,
       cashierId: cashierId || null,
+      cajaId: cajaId || null,
       posTokenId: posTokenId || null,
       productId: productId || null,
-      origin,
+      channel,
       returnState,
     };
     const [data, nextSummary] = await Promise.all([
@@ -295,9 +267,10 @@ export function SalesClient({
     payment,
     search,
     cashierId,
+    cajaId,
     posTokenId,
     productId,
-    origin,
+    channel,
     returnState,
   ]);
 
@@ -326,9 +299,10 @@ export function SalesClient({
     setPayment('all');
     setSearch('');
     setCashierId('');
+    setCajaId('');
     setPosTokenId('');
     setProductId('');
-    setOrigin('all');
+    setChannel('all');
     setReturnState('all');
     setPage(0);
   }
@@ -463,12 +437,12 @@ export function SalesClient({
   const advancedCount = [
     productId,
     payment !== 'all' ? payment : '',
-    origin !== 'all' ? origin : '',
+    channel !== 'all' ? channel : '',
     returnState !== 'all' ? returnState : '',
   ].filter(Boolean).length;
 
   const hasActiveFilters
-    = Boolean(start || end || search || cashierId || posTokenId)
+    = Boolean(start || end || search || cashierId || cajaId || posTokenId)
       || advancedCount > 0;
 
   return (
@@ -514,16 +488,33 @@ export function SalesClient({
           <div className="flex flex-col gap-1">
             <span className={labelCls}>Caja</span>
             <Select
+              value={cajaId}
+              onValueChange={(v) => {
+                setCajaId(v);
+                resetToFirstPage();
+              }}
+              options={[
+                { value: '', label: 'Todas las cajas' },
+                ...filterOptions.cajas.map(c => ({
+                  value: c.id,
+                  label: c.name,
+                })),
+              ]}
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className={labelCls}>Dispositivo</span>
+            <Select
               value={posTokenId}
               onValueChange={(v) => {
                 setPosTokenId(v);
                 resetToFirstPage();
               }}
               options={[
-                { value: '', label: 'Todas las cajas' },
-                ...filterOptions.registers.map(r => ({
-                  value: r.id,
-                  label: r.name,
+                { value: '', label: 'Todos los dispositivos' },
+                ...filterOptions.devices.map(d => ({
+                  value: d.id,
+                  label: d.name,
                 })),
               ]}
             />
@@ -604,15 +595,15 @@ export function SalesClient({
             <div className="flex flex-col gap-1">
               <span className={labelCls}>Canal</span>
               <Select
-                value={origin}
+                value={channel}
                 onValueChange={(v) => {
-                  setOrigin(v as typeof origin);
+                  setChannel(v as typeof channel);
                   resetToFirstPage();
                 }}
                 options={[
-                  { value: 'all', label: 'Todos los canales' },
-                  { value: 'pos', label: 'Punto de venta (POS)' },
-                  { value: 'panel', label: 'Panel web' },
+                  { value: 'all', label: 'Todos' },
+                  { value: 'pos', label: 'POS' },
+                  { value: 'delivery', label: 'Domicilio' },
                 ]}
               />
             </div>
@@ -627,6 +618,7 @@ export function SalesClient({
                 options={[
                   { value: 'all', label: 'Todas las ventas' },
                   { value: 'clean', label: 'Sin devoluciones' },
+                  { value: 'any', label: 'Devueltas' },
                   { value: 'partial', label: 'Parcialmente devueltas' },
                   { value: 'returned', label: 'Devueltas totalmente' },
                 ]}
@@ -678,7 +670,7 @@ export function SalesClient({
               <th className="px-3 py-2">N.º venta</th>
               <th className="px-3 py-2">Pago</th>
               <th className="px-3 py-2">Estado</th>
-              <th className="px-3 py-2">Cajero</th>
+              <th className="px-3 py-2">Canal</th>
               <th className="px-3 py-2 text-right">Total</th>
               <th className="px-3 py-2 text-right">Devolución</th>
             </tr>
@@ -725,20 +717,7 @@ export function SalesClient({
                           {dateFmt.format(new Date(s.createdAt))}
                         </td>
                         <td className="px-3 py-2 font-medium tabular-nums">
-                          <div className="flex items-center gap-2">
-                            {formatSaleNumber(s.saleNumber)}
-                            {s.channel === 'delivery' && (
-                              <Badge
-                                variant="outline"
-                                className="
-                                  border-sky-500/30 bg-sky-500/10 text-sky-600
-                                  dark:text-sky-400
-                                "
-                              >
-                                🛵 Domicilio
-                              </Badge>
-                            )}
-                          </div>
+                          {formatSaleNumber(s.saleNumber)}
                         </td>
                         <td className="px-3 py-2">{s.paymentType}</td>
                         <td className="px-3 py-2">
@@ -747,11 +726,7 @@ export function SalesClient({
                           </Badge>
                         </td>
                         <td className="px-3 py-2">
-                          <CashierCell
-                            name={s.cashierName}
-                            imageUrl={s.cashierImageUrl}
-                            deviceName={s.deviceName}
-                          />
+                          <ChannelCell row={s} />
                         </td>
                         <td className="px-3 py-2 text-right font-medium">
                           {formatMoney(s.total)}

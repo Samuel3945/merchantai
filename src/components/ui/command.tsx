@@ -57,7 +57,10 @@ function CommandList({
   return (
     <CommandPrimitive.List
       data-slot="command-list"
-      className={cn('max-h-64 overflow-x-hidden overflow-y-auto p-1', className)}
+      className={cn(
+        'scrollbar-subtle max-h-64 overflow-x-hidden overflow-y-auto p-1',
+        className,
+      )}
       {...props}
     />
   );
