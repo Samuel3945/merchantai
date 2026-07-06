@@ -1,7 +1,7 @@
 import type { db } from '@/libs/DB';
 import { randomUUID } from 'node:crypto';
 import bcrypt from 'bcryptjs';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, or, sql } from 'drizzle-orm';
 import { posUsersSchema } from '@/models/Schema';
 
 type Executor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -94,7 +94,9 @@ export async function ensureOwnerCashier(
       .where(
         and(
           eq(posUsersSchema.organizationId, orgId),
-          eq(posUsersSchema.email, email),
+          // Case-insensitive: el admin (primer empleado) puede tener el email con
+          // otra capitalización; igual lo adoptamos en vez de crear un duplicado.
+          sql`LOWER(${posUsersSchema.email}) = ${email}`,
         ),
       )
       .limit(1);
@@ -128,10 +130,40 @@ export async function ensureOwnerCashier(
       clerkUserId: owner.clerkUserId,
       panelAccess: true,
     })
+    // pos_users.email es UNIQUE GLOBAL. Si el operador del dueño ya existe (creado
+    // en el onboarding como primer empleado, en paralelo, o en un intento previo),
+    // NO reventamos con 500: saltamos el insert y reutilizamos la fila de abajo.
+    .onConflictDoNothing()
     .returning({ id: posUsersSchema.id, name: posUsersSchema.name });
 
-  if (!created) {
-    throw new Error('Failed to provision owner operator');
+  if (created) {
+    return created;
   }
-  return created;
+
+  // Hubo conflicto → el dueño ya tiene su operador. Lo buscamos (por Clerk id o por
+  // el email sintético) y lo reutilizamos como admin, sin crear un perfil nuevo.
+  const [existing] = await executor
+    .select({
+      id: posUsersSchema.id,
+      name: posUsersSchema.name,
+      active: posUsersSchema.active,
+      role: posUsersSchema.role,
+      pin: posUsersSchema.pin,
+    })
+    .from(posUsersSchema)
+    .where(
+      and(
+        eq(posUsersSchema.organizationId, orgId),
+        or(
+          eq(posUsersSchema.clerkUserId, owner.clerkUserId),
+          eq(posUsersSchema.email, operatorEmail),
+        ),
+      ),
+    )
+    .limit(1);
+  if (existing) {
+    return linkAdmin(existing);
+  }
+
+  throw new Error('Failed to provision owner operator');
 }

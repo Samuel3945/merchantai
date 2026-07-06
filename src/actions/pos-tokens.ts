@@ -233,6 +233,15 @@ export async function createPosToken(
     return { ok: false, error: 'El nombre de la caja es obligatorio' };
   }
 
+  // El PIN del administrador es OBLIGATORIO al crear una caja (4 a 6 dígitos).
+  const adminPin = input.adminPin?.trim() ?? '';
+  if (!/^\d{4,6}$/.test(adminPin)) {
+    return {
+      ok: false,
+      error: 'El PIN del administrador es obligatorio (4 a 6 dígitos)',
+    };
+  }
+
   if (await deviceNameTaken(orgId, deviceName)) {
     return {
       ok: false,
@@ -277,12 +286,7 @@ export async function createPosToken(
   // caja to an employee (setCajaOperator). The PIN, when given, is set on the
   // owner operator's first caja.
   const { row, operatorId } = await db.transaction(async (tx) => {
-    const operator = await ensureOwnerCashier(
-      tx,
-      orgId,
-      owner,
-      input.adminPin ?? undefined,
-    );
+    const operator = await ensureOwnerCashier(tx, orgId, owner, adminPin);
     const [created] = await tx
       .insert(posTokensSchema)
       .values({

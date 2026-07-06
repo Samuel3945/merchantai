@@ -3,6 +3,7 @@
 import type { OrganizationResource } from '@clerk/types';
 import { CreateOrganization, useOrganization, useOrganizationList } from '@clerk/nextjs';
 import { Building2, Check, ChevronDown, Plus, X } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -50,6 +51,7 @@ export function BusinessSwitcher() {
     userMemberships: { infinite: true },
   });
 
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [switching, setSwitching] = useState<string | null>(null);
@@ -82,6 +84,10 @@ export function BusinessSwitcher() {
     try {
       await setActive({ organization: orgId });
       window.dispatchEvent(new Event(ORG_CHANGED_EVENT));
+      // Clerk ya cambió la organización activa en la sesión (cookie), pero los
+      // server components se renderizaron con la org anterior. router.refresh()
+      // los vuelve a pedir con la nueva org → todo se actualiza sin F5.
+      router.refresh();
     } finally {
       setSwitching(null);
       setOpen(false);

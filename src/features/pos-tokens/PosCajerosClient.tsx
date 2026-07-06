@@ -867,7 +867,7 @@ function CreateTokenModal({
           : ({ mode: 'exclusive' } as const);
       const result = await createPosToken({
         deviceName,
-        adminPin: adminPin.trim() || null,
+        adminPin: adminPin.trim(),
         cajaChoice,
       });
       if (!result.ok) {
@@ -919,16 +919,18 @@ function CreateTokenModal({
           </div>
           <div>
             <label htmlFor="pt-admin-pin" className={labelCls}>
-              PIN del administrador (opcional)
+              PIN del administrador
             </label>
             <input
               id="pt-admin-pin"
               type="password"
               inputMode="numeric"
               autoComplete="off"
+              required
               pattern="[0-9]*"
+              minLength={4}
               maxLength={6}
-              placeholder="Ej. 1234 — dejalo vacío para entrar sin PIN"
+              placeholder="Ej. 1234 (mínimo 4 dígitos)"
               value={adminPin}
               onChange={e => setAdminPin(e.target.value.replace(/\D/g, ''))}
               className={inputCls}
@@ -1023,7 +1025,10 @@ function CreateTokenModal({
             >
               Cancelar
             </Button>
-            <Button type="submit" disabled={submitting}>
+            <Button
+              type="submit"
+              disabled={submitting || !deviceName.trim() || adminPin.length < 4}
+            >
               {submitting ? 'Creando…' : 'Crear caja'}
             </Button>
           </div>

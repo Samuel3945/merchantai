@@ -44,6 +44,10 @@ const SCHEMA = `
     salary numeric(12, 2),
     phone text,
     work_schedule jsonb DEFAULT '{}' NOT NULL,
+    activation_token text,
+    activation_expires_at timestamp,
+    pin_failed_attempts integer DEFAULT 0 NOT NULL,
+    pin_locked_until timestamp,
     created_at timestamp DEFAULT now() NOT NULL,
     updated_at timestamp DEFAULT now() NOT NULL
   );
