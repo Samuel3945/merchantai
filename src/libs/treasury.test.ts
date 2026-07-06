@@ -61,6 +61,18 @@ const DDL = `
     PRIMARY KEY (organization_id, key)
   );
 
+  CREATE TABLE cajas (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+    organization_id text NOT NULL,
+    name text NOT NULL,
+    type text DEFAULT 'register' NOT NULL,
+    courier_id uuid,
+    archived boolean DEFAULT false NOT NULL,
+    archived_at timestamp,
+    created_by text,
+    created_at timestamp DEFAULT now() NOT NULL
+  );
+
   CREATE TABLE pos_tokens (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     organization_id text NOT NULL,

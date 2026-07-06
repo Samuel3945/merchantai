@@ -7,6 +7,7 @@ import {
   toMoney,
 } from '@/libs/cash-helpers';
 import {
+  cajasSchema,
   cashMovementsSchema,
   cashSessionsSchema,
   expensesSchema,
@@ -99,8 +100,14 @@ export async function getTreasuryPosition(
   // that "the panel only lists active devices" — but this view never honored
   // active, so those phantoms resurfaced as $0 "cajas" in "Dónde está la plata".
   const tokens = await executor
-    .select({ id: posTokensSchema.id, name: posTokensSchema.deviceName })
+    .select({
+      id: posTokensSchema.id,
+      name: posTokensSchema.deviceName,
+      cajaId: posTokensSchema.cajaId,
+      cajaName: cajasSchema.name,
+    })
     .from(posTokensSchema)
+    .leftJoin(cajasSchema, eq(posTokensSchema.cajaId, cajasSchema.id))
     .where(
       and(
         eq(posTokensSchema.organizationId, organizationId),
@@ -108,11 +115,65 @@ export async function getTreasuryPosition(
       ),
     );
 
-  // Batch-fetch the most recent closed session ID per pos_token (for R7 "entregado" label).
-  // One query for all tokens avoids N+1. Result: Map<posTokenId, sessionId>.
+  // El dinero vive en la BOLSA (caja), no en el dispositivo: varios dispositivos
+  // que comparten una caja resuelven a la MISMA sesión, así que emitimos UN solo
+  // lugar por caja (si no, el efectivo compartido se contaría doble). Dispositivos
+  // sin caja (legacy) caen a "una caja por dispositivo".
+  type CajaGroup = {
+    key: string;
+    name: string;
+    repTokenId: string;
+    cajaId: string | null;
+  };
+  const cajaGroups: CajaGroup[] = [];
+  const seenCaja = new Set<string>();
+  for (const t of tokens) {
+    if (t.cajaId) {
+      if (seenCaja.has(t.cajaId)) {
+        continue;
+      }
+      seenCaja.add(t.cajaId);
+      cajaGroups.push({
+        key: `caja:${t.cajaId}`,
+        name: t.cajaName ?? t.name,
+        repTokenId: t.id,
+        cajaId: t.cajaId,
+      });
+    } else {
+      cajaGroups.push({
+        key: `caja:${t.id}`,
+        name: t.name,
+        repTokenId: t.id,
+        cajaId: null,
+      });
+    }
+  }
+
+  // Última sesión cerrada por CAJA (para el label R7 "entregado"). Con cajas
+  // compartidas la sesión cuelga de caja_id; para dispositivos sin caja usamos
+  // pos_token_id. Map key = cajaId ?? posTokenId.
   const lastSessionIds = new Map<string, string>();
-  if (tokens.length > 0) {
-    const sessionRows = await executor
+  if (cajaGroups.length > 0) {
+    const byCaja = await executor
+      .select({
+        cajaId: sql<string>`caja_id::text`,
+        sessionId: sql<string>`id::text`,
+      })
+      .from(
+        sql`(
+          SELECT DISTINCT ON (caja_id)
+            id, caja_id
+          FROM cash_sessions
+          WHERE organization_id = ${organizationId}
+            AND status = 'closed'
+            AND caja_id IS NOT NULL
+          ORDER BY caja_id, closed_at DESC
+        ) latest_by_caja`,
+      );
+    for (const r of byCaja) {
+      lastSessionIds.set(r.cajaId, r.sessionId);
+    }
+    const byToken = await executor
       .select({
         posTokenId: sql<string>`pos_token_id::text`,
         sessionId: sql<string>`id::text`,
@@ -124,11 +185,12 @@ export async function getTreasuryPosition(
           FROM cash_sessions
           WHERE organization_id = ${organizationId}
             AND status = 'closed'
+            AND caja_id IS NULL
             AND pos_token_id IS NOT NULL
           ORDER BY pos_token_id, closed_at DESC
-        ) latest_sessions`,
+        ) latest_by_token`,
       );
-    for (const r of sessionRows) {
+    for (const r of byToken) {
       lastSessionIds.set(r.posTokenId, r.sessionId);
     }
   }
@@ -145,12 +207,14 @@ export async function getTreasuryPosition(
   // swept amount. No further correction is needed here. ADR-1 sub-decision.
 
   const cajas = await Promise.all(
-    tokens.map(async (t) => {
-      const sessionId = lastSessionIds.get(t.id);
-      const balance = await cajaBalance(executor, organizationId, t.id);
+    cajaGroups.map(async (g) => {
+      // Un representante del grupo basta: comparten la sesión de la caja, así que
+      // cajaBalance() devuelve el saldo de la bolsa UNA vez.
+      const balance = await cajaBalance(executor, organizationId, g.repTokenId);
+      const sessionId = lastSessionIds.get(g.cajaId ?? g.repTokenId);
       return {
-        key: `caja:${t.id}`,
-        name: t.name,
+        key: g.key,
+        name: g.name,
         type: 'caja' as const,
         balance,
         sessionId,
