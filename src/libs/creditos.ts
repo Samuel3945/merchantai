@@ -1100,6 +1100,10 @@ export type CustomerCreditSummary = {
     method: string | null;
     createdAt: string;
   }[];
+  // Ventas (fiado) ligadas a este cliente POR IDENTIDAD (FK/whatsapp/nombre),
+  // aunque la venta tenga customer_id NULL. La ficha las usa para listar las
+  // compras del cliente, no solo los abonos.
+  saleIds: string[];
 };
 
 export async function getCustomerCreditSummary(
@@ -1108,7 +1112,7 @@ export async function getCustomerCreditSummary(
 ): Promise<CustomerCreditSummary> {
   const all = await fetchEnrichedCreditos(organizationId);
   if (all.length === 0) {
-    return { balance: 0, abonos: [] };
+    return { balance: 0, abonos: [], saleIds: [] };
   }
 
   const groups = groupByClient(all);
@@ -1130,14 +1134,25 @@ export async function getCustomerCreditSummary(
   });
 
   if (mine.length === 0) {
-    return { balance: 0, abonos: [] };
+    return { balance: 0, abonos: [], saleIds: [] };
   }
 
   const balance = round2(mine.reduce((a, g) => a + g.balance, 0));
   const creditoIds = mine.flatMap(g => g.creditoIds);
   if (creditoIds.length === 0) {
-    return { balance, abonos: [] };
+    return { balance, abonos: [], saleIds: [] };
   }
+
+  // Ventas (fiado) de este cliente por identidad — aunque tengan customer_id NULL.
+  const saleRows = await db
+    .select({ saleId: creditosSchema.saleId })
+    .from(creditosSchema)
+    .where(inArray(creditosSchema.id, creditoIds));
+  const saleIds = [
+    ...new Set(
+      saleRows.map(r => r.saleId).filter((x): x is string => !!x),
+    ),
+  ];
 
   const movements = await db
     .select({
@@ -1163,5 +1178,6 @@ export async function getCustomerCreditSummary(
       method: m.method,
       createdAt: m.createdAt.toISOString(),
     })),
+    saleIds,
   };
 }

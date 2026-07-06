@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, or, sql } from 'drizzle-orm';
 import { getCustomerCreditSummary } from '@/libs/creditos';
 import { db } from '@/libs/DB';
 import {
@@ -125,17 +125,33 @@ export async function loadCustomerDetail(
     return null;
   }
 
-  // Sales linked to this customer. Same status scope as the sales listing so the
-  // KPIs and the rows agree. fullyReturned uses literal table refs — see the
-  // note in actions/sales.ts on why drizzle column interpolation misfires here.
+  // Créditos por IDENTIDAD (FK OR whatsapp OR name) primero: la mayoría de las
+  // ventas fiadas del POS quedan con customer_id NULL y se ligan al cliente por
+  // el crédito. Necesitamos sus saleIds para que las COMPRAS (no solo los abonos)
+  // aparezcan en la ficha.
+  const creditSummary = await getCustomerCreditSummary(organizationId, {
+    id: profile.id,
+    name: profile.name,
+    whatsapp: profile.whatsapp,
+  });
+
+  // Sales linked to this customer: por FK directo O por identidad (vía crédito).
+  // Same status scope as the sales listing so the KPIs and the rows agree.
+  // fullyReturned uses literal table refs — see the note in actions/sales.ts on
+  // why drizzle column interpolation misfires here.
   const linkedStatuses = ['completed', 'settled', 'returned'] as const;
   const saleWhere = and(
     eq(salesSchema.organizationId, organizationId),
-    eq(salesSchema.customerId, customerId),
     inArray(salesSchema.status, linkedStatuses),
+    creditSummary.saleIds.length > 0
+      ? or(
+          eq(salesSchema.customerId, customerId),
+          inArray(salesSchema.id, creditSummary.saleIds),
+        )
+      : eq(salesSchema.customerId, customerId),
   );
 
-  const [agg, recentSales, deliveries, creditSummary] = await Promise.all([
+  const [agg, recentSales, deliveries] = await Promise.all([
     db
       .select({
         count: sql<number>`count(*)::int`,
@@ -192,14 +208,6 @@ export async function loadCustomerDetail(
       )
       .orderBy(desc(deliveryOrdersSchema.createdAt))
       .limit(RECENT_DELIVERIES_LIMIT),
-    // Resolve credit by identity (FK OR whatsapp OR name), reusing the créditos
-    // wall's own grouping — so NULL-FK POS creditos still count. Empty summary
-    // (balance 0, no abonos) when nothing matches this customer.
-    getCustomerCreditSummary(organizationId, {
-      id: profile.id,
-      name: profile.name,
-      whatsapp: profile.whatsapp,
-    }),
   ]);
 
   const purchaseCount = agg[0]?.count ?? 0;
