@@ -309,7 +309,16 @@ function ClientCard({
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="truncate text-base font-semibold">{client.name}</div>
+          <div className="flex items-center gap-1.5">
+            <span className="truncate text-base font-semibold">
+              {client.name}
+            </span>
+            {client.isEmployee && (
+              <Badge variant="secondary" className="shrink-0">
+                Empleado
+              </Badge>
+            )}
+          </div>
           {client.phone && (
             <a
               href={`tel:${client.phone}`}

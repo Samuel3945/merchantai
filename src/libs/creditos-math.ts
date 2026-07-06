@@ -26,13 +26,20 @@ export function parseClient(notes: string | null): { name: string; phone: string
   };
 }
 
-// Stable grouping key for "this debt belongs to this client". Prefers the real
-// customer FK; falls back to the notes-parsed name+phone for legacy/unlinked
-// creditos so historical data still groups correctly during the migration.
+// Stable grouping key for "this debt belongs to this client". An employee-loan
+// credito (employeeId set) keys by `emp:<id>` so it never mixes with customer
+// debt. Otherwise prefers the real customer FK; falls back to the notes-parsed
+// name+phone for legacy/unlinked creditos so historical data still groups
+// correctly during the migration. The `employeeId` field is OPTIONAL, so every
+// existing caller that passes only { customerId, notes } is unchanged.
 export function clientKeyOf(row: {
   customerId: string | null;
   notes: string | null;
+  employeeId?: string | null;
 }): string {
+  if (row.employeeId) {
+    return `emp:${row.employeeId}`;
+  }
   if (row.customerId) {
     return `c:${row.customerId}`;
   }
@@ -40,11 +47,15 @@ export function clientKeyOf(row: {
   return `n:${Buffer.from(`${name}||${phone}`, 'utf8').toString('base64url')}`;
 }
 
-// Accepts either a new-format key (c:/n:) or a legacy POS key (raw
+// Accepts a new-format key (c:/n:/emp:) or a legacy POS key (raw
 // base64url(name||phone)) and returns the canonical new-format key. Keeps the
 // cashier app working through the cutover.
 export function normalizeClientKey(key: string): string {
-  if (key.startsWith('c:') || key.startsWith('n:')) {
+  if (
+    key.startsWith('c:')
+    || key.startsWith('n:')
+    || key.startsWith('emp:')
+  ) {
     return key;
   }
   return `n:${key}`;

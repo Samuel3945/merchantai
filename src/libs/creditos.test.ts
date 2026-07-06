@@ -43,6 +43,12 @@ const ENUMS = [
 ];
 
 const DDL = `
+  CREATE TABLE pos_users (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+    organization_id text NOT NULL,
+    name text NOT NULL
+  );
+
   CREATE TABLE app_settings (
     organization_id text NOT NULL,
     key text NOT NULL,
@@ -98,6 +104,7 @@ const DDL = `
     organization_id text NOT NULL,
     customer_id uuid,
     sale_id uuid,
+    employee_id uuid REFERENCES pos_users(id) ON DELETE SET NULL,
     original_amount numeric(12, 2) NOT NULL,
     due_date date NOT NULL,
     status "credito_status" DEFAULT 'pending' NOT NULL,

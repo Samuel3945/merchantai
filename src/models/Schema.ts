@@ -1377,6 +1377,13 @@ export const creditosSchema = pgTable(
     saleId: uuid('sale_id').references(() => salesSchema.id, {
       onDelete: 'set null',
     }),
+    // Employee-loan (vale / préstamo a empleado) unification: when set, this
+    // credito is a loan owed BY the employee, not a customer debt. customerId /
+    // saleId stay null; the wall groups it under `emp:<id>` and badges it. SET
+    // NULL keeps the debt on record even if the pos_user is deleted.
+    employeeId: uuid('employee_id').references(() => posUsersSchema.id, {
+      onDelete: 'set null',
+    }),
     originalAmount: numeric('original_amount', {
       precision: 12,
       scale: 2,
@@ -1401,6 +1408,11 @@ export const creditosSchema = pgTable(
     // Vencidos / Próximos a vencer scan org + due_date.
     index('creditos_org_due_date_idx').on(table.organizationId, table.dueDate),
     index('creditos_customer_idx').on(table.customerId),
+    // Employee-loan wall + outstanding-loan scans filter org + employee.
+    index('creditos_org_employee_idx').on(
+      table.organizationId,
+      table.employeeId,
+    ),
     // One credito per origin sale. Lets the backfill be re-run safely to catch
     // creditos created between Phase 0 and the Phase 1 write path going live.
     uniqueIndex('creditos_sale_unique_idx')
@@ -2907,65 +2919,6 @@ export const supplierRefundsSchema = pgTable(
     ),
   ],
 );
-
-// ── Employee loans (vale / préstamo a empleado) ─────────────────────────────
-// Modeled on supplier_payables: a loan header with denormalized paid_amount +
-// status, plus a payments ledger (one row per abono). A loan is FUNDED by an
-// `advance` cash_movements salida (money leaves the drawer to the employee) and
-// REPAID by `deposit` cash_movements entradas (cash back into the drawer). FKs
-// are enforced in migration 0091 only (no .references() here) to avoid
-// forward-reference/lint issues, mirroring the cajas/cash_session caja_id work.
-export const employeeLoanStatusEnum = pgEnum('employee_loan_status', [
-  'open',
-  'partial',
-  'paid',
-]);
-
-export const employeeLoansSchema = pgTable('employee_loans', {
-  id: uuid('id').primaryKey().defaultRandom().notNull(),
-  organizationId: text('organization_id').notNull(),
-  employeeId: uuid('employee_id').notNull(), // FK pos_users.id (migration only)
-  borrowerName: text('borrower_name'), // name snapshot at creation
-  totalAmount: numeric('total_amount', { precision: 12, scale: 2 }).notNull(),
-  paidAmount: numeric('paid_amount', { precision: 12, scale: 2 })
-    .default('0')
-    .notNull(),
-  status: employeeLoanStatusEnum('status').default('open').notNull(),
-  cashMovementId: uuid('cash_movement_id'), // the advance that funded it
-  notes: text('notes'),
-  createdBy: text('created_by').notNull(),
-  createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
-  updatedAt: timestamp('updated_at', { mode: 'date' })
-    .defaultNow()
-    .$onUpdate(() => new Date())
-    .notNull(),
-}, table => [
-  index('employee_loans_org_employee_idx').on(
-    table.organizationId,
-    table.employeeId,
-  ),
-  index('employee_loans_org_status_idx').on(table.organizationId, table.status),
-  index('employee_loans_org_created_idx').on(
-    table.organizationId,
-    table.createdAt,
-  ),
-]);
-
-export const employeeLoanPaymentsSchema = pgTable('employee_loan_payments', {
-  id: uuid('id').primaryKey().defaultRandom().notNull(),
-  organizationId: text('organization_id').notNull(),
-  employeeId: uuid('employee_id').notNull(),
-  loanId: uuid('loan_id'), // FK employee_loans.id
-  cashMovementId: uuid('cash_movement_id'), // FK cash_movements.id
-  treasuryMovementId: uuid('treasury_movement_id'),
-  amount: numeric('amount', { precision: 12, scale: 2 }).notNull(),
-  note: text('note'),
-  createdBy: text('created_by').notNull(),
-  createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
-}, table => [
-  index('employee_loan_payments_loan_idx').on(table.loanId),
-  index('employee_loan_payments_org_idx').on(table.organizationId),
-]);
 
 // ── AI Agent backbone (delivery-agent-backbone) ────────────────────────────
 // Three enums + three tables that back the n8n ↔ merchantai agent integration.

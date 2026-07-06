@@ -25,6 +25,7 @@ import {
   cashSessionsSchema,
   creditoMovementsSchema,
   creditosSchema,
+  posUsersSchema,
   transferReconciliationsSchema,
 } from '@/models/Schema';
 
@@ -164,6 +165,70 @@ export async function createCredito(
   return credito;
 }
 
+// ── Write: create an EMPLOYEE-LOAN credito (vale / préstamo) ──────────────────
+//
+// A vale is a real credito owed BY the employee: customerId / saleId stay null,
+// employeeId is set, and notes carries the employee name so the wall shows it
+// even without a customer FK. Mirrors createCredito but needs no sale. Runs
+// inside the POS movement tx, funded by the `advance` cash_movements salida whose
+// id is threaded in as cashMovementId on the opening `charge` movement.
+
+export type CreateEmployeeLoanCreditoArgs = {
+  organizationId: string;
+  employeeId: string;
+  employeeName: string | null;
+  amount: number | string;
+  // The `advance` cash_movements row that funded the loan (drawer outflow).
+  cashMovementId: string | null;
+  createdBy?: string | null;
+  // 'YYYY-MM-DD'. Defaults to today + DEFAULT_TERM_DAYS.
+  dueDate?: string | null;
+};
+
+export async function createEmployeeLoanCredito(
+  executor: Executor,
+  args: CreateEmployeeLoanCreditoArgs,
+): Promise<{ id: string }> {
+  const amount = toMoney(args.amount);
+  if (Number.parseFloat(amount) <= 0) {
+    throw new Error('El monto del préstamo debe ser mayor a 0');
+  }
+
+  const dueDate = args.dueDate ?? addDaysISO(new Date(), DEFAULT_TERM_DAYS);
+
+  const [credito] = await executor
+    .insert(creditosSchema)
+    .values({
+      organizationId: args.organizationId,
+      customerId: null,
+      saleId: null,
+      employeeId: args.employeeId,
+      originalAmount: amount,
+      dueDate,
+      status: 'pending',
+      // The name snapshot doubles as the wall display name (no customer FK).
+      notes: args.employeeName ?? null,
+      createdBy: args.createdBy ?? null,
+    })
+    .returning({ id: creditosSchema.id });
+
+  if (!credito) {
+    throw new Error('No se pudo registrar el préstamo');
+  }
+
+  await executor.insert(creditoMovementsSchema).values({
+    creditoId: credito.id,
+    organizationId: args.organizationId,
+    type: 'charge',
+    amount,
+    note: 'Préstamo a empleado',
+    cashMovementId: args.cashMovementId,
+    createdBy: args.createdBy ?? null,
+  });
+
+  return credito;
+}
+
 // ── Write: register an abono (payment) for a client ──────────────────────────
 
 export type RecordAbonoArgs = {
@@ -221,6 +286,7 @@ export async function recordAbonoTx(
     .select({
       id: creditosSchema.id,
       customerId: creditosSchema.customerId,
+      employeeId: creditosSchema.employeeId,
       notes: creditosSchema.notes,
       originalAmount: creditosSchema.originalAmount,
     })
@@ -245,6 +311,7 @@ export async function recordAbonoTx(
     .select({
       id: creditosSchema.id,
       customerId: creditosSchema.customerId,
+      employeeId: creditosSchema.employeeId,
       notes: creditosSchema.notes,
       originalAmount: creditosSchema.originalAmount,
     })
@@ -517,6 +584,11 @@ export async function extendCreditoTermTx(
 type EnrichedCredito = {
   id: string;
   customerId: string | null;
+  // Set when this credito is an employee loan (vale). Drives the `emp:<id>`
+  // client key and the "Empleado" badge.
+  employeeId: string | null;
+  // Live pos_users.name for the employee (null for customer creditos).
+  employeeName: string | null;
   saleId: string | null;
   notes: string | null;
   originalAmount: number;
@@ -544,6 +616,10 @@ async function fetchEnrichedCreditos(
     .select({
       id: creditosSchema.id,
       customerId: creditosSchema.customerId,
+      employeeId: creditosSchema.employeeId,
+      // Live employee name (null for customer creditos). LEFT JOIN so customer
+      // rows are unaffected — they simply carry a null employeeName.
+      employeeName: posUsersSchema.name,
       saleId: creditosSchema.saleId,
       notes: creditosSchema.notes,
       originalAmount: creditosSchema.originalAmount,
@@ -552,6 +628,7 @@ async function fetchEnrichedCreditos(
       createdAt: creditosSchema.createdAt,
     })
     .from(creditosSchema)
+    .leftJoin(posUsersSchema, eq(posUsersSchema.id, creditosSchema.employeeId))
     .where(and(...conds));
 
   if (rows.length === 0) {
@@ -617,6 +694,9 @@ export type ClientDebt = {
   creditoIds: string[];
   // Total abonado by transfer that is still awaiting caja confirmation.
   pendingConfirmation: number;
+  // True when this group is an employee loan (vale) — the wall/POS badge it as
+  // "Empleado". Customer debts are always false.
+  isEmployee: boolean;
 };
 
 function groupByClient(
@@ -642,7 +722,15 @@ function groupByClient(
     const pendingConfirmation = round2(
       list.reduce((a, f) => a + f.pendingConfirmation, 0),
     );
-    const { name, phone } = parseClient(list[0]?.notes ?? null);
+    // Employee loans carry no "Cliente: … | Tel: …" notes; their display name is
+    // the live pos_users.name (snapshotted in notes as a fallback). Customer
+    // groups keep the exact notes-parsed identity — unchanged.
+    const isEmployee = list[0]?.employeeId != null;
+    const parsed = parseClient(list[0]?.notes ?? null);
+    const name = isEmployee
+      ? list[0]?.employeeName ?? list[0]?.notes ?? ''
+      : parsed.name;
+    const phone = isEmployee ? '' : parsed.phone;
     const allPaid = list.every(f => f.status !== 'pending');
     // Headline due date = the most urgent (earliest) still-pending due date.
     const pendingDues = list
@@ -672,6 +760,7 @@ function groupByClient(
       creditoCount: list.length,
       creditoIds: list.map(f => f.id),
       pendingConfirmation,
+      isEmployee,
     });
   }
 
@@ -778,7 +867,12 @@ export async function getCreditosHistoryForPos(
 
   const items: PosCreditoHistoryItem[] = [];
   for (const [clientKey, list] of groups) {
-    const { name, phone } = parseClient(list[0]?.notes ?? null);
+    const isEmployee = list[0]?.employeeId != null;
+    const parsed = parseClient(list[0]?.notes ?? null);
+    const name = isEmployee
+      ? list[0]?.employeeName ?? list[0]?.notes ?? ''
+      : parsed.name;
+    const phone = isEmployee ? '' : parsed.phone;
     const total = round2(list.reduce((a, f) => a + f.originalAmount, 0));
     const createdAt = list
       .map(f => f.createdAt)
@@ -829,6 +923,9 @@ export type PosCreditoClient = {
   status: 'pending' | 'partial' | 'settled';
   last_activity: string;
   notes: string | null;
+  // True when this debtor is an employee (vale / préstamo). Additive: the POS
+  // reads it to badge the row "Empleado"; older clients ignore it.
+  is_employee: boolean;
   sales: PosCreditoSale[];
 };
 
@@ -875,7 +972,12 @@ export async function getCreditosForPos(
 
   const clients: PosCreditoClient[] = [];
   for (const [clientKey, list] of groups) {
-    const { name, phone } = parseClient(list[0]?.notes ?? null);
+    const isEmployee = list[0]?.employeeId != null;
+    const parsed = parseClient(list[0]?.notes ?? null);
+    const name = isEmployee
+      ? list[0]?.employeeName ?? list[0]?.notes ?? ''
+      : parsed.name;
+    const phone = isEmployee ? '' : parsed.phone;
     const dueDate = list.map(f => f.dueDate).sort()[0] ?? '';
     const { state } = deriveDueState(dueDate, false, today);
     clients.push({
@@ -889,6 +991,7 @@ export async function getCreditosForPos(
       last_activity:
         list.map(f => f.createdAt.toISOString()).sort().at(-1) ?? '',
       notes: null,
+      is_employee: isEmployee,
       sales: list.map(f => ({
         id: f.saleId ?? f.id,
         total: f.originalAmount,
@@ -1120,6 +1223,11 @@ export async function getCustomerCreditSummary(
   const wantName = customer.name?.trim().toLowerCase() ?? '';
 
   const mine = groups.filter((g) => {
+    // An employee loan is never a customer's debt — keep it off the ficha even
+    // if an employee happens to share a name with this customer.
+    if (g.isEmployee) {
+      return false;
+    }
     if (g.customerId && g.customerId === customer.id) {
       return true;
     }
@@ -1180,4 +1288,235 @@ export async function getCustomerCreditSummary(
     })),
     saleIds,
   };
+}
+
+// ── Employee loans (vale / préstamo) — caja repayment + outstanding list ──────
+//
+// Employee loans are creditos with employeeId set. These two functions preserve
+// the exact wire contract the POS already speaks (POST /pos/cash/movement with
+// loanSelections, and GET /pos/employee-loans) after the unification — `loanId`
+// is now simply a credito id. The balance is COMPUTED from the credito_movements
+// ledger (charge − payments), never denormalized, matching the customer path.
+
+// Sum of settled `payment` movements per credito. Cash and every non-transfer
+// abono land immediately; a transfer counts only once confirmed — mirrors the
+// customer aggregate in fetchEnrichedCreditos so a loan can be paid by either
+// path without double-counting.
+async function paidByCreditoIds(
+  executor: Executor,
+  creditoIds: string[],
+): Promise<Map<string, number>> {
+  if (creditoIds.length === 0) {
+    return new Map();
+  }
+  const rows = await executor
+    .select({
+      creditoId: creditoMovementsSchema.creditoId,
+      paid: sql<string>`COALESCE(SUM(${creditoMovementsSchema.amount}) FILTER (WHERE ${creditoMovementsSchema.type} = 'payment' AND (${creditoMovementsSchema.transferReconciliationId} IS NULL OR ${transferReconciliationsSchema.status} = 'confirmed')), 0)::text`,
+    })
+    .from(creditoMovementsSchema)
+    .leftJoin(
+      transferReconciliationsSchema,
+      eq(
+        creditoMovementsSchema.transferReconciliationId,
+        transferReconciliationsSchema.id,
+      ),
+    )
+    .where(inArray(creditoMovementsSchema.creditoId, creditoIds))
+    .groupBy(creditoMovementsSchema.creditoId);
+  return new Map(rows.map(r => [r.creditoId, Number.parseFloat(r.paid) || 0]));
+}
+
+export type EmployeeLoanRepaymentSelection = { loanId: string; amount: number };
+
+export type EmployeeLoanRepaymentInput = {
+  organizationId: string;
+  sessionId: string;
+  createdBy: string;
+  selections: EmployeeLoanRepaymentSelection[];
+};
+
+export type EmployeeLoanRepaymentResult = {
+  appliedTotal: number;
+  // Credito ids that reached a zero balance (status → paid) in this call.
+  settledLoans: string[];
+};
+
+// Applies caller-chosen caja abonos to employee-loan creditos inside the caller's
+// tx. For each selection: locks the credito (org-scoped, must be an employee
+// loan, must not already be paid), inserts a `credito_payment` cash_movements
+// INFLOW (cash back into the drawer) + a `payment` credito_movements ledger row
+// (method 'efectivo'), then flips the credito to 'paid' when the ledger balance
+// hits zero. `loanId` is a credito id.
+export async function recordEmployeeLoanRepaymentCaja(
+  executor: Executor,
+  input: EmployeeLoanRepaymentInput,
+): Promise<EmployeeLoanRepaymentResult> {
+  if (input.selections.length === 0) {
+    throw new Error('No seleccionaste ningún préstamo');
+  }
+
+  const ids = input.selections.map(s => s.loanId);
+  if (new Set(ids).size !== ids.length) {
+    throw new Error('Hay préstamos repetidos en la selección');
+  }
+
+  // Deterministic id-sorted order → consistent lock acquisition, no deadlock.
+  const ordered = [...input.selections].sort((a, b) =>
+    a.loanId.localeCompare(b.loanId),
+  );
+
+  let appliedTotal = 0;
+  const settledLoans: string[] = [];
+
+  for (const sel of ordered) {
+    const amount = round2(sel.amount);
+    if (!(amount > 0)) {
+      throw new Error('El monto de cada abono debe ser mayor a 0');
+    }
+
+    // 1. Lock the credito FOR UPDATE (org-scoped). Must be an employee loan.
+    const [loan] = await executor
+      .select({
+        id: creditosSchema.id,
+        employeeId: creditosSchema.employeeId,
+        originalAmount: creditosSchema.originalAmount,
+        status: creditosSchema.status,
+      })
+      .from(creditosSchema)
+      .where(
+        and(
+          eq(creditosSchema.id, sel.loanId),
+          eq(creditosSchema.organizationId, input.organizationId),
+        ),
+      )
+      .for('update')
+      .limit(1);
+
+    if (!loan || loan.employeeId == null) {
+      throw new Error(
+        'El préstamo seleccionado no existe o no pertenece a esta organización',
+      );
+    }
+    if (loan.status === 'paid') {
+      throw new Error('Ese préstamo ya está saldado — no acepta más abonos');
+    }
+
+    const total = round2(Number.parseFloat(loan.originalAmount) || 0);
+    const paidMap = await paidByCreditoIds(executor, [loan.id]);
+    const alreadyPaid = round2(paidMap.get(loan.id) ?? 0);
+    const outstanding = round2(total - alreadyPaid);
+
+    if (amount > outstanding + 0.005) {
+      throw new Error(
+        `El abono ($${amount.toFixed(2)}) supera el saldo del préstamo ($${outstanding.toFixed(2)})`,
+      );
+    }
+
+    // 2. Insert the credito_payment cash_movements row — cash INTO the drawer.
+    const [movRow] = await executor
+      .insert(cashMovementsSchema)
+      .values({
+        sessionId: input.sessionId,
+        organizationId: input.organizationId,
+        type: 'credito_payment',
+        amount: toMoney(amount),
+        reason: 'Abono de préstamo de empleado',
+        createdBy: input.createdBy,
+      })
+      .returning({ id: cashMovementsSchema.id });
+
+    if (!movRow) {
+      throw new Error(
+        'recordEmployeeLoanRepaymentCaja: no se pudo registrar el movimiento de caja',
+      );
+    }
+
+    // 3. Insert the payment credito_movements ledger row (efectivo).
+    await executor.insert(creditoMovementsSchema).values({
+      creditoId: loan.id,
+      organizationId: input.organizationId,
+      type: 'payment',
+      amount: toMoney(amount),
+      method: 'efectivo',
+      cashMovementId: movRow.id,
+      createdBy: input.createdBy,
+    });
+
+    // 4. Recompute status from the ledger balance.
+    const newBalance = round2(total - round2(alreadyPaid + amount));
+    if (newBalance <= 0.005) {
+      await executor
+        .update(creditosSchema)
+        .set({ status: 'paid' })
+        .where(eq(creditosSchema.id, loan.id));
+      settledLoans.push(loan.id);
+    }
+
+    appliedTotal = round2(appliedTotal + amount);
+  }
+
+  return { appliedTotal, settledLoans };
+}
+
+// Outstanding employee loans for the org, oldest-first, with the employee's live
+// name resolved (falling back to the notes snapshot). Read-only. Balance is
+// computed from the ledger. Preserves the GET /pos/employee-loans response shape.
+export type OutstandingEmployeeLoan = {
+  loanId: string;
+  employeeId: string;
+  employeeName: string | null;
+  totalAmount: number;
+  outstanding: number;
+  createdAt: Date;
+  notes: string | null;
+};
+
+export async function listOutstandingEmployeeLoans(
+  executor: Executor,
+  organizationId: string,
+): Promise<OutstandingEmployeeLoan[]> {
+  const rows = await executor
+    .select({
+      loanId: creditosSchema.id,
+      employeeId: creditosSchema.employeeId,
+      userName: posUsersSchema.name,
+      totalAmount: creditosSchema.originalAmount,
+      createdAt: creditosSchema.createdAt,
+      notes: creditosSchema.notes,
+    })
+    .from(creditosSchema)
+    .leftJoin(posUsersSchema, eq(posUsersSchema.id, creditosSchema.employeeId))
+    .where(
+      and(
+        eq(creditosSchema.organizationId, organizationId),
+        eq(creditosSchema.status, 'pending'),
+        sql`${creditosSchema.employeeId} IS NOT NULL`,
+      ),
+    )
+    .orderBy(asc(creditosSchema.createdAt));
+
+  if (rows.length === 0) {
+    return [];
+  }
+
+  const paidMap = await paidByCreditoIds(
+    executor,
+    rows.map(r => r.loanId),
+  );
+
+  return rows.map((r) => {
+    const total = round2(Number.parseFloat(r.totalAmount) || 0);
+    const outstanding = round2(total - (paidMap.get(r.loanId) ?? 0));
+    return {
+      loanId: r.loanId,
+      // employeeId IS NOT NULL is guaranteed by the WHERE above.
+      employeeId: r.employeeId as string,
+      employeeName: r.userName ?? r.notes ?? null,
+      totalAmount: total,
+      outstanding,
+      createdAt: r.createdAt,
+      notes: r.notes,
+    };
+  });
 }

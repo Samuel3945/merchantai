@@ -645,6 +645,13 @@
       "when": 1782900011004,
       "tag": "0091_employee_loans",
       "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1782900012004,
+      "tag": "0092_employee_loan_as_credito",
+      "breakpoints": true
     }
   ]
 }

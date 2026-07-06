@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
+import { listOutstandingEmployeeLoans } from '@/libs/creditos';
 import { db } from '@/libs/DB';
-import { listOutstandingEmployeeLoans } from '@/libs/employee-loans';
 import { requirePosAuth } from '@/libs/pos-auth';
 
 export const runtime = 'nodejs';

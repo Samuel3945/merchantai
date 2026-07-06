@@ -9,11 +9,11 @@ import {
   INCOME_MOVEMENT_TYPES,
   toMoney,
 } from '@/libs/cash-helpers';
-import { db } from '@/libs/DB';
 import {
-  insertEmployeeLoan,
+  createEmployeeLoanCredito,
   recordEmployeeLoanRepaymentCaja,
-} from '@/libs/employee-loans';
+} from '@/libs/creditos';
+import { db } from '@/libs/DB';
 import { requirePosAuth } from '@/libs/pos-auth';
 import { recordPosGastoBridge } from '@/libs/pos-gasto-bridge';
 import {
@@ -551,14 +551,13 @@ export async function POST(req: Request): Promise<NextResponse> {
           throw new Error('No se pudo registrar el vale');
         }
 
-        const loan = await insertEmployeeLoan(tx, {
+        const loan = await createEmployeeLoanCredito(tx, {
           organizationId: ctx.organizationId,
           employeeId: loanEmployeeId,
-          borrowerName: loanBorrowerName,
-          totalAmount: Number.parseFloat(amount),
+          employeeName: loanBorrowerName,
+          amount: Number.parseFloat(amount),
           cashMovementId: created.id,
           createdBy: ctx.cashierName || 'Cajero',
-          notes: reason,
         });
         loanOutcome = { outcome: 'loan_created', loanId: loan.id };
 
