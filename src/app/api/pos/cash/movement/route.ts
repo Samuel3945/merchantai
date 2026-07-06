@@ -66,6 +66,9 @@ type MovementBody = {
   // advance. Requires the modules.employee_loans toggle to be ON.
   employeeId?: string | null;
   loanKind?: 'employee_loan' | null;
+  // Fecha de pago (plazo) elegida por el cajero al crear el préstamo, ISO
+  // 'YYYY-MM-DD'. Omitida ⇒ el default del sistema (createEmployeeLoanCredito).
+  loanDueDate?: string | null;
   // On an entrada type='deposit', settles EXACTLY these loans (abonos). Always
   // allowed, even when the toggle is OFF, so outstanding loans can be repaid.
   loanSelections?: { loanId?: string; amount?: number | string }[] | null;
@@ -551,6 +554,13 @@ export async function POST(req: Request): Promise<NextResponse> {
           throw new Error('No se pudo registrar el vale');
         }
 
+        // Plazo elegido por el cajero (YYYY-MM-DD). Si no es una fecha válida se
+        // ignora y createEmployeeLoanCredito aplica su default.
+        const loanDueDate
+          = typeof body.loanDueDate === 'string'
+            && /^\d{4}-\d{2}-\d{2}$/.test(body.loanDueDate.trim())
+            ? body.loanDueDate.trim()
+            : undefined;
         const loan = await createEmployeeLoanCredito(tx, {
           organizationId: ctx.organizationId,
           employeeId: loanEmployeeId,
@@ -558,6 +568,7 @@ export async function POST(req: Request): Promise<NextResponse> {
           amount: Number.parseFloat(amount),
           cashMovementId: created.id,
           createdBy: ctx.cashierName || 'Cajero',
+          dueDate: loanDueDate,
         });
         loanOutcome = { outcome: 'loan_created', loanId: loan.id };
 
