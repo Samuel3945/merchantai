@@ -926,6 +926,9 @@ export type PosCreditoClient = {
   // True when this debtor is an employee (vale / préstamo). Additive: the POS
   // reads it to badge the row "Empleado"; older clients ignore it.
   is_employee: boolean;
+  // Monto abonado por TRANSFERENCIA que aún no se confirma (transfer_reconciliation
+  // pending). > 0 ⇒ el POS muestra "pendiente a confirmar" en la tarjeta. Additive.
+  pending_confirmation: number;
   sales: PosCreditoSale[];
 };
 
@@ -992,6 +995,9 @@ export async function getCreditosForPos(
         list.map(f => f.createdAt.toISOString()).sort().at(-1) ?? '',
       notes: null,
       is_employee: isEmployee,
+      pending_confirmation: round2(
+        list.reduce((a, f) => a + f.pendingConfirmation, 0),
+      ),
       sales: list.map(f => ({
         id: f.saleId ?? f.id,
         total: f.originalAmount,
