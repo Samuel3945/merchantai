@@ -1,8 +1,6 @@
 'use client';
 
-import type { ReactNode } from 'react';
 import type {
-  ChannelStats,
   DashboardMetrics,
   LowStockRow,
   StockCategoryRow,
@@ -10,7 +8,7 @@ import type {
 import type { CreditosOverview } from '@/libs/creditos';
 import type { RangePreset } from '@/utils/DateRange';
 import { useOrganization } from '@clerk/nextjs';
-import { Bike, Bot, MessageCircle, Store } from 'lucide-react';
+import { Bot, MessageCircle } from 'lucide-react';
 import Link from 'next/link';
 import {
   useEffect,
@@ -410,54 +408,6 @@ function KpiCard({
   );
 }
 
-// Headline card for the "Ventas por canal" section — Domicilio and POS are the
-// two the owner checks daily, so they get the same visual weight as a KpiCard
-// (no selection/chart wiring, this section has no daily series of its own).
-function ChannelCard({
-  title,
-  icon,
-  stats,
-  color,
-}: {
-  title: string;
-  icon: ReactNode;
-  stats: ChannelStats;
-  color: string;
-}) {
-  return (
-    <div className="rounded-lg border bg-background p-4 shadow-xs">
-      <div className="flex items-center gap-2">
-        <span
-          className="
-            inline-flex size-7 shrink-0 items-center justify-center rounded-md
-          "
-          style={{ backgroundColor: `${color}1F`, color }}
-        >
-          {icon}
-        </span>
-        <div className="
-          text-[11px] font-semibold tracking-[0.08em] text-muted-foreground
-          uppercase
-        "
-        >
-          {title}
-        </div>
-      </div>
-      <div className="
-        mt-2 font-display text-2xl font-medium tracking-tight tabular-nums
-      "
-      >
-        {formatMoney(stats.revenue)}
-      </div>
-      <div className="mt-1 text-xs text-muted-foreground">
-        {stats.count}
-        {' '}
-        {stats.count === 1 ? 'venta' : 'ventas'}
-      </div>
-    </div>
-  );
-}
-
 // The metrics that have an honest per-day series to drive the chart. Flujo de
 // caja neto is a period aggregate with no daily line, so it stays a plain stat.
 // All four KPIs drive the chart, each with its own series and color.
@@ -481,7 +431,6 @@ export function DashboardClient({
   stockByCategory,
   hasWhatsAppAgent,
   aiEnabled,
-  deliveryEnabled,
 }: {
   initial: DashboardMetrics;
   credito: CreditosOverview;
@@ -489,9 +438,6 @@ export function DashboardClient({
   stockByCategory: StockCategoryRow[];
   hasWhatsAppAgent: boolean;
   aiEnabled: boolean;
-  // When the org does not work with domicilios the "Domicilio" channel card is
-  // hidden and the "Ventas por canal" grid collapses to a single POS column.
-  deliveryEnabled: boolean;
 }) {
   const [data, setData] = useState<DashboardMetrics>(initial);
   const [start, setStart] = useState(initial.range.start);
@@ -628,7 +574,7 @@ export function DashboardClient({
       "
       >
         <KpiCard
-          title="Ventas hoy"
+          title="Ventas"
           value={formatMoney(data.period.total)}
           selected={metric === 'ventas'}
           onSelect={() => setMetric('ventas')}
@@ -638,7 +584,7 @@ export function DashboardClient({
           hint={`${data.period.count} ${data.period.count === 1 ? 'venta' : 'ventas'}`}
         />
         <KpiCard
-          title="Ganancia hoy"
+          title="Ganancia"
           value={formatMoney(data.period.profit)}
           selected={metric === 'ganancia'}
           onSelect={() => setMetric('ganancia')}
@@ -665,67 +611,6 @@ export function DashboardClient({
           color={METRIC_CONFIG.stock.color}
           hint="productos para reponer"
         />
-      </div>
-
-      {/* Ventas por canal — Domicilio vs POS are the headline (same weight as a
-          KpiCard); Panel y Agente IA ride along as a compact breakdown since
-          they're lower-volume channels the owner checks less often. */}
-      <div className="rounded-lg border bg-background p-4 shadow-xs">
-        <div className="
-          mb-3 text-[11px] font-semibold tracking-[0.08em] text-muted-foreground
-          uppercase
-        "
-        >
-          Ventas por canal
-        </div>
-        <div className={cn(
-          'grid grid-cols-1 gap-3',
-          deliveryEnabled && 'sm:grid-cols-2',
-        )}
-        >
-          {deliveryEnabled && (
-            <ChannelCard
-              title="Domicilio"
-              icon={<Bike className="size-4" />}
-              stats={data.salesByChannel.delivery}
-              color="#0EA5E9"
-            />
-          )}
-          <ChannelCard
-            title="POS"
-            icon={<Store className="size-4" />}
-            stats={data.salesByChannel.pos}
-            color="#0F766E"
-          />
-        </div>
-        <div className="
-          mt-3 flex flex-wrap items-center gap-x-6 gap-y-1 border-t pt-3 text-xs
-          text-muted-foreground
-        "
-        >
-          <span>
-            Panel:
-            {' '}
-            <span className="font-medium text-foreground">
-              {formatMoney(data.salesByChannel.panel.revenue)}
-            </span>
-            {' '}
-            (
-            {data.salesByChannel.panel.count}
-            )
-          </span>
-          <span>
-            Agente IA:
-            {' '}
-            <span className="font-medium text-foreground">
-              {formatMoney(data.salesByChannel.agent.revenue)}
-            </span>
-            {' '}
-            (
-            {data.salesByChannel.agent.count}
-            )
-          </span>
-        </div>
       </div>
 
       {/* Main grid — revenue chart beside the best sellers */}
