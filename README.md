@@ -1,6 +1,90 @@
 # MerchantAI
 
-SaaS multi-tenant para comercios: punto de venta (POS), inventario FIFO, ventas, fiados, delivery con notificaciones por WhatsApp, reportes, agente de IA y gestión multi-organización via Clerk.
+**El sistema operativo del pequeño comercio colombiano.** SaaS multi-tenant que reemplaza el cuaderno de la tienda: punto de venta, inventario FIFO, fiados, caja, delivery, facturación electrónica y un agente de IA que atiende por WhatsApp.
+
+🌐 [mymerchantai.com](https://mymerchantai.com)
+
+![Next.js](https://img.shields.io/badge/Next.js-000000?logo=nextdotjs&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?logo=postgresql&logoColor=white)
+![Drizzle](https://img.shields.io/badge/Drizzle_ORM-C5F74F?logo=drizzle&logoColor=black)
+![Clerk](https://img.shields.io/badge/Clerk-6C47FF?logo=clerk&logoColor=white)
+![OpenAI](https://img.shields.io/badge/OpenAI-412991?logo=openai&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
+
+---
+
+## El problema
+
+Las tiendas de barrio, ferreterías, droguerías y misceláneas de Colombia siguen manejando ventas, inventario y fiados en un cuaderno o en Excel. No saben cuánto ganan de verdad, pierden mercancía por vencimiento y los créditos a clientes se les escapan. Además, desde 2026 la DIAN exige reportar cada venta POS en tiempo real.
+
+## La solución
+
+Una plataforma web pensada para el comerciante, no para el contador:
+
+| Módulo | Qué resuelve |
+|---|---|
+| **Caja / POS** | Cobro con código de barras, pagos mixtos, venta por peso y cierre de caja |
+| **Inventario FIFO** | Costo real por lote, vencimientos, alertas de stock y movimientos auditables |
+| **Fiados** | Créditos con plazos, abonos y recordatorios automáticos por WhatsApp |
+| **Delivery** | Pedidos con estados y notificaciones al cliente |
+| **Empleados** | Cajeros con PIN, roles y permisos |
+| **Reportes** | Ventas por periodo, cajero y método de pago; exportación a Excel y PDF |
+| **Facturación electrónica** | Emisión a la DIAN mediante adaptador a MATIAS API |
+| **Pagos y planes** | Planes y créditos de uso con Wompi |
+| **Consola de operador** | Panel super-admin para gestionar todas las organizaciones |
+
+### El agente de IA
+
+- **Atiende 24/7 por WhatsApp**: responde, cotiza y toma pedidos con el catálogo real del negocio.
+- **Responde en lenguaje natural**: "¿cuánto vendí esta semana?".
+- **Detecta lo que se escapa**: productos por vencer, caídas de venta, posibles fraudes.
+- **Pide aprobación**: las acciones sensibles requieren el PIN del dueño.
+
+## Arquitectura
+
+```mermaid
+flowchart LR
+    subgraph Clientes
+        WEB[Panel web<br/>Next.js]
+        POS[POS de caja<br/>React + Capacitor]
+        WA[Clientes por WhatsApp]
+    end
+
+    subgraph MerchantAI["MerchantAI · Next.js App Router"]
+        SA[Server Actions + API Routes]
+        AI[Agente de IA<br/>Vercel AI SDK]
+    end
+
+    WEB --> SA
+    POS -- "/api/pos/* · JWT" --> SA
+    WA --> EVO[Evolution API] --> N8N[n8n] --> AI
+    SA --> DB[(PostgreSQL<br/>Drizzle ORM)]
+    AI --> DB
+    SA --> CLERK[Clerk<br/>organizaciones = tenants]
+    SA --> MATIAS[MATIAS API<br/>DIAN]
+    SA --> WOMPI[Wompi]
+```
+
+Ecosistema:
+
+- **[merchantai](https://github.com/Samuel3945/merchantai)**: este repo, el núcleo (panel, API y agente).
+- **[pos-merchatai](https://github.com/Samuel3945/pos-merchatai)**: POS de caja web y Android, offline-first.
+- **[pagemerchantai](https://github.com/Samuel3945/pagemerchantai)**: landing pública y SEO.
+
+## Calidad e ingeniería
+
+- **+110 archivos de pruebas**: unitarias (Vitest), integración y E2E (Playwright).
+- **96 migraciones** versionadas con Drizzle.
+- **CI en GitHub Actions** con *semantic-release* y commits convencionales (commitlint + lefthook).
+- **Observabilidad** con Sentry; internacionalización con next-intl.
+- **Despliegue** con imagen Docker *standalone* en VPS (Easypanel); las migraciones corren al arrancar, con reintentos.
+
+> Construido sobre [SaaS Boilerplate](https://github.com/ixartz/SaaS-Boilerplate) (MIT) como base técnica. Todo el dominio de negocio (POS, inventario FIFO, fiados, delivery, facturación, agente de IA y consola de operador) es desarrollo propio.
+
+---
+
+# Documentación técnica
 
 ## Tecnologías
 
@@ -152,3 +236,7 @@ npm run db:migrate
 Para desarrollo local, la base de datos se levanta automaticamente con PGlite en memoria
 (`npm run dev` lanza `pglite-server` + Next.js en paralelo). Para conectar a una PostgreSQL
 real, configurar `DATABASE_URL` en el entorno del shell antes de correr los comandos.
+
+---
+
+Desarrollado por **[Samuel Alzate](https://github.com/Samuel3945)** · Cartagena, Colombia
